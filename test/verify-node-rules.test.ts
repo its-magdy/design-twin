@@ -6,7 +6,7 @@
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
-import { TOLERANCE } from "../design-to-code/verify-shared.ts";
+import { CHECK_ORDER, PROPERTIES, STYLE_KEYS, TOLERANCE, toleranceOf } from "../design-to-code/verify-shared.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import type { IndexRow, JsonValue, MeasuredNode, MeasuredStyles, PlanWaiver, ScreenDoc, VerifyDelta, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { readableMeasured } from "../design-to-code/doc-guards.ts";
@@ -625,6 +625,151 @@ console.log("a wrapping list's main-axis padding shows, its cross axis holds the
       return !!deltaOn(r, "21:1", /match/)?.accepted && d?.severity === "medium" && d.cappedFrom === "high" && JSON.stringify(d.cappedBy) === '["match"]' && r.verdict === "incomplete";
     });
   }
+}
+
+// ---------------------------------------------------------------- the property table: property × gap kind
+console.log("the property table — every property under each gap kind (not reported, null, unreadable, negative, on a leaf, on an inline element):");
+{
+  const TXTP = { ...TXT, weight: "Regular", lineHeight: { value: 20, unit: "px" as const }, letterSpacing: { value: 0.5, unit: "px" as const } };
+  const e = expect1([
+    // a hug card: one radius, one border width, gap, padding, an absolute position
+    { type: "FRAME", id: "30:1", name: "Card", box: { x: 110, y: 60, w: 200, h: 40 }, absolute: true, fills: [{ type: "solid", color: "#ffffff" }], radius: 8, strokes: { colors: ["#cccccc"], weight: 1, align: "inside" },
+      widthMode: "hug", heightMode: "hug", layout: { display: "flex", gap: 8, padding: [4, 8, 4, 8] }, children: [
+        { type: "FRAME", id: "30:2", name: "Dot", box: { w: 24, h: 24 }, fills: [{ type: "solid", color: "#00aa00" }] }, { type: "FRAME", id: "30:3", name: "Dot2", box: { w: 24, h: 24 }, fills: [{ type: "solid", color: "#00aa00" }] }] },
+    // per-corner radius and a bottom-only border
+    { type: "FRAME", id: "31:1", name: "Header", box: { w: 300, h: 48 }, fills: [{ type: "solid", color: "#121319" }], radius: { tl: 12, tr: 12, br: 0, bl: 0 }, strokes: { colors: ["#e6e6e6"], weights: { bottom: 1 }, align: "inside" } },
+    { type: "TEXT", id: "32:1", name: "Label", text: "Members", font: TXTP, autoResize: "width_and_height", box: { w: 60, h: 20 } },
+    { type: "FRAME", id: "33:1", name: "Field", box: { w: 200, h: 36 }, fills: [{ type: "solid", color: "#ffffff" }], children: [
+      { type: "TEXT", id: "33:2", name: "Placeholder", text: "Search", font: { ...TXTP, color: "#999999" }, autoResize: "width_and_height", box: { w: 50, h: 20 } }] },
+    { type: "VECTOR", id: "34:1", name: "Icon", box: { w: 16, h: 16 }, fills: [{ type: "solid", color: "#000000" }] },
+    // a fixed-width label in a hug row: its own box width is compared too
+    { type: "FRAME", id: "35:1", name: "Nav Item", widthMode: "hug", box: { w: 165, h: 40 }, fills: [{ type: "solid", color: "#eeeeee" }], layout: { display: "flex", padding: [10, 12, 10, 12] },
+      children: [{ type: "TEXT", id: "35:2", name: "Nav Label", text: "Members", font: TXTP, autoResize: "height", box: { w: 141, h: 20 }, renderBox: { x: 0, y: 0, w: 60, h: 11 } }] },
+  ]);
+  safe("the fixture states every property the table has", () => {
+    const has = (id: string, k: keyof VerifySpec): boolean => spec(e, id)?.[k] !== undefined;
+    return (["backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap", "padding", "width", "height", "x", "y", "opacity"] as const).every((k) => has("30:1", k))
+      && has("31:1", "radiusCorners") && has("31:1", "borderWidths") && (["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "text"] as const).every((k) => has("32:1", k))
+      && has("33:2", "placeholderText") && has("33:2", "placeholderColor") && has("34:1", "fill") && has("35:2", "boxWidth");
+  });
+  // a measurement of each node that matches its design — every case below changes one key
+  const BASE: Record<string, MeasuredStyles> = {
+    "30:1": { backgroundColor: "rgb(255, 255, 255)", borderColor: "rgb(204, 204, 204)", borderWidth: 1, borderRadius: 8, gap: 8, padding: [4, 8, 4, 8], width: 200, height: 40, x: 10, y: 10, opacity: 1, tag: "div", display: "flex" },
+    "31:1": { backgroundColor: "rgb(18, 19, 25)", borderColor: "rgb(230, 230, 230)", borderWidths: [0, 0, 1, 0], borderRadius: [12, 12, 0, 0], width: 300, height: 48, opacity: 1, tag: "div", display: "block" },
+    "32:1": { fontFamily: "Inter", fontSize: 14, fontWeight: 400, lineHeight: 20, letterSpacing: 0.5, color: "rgb(51, 51, 51)", text: "Members", textBox: { x: 0, w: 60 }, opacity: 1, tag: "span", display: "inline" },
+    "33:2": { fontFamily: "Inter", fontSize: 14, fontWeight: 400, lineHeight: 20, letterSpacing: 0.5, placeholderText: "Search", placeholderColor: "rgb(153, 153, 153)", opacity: 1, tag: "input" },
+    "34:1": { fill: "rgb(0, 0, 0)", width: 16, height: 16, opacity: 1, tag: "svg" },
+    "35:2": { fontFamily: "Inter", fontSize: 14, fontWeight: 400, lineHeight: 20, letterSpacing: 0.5, color: "rgb(51, 51, 51)", text: "Members", textBox: { x: -100, w: 60 }, width: 141, opacity: 1, tag: "span" },
+  };
+  const run = (id: string, change: MeasuredStyles, drop: string[] = [], unmeasured?: Record<string, string>): VerifyReportV2 => {
+    const styles: MeasuredStyles = { ...BASE[id], ...change };
+    for (const k of drop) delete styles[k];
+    return compare(e, measured([{ ...node(id, styles), ...(unmeasured ? { unmeasured } : {}) }]));
+  };
+  const clean = Object.keys(BASE).every((id) => { const r = run(id, {}); return !r.deltas.some((d) => d.nodeId === id) && !r.fieldsNotMeasured.some((g) => g.nodeId === id); });
+  safe("each base measurement: no delta and no gap of its own", () => clean);
+  // the gap the report lists for one field of one node (its why), or null when there is none
+  const why = (r: VerifyReportV2, id: string, field: string): string | null => r.fieldsNotMeasured.find((g) => g.nodeId === id && g.field === field)?.why ?? null;
+  const LEAF = /sits on a leaf <img> inside the element that implements it/, INLINE = /the id sits on an inline <span>, whose box is its text's/;
+  const ARTEFACT_LONG = / \(CSS cannot make it negative\) — a measuring artefact \(children not laid out in one line, or rows read across columns\?\); not compared$/;
+  const ARTEFACT = / \(CSS cannot make it negative\) — a measuring artefact; not compared$/;
+  // [node, measured key, field, unreadable value → why, negative value → why (null: a negative value is a real one), leaf?, inline?]
+  type Case = { id: string; key: string; field: string; bad: JsonValue; badWhy: RegExp; neg: JsonValue | null; negWhy: RegExp | null; leaf: boolean; inline: boolean };
+  const C = (id: string, key: string, field: string, bad: JsonValue, badWhy: RegExp, neg: JsonValue | null, negWhy: RegExp | null, leaf: boolean, inline: boolean): Case =>
+    ({ id, key, field, bad, badWhy, neg, negWhy, leaf, inline });
+  const CASES: Case[] = [
+    C("32:1", "fontFamily", "font-family", {}, /^could not read '\{\}' as font-family$/, null, null, false, false),
+    C("32:1", "fontSize", "font-size", "50%", /^could not read '50%' as a px number$/, -1, /^-1 is impossible for font-size/, false, false),
+    C("32:1", "fontWeight", "font-weight", "bolder", /^could not read 'bolder' as font-weight$/, null, null, false, false),
+    C("32:1", "lineHeight", "line-height", "50%", /^could not read '50%' as a px number$/, -1, /^-1 is impossible for line-height/, false, false),
+    C("32:1", "letterSpacing", "letter-spacing", "1em", /^could not read '1em' as a px number$/, null, null, false, false),
+    C("32:1", "color", "color", {}, /^could not read '\{\}' as color$/, null, null, false, false),
+    C("30:1", "backgroundColor", "background", {}, /^could not read '\{\}' as background$/, null, null, true, false),
+    C("34:1", "fill", "fill (SVG paint)", {}, /^could not read '\{\}' as fill \(SVG paint\)$/, null, null, false, false),
+    C("33:2", "placeholderColor", "placeholder colour", {}, /^could not read '\{\}' as placeholder colour$/, null, null, false, false),
+    C("30:1", "borderColor", "border-color", {}, /^could not read '\{\}' as border-color$/, null, null, true, false),
+    C("30:1", "borderWidth", "border-width", "thin", /^could not read 'thin' as a px number$/, -1, /^-1 is impossible for border-width/, true, false),
+    C("31:1", "borderWidths", "border-width", "thin", /^could not read '"thin"' as px border widths \[t,r,b,l\]$/, [0, 0, -1, 0], /^\[0,0,-1,0\] is impossible for a border width/, true, false),
+    C("30:1", "borderRadius", "border-radius", "50%", /^could not read '"50%"' as a px radius$/, -2, /^-2 is impossible for a radius/, true, true),
+    C("31:1", "borderRadius", "border-radius", "50%", /^could not read '"50%"' as a px radius$/, [-1, 12, 0, 0], /^\[-1,12,0,0\] is impossible for a radius/, true, true),
+    C("30:1", "gap", "gap", "50%", /^could not read '50%' as a px number$/, -3, /^-3 is impossible for gap/, true, false),
+    C("30:1", "padding", "padding", "50%", /^could not read '"50%"' as px padding \[t,r,b,l\]$/, [-1, 8, 4, 8], /^\[-1,8,4,8\] is impossible for padding/, true, true),
+    C("30:1", "width", "width", "50%", /^could not read '50%' as a px number$/, -3, /^-3 is impossible for width/, true, true),
+    C("30:1", "height", "height", "50%", /^could not read '50%' as a px number$/, -3, /^-3 is impossible for height/, true, true),
+    C("30:1", "x", "x (frame-relative)", "50%", /^could not read '50%' as a px number$/, null, null, true, true),
+    C("30:1", "y", "y (frame-relative)", "50%", /^could not read '50%' as a px number$/, null, null, true, true),
+    C("30:1", "opacity", "opacity", "50%", /^could not read '50%' as a px number$/, -1, /^-1 is impossible for opacity/, false, false),
+    C("35:2", "width", "width (text box)", "50%", /^could not read '50%' as a px number$/, -3, /^-3 is impossible for width \(text box\)/, false, false),
+  ];
+  for (const c of CASES) {
+    const at = `${c.field} (${c.id})`;
+    // not reported: listed as such — never compared
+    safe(`${at}: not reported → '${"the probe did not report this property"}'`, () => why(run(c.id, {}, [c.key]), c.id, c.field) === "the probe did not report this property"
+      || (c.key === "placeholderColor" && run(c.id, {}, [c.key]).unverifiable.some((u) => u.nodeId === c.id && u.field === c.field)));
+    safe(`${at}: null → the probe's reason`, () => why(run(c.id, { [c.key]: null }, [], { [c.key]: "the element was gone" }), c.id, c.field) === "the element was gone");
+    safe(`${at}: unreadable ${JSON.stringify(c.bad)} → 'could not read …'`, () => c.badWhy.test(why(run(c.id, { [c.key]: c.bad }), c.id, c.field) ?? ""));
+    if (c.neg !== null && c.negWhy) {
+      const negWhy = c.negWhy;
+      safe(`${at}: negative → 'impossible', a measuring artefact`, () => { const w = why(run(c.id, { [c.key]: c.neg }), c.id, c.field) ?? ""; return negWhy.test(w) && (["borderRadius", "borderWidths", "padding"].includes(c.key) ? ARTEFACT : ARTEFACT_LONG).test(w); });
+    }
+    if (c.id === "30:1" || c.id === "31:1") {
+      safe(`${at}: on a leaf <img> → ${c.leaf ? "the leaf's why" : "compared as usual"}`, () => { const w = why(run(c.id, { tag: "img" }), c.id, c.field); return c.leaf ? LEAF.test(w ?? "") : w === null; });
+      safe(`${at}: on an inline <span> → ${c.inline ? "the inline why" : "compared as usual"}`, () => { const w = why(run(c.id, { tag: "span", display: "inline" }), c.id, c.field); return c.inline ? INLINE.test(w ?? "") : w === null; });
+    }
+  }
+  // a TEXT's x/width come only from its textBox
+  safe("TEXT width: textBox not reported → 'report textBox {x,w}' (lost coverage)", () => /^report textBox \{x,w\}/.test(why(run("32:1", {}, ["textBox"]), "32:1", "width") ?? ""));
+  safe("TEXT width: textBox null → the probe's reason", () => why(run("32:1", { textBox: null }, [], { textBox: "no rendered box" }), "32:1", "width") === "no rendered box");
+  safe("TEXT width: textBox.w negative → impossible", () => /^-3 is impossible for width/.test(why(run("32:1", { textBox: { x: 0, w: -3 } }), "32:1", "width") ?? ""));
+  // the copy
+  safe("text not reported: no row of its own, but never measured on 0 of 1", () => { const r = run("32:1", {}, ["text"]); return why(r, "32:1", "text") === null && r.coverage.fieldsNeverMeasured.some((f) => f.field === "text"); });
+  safe("text null → the probe's reason, else the text-specific advice", () => why(run("32:1", { text: null }, [], { text: "no text node" }), "32:1", "text") === "no text node"
+    && /^the probe reported text: null — an element with child elements still has text/.test(why(run("32:1", { text: null }), "32:1", "text") ?? ""));
+  safe("placeholder text not reported → 'report el.placeholder'; null → the reason", () => /^this layer is an input placeholder: report el\.placeholder/.test(why(run("33:2", {}, ["placeholderText"]), "33:2", "placeholder text") ?? "")
+    && why(run("33:2", { placeholderText: null }, [], { placeholderText: "no input" }), "33:2", "placeholder text") === "no input");
+  // an exported asset built as its <img>: only its box is measured
+  const eA = expect1([{ type: "FRAME", id: "36:1", name: "Logo", box: { w: 120, h: 32 }, fills: [{ type: "solid", color: "#ffffff" }], radius: 4, asset: "assets/logo.svg" }]);
+  const assetR = compare(eA, measured([node("36:1", { backgroundColor: "rgb(0, 0, 0)", borderRadius: 4, width: 120, height: 32, opacity: 1, tag: "img" })]));
+  const ASSET = /is an exported asset built as an <img>: only its box is measured/;
+  safe("an asset leaf <img>: its box is compared (no width/height gap); its radius is the asset file's, its fill pixels", () => spec(eA, "36:1")?.asset === true
+    && why(assetR, "36:1", "width") === null && why(assetR, "36:1", "height") === null && ASSET.test(why(assetR, "36:1", "border-radius") ?? "")
+    && assetR.unverifiable.some((u) => u.nodeId === "36:1" && u.field === "fill (SVG paint)"));
+
+  // ---- the rules the table now applies to every property alike (each was missing from one check before)
+  safe("[applies first] padding on a leaf <img> the probe did not report: the leaf's why, not 'did not report'", () => LEAF.test(why(run("30:1", { tag: "img" }, ["padding"]), "30:1", "padding") ?? ""));
+  safe("[applies first] padding on a <tr> the probe did not report: the cells' why", () => /a table row's padding lives on its cells/.test(why(run("30:1", { tag: "tr", display: "table-row" }, ["padding"]), "30:1", "padding") ?? ""));
+  safe("[applies first] a text box width on a padded container the probe did not report: the container's why", () =>
+    /whose box is not the text's — tag the text's own element/.test(why(run("35:2", { padding: [0, 12, 0, 12] }, ["width"]), "35:2", "width (text box)") ?? ""));
+  safe("[counted] a per-corner radius on a leaf counts toward coverage like one radius does (never measured on 0 of 1)", () =>
+    run("31:1", { tag: "img" }, ["borderRadius"]).coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius")
+    && run("30:1", { tag: "img" }, ["borderRadius"]).coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius"));
+  const w: PlanWaiver = { nodeId: "31:1", field: "border-width (bottom)", designed: 1, built: 0.2, exportContentSha256: e.exportContentSha256, reason: "a hairline here", decidedBy: "Sam Doe", decidedAt: "2026-10-01T02:00:00Z" };
+  safe("[tolerance] a waiver on a per-side border width matches within the stroke tolerance (0.5), like one on 'border-width'", () =>
+    !!deltaOn(compare(e, measured([node("31:1", { ...BASE["31:1"], borderWidths: [0, 0, 0, 0] })]), { plan: usingPlan({ waivers: [w] }) }), "31:1", /^border-width \(bottom\)$/)?.accepted);
+  // a layer inside a drawn state that renders 0×0 at rest: every property it states is listed, under its findings' field
+  const eH = expect1([{ type: "FRAME", id: "37:1", name: "Row Hovered", box: { w: 400, h: 40 }, fills: [{ type: "solid", color: "#46464f", tokens: { color: "Surface/Row Hover" } }], children: [
+    { type: "FRAME", id: "37:2", name: "Edit", box: { w: 60, h: 24 }, fills: [{ type: "solid", color: "#ffffff" }], radius: { tl: 4, tr: 0, br: 0, bl: 4 }, strokes: { colors: ["#cccccc"], weights: { left: 1 } }, layout: { display: "flex", padding: [2, 6, 2, 6] },
+      children: [{ type: "FRAME", id: "37:3", name: "Mark", box: { w: 12, h: 12 }, fills: [{ type: "solid", color: "#000000" }] }] }] }]);
+  const rest = compare(eH, measured([node("37:2", { backgroundColor: "rgb(255, 255, 255)", width: 0, height: 0, opacity: 0 })]));
+  const AT_REST = /^renders 0×0 at rest:/;
+  safe("[at rest] a 0×0 hover-only layer: padding, per-corner radius and per-side border listed too (not only the one-value fields)", () => spec(eH, "37:2")?.drawnState === "hover"
+    && ["background", "width", "height", "padding", "border-radius", "border-width"].every((f) => AT_REST.test(why(rest, "37:2", f) ?? "")));
+}
+
+// ---------------------------------------------------------------- the registries derived from the table
+console.log("the registries derived from the property table:");
+{
+  safe("STYLE_KEYS is the list every expectation's measuredKeys has named, in that order", () => JSON.stringify(STYLE_KEYS) === JSON.stringify([
+    "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill", "placeholderColor", "borderColor", "borderWidth", "borderRadius", "gap",
+    "width", "height", "x", "y", "opacity", "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"]));
+  safe("every key a property reads or counts is one the probe is told to send", () => PROPERTIES.every((p) => p.shapes.every((s) => STYLE_KEYS.includes(s.measured) && STYLE_KEYS.includes(s.census)
+    && (s.read === undefined || STYLE_KEYS.includes(s.read)))));
+  safe("CHECK_ORDER names every spec value a shape states, once", () => {
+    const specs = PROPERTIES.flatMap((p) => p.shapes.map((s) => s.spec));
+    return CHECK_ORDER.length === new Set(CHECK_ORDER).size && new Set(specs).size === CHECK_ORDER.length && specs.every((k) => CHECK_ORDER.includes(k));
+  });
+  safe("a field's tolerance: per side and per corner too", () => toleranceOf("border-width (top)") === TOLERANCE.stroke && toleranceOf("border-radius (top-left)") === TOLERANCE.radius
+    && toleranceOf("width (text ink)") === TOLERANCE.textInk && toleranceOf("width (text box)") === TOLERANCE.size && toleranceOf("padding") === TOLERANCE.padding && toleranceOf("text") === null && toleranceOf("placement") === undefined);
 }
 
 report();
