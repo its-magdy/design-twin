@@ -57,7 +57,7 @@ To work on the code:
 ```bash
 git clone https://github.com/its-magdy/design-twin.git
 cd design-twin
-bun install
+bun install --frozen-lockfile
 (cd bridge && bun link)   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer); no build step
 dtwin --version
 ```
@@ -120,7 +120,8 @@ design/
 It also creates the bridge token if one doesn't exist, and it never overwrites an existing file.
 With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json` (it runs the server with the absolute path of the
 `bun` that ran `dtwin init`, as `bun --no-install --no-env-file <package>/src/figma-mcp.ts` — `<package>` is the
-installed package, or `bridge/` in a clone). Enable it with `/mcp`, then restart Claude Code.
+installed package, or `bridge/` in a clone). Restart Claude Code in the project folder and approve the `designtwin`
+server when it asks (or enable it under `/mcp`).
 
 ### 2. Connect the Figma plugin
 
@@ -152,26 +153,48 @@ Recommended. The two map files are described in the README's
 
 ## Setting up as an agent
 
-If you are an agent setting this up for a user, run these in the root of the project being **built**. Three steps
-are clicks in Figma that only the user can do. Ask for them; don't try to script them.
+If you are an agent setting this up for a user, run these in the root of the project being **built**, one at a time.
+Three steps are clicks in Figma that only the user can do, and restarting Claude Code is theirs too. Ask for them;
+don't try to script them.
+
+1. Check for the CLI: `dtwin --version`. If it prints a version, skip to step 3.
+2. Install it. If `brew` is on PATH, run `brew install its-magdy/tap/dtwin` (it brings Bun). Otherwise check
+   `bun --version`; if Bun is missing, ask the user to install it from [bun.sh/install](https://bun.sh/install), then
+   run `bun add -g @design-twin/dtwin`.
+3. Install the Claude Code plugin:
+   ```bash
+   claude plugin marketplace add its-magdy/design-twin
+   claude plugin install designtwin@designtwin-marketplace
+   ```
+4. Set up the project:
+   ```bash
+   dtwin init --mcp          # design/, target.json, bridge token, plugin copy, .mcp.json entry
+   dtwin plugin path         # the manifest.json the user imports into Figma
+   dtwin token show          # the token the user pastes into the plugin
+   ```
+   `dtwin init` ends by printing the steps only the user can do. Relay them as written.
+
+The user's part:
+
+1. In Figma desktop: **Plugins → Development → Import plugin from manifest…** and pick the file `dtwin plugin path` printed (once).
+2. In Figma desktop: run **Plugins → Development → Design Twin**. Open **Connect to Claude Code (optional)**, paste the token, and press **Save** (once).
+3. Restart Claude Code in the project folder and approve the `designtwin` MCP server when it asks (or enable it under `/mcp`).
+4. Only before a `figma_write`: tick **Allow edits** in the plugin window. It is off by default, and nothing on the bridge or MCP side can turn it on.
+
+Wait for the user to confirm, then check:
 
 ```bash
-which dtwin || bun add -g @design-twin/dtwin   # or: brew install its-magdy/tap/dtwin
-dtwin --version
-dtwin init --mcp          # design/, target.json, bridge token, plugin copy, .mcp.json entry
-dtwin plugin path         # the manifest.json the user imports into Figma
-dtwin token show          # the token the user pastes into the plugin
-dtwin doctor              # every check, with the next step for each failure
+dtwin doctor --wait 60    # every check, with the next step for each failure
 ```
 
-The user's part, in Figma desktop:
+- Before the user's Figma steps, doctor's plugin check fails. That is expected.
+- If Claude Code has already started the MCP server, doctor can't probe the plugin: the check is skipped and it
+  tells you to call `figma_status`. Call `mcp__designtwin__figma_status` instead; a connected file there means it worked.
+- On any other ✗, do its `next` line. If that doesn't clear it, run `/designtwin:help <symptom>`. Its
+  troubleshooting reference matches each `dtwin doctor` failure to a fix.
 
-1. **Plugins → Development → Import plugin from manifest…** and pick the file `dtwin plugin path` printed (once).
-2. Run **Plugins → Development → Design Twin**. Open **Connect to Claude Code (optional)**, paste the token, and press **Save** (once).
-3. Only before a `figma_write`: tick **Allow edits** in the plugin window. It is off by default, and nothing on the bridge or MCP side can turn it on.
-
-Then `/designtwin:help` covers the rest. Its troubleshooting reference matches each `dtwin doctor` failure to a fix.
-Working on the Design Twin repo itself? Read [`CLAUDE.md`](../CLAUDE.md) first.
+Working on the Design Twin repo itself? The `designtwin` plugin isn't installed there, and `dtwin` is
+`bun bridge/src/figma-pull.ts`. Read [`CLAUDE.md`](../CLAUDE.md) first.
 
 ---
 

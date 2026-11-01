@@ -55,7 +55,7 @@ dependency tree the release was tested with, never a newer one published since. 
 Or from a clone (to work on the code):
 ```
 git clone https://github.com/its-magdy/design-twin.git && cd design-twin
-bun install                     # @modelcontextprotocol/sdk (+ zod), for every workspace
+bun install --frozen-lockfile   # @modelcontextprotocol/sdk (+ zod), for every workspace
 cd bridge && bun link           # puts `dtwin` in ~/.bun/bin (on your PATH); nothing to build
 ```
 Or skip the link and run `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever
