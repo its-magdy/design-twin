@@ -18,7 +18,7 @@ import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
-import { collectCandidates, focusablePath, freeHoverPoint, measureElements, type CollectOutput } from "../design-to-code/probe-page.ts";
+import { collectCandidates, focusablePath, freeHoverPoint, measureElements, rawHoverPoint, type CollectOutput } from "../design-to-code/probe-page.ts";
 import { PAGE_RUNTIME, byPath, registerPathEngine } from "../design-to-code/page-runtime.ts";
 import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
@@ -680,6 +680,23 @@ else {
   const tile = await at('[data-dt-node="70:70"]', '[data-dt-node="70:71"]');
   check(`[guard] the measured element's box is skipped even where an overlay is what elementFromPoint returns (got ${JSON.stringify(tile)})`,
     tile !== null && tile.hit === "i" && !tile.inAvoid);
+  // through an open shadow root (window.__dt.hitAt / within): a web component's own <button> in the owner's first corner is a
+  // control (document.elementFromPoint stops at the host, so it read as a free point), and an element inside the shadow root
+  // is reachable for the raw pointer (it read as covered by its own host)
+  await pg.evaluate(`(() => {
+    const host = document.createElement("div");
+    host.id = "shadow-row";
+    host.style.cssText = "position:absolute;left:640px;top:420px;width:140px;height:40px";
+    document.body.appendChild(host);
+    host.attachShadow({ mode: "open" }).innerHTML = '<style>button, i { position: absolute; display: block; margin: 0; padding: 0; border: 0 } button { left: 0; top: 0; width: 24px; height: 24px } i { right: 0; bottom: 0; width: 30px; height: 16px }</style><button aria-label="Pick shed"></button><i></i>';
+  })()`);
+  const shadowPt = await pg.evaluate(freeHoverPoint, { owner: "#shadow-row", avoid: "#no-such-element" });
+  check(`[shadow] a free point skips a web component's own shadow <button> in the owner's first corner (got ${JSON.stringify(shadowPt)}; the button is 0..24 × 0..24)`,
+    shadowPt !== null && !(shadowPt.x <= 24 && shadowPt.y <= 24));
+  const innerPath = await pg.evaluate(`window.__dt.path(document.getElementById("shadow-row").shadowRoot.querySelector("i"))`);
+  const raw = typeof innerPath === "string" ? await pg.evaluate(rawHoverPoint, { path: innerPath, at: null }) : null;
+  check(`[shadow] the raw pointer reaches an element inside an open shadow root — not "covered" by its own host (got ${JSON.stringify(raw)})`,
+    raw !== null && "hit" in raw && /^<i/.test(raw.hit));
   await fhpBrowser.close();
 }
 // A form control's shown text is its value, not its child text: in the page itself, after a person typed / chose (the

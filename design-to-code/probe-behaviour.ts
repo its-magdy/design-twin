@@ -39,7 +39,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark, BehaviourStatus, BehaviourWidth, InteractionEvidence, JsonObject, MeasuredBehaviour, PageOverflow, VerifyExpectation, VerifyInteraction } from "./types.ts";
-import { DIALOG_CONTRACT, armDetector, drivable, openerState, ownPixels, pollDetector, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
+import { drivable, openOverlay, ownPixels, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
 import type { DetectorRead } from "./probe-drive.ts";
 import { unitCap } from "./probe-session.ts";
 import type { ProbeSession } from "./probe-session.ts";
@@ -1075,9 +1075,10 @@ const park = async (page: Page): Promise<void> => { await page.mouse.move(0, 0);
  *  pixel check as the drive's (probe-drive.ts ownPixels): content of the container's own drops the control (no key is
  *  pressed on it). The pointer stays where it is (a hover-revealed opener stays revealed); the check may scroll the container
  *  into view and back, so `act` (the unit's first action arms the write block) runs before it. An error refuses. */
-async function markOpenerSeen(page: Page, id: string, act: () => void): Promise<OpenerRead> {
+async function markOpenerSeen(page: Page, id: string, act: () => void, o: { tips: boolean } = { tips: true }): Promise<OpenerRead> {
   // the unit runner took it before the unit's first action; again only after a reload (what is shown then counts as before)
-  await page.evaluate(tipPreMark, null).catch(() => false);
+  // — not when the probe's own hover is on the opener (openOverlay took it before that hover: a tooltip it shows is not "before")
+  if (o.tips) await page.evaluate(tipPreMark, null).catch(() => false);
   const r = await page.evaluate(markOpener, { id });
   if (!r.sole) return r;
   act();
@@ -1086,6 +1087,14 @@ async function markOpenerSeen(page: Page, id: string, act: () => void): Promise<
   const why = own ? (px === null ? "its pixels could not be compared" : px.why) : null;
   await page.evaluate(ownDecide, { own, why });
   return { ...r, why };
+}
+/** The battery's mouse open: the drive's own sequence (probe-drive.ts openOverlay — scroll in, guards, hover reveal, the
+ *  pointer on the click point, the click point's own control), by a REAL click only (a synthetic open is never judged: refused
+ *  instead), the opener marked for the later checks (markOpener) just before the click. A document load ends the unit. */
+async function mouseOpenOn(page: Page, row: VerifyInteraction, act: () => void): Promise<{ opened: DetectorRead["opened"]; why?: string }> {
+  const r = await openOverlay(page, row, { activation: "mouse", synthetic: false, act, beforeActivate: async () => { await markOpenerSeen(page, row.nodeId, act, { tips: false }); } });
+  if (r.read.lost) throw new UnitNavigated("the page loaded a new document");
+  return r.why !== null ? { opened: null, why: r.why } : { opened: r.opened };
 }
 /** Close the open dialog with its SAFE close control (a button / [role=button] named Cancel, Close, ×…, never a
  *  navigating link, never a submit) — by a mouse click (an Enter on it would also fire a dialog's own "Enter =
@@ -1677,8 +1686,8 @@ function renderUnit(ctx: UnitCtx): Unit {
 }
 
 /** One battery row as its two units see it: `key` (nodeId|trigger) names it in keyOpens / nonModal, `base` is what each of
- *  its checks carries, `contract` the detector's dialog selectors, `uses` the tags it acts on. */
-interface BatteryRow { row: VerifyInteraction; key: string; base: { nodeId: string; trigger: string }; destId: string | null; contract: string[]; uses: string[] }
+ *  its checks carries, `uses` the tags it acts on (openOverlay arms the detector with the dialog contract). */
+interface BatteryRow { row: VerifyInteraction; key: string; base: { nodeId: string; trigger: string }; destId: string | null; uses: string[] }
 /** The battery: per overlay row opened as a modal by a real click in the drive, R-key then R-scroll (each its own share of
  *  the budget). */
 async function runBattery(ctx: UnitCtx): Promise<void> {
@@ -1691,9 +1700,8 @@ async function runBattery(ctx: UnitCtx): Promise<void> {
     const key = `${row.nodeId}|${row.trigger}`;
     const base = { nodeId: row.nodeId, trigger: row.trigger };
     const destId = row.destinationId ?? null;
-    const contract = [...DIALOG_CONTRACT];
     const uses = destId === null ? [row.nodeId] : [row.nodeId, destId];
-    const b: BatteryRow = { row, key, base, destId, contract, uses };
+    const b: BatteryRow = { row, key, base, destId, uses };
     await runUnit(ctx, keyUnit(ctx, b));
     // a key that opened the dialog but was charged with a write is not pressed again to open it without scrolling
     if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
@@ -1703,7 +1711,7 @@ async function runBattery(ctx: UnitCtx): Promise<void> {
 /** R-key: keyboard activation, focus on open, focus trap, Escape closes, focus return, nested Escape. */
 function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
   const { keyOpens, nonModal } = ctx;
-  const { row, key, base, destId, contract, uses } = b;
+  const { row, key, base, destId, uses } = b;
   return {
     name: `keyboard ${key}`, battery: true, uses,
     declared: [{ id: "keyboard.activation", ...base }, { id: "dialog.focus-on-open", ...base }, { id: "dialog.focus-trap", ...base }, { id: "dialog.escape-closes", ...base },
@@ -1712,43 +1720,14 @@ function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
       const { page } = u;
       const add = (c: Omit<BehaviourCheck, "nodeId" | "trigger">): void => u.add({ ...c, ...base });
       await park(page);
-      const detect = async (): Promise<DetectorRead["opened"]> => {
-        const t = Date.now();
-        for (;;) {
-          const r = await page.evaluate(pollDetector, { destId, contract });
-          if (r.lost) throw new UnitNavigated("the page loaded a new document");
-          if (r.opened && (destId === null || (r.dest !== null && r.dest.inside) || Date.now() - t >= 500)) return r.opened;
-          if (Date.now() - t >= 2000) return r.opened;
-          await sleep(100);
-        }
-      };
       /** null opened + blocked: the key was never pressed */
       const keyOpen = async (key: "Enter" | " "): Promise<{ opened: DetectorRead["opened"]; blocked: string | null }> => {
-        await page.evaluate(armDetector, { destId, contract });
-        const blocked = await pressOnOpener(page, key, u.act);
-        return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
+        const r = await openOverlay(page, row, { activation: "key", press: () => pressOnOpener(page, key, u.act), act: u.act });
+        if (r.read.lost) throw new UnitNavigated("the page loaded a new document");
+        return r.why !== null ? { opened: null, blocked: r.why } : { opened: r.opened, blocked: null };
       };
-      /** the drive's mouse path: reveal a hover-hidden opener (pointer parked, hover its nearest visible ancestor), real click */
-      const mouseOpen = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => {
-        let st = await page.evaluate(openerState, { id: row.nodeId });
-        if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
-        if (st.disabled) return { opened: null, why: "the opener is disabled" };
-        if (!st.visible && st.hoverPath !== null) {
-          await page.mouse.move(0, 0);
-          u.act();
-          await byPath(page, st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
-          await raf2(page);
-          st = await page.evaluate(openerState, { id: row.nodeId });
-        }
-        if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
-        const loc = byPath(page, st.path).first();
-        if ((await loc.evaluate(submitGuard)) !== null) return { opened: null, why: "the opener would submit a form" };
-        await markOpenerSeen(page, row.nodeId, u.act);
-        await page.evaluate(armDetector, { destId, contract });
-        u.act();
-        await loc.click({ timeout: 2000 });
-        return { opened: await detect() };
-      };
+      /** the drive's mouse open (probe-drive.ts openOverlay) — a real click only, never the synthetic fallback */
+      const mouseOpen = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => mouseOpenOn(page, row, u.act);
       // keyboard.activation: Tab from a sentinel to the opener, Enter (then Space)
       u.phase("keyboard.activation");
       const marked = await markOpenerSeen(page, row.nodeId, u.act);
@@ -1935,7 +1914,7 @@ function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
 /** R-scroll: scroll-open (y = 0 / 150 / max), scrim, click-outside. */
 function scrollUnit(ctx: UnitCtx, b: BatteryRow): Unit {
   const { keyOpens, nonModal } = ctx;
-  const { row, key, base, destId, contract, uses } = b;
+  const { row, key, base, destId, uses } = b;
   return {
     name: `scroll ${key}`, battery: true, uses,
     declared: [{ id: "dialog.scroll-open", ...base }, { id: "dialog.scrim", ...base }, { id: "dialog.click-outside", ...base }],
@@ -1947,41 +1926,24 @@ function scrollUnit(ctx: UnitCtx, b: BatteryRow): Unit {
       const centre = overlayCentred(ov);
       const keyVia = keyOpens.get(key) ?? null;
       await park(page);
-      const detect = async (): Promise<DetectorRead["opened"]> => {
-        const t = Date.now();
-        for (;;) {
-          const r = await page.evaluate(pollDetector, { destId, contract });
-          if (r.lost) throw new UnitNavigated("the page loaded a new document");
-          if (r.opened && (destId === null || (r.dest !== null && r.dest.inside) || Date.now() - t >= 500)) return r.opened;
-          if (Date.now() - t >= 2000) return r.opened;
-          await sleep(100);
-        }
-      };
-      /** open WITHOUT scrolling: a mouse click at the opener's on-screen point (a hover-hidden one revealed by moving the
-       *  pointer to its ancestor's point — never locator.hover, which scrolls), else focus({preventScroll})+the key that
-       *  opened it in keyboard.activation */
+      /** open WITHOUT scrolling: the drive's mouse open at this scroll (probe-drive.ts openOverlay scroll:false — the
+       *  pointer moves to a hover-hidden opener's ancestor and to the click point, never locator.hover, which scrolls; a real
+       *  click where the opener is on top), else focus({preventScroll})+the key that opened it in keyboard.activation */
       const openStill = async (): Promise<{ opened: DetectorRead["opened"]; how: string } | { why: string }> => {
-        await page.mouse.move(0, 0);
-        let p = await markOpenerSeen(page, row.nodeId, u.act);
-        if (!p.found) return { why: "the opener is not on the page" };
-        if (!p.visible && p.hover && p.hover.inViewport) {
-          u.act();
-          await page.mouse.move(p.hover.x, p.hover.y);
-          await raf2(page);
-          p = await markOpenerSeen(page, row.nodeId, u.act);
-        }
-        if (p.visible && p.inViewport && p.hits) {
-          await page.evaluate(armDetector, { destId, contract });
-          u.act();
-          await page.mouse.click(p.x, p.y);
-          return { opened: await detect(), how: "a mouse click at its on-screen point" };
-        }
+        const m = await openOverlay(page, row, { activation: "mouse", scroll: false, synthetic: false, act: u.act, beforeActivate: async () => { await markOpenerSeen(page, row.nodeId, u.act, { tips: false }); } });
+        if (m.read.lost) throw new UnitNavigated("the page loaded a new document");
+        if (m.refused === null) return { opened: m.opened, how: "a mouse click at its on-screen point" };
+        const f = m.refused;
+        // never pressed instead: an opener that is not there, is disabled, would submit, or whose point is another control
+        if (f.kind === "count") return { why: "the opener is not on the page" };
+        if (f.kind !== "hidden" && f.kind !== "off-screen") return { why: m.why ?? "the opener was not clicked" };
         if (keyVia !== null) {
+          await markOpenerSeen(page, row.nodeId, u.act);
           await page.evaluate(focusOpener, { preventScroll: true });
-          await page.evaluate(armDetector, { destId, contract });
-          const blocked = await pressOnOpener(page, keyVia, u.act);
-          if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
-          return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
+          const k = await openOverlay(page, row, { activation: "key", press: () => pressOnOpener(page, keyVia, u.act), act: u.act });
+          if (k.read.lost) throw new UnitNavigated("the page loaded a new document");
+          if (k.why !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${k.why})` };
+          return { opened: k.opened, how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
         }
         return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
       };

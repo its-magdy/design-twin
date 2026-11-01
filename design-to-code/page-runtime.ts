@@ -183,6 +183,46 @@ export function installPageRuntime(): void {
     }
     return { x: r.x + r.width / 2, y: r.y + r.height / 2, onScreen: false };
   };
+  /** what the mouse presses at (x, y) — the deepest element there, through open shadow roots (document.elementFromPoint
+   *  stops at a shadow host): a web component's own <button>, or for text slotted into a shadow control its <slot> (the
+   *  path its click event takes up the flat tree). A host whose shadow root has nothing of its own there is the host. Not
+   *  seen: a closed shadow root. null: nothing at the point. */
+  const hitAt = (x: number, y: number): PageElement | null => {
+    let hit = document.elementFromPoint(x, y), from = hit;
+    for (let i = 0; hit && hit.shadowRoot && i < 32; i++) {
+      const host: PageElement = hit, sr = hit.shadowRoot;
+      const deeper = sr.elementFromPoint ? sr.elementFromPoint(x, y) : null;
+      let under = false;
+      for (let p = deeper; p; p = parent(p)) if (p === host) { under = true; break; }
+      if (deeper && deeper !== host && under) { hit = deeper; from = deeper; continue; }
+      const slotted = Array.from(host.childNodes).find((t) => {
+        if (t.nodeType !== 3 || !t.assignedSlot) return false;
+        const rg = document.createRange();
+        rg.selectNodeContents(t);
+        return Array.from(rg.getClientRects()).some((q) => x >= q.x && x <= q.right && y >= q.y && y <= q.bottom);
+      });
+      from = slotted && slotted.assignedSlot ? slotted.assignedSlot : host;
+      break;
+    }
+    return from;
+  };
+  /** is `el` `anc` or below it in the flat tree (Node.contains stops at a shadow root) */
+  const within = (el: PageElement | null, anc: PageElement): boolean => {
+    for (let p = el; p; p = parent(p)) if (p === anc) return true;
+    return false;
+  };
+  /** The 9 points a pointer tries on a box: its 4 corners, 4 edge midpoints and centre, inset `inset` px — "corners" order
+   *  (corners, edge midpoints, centre) or "centre" first — of those, the ones in the layout viewport (viewport()); none when the
+   *  inset box is empty. */
+  const samplePoints = (rect: { x: number; y: number; width: number; height: number }, o: { inset: number; order: "corners" | "centre" }): Array<[number, number]> => {
+    const l = rect.x + o.inset, r = rect.x + rect.width - o.inset, t = rect.y + o.inset, b = rect.y + rect.height - o.inset;
+    if (r < l || b < t) return [];
+    const cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
+    const ring: Array<[number, number]> = [[l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy]];
+    const all: Array<[number, number]> = o.order === "centre" ? [[cx, cy], ...ring] : [...ring, [cx, cy]];
+    const { w: vw, h: vh } = viewport();
+    return all.filter(([x, y]) => x >= 0 && y >= 0 && x < vw && y < vh);
+  };
   /** the deep active element — through open shadow roots (an iframe is one: focus inside it leaves the iframe active) */
   const active = (): PageElement | null => {
     let a = document.activeElement;
@@ -531,7 +571,7 @@ export function installPageRuntime(): void {
   };
 
   const dt: PageRuntime = {
-    parent, paths, path: (el) => paths()(el), find, controlText, ownText, shownText, visible, viewport, clickPoint, active, tagSel, tagged, describe, ownContent,
+    parent, paths, path: (el) => paths()(el), find, controlText, ownText, shownText, visible, viewport, clickPoint, hitAt, within, samplePoints, active, tagSel, tagged, describe, ownContent,
   };
   Object.defineProperty(window, "__dt", { value: dt, configurable: true });
 }

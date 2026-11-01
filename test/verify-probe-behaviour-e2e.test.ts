@@ -6,7 +6,7 @@
 // openers (each opens a dialog holding the destination frame's tag 80:60 — overlay center, closeOnClickOutside, #00000066), a
 // mask icon, a focus-ring utility pair, a Seed Trays region and a tall tail. No ?mode= is the correct twin; ?mode=broken
 // breaks one thing per check (hidden-opener, leaky-listbox, div-modal, relative-dialog, backdrop-ignored, outline-hidden,
-// mask-bare, nested-regions, two-main, unnamed-icon, div-button, hover-only); ?mode=fixed-table and ?mode=spin-on-tab stand alone. The
+// mask-bare, nested-regions, two-main, unnamed-icon, div-button, hover-only); ?mode=fixed-table, ?mode=spin-on-tab and ?mode=uncover-hover stand alone. The
 // server sends `Content-Security-Policy: script-src 'self'` on every page (the app script is served from /seed-shelf.js), so
 // axe-core runs under a CSP (it is injected by page.evaluate). The server counts every write — any method but GET/HEAD/OPTIONS
 // at any path (POST /graphql excepted: the fixture's read-by-POST endpoint) and every WebSocket message the page sends:
@@ -217,6 +217,8 @@ const P = {
   r5: q(later(projBare, ["--expected", kase(projBare, "QuietOk", QUIET), "--url", url(), "--behaviour", "off"])),
   rAx: q(later(projSlowAxe, ["--expected", kase(projSlowAxe, "SlowAxe", QUIET), "--url", url()])),
   r6: q(later(projBare, ["--expected", kase(projBare, "Spin", QUIET), "--url", url("spin-on-tab"), "--max-time", "40000"])),
+  // the 80:24 opener a click-only <span> under a layer that lets the pointer through only while its slot is hovered
+  rUn: q(later(projBare, ["--expected", kase(projBare, "Uncover", EXP), "--url", url("uncover-hover")])),
 };
 
 // ================================================================ the correct twin (axe-core in the project)
@@ -255,6 +257,27 @@ const ix = (m: VerifyMeasured | null, id: string): NonNullable<VerifyMeasured["i
 check("an opener under a transparent layer (synthetic drive row, ok:null) is never used for the battery: every dialog.* 80:24 not-run 'synthetic'",
   ix(m1, "80:24")?.ok === null && ix(m1, "80:24")?.activation === "synthetic"
   && rows(m1).filter((c) => c.nodeId === "80:24").length === 8 && rows(m1).filter((c) => c.nodeId === "80:24").every((c) => c.status === "not-run" && /synthetic/.test(c.detail)));
+
+// ================================================================ the battery opens as the drive does (probe-drive.ts openOverlay)
+// a click-only opener under a transparent layer that lets the pointer through only while its slot is hovered: the drive puts
+// the pointer on the click point first, so its real click lands — and the battery's mouse opens now do the same (a plain
+// Playwright click times out on it, so the battery used to end with "the check could not run")
+const rUn = await P.rUn;
+const mUn = read(projBare, baseOf("Uncover"));
+if (rUn.status !== 0) console.log(rUn.stderr);
+const un = rows(mUn).filter((c) => c.nodeId === "80:24");
+const unOpen = un.filter((c) => c.id === "dialog.scroll-open" && /a mouse click at its on-screen point/.test(c.detail));
+if (!(un.some((c) => c.id === "dialog.focus-on-open" && c.status === "pass") && unOpen.length > 0)) show(mUn, /./);
+check(`[open] a hover-uncovered click-only opener: the drive clicks it by mouse (ok:true) — got ${JSON.stringify([ix(mUn, "80:24")?.ok, ix(mUn, "80:24")?.activation])}`,
+  rUn.status === 0 && ix(mUn, "80:24")?.ok === true && ix(mUn, "80:24")?.activation === "mouse");
+check("[open] …and the battery opens it by the same mouse sequence: keyboard.activation 80:24 not-run (Tab never reaches it), dialog.focus-on-open + escape-closes 80:24 pass, no row 'could not run'",
+  statusOf(mUn, "keyboard.activation", "80:24") === "not-run" && statusOf(mUn, "dialog.focus-on-open", "80:24") === "pass" && statusOf(mUn, "dialog.escape-closes", "80:24") === "pass"
+  && !un.some((c) => /could not run|did not open/.test(c.detail)));
+const unStill = un.filter((c) => c.id === "dialog.scroll-open");
+check(`[open] …and the scroll unit opens it at y=150 by a mouse click at its on-screen point (the pointer on the point first); a scroll where it is not on screen says so (got ${JSON.stringify(unStill.map((c) => [c.variant, c.status, c.detail.slice(0, 90)]))})`,
+  unOpen.some((c) => c.variant === "y=150") && unStill.every((c) => unOpen.includes(c) || /off screen at this scroll/.test(c.detail)));
+check("[open] never destructive: no write in the uncover run", writesOf("uncover-hover").length === 0);
+
 check("[axe] axe-core from the PROJECT: ran, version = the repo's devDependency, 0 violations → a11y.axe pass — under the page's CSP script-src 'self'",
   b1?.ran === true && b1.axe.ran === true && b1.axe.version === axeVersion && b1.axe.violations.length === 0 && statusOf(m1, "a11y.axe") === "pass" && cspPages > 0 && m1?.frame?.via === "tag");
 const fc1 = path.join(projAxe, baseOf("Ok") + ".forced-colors.png");

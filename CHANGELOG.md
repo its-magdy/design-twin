@@ -9,6 +9,16 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Fixed
+
+- `/designtwin:verify`'s behaviour checks now open an overlay the way the interaction drive does: scrolled into view,
+  the pointer on the click point first, and the same guards. An opener that is hover-revealed or only clickable while
+  hovered used to end the dialog checks with "the check could not run", though the drive had opened it. The two
+  probes also wait for a slow dialog by one rule: up to 0.5 s after it first shows.
+- Hover points and the submit guard now see inside open shadow roots, as the click check already did. A web
+  component's own button in a corner is no longer taken as a free hover point, and an element inside a shadow root
+  is no longer reported as covered by its own host.
+
 ## [0.1.5] - 2026-11-01
 
 ### Added
