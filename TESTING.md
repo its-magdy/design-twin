@@ -231,7 +231,8 @@ bun test/plugin-install.test.ts # expect: all checks pass, exit 0 — `dtwin plu
 bun test/pack-lock.test.ts     # expect: all checks pass, exit 0 — the npm package's bun.lock (bridge/pack.ts) held to the
                                  # root lock's exact pins and sha512s; no ports, no network
 bun test/version-sync.test.ts  # expect: all checks pass, exit 0 — one version across the CLI package, the Figma plugin and
-                                 # the Claude Code plugin (what `bun run release:bump` sets)
+                                 # the Claude Code plugin (what `bun run release:bump` sets), CHANGELOG.md's entry for it
+                                 # and release:bump's Unreleased → version promotion
 bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/served-session.ts bridge/src/pending-requests.ts bridge/src/clock.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/cli-commands.ts bridge/src/doctor.ts
 ```
 

@@ -68,7 +68,10 @@ to re-bundle `claude-plugin/scripts/`.
 ## Commits and pull requests
 
 - Commit messages follow `type(scope): summary` (`fix`, `feat`, `refactor`, `test`, `docs`, `chore`), with the why in
-  the body. Git history is the changelog.
+  the body.
+- If users will notice the change, add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), written for
+  them rather than as a commit message. A release turns those notes into its entry (`bun run release:bump <x.y.z>`),
+  and the GitHub Release opens with them.
 - Keep a pull request to one concern, and fill in the template.
 - CI must be green; the required check is **test result**.
 

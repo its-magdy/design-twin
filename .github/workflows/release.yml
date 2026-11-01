@@ -1,7 +1,8 @@
 name: release
 
 # Pushing a v* tag publishes bridge/ (the @design-twin/dtwin package, `dtwin` CLI) to npm, then creates the GitHub Release.
-# bun run release:bump <x.y.z> (every version file, code.js, bun.lock), merge, then tag that commit: git tag v0.1.0 && git push origin v0.1.0
+# Write the changes under CHANGELOG.md's "## [Unreleased]", bun run release:bump <x.y.z> (every version file, code.js,
+# bun.lock, the CHANGELOG.md entry), merge, then tag that commit: git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
     tags:
@@ -71,6 +72,21 @@ jobs:
 
       - name: Typecheck
         run: bun run typecheck
+
+      # The GitHub Release opens with this version's CHANGELOG.md entry (release:bump writes it from Unreleased); a tag
+      # whose version has none stops here, before anything is published.
+      - name: CHANGELOG.md has this version's entry
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-notes"
+          bun --no-install --no-env-file bridge/release-bump.ts --notes "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/release-notes/notes.md"
+          cat "$RUNNER_TEMP/release-notes/notes.md"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes/notes.md
+          if-no-files-found: error
+          retention-days: 7
 
       # The package ships its TypeScript as is (no build): smoke the CLI the way the installed `dtwin` starts it.
       - name: CLI runs
@@ -185,6 +201,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes
+
+      # The CHANGELOG.md entry preflight checked, then GitHub's generated list of merged PRs after it.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -192,7 +214,7 @@ jobs:
         run: |
           prerelease=""
           case "$TAG" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $prerelease
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --notes-file "$RUNNER_TEMP/release-notes/notes.md" --generate-notes $prerelease
 
   # Last: tell the Homebrew tap (its-magdy/homebrew-tap) to move Formula/dtwin.rb to this version. Its update-dtwin.yml
   # workflow fetches the npm tarball just published, recomputes the sha256 and commits the formula. Needs a GitHub App
