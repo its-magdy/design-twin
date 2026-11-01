@@ -41,11 +41,11 @@ check("depth: COLORTERM=truecolor → 3, TERM=*256color → 2, plain xterm → 1
   colorLevel({ COLORTERM: "truecolor", TERM: "xterm" }, mac) === 3 && colorLevel({ TERM: "xterm-256color" }, mac) === 2 && colorLevel({ TERM: "xterm" }, mac) === 1);
 check("NO_COLOR (any non-empty value) and TERM=dumb → off; an empty NO_COLOR is ignored",
   colorLevel({ NO_COLOR: "1", COLORTERM: "truecolor" }, mac) === 0 && colorLevel({ TERM: "dumb" }, mac) === 0 && colorLevel({ NO_COLOR: "", TERM: "xterm-256color" }, mac) === 2);
-check("FORCE_COLOR wins (as Node/chalk): 0/false → off; empty/true/1 → 16 colours; 2/3 → that depth, even over NO_COLOR or TERM=dumb; other values → detected depth",
+check("FORCE_COLOR wins (as Node/chalk): 0/false → off; empty/true/1 → 16 colours; 2/3 → that depth, even over NO_COLOR or TERM=dumb; any other value → off",
   colorLevel({ FORCE_COLOR: "0", COLORTERM: "truecolor" }, mac) === 0 && colorLevel({ FORCE_COLOR: "false" }, mac) === 0
   && colorLevel({ FORCE_COLOR: "1", NO_COLOR: "1" }, mac) === 1 && colorLevel({ FORCE_COLOR: "3", TERM: "dumb" }, mac) === 3
   && colorLevel({ FORCE_COLOR: "", TERM: "xterm-256color", NO_COLOR: "1" }, mac) === 1 && colorLevel({ FORCE_COLOR: "true", COLORTERM: "truecolor" }, mac) === 1
-  && colorLevel({ FORCE_COLOR: "yes", TERM: "xterm-256color" }, mac) === 2);
+  && colorLevel({ FORCE_COLOR: "yes", TERM: "xterm-256color" }, mac) === 0);
 check("Windows console with no TERM → truecolor", colorLevel({}, "win32") === 3);
 check("locale: unset or UTF-8 → glyphs; C / POSIX / Latin-1 → no glyphs; LC_ALL wins over LANG",
   utf8Locale({}, mac) && utf8Locale({ LANG: "en_US.UTF-8" }, mac) && utf8Locale({ LC_CTYPE: "UTF-8" }, mac)

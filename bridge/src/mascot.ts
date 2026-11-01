@@ -8,7 +8,7 @@
 //
 // The grid is drawn so no cell mixes a handle pixel with an ink pixel. The ink is the terminal's own foreground
 // colour (right on light and dark themes), and only the handles get a colour, so a cell never needs two colours.
-// Colour follows the usual conventions: FORCE_COLOR (0/false = off, 1/true/empty = 16 colours, 2 = 256, 3 = truecolor) wins, then
+// Colour follows the usual conventions: FORCE_COLOR (1/true/empty = 16 colours, 2 = 256, 3 = truecolor, anything else = off) wins, then
 // NO_COLOR (https://no-color.org) and TERM=dumb turn it off; otherwise the depth is read from COLORTERM / TERM. With
 // colour off the handles print in the foreground colour too: just the outline.
 
@@ -79,7 +79,7 @@ export function colorLevel(env: Env, platform: string = process.platform): Color
     if (force === "" || force === "1" || force.toLowerCase() === "true") return 1; // as Node and chalk read it
     if (force === "2") return 2;
     if (force === "3") return 3;
-    return detectedLevel(env, platform);
+    return 0; // any other value: off, as Node reads it
   }
   if (env.NO_COLOR) return 0;
   if (env.TERM === "dumb") return 0;
