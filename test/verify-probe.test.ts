@@ -25,6 +25,7 @@ import { buildPool, census, chooseMatch, claimOnce, isMatch, resolveFrame, shape
 import * as PM from "../design-to-code/probe-match.ts";
 import * as PP from "../design-to-code/probe-page.ts";
 import * as VP from "../design-to-code/verify-probe.ts";
+import * as SG from "../design-to-code/screen-gate.ts";
 import type { Match, MatchPool, NoMatch, ResolvedFrame } from "../design-to-code/probe-match.ts";
 import type { Candidate, CollectOutput, ElemFlags, MeasureResult, SizedCandidate } from "../design-to-code/probe-page.ts";
 import { errorKind, installHint, installedInProject, resolvePlaywright } from "../design-to-code/verify-probe.ts";
@@ -536,7 +537,7 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   const readyEmpty = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", " "]);
   t("[ready] --ready ' ' → exit 2 \"--ready must be a selector or none, got ' '\"", () => readyEmpty.status === 2 && readyEmpty.stderr.startsWith("verify-probe: --ready must be a selector or none, got ' '"));
   t("[ready] readyOf: the default is the frame's tag (quoted for CSS); an explicit selector is kept; none waits for nothing; no frame id → no default, said so", () => {
-    const d = VP.readyOf(undefined, "1:2"), q = VP.readyOf(undefined, "a\"b"), x = VP.readyOf("#app", "1:2"), n = VP.readyOf("none", "1:2"), u = VP.readyOf(undefined, undefined);
+    const d = SG.readyOf(undefined, "1:2"), q = SG.readyOf(undefined, "a\"b"), x = SG.readyOf("#app", "1:2"), n = SG.readyOf("none", "1:2"), u = SG.readyOf(undefined, undefined);
     return d.ready === "[data-dt-node=\"1:2\"]" && q.ready === "[data-dt-node=\"a\\\"b\"]" && x.ready === "#app" && x.note === "ready  #app" && n.ready === undefined && u.ready === undefined
       && u.note === "note  the expectation names no frame node id, so there is no --ready default — the page is measured once it is quiet (pass --ready <selector>)";
   });
@@ -544,11 +545,11 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   const MISSED_TAIL = ") — or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing) — or the root is untagged and most of " +
     "its tags are not visible at load: tag the root data-dt-node=\"1:2\" or pass --ready <root selector>";
   t("[ready] the exit-4 hint of a default --ready that never showed (nor enough of the expectation's tags) names the redirect, another section and the tagging opt-out — without --steps: reach the section with --steps", () =>
-    VP.defaultReadyMissed("[data-dt-node=\"1:2\"]", false) === `${MISSED_HEAD}a screen that is a section of the app is reached with --steps <plan.json>${MISSED_TAIL}`);
+    SG.defaultReadyMissed("[data-dt-node=\"1:2\"]", false) === `${MISSED_HEAD}a screen that is a section of the app is reached with --steps <plan.json>${MISSED_TAIL}`);
   t("[ready] …with --steps passed it never says to reach it with --steps: the steps ended somewhere else", () =>
-    VP.defaultReadyMissed("[data-dt-node=\"1:2\"]", true) === `${MISSED_HEAD}the --steps ended somewhere else: check the plan's navigate list${MISSED_TAIL}`);
+    SG.defaultReadyMissed("[data-dt-node=\"1:2\"]", true) === `${MISSED_HEAD}the --steps ended somewhere else: check the plan's navigate list${MISSED_TAIL}`);
   t("[ready] readyOf with a --steps plan that opts out of tagging → no default, said so; an explicit --ready still wins", () => {
-    const off = VP.readyOf(undefined, "1:2", true), offX = VP.readyOf("#root", "1:2", true);
+    const off = SG.readyOf(undefined, "1:2", true), offX = SG.readyOf("#root", "1:2", true);
     return off.ready === undefined && off.note === "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default — the page is measured once it is quiet (pass --ready <root selector>)"
       && offX.ready === "#root";
   });
@@ -556,22 +557,22 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     VP.planTaggingOff({ tagging: { off: true, reason: "a third-party renderer" } }) && !VP.planTaggingOff({ tagging: { off: true } }) && !VP.planTaggingOff({ tagging: { off: true, reason: " " } })
     && !VP.planTaggingOff({ tagging: { off: false, reason: "x" } }) && !VP.planTaggingOff({ navigate: [] }) && !VP.planTaggingOff([]) && !VP.planTaggingOff(null));
   t("[ready] ownTagsOf: the screen root's own tags but the frame's — its nodes and instances, never a hidden one, never another root's (a frameId) or another root itself; every named id is known; the frame's size; none → null", () => {
-    const sel = VP.ownTagsOf({ frame: { nodeId: "1:1", w: 1280, h: 800 }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
+    const sel = SG.ownTagsOf({ frame: { nodeId: "1:1", w: 1280, h: 800 }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
       nodes: [{ nodeId: "1:2", name: "Label", type: "TEXT" }, { nodeId: "1:3", name: "Gone", type: "FRAME" }, { nodeId: "1:1", name: "Orders", type: "FRAME" },
         { nodeId: "9:1", name: "Dialog", type: "FRAME", frameId: "9:1" }, { nodeId: "9:2", name: "Title", type: "TEXT", frameId: "9:1" }, { nodeId: "9:3", name: "Close", type: "INSTANCE", frameId: "9:1" }],
       instances: [{ nodeId: "1:4", name: "Button" }, { nodeId: "9:3", name: "Close" }], hidden: { roots: [], ids: ["1:3"] } }, "1:1");
     return sel !== null && sel.ids.join(" ") === "1:2 1:4" && [...sel.known].sort().join(" ") === "1:1 1:2 1:3 1:4 9:1 9:2 9:3" && sel.frame?.w === 1280 && sel.frame.h === 800
-      && VP.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [] }, "1:1") === null && VP.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [{ nodeId: "1:2", name: "L", type: "TEXT" }] }, "1:1")?.frame === null;
+      && SG.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [] }, "1:1") === null && SG.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [{ nodeId: "1:2", name: "L", type: "TEXT" }] }, "1:1")?.frame === null;
   });
   t("[ready] ownTagsOf: every spec's aliases are known; an own node's alias maps to it (alias), another root's node's alias and an alias that is itself a named id do not", () => {
-    const al = VP.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
+    const al = SG.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
       nodes: [{ nodeId: "1:2", name: "Nav", type: "FRAME", aliases: ["8:2", "8:3"] }, { nodeId: "1:3", name: "Item", type: "TEXT", aliases: ["1:2"] },
         { nodeId: "9:2", name: "Title", type: "TEXT", frameId: "9:1", aliases: ["8:9"] }] }, "1:1");
     return al !== null && JSON.stringify(al.alias) === JSON.stringify({ "8:2": "1:2", "8:3": "1:2" })
       && ["8:2", "8:3", "8:9"].every((id) => al.known.includes(id)) && al.ids.join(" ") === "1:2 1:3";
   });
   t("[ready] ownTagsOf: an instance row of another root (its frameId) is not counted, even when no spec names it; known", () => {
-    const inst = VP.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
+    const inst = SG.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
       nodes: [{ nodeId: "1:2", name: "Label", type: "TEXT" }], instances: [{ nodeId: "1:4", name: "Button" }, { nodeId: "9:5", name: "Chip", frameId: "9:1" }] }, "1:1");
     return inst !== null && inst.ids.join(" ") === "1:2 1:4" && inst.known.includes("9:5");
   });
@@ -584,7 +585,7 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
         children: [text("5:2", "Heading", "Confirm", FONT), text("5:3", "Text", "Sure?", FONT), text("5:4", "Ok", "OK", FONT),
           { type: "INSTANCE", id: "5:5", name: "Chip", box: { x: 0, y: 0, w: 40, h: 20 }, mainComponent: { name: "Chip", key: "k-chip" } }] },
     ], { screen: "Panel" }) }]);
-    const own = VP.ownTagsOf(multi, "1:1");
+    const own = SG.ownTagsOf(multi, "1:1");
     t("[ready] ownTagsOf on a built screen + dialog expectation → only the screen root's nodes and instance (1:2 1:3 1:6); the dialog's root, nodes and instance are known, not counted", () =>
       own !== null && own.ids.join(" ") === "1:2 1:3 1:6" && ["5:1", "5:2", "5:3", "5:4", "5:5"].every((id) => own.known.includes(id)));
     t("[ready] verify-expect: a multi-root export's instance rows under a later root carry its frameId; the first root's carry none", () =>
@@ -597,24 +598,24 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
       JSON.stringify(single.instances) === JSON.stringify([{ nodeId: "1:6", name: "Tag", setName: "Tag", setKey: "k-tag" }]));
   }
   t("[ready] takesForScreen: a page without the frame's tag is the screen only when it shows at least half of the expectation's own tags (a shell's few never are)", () =>
-    VP.takesForScreen(5, 10) && VP.takesForScreen(10, 10) && !VP.takesForScreen(4, 10) && !VP.takesForScreen(3, 20) && !VP.takesForScreen(0, 0));
+    SG.takesForScreen(5, 10) && SG.takesForScreen(10, 10) && !SG.takesForScreen(4, 10) && !SG.takesForScreen(3, 20) && !SG.takesForScreen(0, 0));
   const NOTE_HEAD = "the screen root is not tagged: [data-dt-node=\"1:1\"] (the default --ready) never showed within ";
   const NOTE_MID = ", but the page shows at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ";
   const NOTE_TAIL = " — tag the root data-dt-node=\"1:1\", or pass --ready <root selector>";
   t("[ready] the untagged-root note names the frame's tag, the actual wait, the measurement as the screen, how the root was found and both fixes", () =>
-    VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 30_000, "size-and-fill") === `${NOTE_HEAD}30s${NOTE_MID}its root found as the outermost element with the frame's size (±2 px) and a fill${NOTE_TAIL}`);
+    SG.untaggedRootNote("[data-dt-node=\"1:1\"]", 30_000, "size-and-fill") === `${NOTE_HEAD}30s${NOTE_MID}its root found as the outermost element with the frame's size (±2 px) and a fill${NOTE_TAIL}`);
   t("[ready] …a wait cut short by a navigation's window says its own length (2.4s), and a root the measurement could not find says the viewport stands in for it", () =>
-    VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 2_400, "viewport") === `${NOTE_HEAD}2.4s${NOTE_MID}no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)${NOTE_TAIL}`);
+    SG.untaggedRootNote("[data-dt-node=\"1:1\"]", 2_400, "viewport") === `${NOTE_HEAD}2.4s${NOTE_MID}no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)${NOTE_TAIL}`);
   t("[ready] …and no note when the frame's tag showed after a wait a navigation cut short (the measurement found the root by its tag): the root is tagged", () =>
-    VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 0, "tag") === null);
+    SG.untaggedRootNote("[data-dt-node=\"1:1\"]", 0, "tag") === null);
   {
     // a hung main thread never answers page.evaluate: the look and the wait end on their own bound
     const hung = { evaluate: (): Promise<never> => new Promise<never>(() => undefined), isClosed: () => false };
-    const root: VP.UntaggedRoot = { ids: ["1:2"], known: ["1:1", "1:2"], alias: {}, frame: null, seen: true };
+    const root: SG.OwnTags = { ids: ["1:2"], known: ["1:1", "1:2"], alias: {}, frame: null };
     // (the bounds' timers do not hold the process open — a live browser connection does in a real run, this one here)
     const keepAlive = setInterval(() => undefined, 1_000);
     const t0 = Date.now();
-    const look = await VP.screenTagsNow(hung, root, 50);
+    const look = await SG.screenTagsNow(hung, root, 50);
     const lookMs = Date.now() - t0;
     t("[ready] screenTagsNow on a page that never answers → null within its bound (50 ms), never a hang", () => look === null && lookMs < 1_000);
     const t2 = Date.now();
@@ -624,7 +625,7 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     t("[ready] docTokenWithin (the document token read after the frame's wait ran out) on a page that never answers → undefined (unanswered, not null) within its bound (50 ms); a page that answers → its token", () =>
       tok === undefined && tokMs < 1_000 && answered === "doc7");
     const t1 = Date.now();
-    const waited = await VP.waitForScreenTags(hung, root, 200).then(() => "met", (e: unknown) => (e instanceof Error ? e.name : "?"));
+    const waited = await SG.waitForScreenTags(hung, root, 200).then(() => "met", (e: unknown) => (e instanceof Error ? e.name : "?"));
     const waitMs = Date.now() - t1;
     clearInterval(keepAlive);
     t("[ready] waitForScreenTags on a page that never answers → a TimeoutError once its 200 ms run out, never held past them", () => waited === "TimeoutError" && waitMs < 1_500);
@@ -636,17 +637,17 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   t("[ready] --steps <plan with tagging.off> → the 'no --ready default' note, no frame-tag default line", () =>
     offRun.status === 4 && offRun.stderr.includes("note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default") && !offRun.stderr.includes(DEFAULT_READY));
   t("[ready] settleMiss: a --ready wait that ran out on a document that stayed is 'unreachable' — after a navigation too (a redirect), never 'kept navigating'", () =>
-    VP.settleMiss({ readyWait: true, navigated: false, sameDocument: true, moved: true, pastDocDeadline: true }) === "unreachable"
-    && VP.settleMiss({ readyWait: true, navigated: false, sameDocument: true, moved: false, pastDocDeadline: true }) === "unreachable");
+    SG.settleMiss({ readyWait: true, navigated: false, sameDocument: true, moved: true, pastDocDeadline: true }) === "unreachable"
+    && SG.settleMiss({ readyWait: true, navigated: false, sameDocument: true, moved: false, pastDocDeadline: true }) === "unreachable");
   t("[ready] settleMiss: a navigation with no settled document is still 'retry' within its window and 'kept' past it; a load/fonts wait is never read as the --ready miss", () =>
-    VP.settleMiss({ readyWait: true, navigated: true, sameDocument: true, moved: true, pastDocDeadline: false }) === "retry"
-    && VP.settleMiss({ readyWait: true, navigated: true, sameDocument: true, moved: true, pastDocDeadline: true }) === "kept"
-    && VP.settleMiss({ readyWait: true, navigated: false, sameDocument: false, moved: true, pastDocDeadline: true }) === "kept"
-    && VP.settleMiss({ readyWait: false, navigated: false, sameDocument: true, moved: true, pastDocDeadline: true }) === "kept"
-    && VP.settleMiss({ readyWait: false, navigated: true, sameDocument: true, moved: false, pastDocDeadline: false }) === "retry"
-    && VP.settleMiss({ readyWait: false, navigated: false, sameDocument: true, moved: false, pastDocDeadline: false }) === "unreachable");
+    SG.settleMiss({ readyWait: true, navigated: true, sameDocument: true, moved: true, pastDocDeadline: false }) === "retry"
+    && SG.settleMiss({ readyWait: true, navigated: true, sameDocument: true, moved: true, pastDocDeadline: true }) === "kept"
+    && SG.settleMiss({ readyWait: true, navigated: false, sameDocument: false, moved: true, pastDocDeadline: true }) === "kept"
+    && SG.settleMiss({ readyWait: false, navigated: false, sameDocument: true, moved: true, pastDocDeadline: true }) === "kept"
+    && SG.settleMiss({ readyWait: false, navigated: true, sameDocument: true, moved: false, pastDocDeadline: false }) === "retry"
+    && SG.settleMiss({ readyWait: false, navigated: false, sameDocument: true, moved: false, pastDocDeadline: false }) === "unreachable");
   t("[ready] visibleOnly: a wait on any VISIBLE match (Playwright's visible=true engine), so a hidden first copy never hides a visible one", () =>
-    VP.visibleOnly("[data-dt-node=\"1:1\"]") === "[data-dt-node=\"1:1\"] >> visible=true");
+    SG.visibleOnly("[data-dt-node=\"1:1\"]") === "[data-dt-node=\"1:1\"] >> visible=true");
 
   // A stubbed Playwright whose page models only what the --ready wait sees (DT_STUB_SCENARIO): `redirect` — the page
   // replaces itself with a login page 20 ms into the wait, and neither document shows a tag; `untagged` — the frame's tag
@@ -780,18 +781,18 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   t("[ready] a screen + dialog expectation whose untagged screen shows all its root's tags and none of the closed dialog's → measured (exit 0) with the untagged-root note: the dialog root's nodes are not counted", () =>
     panel.status === 0 && panelDoc !== null && (panelDoc.notes || []).some((n) => n.startsWith(NOTE_HEAD)));
   t("[ready] screenTagsWhy: the count below half (a foreign root then is not the reason), else the foreign root by size / by what it encloses", () =>
-    VP.screenTagsWhy({ shown: 1, foreign: null }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
-    && VP.screenTagsWhy({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
-    && VP.refusingRoot({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === null
-    && VP.screenTagsWhy({ shown: 4, foreign: { id: "7:1", by: "encloses", encloses: 3 } }, 6) === " (another screen's tagged root is on the page: a visible element tagged data-dt-node=\"7:1\", an id this expectation does not name, encloses 3 of the 4 own tags the page shows)");
+    SG.screenTagsWhy({ shown: 1, foreign: null }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
+    && SG.screenTagsWhy({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
+    && SG.refusingRoot({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === null
+    && SG.screenTagsWhy({ shown: 4, foreign: { id: "7:1", by: "encloses", encloses: 3 } }, 6) === " (another screen's tagged root is on the page: a visible element tagged data-dt-node=\"7:1\", an id this expectation does not name, encloses 3 of the 4 own tags the page shows)");
   t("[ready] screenTagsWhy: own nodes carried only ambiguously (an alias or component path on several elements each) are named beside the count, with the fix; none → the plain count", () =>
-    VP.screenTagsWhy({ shown: 3, ambiguous: 7, foreign: null }, 10) === " (the page shows 3 of the expectation's 10 own tags — fewer than half; +7 carried only by ids this expectation does not name (an alias or the same component path), on several elements each, which do not count — tag them with their own ids)"
-    && VP.screenTagsWhy({ shown: 3, ambiguous: 0, foreign: null }, 10) === " (the page shows 3 of the expectation's 10 own tags — fewer than half)");
+    SG.screenTagsWhy({ shown: 3, ambiguous: 7, foreign: null }, 10) === " (the page shows 3 of the expectation's 10 own tags — fewer than half; +7 carried only by ids this expectation does not name (an alias or the same component path), on several elements each, which do not count — tag them with their own ids)"
+    && SG.screenTagsWhy({ shown: 3, ambiguous: 0, foreign: null }, 10) === " (the page shows 3 of the expectation's 10 own tags — fewer than half)");
   t("[ready] foreignRootHint names the element, says the probe reached another screen, where to look (with/without --steps) and the fix for a wrapper of this screen", () =>
-    VP.foreignRootHint("[data-dt-node=\"1:1\"]", { id: "7:1", by: "encloses", encloses: 3 }, true) === "[data-dt-node=\"1:1\"] is the default --ready (the frame's tag), and the page shows another screen's tagged root " +
+    SG.foreignRootHint("[data-dt-node=\"1:1\"]", { id: "7:1", by: "encloses", encloses: 3 }, true) === "[data-dt-node=\"1:1\"] is the default --ready (the frame's tag), and the page shows another screen's tagged root " +
       "(data-dt-node=\"7:1\" encloses most of this screen's visible tags): the probe reached another screen — check the --steps plan's navigate list; if that element is a wrapper of this screen tagged " +
       "with another id, tag this screen's root data-dt-node=\"1:1\" or pass --ready <root selector>"
-    && VP.foreignRootHint("[data-dt-node=\"1:1\"]", { id: "7:1", by: "size", encloses: 0 }, false).includes("check the --url, or reach the screen with --steps <plan.json>;"));
+    && SG.foreignRootHint("[data-dt-node=\"1:1\"]", { id: "7:1", by: "size", encloses: 0 }, false).includes("check the --url, or reach the screen with --steps <plan.json>;"));
 
   // screenTags on a fake DOM: visible as Playwright reads it (display:contents by its children, checkVisibility(),
   // visibility "visible", a box), and another screen's tagged root by the frame's size or by enclosing most own tags

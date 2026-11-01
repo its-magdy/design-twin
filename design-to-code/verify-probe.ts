@@ -56,10 +56,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response, Selectors } from "playwright";
-import { collectCandidates, focusablePath, focusableWithin, focusInfo, freeHoverPoint, measureElements, rawHoverPoint, screenTags } from "./probe-page.ts";
+import { collectCandidates, focusablePath, focusableWithin, focusInfo, freeHoverPoint, measureElements, rawHoverPoint } from "./probe-page.ts";
 import { PAGE_RUNTIME, byPath, registerPathEngine } from "./page-runtime.ts";
-import type { Candidate, CollectOutput, ForeignRoot, MeasureInput, MeasureItem, Rect, ScreenTags } from "./probe-page.ts";
-import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
+import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
+import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
 import { STYLE_KEYS } from "./verify-shared.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
@@ -85,6 +85,8 @@ import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { exitFlushed, runCli } from "./proc.ts";
 import { openVerifySet, setFile } from "./verify-sets.ts";
+import { SCREEN_LOOK_CAP_MS, ScreenGate, settleMiss } from "./screen-gate.ts";
+import type { ScreenJudgement, ScreenMiss } from "./screen-gate.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
 export const PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"] as const;
@@ -298,9 +300,9 @@ class BrowserGoneError extends Error {}
 const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the page or browser closed or crashed during measurement (${pwFirstLine(e)})`);
 class KeptNavigatingError extends Error {}
 class UnreachableError extends Error {
-  /** the default --ready missed on a page that shows another screen's tagged root (its exit-4 hint is foreignRootHint) */
-  readonly foreign: ForeignRoot | null;
-  constructor(m: string, foreign: ForeignRoot | null = null) { super(m); this.foreign = foreign; }
+  /** the screen gate's miss, when its --ready wait is what missed (its exit-4 hint is ScreenGate.hint) */
+  readonly miss: ScreenMiss | null;
+  constructor(m: string, miss: ScreenMiss | null = null) { super(m); this.miss = miss; }
 }
 
 /** A URL without its fragment (a hash change never makes a new document). */
@@ -367,83 +369,6 @@ export async function docTokenWithin(page: Pick<Page, "evaluate" | "isClosed">, 
  *  measurement compares against THIS token, so a document that replaced it after settling is never measured as settled). */
 interface Settled { note: string | null; token: string | null }
 
-/** A selector's visible matches only (Playwright's `visible=true` engine): a wait on it is met by ANY visible match,
- *  so a hidden first copy (a responsive duplicate) never hides a visible one. */
-export const visibleOnly = (sel: string): string => `${sel} >> visible=true`;
-
-/** The default --ready's way out for a screen root that carries no tag: `ids` are the expectation's own node ids (its
- *  first root's nodes and instances), `known` every id it names, `frame` its size (ownTagsOf). Once the frame's tag
- *  misses on a page that shows at least half of them and no other screen's tagged root (screenTagsMet — a shell that
- *  keeps this frame's ids shows a few on every section of the app, so a few are not enough), `seen` is set and
- *  `waitedMs` is how long the frame's tag was waited for: that page is measured as the screen (the root found as an
- *  untagged one), and every later load (the re-run, the driven pages, a new document) waits for the same rule
- *  (waitForScreenTags) instead of the frame's tag. */
-export interface UntaggedRoot { ids: string[]; known: string[]; alias: Record<string, string>; frame: { w: number; h: number } | null; seen: boolean; waitedMs?: number }
-/** Whether a page whose frame tag never showed is the screen: it shows at least half of the expectation's own tags. */
-export const takesForScreen = (shown: number, total: number): boolean => total > 0 && shown * 2 >= total;
-/** The untagged-root rule on what the page shows: at least half of the own tags, and no other screen's tagged root. */
-export const screenTagsMet = (s: ScreenTags, total: number): boolean => takesForScreen(s.shown, total) && s.foreign === null;
-/** How long the look after the frame's wait ran out may take: one page.evaluate, which a hung main thread never answers. */
-const SCREEN_LOOK_CAP_MS = 2_000;
-/** What the page shows of the expectation's tags now (no wait); a page mid-navigation shows none; null when the page
- *  does not answer within `capMs` (a hung main thread never answers a page.evaluate). */
-export async function screenTagsNow(page: Pick<Page, "evaluate" | "isClosed">, root: UntaggedRoot, capMs: number): Promise<ScreenTags | null> {
-  const look = (async (): Promise<ScreenTags> => {
-    try { return await page.evaluate(screenTags, { ids: root.ids, known: root.known, alias: root.alias, frame: root.frame }); } catch (e) {
-      if (errorKind(e, page) === "gone") throw gone(e);
-      return { shown: 0, foreign: null };
-    }
-  })();
-  look.catch(() => undefined); // a page gone after the race ended is the next call's to find
-  return Promise.race([look, sleep(Math.max(1, capMs), null, { ref: false })]);
-}
-/** A wait that ran out, named and worded as Playwright's (pwErrorKind reads it as a timeout). */
-class WaitTimeoutError extends Error {
-  constructor(what: string, ms: number) { super(`${what}: Timeout ${ms}ms exceeded.`); this.name = "TimeoutError"; }
-}
-/** The --ready wait of every load after an untagged root was seen: met once the page shows at least half of the
- *  expectation's own tags and no other screen's tagged root (screenTagsMet), polled every POLL_MS, each look bounded by
- *  the time left; past `timeout` a TimeoutError, as the frame tag's locator wait would throw. */
-export async function waitForScreenTags(page: Pick<Page, "evaluate" | "isClosed">, root: UntaggedRoot, timeout: number): Promise<void> {
-  const end = Date.now() + timeout;
-  for (;;) {
-    const look = await screenTagsNow(page, root, end - Date.now());
-    if (look !== null && screenTagsMet(look, root.ids.length)) return;
-    const left = end - Date.now();
-    if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
-    await sleep(Math.min(POLL_MS, left));
-  }
-}
-/** The other screen's tagged root that refused a page, if any: only on a page that shows enough of the own tags (fewer
- *  is the reason on its own). */
-export const refusingRoot = (s: ScreenTags, total: number): ForeignRoot | null => (takesForScreen(s.shown, total) ? s.foreign : null);
-/** The parenthesis of a default --ready miss: what the page showed of the expectation's own tags — fewer than half (and
- *  how many more it carries only ambiguously: by ids this expectation does not name — an alias or the same component
- *  path — on several elements each), else another screen's tagged root. */
-export function screenTagsWhy(s: ScreenTags, total: number): string {
-  const f = refusingRoot(s, total);
-  if (f !== null) {
-    return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ` +
-      `${f.by === "size" ? "has the frame's size (±2 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
-  }
-  const amb = s.ambiguous ?? 0;
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags — fewer than half${amb > 0
-    ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, ` +
-      "which do not count — tag them with their own ids" : ""})`;
-}
-
-/** What settle() does when its load / fonts / --ready wait threw on a document that is still the current one (a
- *  replaced document is settled again first): "unreachable" — the --ready wait ran out on a document that stayed, so
- *  the page is not the screen (a redirect to a login page or another origin, a section the steps did not reach),
- *  whether or not a navigation came before; "retry" — a navigation is still within its document's window; "kept" — a
- *  navigation left no settled document by then (the page kept navigating). */
-export function settleMiss(s: { readyWait: boolean; navigated: boolean; sameDocument: boolean; moved: boolean; pastDocDeadline: boolean }): "unreachable" | "retry" | "kept" {
-  if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
-  if (s.moved) return s.pastDocDeadline ? "kept" : "retry";
-  if (s.navigated && !s.pastDocDeadline) return "retry";
-  return "unreachable";
-}
-
 /**
  * Wait until the page is ready (its load, fonts, --ready) and its DOM has been quiet for QUIET_MS (≤ 10 s).
  * M-a: a document still loading (a step's navigation committed before settling began) is waited for — its load first —
@@ -454,11 +379,11 @@ export function settleMiss(s: { readyWait: boolean; navigated: boolean; sameDocu
  * reload replacing a document a click step had changed in place (NavLog.lost), the steps' state is gone →
  * StepStateLostError (the pass is re-run once and the steps replayed); a step's own navigation is settled on.
  * A --ready wait that runs out on a document that stays — after a navigation too (a redirect to a login page or another
- * origin) — is UnreachableError (settleMiss), never "kept navigating"; with `root` (the default --ready) a page that
- * shows at least half of the expectation's own tags and no other screen's tagged root is the screen with an untagged
- * root instead (and, once seen, that rule is what every later settle waits for).
+ * origin) — is UnreachableError (settleMiss) with the gate's typed miss, never "kept navigating"; the gate may take the
+ * page for the screen instead (ScreenGate.judge: the default --ready's untagged root), and then settling goes on.
+ * Without a gate (the settles before the steps) there is no --ready wait.
  */
-async function settle(page: Page, log: NavLog, ready: string | undefined, timeout: number, root?: UntaggedRoot): Promise<Settled> {
+async function settle(page: Page, log: NavLog, gate: ScreenGate | undefined, timeout: number): Promise<Settled> {
   const cap = Math.min(QUIET_CAP_MS, timeout);
   /** the settle-wide bound on navigation churn: a NEW document after it is "kept navigating" */
   const deadline = Date.now() + cap;
@@ -536,14 +461,11 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
         stateLost();
       }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
-      // the full --timeout for a page that has not navigated since load; what is left of the quiet cap otherwise —
-      // for any visible match (a hidden first copy does not count); an untagged root seen once: the same rule that took
-      // the first page for the screen (at least half of the expectation's own tags, no other screen's tagged root)
-      if (ready) {
+      // the full --timeout for a page that has not navigated since load; what is left of the quiet cap otherwise
+      if (gate?.ready !== undefined) {
         readyWait = true;
         readyMs = moved() ? Math.max(1, docDeadline - Date.now()) : timeout;
-        if (root?.seen === true) await waitForScreenTags(page, root, readyMs);
-        else await page.locator(visibleOnly(ready)).first().waitFor({ state: "visible", timeout: readyMs });
+        await gate.wait(page, readyMs);
       }
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
@@ -559,19 +481,15 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") { await sleep(POLL_MS); continue; }
       if (next === "kept") throw kept();
-      // the default --ready's wait ran out (a timeout only — a selector or any other error is not a page to judge) on a
-      // page that shows at least half of the expectation's own tags and no other screen's tagged root: the screen, with
-      // an untagged root — measured (the root found as an untagged one) and said in a note; else not the screen
-      const asked = readyWait && root !== undefined && pwErrorKind(e) === "timeout";
-      const look = asked && root !== undefined ? await screenTagsNow(page, root, SCREEN_LOOK_CAP_MS) : null;
-      if (root === undefined || look === null || !screenTagsMet(look, root.ids.length)) {
-        const why = look === null || root === undefined
-          ? (asked ? ` (the page did not answer within ${SCREEN_LOOK_CAP_MS / 1000}s when its tags were counted)` : "")
-          : screenTagsWhy(look, root.ids.length);
-        throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e), look !== null && root !== undefined ? refusingRoot(look, root.ids.length) : null);
+      // the gate judges the miss: the default --ready's untagged root (the screen — measured, said in a note), else not
+      // the screen (its typed miss)
+      if (gate === undefined) throw new UnreachableError(firstLine(e));
+      let judged: ScreenJudgement;
+      try { judged = await gate.judge(page, e, readyWait, readyMs); } catch (e2) {
+        if (errorKind(e2, page) === "gone") throw gone(e2);
+        throw e2;
       }
-      if (!root.seen) root.waitedMs = readyMs;
-      root.seen = true;
+      if (judged.kind === "miss") throw new UnreachableError(judged.message, judged.miss);
       // the frame's wait used up this document's window: its quiet window gets one of its own
       docDeadline = Date.now() + cap;
     }
@@ -610,14 +528,13 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
 export interface ProbeOptions {
   expectation: Expectation;
   url: string;
-  ready?: string;
+  /** what every load waits for (--ready, by default the frame's tag) and how a wait that ran out is judged */
+  gate?: ScreenGate;
   viewport: { w: number; h: number };
   position: boolean;
   timeout: number;
   /** replayed after every load, before --ready is waited for */
   steps?: ProbeStep[];
-  /** with the default --ready (the frame's tag): the expectation's own tags, for a screen whose root is untagged */
-  untaggedRoot?: UntaggedRoot;
 }
 
 // ---------------------------------------------------------------- reaching the screen (goto, --steps, --ready)
@@ -817,12 +734,12 @@ async function reachPage(page: Page, log: NavLog, o: ProbeOptions): Promise<Sett
     throw new UnreachableError(`could not load ${o.url}: ${loadFailureWhy(errMsg(e))}`);
   }
   const steps = o.steps || [];
-  if (!steps.length) return settle(page, log, o.ready, o.timeout, o.untaggedRoot);
+  if (!steps.length) return settle(page, log, o.gate, o.timeout);
   try {
     await settle(page, log, undefined, o.timeout);
     await runSteps(page, log, o);
     // the last click still owns its late navigation while --ready is waited for
-    const last = await settle(page, log, o.ready, o.timeout, o.untaggedRoot);
+    const last = await settle(page, log, o.gate, o.timeout);
     if (log.lost !== null) throw new StepStateLostError(log.lost);
     // LOW b: the last settle's note only — the first one's may be about a document the steps replaced, or one that has
     // finished loading since (the last settle re-checks that document's readyState)
@@ -1299,20 +1216,6 @@ const MAX_TIME_LIMIT = 2_147_483_647;
 const OWN_RUN_GRACE_MS = 120_000;
 
 
-/** --ready's value that waits for nothing. */
-export const READY_NONE = "none";
-/** What the probe waits for after every load (and after the steps): --ready's selector; without --ready the frame's
- *  tag `[data-dt-node="<frame id>"]` — a page that shows something else (a login redirect, the app's default section)
- *  is then an exit 4, not a measurement of the wrong page; `--ready none` waits for nothing. With no frame id in the
- *  expectation, or a --steps plan that opts out of tagging, there is no default (the note says so). */
-export function readyOf(flag: string | undefined, frameId: string | undefined, taggingOff = false): { ready?: string; note: string } {
-  if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
-  if (flag !== undefined) return { ready: flag, note: `ready  ${flag}` };
-  if (taggingOff) return { note: "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default — the page is measured once it is quiet (pass --ready <root selector>)" };
-  if (frameId === undefined || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default — the page is measured once it is quiet (pass --ready <selector>)" };
-  const ready = attrSelector(frameId);
-  return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
-}
 /** Whether a --steps document is a plan that opts out of tagging — `"tagging": {"off": true, "reason": "…"}` (no
  *  reason, no opt-out, as the Stop hook reads it). */
 export function planTaggingOff(doc: unknown): boolean {
@@ -1320,73 +1223,6 @@ export function planTaggingOff(doc: unknown): boolean {
   const { off, reason } = doc.tagging;
   return off === true && typeof reason === "string" && reason.trim() !== "";
 }
-/** What the untagged-root rule reads of the expectation (UntaggedRoot): `ids` — the screen root's own node ids, the
- *  frame's excepted: its visible nodes (a multi-root export's other roots — a dialog, an overlay — carry a frameId and
- *  are left out, as are those roots themselves) and its instances that are no other root's (an instance row's frameId,
- *  else a spec's); `known` — every id the expectation names (any root, hidden ones, the frames, every spec's aliases),
- *  so a tag outside it is another screen's; `alias` — an own node's alias → its id (a shared shell tagged with a sibling
- *  screen's ids shows this screen's nodes, as the measurement's tag-alias match reads them; an alias that is itself one
- *  of the expectation's ids is that node's); `frame` — the frame's size, when it states one. Null when the root names
- *  no node. */
-export function ownTagsOf(exp: Expectation, frameId: string): { ids: string[]; known: string[]; alias: Record<string, string>; frame: { w: number; h: number } | null } | null {
-  const hidden = new Set((exp.hidden && exp.hidden.ids) || []);
-  const ids = new Set<string>(), others = new Set<string>(), known = new Set<string>([frameId, ...hidden]);
-  const otherRoot = (f: string | undefined): boolean => f !== undefined && f !== frameId;
-  for (const s of exp.nodes || []) {
-    known.add(s.nodeId);
-    if (otherRoot(s.frameId)) others.add(s.nodeId);
-    else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
-  }
-  for (const i of exp.instances || []) {
-    known.add(i.nodeId);
-    if (otherRoot(i.frameId)) others.add(i.nodeId);
-    else if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
-  }
-  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
-  ids.delete(frameId);
-  const alias = new Map<string, string>();
-  const named = new Set(known);
-  for (const s of exp.nodes || []) {
-    for (const a of s.aliases || []) {
-      known.add(a);
-      if (ids.has(s.nodeId) && !named.has(a) && !alias.has(a)) alias.set(a, s.nodeId);
-    }
-  }
-  const w = exp.frame?.w, h = exp.frame?.h;
-  return ids.size ? { ids: [...ids], known: [...known], alias: Object.fromEntries(alias), frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
-}
-/** How the measurement found a screen root that carries no tag (resolveFrame's `via`). */
-const untaggedRootFound = (via: ResolvedFrame["via"] | undefined): string =>
-  via === "size-and-fill" ? "its root found as the outermost element with the frame's size (±2 px) and a fill"
-    : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)"
-      : "its root not found";
-/** The measured file's note when the frame's tag never showed but at least half of the expectation's own tags did:
- *  `waitedMs` — how long the frame's tag was waited for (the --timeout, or what was left of a navigation's ≤ 10 s
- *  window); `via` — how the measurement found the root. Null when the measurement found the root by its tag (it
- *  showed after a wait a navigation cut short): the root is tagged, and the measurement is the usual one. */
-export function untaggedRootNote(ready: string, waitedMs: number, via: ResolvedFrame["via"] | undefined): string | null {
-  if (via === "tag") return null;
-  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least ` +
-    `half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} — tag the root ` +
-    `${ready.slice(1, -1)}, or pass --ready <root selector>`;
-}
-/** The exit-4 hint when the default --ready (the frame's tag) never showed, and too few of the expectation's own tags did. */
-export function defaultReadyMissed(ready: string, withSteps: boolean): string {
-  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page ` +
-    `the probe reached is not the screen — a redirect (a login page, another origin) or another section (${withSteps
-      ? "the --steps ended somewhere else: check the plan's navigate list"
-      : "a screen that is a section of the app is reached with --steps <plan.json>"}) — or nothing on it is tagged (a tagging ` +
-    `opt-out: pass --ready <root selector>, or --ready none to wait for nothing) — or the root is untagged and most of its tags are not visible ` +
-    `at load: tag the root ${ready.slice(1, -1)} or pass --ready <root selector>`;
-}
-/** The exit-4 hint when the default --ready (the frame's tag) never showed on a page that shows another screen's tagged root. */
-export function foreignRootHint(ready: string, f: ForeignRoot, withSteps: boolean): string {
-  return `${ready} is the default --ready (the frame's tag), and the page shows another screen's tagged root (data-dt-node="${f.id}" ` +
-    `${f.by === "size" ? "has this frame's size" : "encloses most of this screen's visible tags"}): the probe reached another screen — check ` +
-    `${withSteps ? "the --steps plan's navigate list" : "the --url, or reach the screen with --steps <plan.json>"}; if that element is a wrapper of ` +
-    `this screen tagged with another id, tag this screen's root ${ready.slice(1, -1)} or pass --ready <root selector>`;
-}
-
 /** The probe's own run (no --run) while it is open: armed once its `measuring` write is recorded (with how to end it),
  *  disarmed once a write ends it or says the run is over for this probe. */
 interface OwnRunGuard { arm(end: (detail: string) => void): void; disarm(): void }
@@ -1492,12 +1328,10 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size — measured at 1280x800; pass --viewport");
   }
-  // what every load waits for: --ready, else the frame's tag (--check measures nothing: no wait)
-  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId, taggingOff);
-  // the default's way out for an untagged screen root: the expectation's own tags
+  // what every load waits for: --ready, else the frame's tag, with the default's way out for an untagged screen root
+  // (--check measures nothing: no wait)
   const frameNodeId = expectation?.frame?.nodeId;
-  const ownTags = f.ready === undefined && readyPick?.ready !== undefined && expectation && frameNodeId !== undefined ? ownTagsOf(expectation, frameNodeId) : null;
-  const untaggedRoot: UntaggedRoot | undefined = ownTags !== null ? { ...ownTags, seen: false } : undefined;
+  const gate = f.check ? null : new ScreenGate({ flag: f.ready, frameId: frameNodeId, expectation: expectation ?? null, taggingOff });
 
   // the expectation's set name names the files: a legacy name, or one of another node than its frame, is refused before
   // any status is read or written and before anything is launched (--migrate renames a legacy set; --expect names the
@@ -1543,7 +1377,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   if (measuring?.kind === "over") return measuring.exit;
   if (participant?.own) console.error(`run    ${participant.runId} — this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
   if (participant?.measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
-  if (readyPick) console.error(readyPick.note);
+  if (gate) console.error(gate.startNote);
 
   // one bound over launch → measure → close. Past it the browser is closed (at most 10 s more) and nothing is written.
   const held: { browser?: Browser; timedOut?: boolean } = {};
@@ -1569,9 +1403,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     }
 
     let run: ProbeRun;
-    const ready = readyPick?.ready;
-    const probeOpts: ProbeOptions = { expectation, url: f.url, ...(ready !== undefined ? { ready } : {}), viewport, position: !!f.position, timeout, ...(steps.length ? { steps } : {}),
-      ...(untaggedRoot !== undefined ? { untaggedRoot } : {}) };
+    const probeOpts: ProbeOptions = { expectation, url: f.url, ...(gate !== null ? { gate } : {}), viewport, position: !!f.position, timeout, ...(steps.length ? { steps } : {}) };
     try {
       run = await runProbe(browser, probeOpts);
     } catch (e) {
@@ -1579,8 +1411,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       if (e instanceof UnreachableError) {
         // the default --ready that never showed, nor enough of the expectation's tags: the page is not the screen (a
         // redirect, another section, another screen's tagged root), or nothing on it is tagged
-        const byDefault = f.ready === undefined && ready !== undefined && e.message.startsWith(`--ready '${ready}'`);
-        const hint = !byDefault ? "" : e.foreign !== null ? foreignRootHint(ready, e.foreign, steps.length > 0) : defaultReadyMissed(ready, steps.length > 0);
+        const hint = e.miss !== null && gate !== null ? gate.hint(e.miss, steps.length > 0) : "";
         console.error(`verify-probe: ${e.message} — nothing written.` + (hint ? `\n  ${hint}` : ""));
         return 4;
       }
@@ -1595,10 +1426,8 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     }
     // the frame's tag never showed, but the page showed the expectation's own tags: measured as the screen (no note
     // when the tag showed after all and the measurement found the root by it)
-    if (untaggedRoot?.seen === true && ready !== undefined) {
-      const note = untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run.kind === "ok" ? run.result.frames[0]?.via : undefined);
-      if (note !== null) notes.push(note);
-    }
+    const gateNote = gate?.note(run.kind === "ok" ? run.result.frames[0]?.via : undefined) ?? null;
+    if (gateNote !== null) notes.push(gateNote);
     // the browser phases share one session: each unit reached like the measurement pass, each phase its share of --max-time
     const session = openSession(browser, { viewport, timeout, initScript: INIT_SCRIPT, deadline: runDeadline,
       reach: async (page) => { await reachPage(page, attachNavLog(page), probeOpts); } });
