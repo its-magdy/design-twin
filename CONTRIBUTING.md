@@ -30,6 +30,20 @@ A bare `bun test` is not the suite run: it is Bun's own test runner, which `bunf
 only (the spawn-stress workflow's bun:test files). The type and lint gates (`lint:any`, `lint:types`) run as the first two suites. Run `bun run test` before opening a pull
 request; CI runs the same suites, split across several runners.
 
+- `bun run test` runs every suite in order (serially, output live) and ends with a summary: one row per suite, exit 1
+  if any failed, and no suite is skipped after a failure.
+- `bun run test:fast` skips four of the slow browser (probe e2e) suites and says so loudly at the end; CI's other
+  matrix legs run them.
+- One suite runs on its own too: `bun test/harness.ts` (the Figma plugin extractor, against a mock `figma`),
+  `bun test/bridge.test.ts` (CLI + bridge), `bun test/design-to-code.test.ts` (tokens, maps, drift-lint), and every
+  other `test/*.test.ts` the same way.
+- `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once.
+- [TESTING.md](TESTING.md) lists each suite; the run-suites summary is the authority for check counts.
+
+`bun run build` runs each workspace's own build — esbuild → `figma-plugin/code.js` and `figma-plugin/ui.html` for the
+plugin (the bridge has nothing to build: it runs and ships as TypeScript) — and then `bun claude-plugin/build-scripts.ts`
+to re-bundle `claude-plugin/scripts/`.
+
 ## Rules the checks enforce
 
 - **Committed build output stays in sync.** `figma-plugin/code.js`, `figma-plugin/ui.html` and `claude-plugin/scripts/*.js`
