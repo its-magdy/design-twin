@@ -1,3 +1,6 @@
+<!-- npm renders no <picture> and no repo-relative paths: one absolute PNG, dark ink, made for npm's white page. -->
+<img alt="Design Twin" src="https://raw.githubusercontent.com/its-magdy/design-twin/main/assets/wordmark-light.png" height="56">
+
 # Design Twin — `dtwin`
 
 > Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.

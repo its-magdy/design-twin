@@ -67,11 +67,17 @@
                  background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-tertiary, #888); }
   #edits-state.on { background: var(--figma-color-bg-warning-tertiary, #fff4e0); color: var(--figma-color-text-warning, #8a5a00); }
   #cancel { border-color: var(--figma-color-border-danger-strong, #c0362c); color: var(--figma-color-text-danger, #c0362c); }
+  /* Bo, the brand mark (assets/logo-16.svg), in front of the status line: it "says" the status. It sits in the
+     line's own height, so no control moves and the window keeps its size. The frame and eyes are currentColor
+     (they follow Figma's theme); the four handles stay brand magenta. */
+  #head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
+  #head svg { flex: 0 0 auto; margin-top: 1px; }
+  #head #status { flex: 1; margin-bottom: 0; }
 </style>
 
 <!-- role=status / role=alert: a screen-reader user otherwise never hears that a long export finished
      or that a download batch failed. -->
-<div id="status" role="status" aria-live="polite">Loading…</div>
+<div id="head"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" shape-rendering="crispEdges" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" stroke="currentColor"/><g fill="#d6409f"><rect x="2" y="2" width="3" height="3"/><rect x="11" y="2" width="3" height="3"/><rect x="2" y="11" width="3" height="3"/><rect x="11" y="11" width="3" height="3"/></g><g fill="currentColor"><rect x="5" y="6" width="2" height="3"/><rect x="9" y="6" width="2" height="3"/></g></svg><div id="status" role="status" aria-live="polite">Loading…</div></div>
 <div id="banner" role="alert" hidden></div>
 <div id="progress" hidden><div id="bar"></div></div>
 

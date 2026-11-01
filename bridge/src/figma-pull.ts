@@ -83,6 +83,7 @@ import { ifDefined, isUnknownArray } from "./json-util.ts";
 // too): `dtwin --version` prints its version.
 import pkg from "../package.json" with { type: "json" };
 import { CliExit, exitCli, exitFlushed, runCli } from "./stdio.ts";
+import { spriteAllowed, versionText } from "./mascot.ts";
 
 // --help / -h: print USAGE and exit 0. Handled in cli() BEFORE the settings are read, so help has no
 // side effects at all — no token minted, no port bound. A constant, not text read back from this file
@@ -1205,7 +1206,8 @@ async function cli(argv: string[]): Promise<void> {
     }
   }
   if (argv[0] === "--version" || argv[0] === "-v") {
-    console.log(pkg.version);
+    // On a terminal, Bo (mascot.ts) beside the name; piped, redirected or with --json, the bare version, as scripts expect.
+    console.log(versionText(pkg.version, spriteAllowed(process.stdout.isTTY === true, argv), process.env));
     exitCli(0);
   }
   if (argv.some((a) => a === "--help" || a === "-h")) {
