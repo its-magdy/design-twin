@@ -13,9 +13,12 @@
 // ESM TypeScript like the rest of bridge/src/ (the MCP SDK is ESM-only). The bridge core and the other
 // bridge modules are imported directly, typed by their own source.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { AnySchema, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { MCP_TOOLS, planeOf, type McpToolName } from "./mcp-tools.ts";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import fs from "node:fs";
 
 // The bridge core. `request`'s `timeoutMs` (3rd) is server-core's default-120s budget: exports on a
 // real design-system file routinely run longer than that — the dtwin CLI scales its own default
@@ -147,6 +150,7 @@ import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
 import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
 import { findMapFile } from "./project-layout.ts";
+import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile } from "./doc-types.ts";
@@ -321,7 +325,21 @@ import { readExportVerdict, statusSnapshot } from "./export-verdict.ts";
 import pkg from "../package.json" with { type: "json" };
 const server = new McpServer({ name: "designtwin", version: pkg.version });
 
-server.registerTool(
+// Every tool is registered through here, by a name in MCP_TOOLS (mcp-tools.ts, the list `dtwin mcp --help` and the
+// docs test read): a registration whose readOnlyHint disagrees with the list's plane stops the server at start-up, and
+// so does a tool in the list that was never registered (checked once all are, below).
+const registered = new Set<McpToolName>();
+function registerTool<I extends undefined | ZodRawShapeCompat | AnySchema = undefined>(
+  name: McpToolName,
+  config: { description: string; inputSchema?: I; annotations: ToolAnnotations },
+  cb: ToolCallback<I>,
+): void {
+  if ((config.annotations.readOnlyHint === true) !== (planeOf(name) === "read")) throw new Error(`${name}: its readOnlyHint disagrees with its plane in MCP_TOOLS (${planeOf(name) ?? "?"})`);
+  registered.add(name);
+  server.registerTool(name, config, cb);
+}
+
+registerTool(
   "figma_status",
   {
     description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the export on disk, if any, as `snapshot`: the newest stamp's exportedAt/ageMs/sourceFile, `stale` (older than `staleAfterMs`), `sources` (the screens of each Figma file, and the design system, each with its own age) and `problems` (files there but unusable) — so an agent can tell whether it's about to read a stale or mixed snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
@@ -365,7 +383,7 @@ server.registerTool(
 // the bridge's OWN registry and never touches the plugin, so it answers instantly even while every
 // connected file is mid-export — the same "cheap index you consult before committing" role
 // figma_list_pages plays for a file's contents.
-server.registerTool(
+registerTool(
   "figma_list_clients",
   {
     description:
@@ -398,7 +416,7 @@ server.registerTool(
 // Identity of ONE connection. Distinct from figma_list_clients (which files are there?) — this asks a
 // specific plugin instance who it is, which is how a runtime teardown is detected: the socket survives
 // and the connId is unchanged, but the instanceId is new.
-server.registerTool(
+registerTool(
   "figma_whoami",
   {
     description:
@@ -418,7 +436,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_get_selection",
   {
     description: "List the currently selected nodes (id, name, type) in a connected Figma file.",
@@ -431,7 +449,7 @@ server.registerTool(
 // The cheap map. This is the tool an agent should reach for FIRST: every other read here
 // deep-serializes, so without it the only way to learn what a file holds was to export all of it —
 // measured 12+ minutes and tens of MB on a real design system, straight into the context window.
-server.registerTool(
+registerTool(
   "figma_list_pages",
   {
     description:
@@ -455,7 +473,7 @@ server.registerTool(
 // answers WHERE things are in this file, this one answers WHICH design libraries the file draws on.
 // Same cheap tier (TIMEOUTS.list), no arguments, and the result is deliberately COMPACT — a handful
 // of rows — because a discovery call that costs real context defeats its own purpose.
-server.registerTool(
+registerTool(
   "figma_list_libraries",
   {
     description:
@@ -505,7 +523,7 @@ server.registerTool(
 
 // The node-scoped twin: listPages depth 2 stops at a page's top-level frames, and peeking INSIDE one
 // otherwise meant a full recursive export of it.
-server.registerTool(
+registerTool(
   "figma_list_children",
   {
     description:
@@ -525,7 +543,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_full",
   {
     description:
@@ -559,7 +577,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_design_system",
   {
     description:
@@ -589,7 +607,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_selection",
   {
     description: "Export the current selection as compacted node JSON + variables + assets.",
@@ -602,7 +620,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_url",
   {
     description:
@@ -626,7 +644,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_screenshot",
   {
     description:
@@ -717,7 +735,7 @@ async function readEditsAllowed(a: { client?: string | undefined } | undefined):
   }
 }
 
-server.registerTool(
+registerTool(
   "figma_write",
   {
     description:
@@ -811,7 +829,7 @@ async function loadLayer<T>(mod: string, tool: string): Promise<T> {
   // dependency OF the layer fails the same way, and the error's code and url fields differ between
   // runtimes (Bun reports neither the way Node did). Any error from an import of a file that IS there
   // is passed on as it is.
-  const url = [new URL(`../../design-to-code/${mod}.ts`, import.meta.url), new URL(`../layer/${mod}.js`, import.meta.url)].find((u) => fs.existsSync(u));
+  const url = installOf().layerUrl(mod);
   if (!url) {
     throw new Error(
       `${tool} needs the design-to-code layer, which is not present in this install: neither a repo checkout's ` +
@@ -849,7 +867,7 @@ const exportDirShape = {
     ),
 };
 
-server.registerTool(
+registerTool(
   "design_get_component",
   {
     description:
@@ -876,7 +894,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "design_drift_lint",
   {
     description:
@@ -917,6 +935,9 @@ server.registerTool(
     });
   })
 );
+
+const unregistered = MCP_TOOLS.filter((t) => !registered.has(t.name)).map((t) => t.name);
+if (unregistered.length) throw new Error(`MCP_TOOLS lists ${unregistered.join(", ")}, which the server never registers`);
 
 // The server, started: stdio guards, signal handlers, the stdio transport, then the bridge. NOT run at import — only
 // when this file is the process entry (`bun figma-mcp.ts`, the .mcp.json entry) or `dtwin mcp` calls runServer() once

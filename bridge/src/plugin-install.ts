@@ -32,9 +32,10 @@ import { sha256Hex } from "./hash.ts";
 import { BRIDGE_VERSION } from "./staleness.ts";
 import { exitCli } from "./stdio.ts";
 import { configDir } from "./token-store.ts";
+import { installOf, PLUGIN_FILES, type PluginSource } from "./install-layout.ts";
 
-/** The files Figma loads: the manifest and the two it names (bridge/pack.ts ships exactly these). */
-export const PLUGIN_FILES = ["manifest.json", "code.js", "ui.html"] as const;
+export { PLUGIN_FILES };
+export type { PluginSource };
 type PluginFile = (typeof PLUGIN_FILES)[number];
 // The manifest last: a manifest that names code.js / ui.html is never on disk before they are.
 const WRITE_ORDER: readonly PluginFile[] = ["ui.html", "code.js", "manifest.json"];
@@ -44,16 +45,11 @@ const RECORD = "install.json";
 export const pluginHome = (): string => path.join(configDir(), "figma-plugin");
 const lockOf = (home: string): string => home + ".lock";
 
-/** Where this dtwin's plugin files are: a repo checkout's figma-plugin/ (bridge/src/ → ../../figma-plugin/, told
- *  apart by the ui.template.html no package ships), else the copy the npm package carries (../figma-plugin/,
- *  bridge/pack.ts). null: neither (a package packed without it). */
-export interface PluginSource { dir: string; kind: "checkout" | "package" }
+/** Where this dtwin's plugin files are: a repo checkout's figma-plugin/ (told apart by the ui.template.html no package
+ *  ships), else the copy the npm package carries (install-layout.ts installOf). null: neither (a package packed
+ *  without it). */
 export function pluginSource(here: string = import.meta.dirname): PluginSource | null {
-  const checkout = path.join(here, "..", "..", "figma-plugin");
-  if (fs.existsSync(path.join(checkout, "ui.template.html")) && fs.existsSync(path.join(checkout, "manifest.json"))) return { dir: checkout, kind: "checkout" };
-  const packaged = path.join(here, "..", "figma-plugin");
-  if (PLUGIN_FILES.every((f) => fs.existsSync(path.join(packaged, f)))) return { dir: packaged, kind: "package" };
-  return null;
+  return installOf(here).pluginSource;
 }
 
 /** What install.json records: the version installed, each file's sha256, from where, when. */
@@ -148,7 +144,8 @@ export function uninstallPlugin(home: string = pluginHome()): string[] {
 
 // Reopening runs replaced files only while Figma's hot reload is on; with it off, Figma kept the old code.
 const REOPEN = "reopen the plugin in Figma (Plugins → Development → Design Twin) with Plugins → Development → Hot reload plugin on, to run the new code";
-const importStep = (manifest: string): string => "Plugins → Development → Import plugin from manifest… → " + manifest;
+/** The one-time import step, naming `manifest` (init prints it too). */
+export const importStep = (manifest: string): string => "Plugins → Development → Import plugin from manifest… → " + manifest;
 /** The manifest's folder is hidden in a file picker (a dot folder, or AppData on Windows): how to get there anyway. */
 export function hiddenHint(manifest: string): string | null {
   if (process.platform === "darwin" && manifest.split(path.sep).some((s) => s.startsWith("."))) return "the folder is hidden in Finder: in the file picker press ⌘⇧G and paste the path";

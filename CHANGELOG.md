@@ -9,6 +9,15 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Changed
+
+- `dtwin mcp --help` now lists all 15 MCP tools by name, grouped as live reads, the one write and the two that read
+  the export on disk. Before, it named some and shortened the export tools to `figma_export_*`.
+- Internal: one module now decides where a dtwin is installed (a repo checkout, the npm package, a Homebrew keg or a
+  bunx cache). `dtwin init`, `dtwin plugin`, the MCP server and the package build all use it, so the paths they hand
+  out cannot drift apart. A test now checks that the MCP tool list, `dtwin mcp --help` and the docs name the same
+  tools and the same counts.
+
 ## [0.1.5] - 2026-11-01
 
 ### Added
