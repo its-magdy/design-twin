@@ -6837,7 +6837,7 @@ var ScreenGate = class {
   get untaggedRootSeen() {
     return this.#waitedMs !== null;
   }
-  /** Wait (≤ `timeoutMs`) for the page to show the screen: any visible match of `ready`, or — once an untagged root was
+  /** Wait (≤ `timeoutMs`) for the page to show the screen: a visible match of `ready` (the first visible one counts), or — once an untagged root was
    *  taken for the screen — at least half of the own tags and no other screen's tagged root. Throws what the wait threw
    *  (a Playwright TimeoutError on a run out wait); a no-op without a selector. */
   async wait(page, timeoutMs) {
