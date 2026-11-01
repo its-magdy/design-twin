@@ -6,6 +6,7 @@ import type { Scene } from "../fake-figma.ts";
 import { STYLE_KINDS } from "../../bridge/src/design-system-layout.ts";
 import { aliasOf, flatPaint, type Case } from "./helpers.ts";
 import { world, CAS1_ENTRIES } from "./scene.ts";
+import { MIXED } from "../fake-figma.ts";
 
 /** `buildDesignSystem()` called directly, after a `collectSelection()` on the same file. That read leaves the variable-name memo holding every id the selection referenced (run.ts
  *  Run.varName — the selection's run is still the one in progress), and dumpVariables reads `varName.ids()` as the reference set it resolves library variables from — so
@@ -101,5 +102,25 @@ export const cases: Case[] = [{
     const bodyStyle = ds.styles.text.find((s) => s.name === "Body/Regular");
     ok("text style leadingTrim + listSpacing + paragraphIndent", !!(bodyStyle && bodyStyle.leadingTrim === "cap_height" && bodyStyle.listSpacing === 6 && bodyStyle.paragraphIndent === 4));
     ok("text style variable binding (fontSize -> token)", !!(bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad"));
+  },
+}, {
+  name: "catalog visuals: a component's radius is written as a page walk writes it (no sentinel, no float dust)",
+  async run() {
+    // A pill COMPONENT (Figma's "fully rounded" corner reads back as 1000000000), a COMPONENT whose radius
+    // carries float dust from a resize, and a COMPONENT with one fully rounded corner among mixed corners.
+    const pill = { type: "COMPONENT", name: "Pill", id: "pc:1", parent: null, width: 120, height: 32, cornerRadius: 1000000000, componentPropertyDefinitions: {} };
+    const card = { type: "COMPONENT", name: "Card", id: "pc:2", parent: null, width: 200, height: 100, cornerRadius: 12.000000476837158, componentPropertyDefinitions: {} };
+    const tab = { type: "COMPONENT", name: "Tab", id: "pc:3", parent: null, width: 80, height: 40, cornerRadius: MIXED,
+      topLeftRadius: 1000000000, topRightRadius: 1000000000, bottomRightRadius: 4.0000001, bottomLeftRadius: 0, componentPropertyDefinitions: {} };
+    const ds = await designSystem({ pages: [{ name: "Components", id: "p:c", children: [], findAllWithCriteria: () => [pill, card, tab] }] });
+    const of = (name: string) => must(ds.components.find((c) => c.name === name), "catalog " + name).visuals;
+    const pillV = of("Pill");
+    ok("a pill component's radius is half its shorter side, not the 1000000000 sentinel", pillV?.radius === 16);
+    ok("and the catalog says radiusFull, as the page walk does", pillV?.radiusFull === true);
+    const cardV = of("Card");
+    ok("a component's fractional radius is rounded to 2dp", cardV?.radius === 12);
+    ok("an ordinary radius carries no radiusFull", cardV !== undefined && cardV.radiusFull === undefined);
+    ok("mixed corners: fully rounded corners clamp to half the shorter side, the rest round, a zero corner is left out",
+      JSON.stringify(of("Tab")) === '{"radiusFull":true,"radius":{"tl":20,"tr":20,"br":4}}');
   },
 }];
