@@ -3,7 +3,8 @@
 
 # Design Twin — `dtwin`
 
-> Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
+> Figma → code with Claude Code, on the **free** Figma plan. No REST API key, no cloud service in between: the design
+> goes from your Figma app to your coding agent and nowhere else.
 
 `@design-twin/dtwin` is the **`dtwin` CLI** (pulls a design onto disk) and the **MCP server** (the same reads as live
 tools, plus the only write path) of [Design Twin](https://github.com/its-magdy/design-twin). It also ships the Figma
@@ -55,7 +56,7 @@ dependency tree the release was tested with, never a newer one published since. 
 Or from a clone (to work on the code):
 ```
 git clone https://github.com/its-magdy/design-twin.git && cd design-twin
-bun install                     # @modelcontextprotocol/sdk (+ zod), for every workspace
+bun install --frozen-lockfile   # @modelcontextprotocol/sdk (+ zod), for every workspace
 cd bridge && bun link           # puts `dtwin` in ~/.bun/bin (on your PATH); nothing to build
 ```
 Or skip the link and run `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever

@@ -312,7 +312,8 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
 - **Deliberately not read:** `gradientHandlePositions` (REST-only), a `SET_STATE` action (does not exist),
   `variantGroupProperties` (deprecated for `componentPropertyDefinitions`), `prototypeDevice` (REST-only,
   absent from the Plugin API), frame `guides` (authoring aid with no rendered effect).
-- **Code Connect** (node → codebase component plus prop transforms) is Org/Ent-gated on Figma's side; it is
+- **Code Connect** (node → codebase component plus prop transforms) needs a paid Dev or Full seat on Figma's side
+  (Professional, Organization or Enterprise); it is
   replicated locally in `design-to-code/` (DTCG token emitter, a validated and drift-checked
   `design/codeconnect.local.json` map, a bootstrapper). See `design-to-code/README.md` and
   `docs/design-to-code-spec.md`; validate on real data via the Layer C checklist in `TESTING.md`.

@@ -1,8 +1,8 @@
 # `design-to-code/` — the design-to-code layer (who / what / how / why)
 
 This directory turns the extractor's faithful JSON into **reused real components and real tokens**
-instead of pixel-regenerated lookalikes. It is the free-plan equivalent of Figma's (Org/Enterprise-only)
-Code Connect + a design-token pipeline. Full design rationale + sources: [`../docs/design-to-code-spec.md`](../docs/design-to-code-spec.md).
+instead of pixel-regenerated lookalikes. It is the free-plan equivalent of Figma's Code Connect (a paid Dev or Full seat
+on Professional, Organization or Enterprise) + a design-token pipeline. Full design rationale + sources: [`../docs/design-to-code-spec.md`](../docs/design-to-code-spec.md).
 
 ## Why it exists
 The plugin extracts *what a design looks like*, but codegen only ever sees the JSON — so with no link

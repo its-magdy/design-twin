@@ -5,7 +5,8 @@
   </picture>
 </h1>
 
-> Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
+> Figma → code with Claude Code, on the **free** Figma plan. No REST API key, no cloud service in between: the design
+> goes from your Figma app to your coding agent and nowhere else.
 
 Design Twin reads a Figma screen through a local plugin and has Claude Code build it in your stack, with your own
 components and tokens, then checks the result against the design.
@@ -22,19 +23,19 @@ components and tokens, then checks the result against the design.
 - [Why Design Twin?](#why-design-twin)
 - [Known limitations & platform support](#known-limitations--platform-support)
 - [How it works](#how-it-works)
-- [Quick start for agents](#quick-start-for-agents)
-- [Installation details](#installation-details)
-- [Set up your project](#set-up-your-project)
 - [Usage](#usage)
 - [Command reference](#command-reference)
 - [Where files land](#where-files-land)
-- [Running tests](#running-tests)
+- [Contributing and tests](#contributing-and-tests)
 - [Further reading](#further-reading)
 - [License](#license)
 
 ---
 
 ## First screen in 5 minutes
+
+> **Setting this up as an agent?** Follow [docs/setup.md → Setting up as an agent](docs/setup.md#setting-up-as-an-agent):
+> which commands you can run, and which Figma clicks only the user can do.
 
 You need the **Figma desktop app** (any plan, including free) and **Claude Code**. Run the commands in the root of
 the app you are building.
@@ -48,13 +49,16 @@ the app you are building.
    claude plugin marketplace add its-magdy/design-twin
    claude plugin install designtwin@designtwin-marketplace
    ```
-3. Set up the project. This creates `design/` (with your detected stack in `design/target.json`), the bridge token,
-   the Figma plugin's copy and an `.mcp.json` entry. Then enable the server with `/mcp` and restart Claude Code.
+3. Set up the project. This creates `design/` (with your detected stack in `design/target.json`), the bridge token
+   (a local secret, so only your Figma plugin can talk to `dtwin`), the Figma plugin's copy, and an `.mcp.json` entry
+   for the Design Twin MCP server, which lets Claude call Figma as live tools. Then restart Claude Code in this
+   folder and approve the `designtwin` server when it asks; `/mcp` shows its status.
    ```bash
    dtwin init --mcp
    ```
 4. Import the Figma plugin, once: in Figma desktop, **Plugins → Development → Import plugin from manifest…**, and
-   pick the file this prints. On macOS the folder is hidden, so press ⌘⇧G in the file picker and paste the path.
+   pick the file this prints. The folder is hidden: on macOS press ⌘⇧G in the file picker and paste the path; on Windows paste it into the
+   file picker's **File name** box.
    ```bash
    dtwin plugin path
    ```
@@ -73,67 +77,74 @@ the app you are building.
    /designtwin:build-screen <Figma frame link>
    ```
 
-Something not working? `dtwin doctor` checks every piece and prints the next step for each failure, and
+Something not working? `dtwin doctor` checks every piece and prints the next step for each failure (while Claude
+Code's MCP server holds the port, it skips the plugin check and asks you to call `figma_status` instead), and
 `/designtwin:help` covers the rest. To check a web build against the design afterwards, `/designtwin:verify` needs
-your dev server running and Playwright in the project (it asks before installing anything). For other install
-routes and upgrades, see [Installation details](#installation-details).
+your dev server running and Playwright in the project (it asks before installing anything).
+
+Other install routes (npm, a clone), what `dtwin init` writes, the steps an agent can run for you, and
+upgrading are in [`docs/setup.md`](docs/setup.md).
 
 ---
 
 ## Why Design Twin?
 
-Figma's own MCP server and Dev Mode are gated by your Figma plan and seat, and Figma's recommended MCP server is
-hosted by Figma. Most other design-to-code tools read the design through Figma's REST API, which has its own monthly
-limits. Design Twin reads through the **Figma Plugin API** instead: a plugin running in your own Figma desktop app,
-on your machine.
+Figma's own MCP server and Dev Mode are gated by your Figma plan and seat. Most other design-to-code tools read
+through Figma's REST API, which has monthly limits. Design Twin reads through the **Figma Plugin API** instead: a
+plugin in your own Figma desktop app, on your machine.
 
-| | Design Twin | Figma's official MCP server / Dev Mode | Typical design-to-code tools |
+| | Design Twin | Figma's MCP server / Dev Mode | Typical design-to-code tools |
 |---|---|---|---|
-| **Figma plan** | Any, including the free Starter plan. No Dev seat, and the Plugin API has no documented request quota | The desktop server needs a Dev or Full seat on a Professional, Organization or Enterprise plan (or Education or Government). On the Starter plan, and for View and Collab seats on any plan, it allows 20 tool calls a month | Many read through the REST API, where View and Collab seats get up to 20 file reads a month (Figma's own example: up to 6 a month for a file on the Starter plan) |
-| **Where your design goes** | To your coding agent only. The plugin's manifest allows only `ws://localhost:8787`–`8789`, so it cannot reach the internet, and Design Twin needs no Figma API key | The recommended remote server runs on Figma's hosted endpoint | Often a hosted service |
-| **Your components and tokens** | Built in, free: `design/codeconnect.local.json` maps Figma components to yours, `design/tokens.json` maps variables to your tokens (build-screen reads both), and drift-lint checks the component map against the live Figma catalog | Code Connect, which needs a Dev or Full seat on the Professional, Organization or Enterprise plan. Variables over REST are Enterprise-only | Varies |
-| **Checking the build** | On web, `verify` renders the screen and measures each node against the design's own numbers. The verdict is computed from that report, and any node left unmeasured blocks a pass | Left to the agent | Varies |
-| **Target stacks** | Web (Tailwind, CSS Modules), React Native, SwiftUI, Jetpack Compose, Flutter, or your own profile | Any, through the agent | Varies |
+| **Figma plan** | Any, including free. No Dev seat, no documented request quota | Paid Dev or Full seat; otherwise 20 tool calls a month | REST reads: up to 20 a month on View and Collab seats, 6 for a Starter-plan file |
+| **Where your design goes** | Your coding agent only. The plugin can reach `localhost` and nothing else | Figma's hosted server (recommended setup) | Often a hosted service |
+| **Your components and tokens** | Component and token maps on any plan, checked against the live catalog | Code Connect: paid Dev or Full seat | Varies |
+| **Checking the build** | Measured node by node (web); the verdict comes from the report | Left to the agent | Varies |
+| **Target stacks** | Web, React Native, SwiftUI, Jetpack Compose, Flutter, or your own | Any, through the agent | Varies |
 
-Figma's plan and rate-limit figures above were checked against
-[developers.figma.com](https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/) on 2026-11-01.
-Figma changes them often, and its own pages don't always agree, so check there before relying on them.
+Figma's figures were checked against
+[developers.figma.com](https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/) on 2026-11-01. Figma
+changes them often, and its own pages don't always agree.
+
+<details>
+<summary>Figma's limits and how Design Twin differs, in detail</summary>
+
+- **MCP server.** The desktop server needs a Dev or Full seat on a Professional, Organization or Enterprise plan (or
+  Education or Government). On the Starter plan, and for View and Collab seats on any plan, it allows 20 tool calls a
+  month. The recommended remote server runs on Figma's hosted endpoint.
+- **REST API.** View and Collab seats get up to 20 file reads a month. Figma's own example is up to 6 a month for a
+  file on the Starter plan. Variables over REST are Enterprise-only.
+- **Code Connect.** Needs a Dev or Full seat on the Professional, Organization or Enterprise plan.
+- **Plugin API.** No documented request quota, and it reads variables on every plan.
+
+On the Design Twin side: the plugin's manifest allows only `ws://localhost:8787`–`8789`, and Design Twin needs no
+Figma API key. `design/codeconnect.local.json` maps Figma components to yours and `design/tokens.json` maps variables
+to your tokens; build-screen reads both, and drift-lint checks the component map against the live Figma catalog.
+`verify` computes its verdict from what it measured, and any node left unmeasured blocks a pass.
+
+</details>
 
 ---
 
 ## Known limitations & platform support
 
 - **Your coding agent sees the design.** Nothing goes to Figma's servers or to us, but what Claude Code reads from
-  `design/export/` goes to its model, like any file in your project. drift-lint can call Figma's REST API for file
-  metadata, only if you set `FIGMA_FILE_KEY` and `FIGMA_TOKEN`.
-- **Figma desktop only, and nothing is headless.** A browser tab can't import a development plugin, and every pull
-  needs the file open in Figma desktop with the plugin window running. The plugin is not listed on Figma Community,
-  by design: you import it once as a development plugin, from the copy `dtwin` installs.
-- **Bun is required.** The CLI, the MCP server and the Claude Code plugin's scripts run on
-  [Bun](https://bun.sh/install) 1.4.2 or later, and so do two of the plugin's three hooks (the start-up check is a
-  small `sh` script). Node alone won't run them, even when installed with `npm`.
-- **The skills need Claude Code.** The audit, build, verify and sync workflows are a Claude Code plugin. The `dtwin`
-  CLI and the MCP server (a standard stdio MCP server) work without it.
-- **One bridge, one port.** The MCP server or a `dtwin serve` daemon holds port `8787` and shares it with later
-  `dtwin` commands, but a plain one-shot `dtwin pull` does not share: a second pull started while it runs exits with
-  `EADDRINUSE`. With more than one Figma file connected, every command needs `--client` to say which.
-- **Big files are slow.** A whole-file pull of a large file can take many minutes (the default budget is 300 s, and
-  900 s with `--all-pages`), so pull one screen or page at a time.
-- **Writes are deliberately small.** `figma_write` (MCP only) applies a few safe ops: create a frame or text, set a
-  fill, set text. It runs no arbitrary code, and the plugin refuses every write until you tick **Allow edits** in its
-  window. The box is off by default and nothing on the bridge or MCP side can turn it on. Once ticked, it stays on for
-  every file until you untick it.
-- **Build quality varies by stack.** On web, `verify` drives a real Chromium through your project's Playwright and
-  measures node by node. Native stacks have no node-by-node probe: the agent renders the screen with the stack's own
-  tools (simulator, emulator, Flutter golden tests, which you set up) and compares images. The generated Swift,
-  Kotlin and Dart token files are not compiled in CI. Swift was type-checked with `swiftc` when the emitter was written;
-  Kotlin and Dart never have been.
+  `design/export/` goes to its model, like any file in your project.
+- **Figma desktop only, and nothing is headless.** Every pull needs the file open in Figma desktop with the plugin
+  running. The plugin is not on Figma Community, by design: you import it once as a development plugin.
+- **Bun is required.** The CLI, the MCP server and the Claude Code plugin's scripts run on Bun 1.4.2 or later. Node
+  alone won't run them.
+- **Writes are deliberately small.** `figma_write` creates a frame or text, sets a fill or sets text, and only after
+  you tick **Allow edits** in the plugin window.
+- **Build checks vary by stack.** Web builds are measured node by node in Chromium. Native builds are rendered with
+  the stack's own tools and compared as images. The generated Swift, Kotlin and Dart token files are not compiled in CI.
 
 | OS | Status |
 |---|---|
 | **macOS** | Tested with a live Figma file, and in CI (the quick suites, on macOS 15). |
-| **Windows** | CI runs the quick suites on Windows, including the `dtwin serve` daemon, which uses a named pipe behind a token handshake there ([#61](https://github.com/its-magdy/design-twin/pull/61), closing [#12](https://github.com/its-magdy/design-twin/issues/12)). A few raw-socket daemon checks are POSIX-only and skipped there. Live Figma runs so far have been on macOS. The Claude Code plugin's start-up check needs `sh` (for example from Git Bash); without it, that one check fails as a non-blocking hook error. |
-| **Linux** | CI runs every suite here, including the browser verify tests. Figma has no official desktop app for Linux (unofficial builds exist, untested), and the plugin can only reach `localhost`, so live pulls need Figma desktop on the same machine: a Mac or Windows PC. The skills also work on a manual export copied over from one. |
+| **Windows** | CI runs the quick suites, including the `dtwin serve` daemon. Live Figma runs so far have been on macOS. The Claude Code plugin's start-up check needs `sh` (for example from Git Bash); without it you get one harmless hook error. |
+| **Linux** | CI runs every suite, including the browser verify tests. Figma has no official Linux desktop app (unofficial builds exist, untested), and the plugin only reaches `localhost`, so live pulls need Figma desktop on the same machine: a Mac or Windows PC. The skills also work on a manual export copied over from one. |
+
+More detail on these, and what else is good to know day to day, is under [Good to know](#good-to-know).
 
 ---
 
@@ -165,180 +176,11 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
 
 ---
 
-## Quick start for agents
-
-If you are an agent setting this up for a user, run these in the root of the project being **built**. Three steps
-are clicks in Figma that only the user can do. Ask for them; don't try to script them.
-
-```bash
-which dtwin || bun add -g @design-twin/dtwin   # or: brew install its-magdy/tap/dtwin
-dtwin --version
-dtwin init --mcp          # design/, target.json, bridge token, plugin copy, .mcp.json entry
-dtwin plugin path         # the manifest.json the user imports into Figma
-dtwin token show          # the token the user pastes into the plugin
-dtwin doctor              # every check, with the next step for each failure
-```
-
-The user's part, in Figma desktop:
-
-1. **Plugins → Development → Import plugin from manifest…** and pick the file `dtwin plugin path` printed (once).
-2. Run **Plugins → Development → Design Twin**. Open **Connect to Claude Code (optional)**, paste the token, and press **Save** (once).
-3. Only before a `figma_write`: tick **Allow edits** in the plugin window. It is off by default, and no agent can turn it on.
-
-Then `/designtwin:help` covers the rest. Its troubleshooting reference matches each `dtwin doctor` failure to a fix.
-Working on this repo itself? Read [`CLAUDE.md`](CLAUDE.md) first.
-
----
-
-## Installation details
-
-### Prerequisites
-
-- The **Figma desktop app**. A browser tab can't import a development plugin. Any plan works, including free.
-- **[Bun](https://bun.sh/install) 1.4.2+** (CI runs 1.4.3, and the 1.4.2 floor on Linux). Everything here runs on Bun — the
-  CLI, the MCP server, the plugin's scripts and hooks; Node is not supported. Install: `curl -fsSL https://bun.sh/install | bash`
-  (macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows).
-- **Claude Code**, for the skills.
-- **git**, only if you install from a clone.
-
-### The CLI
-
-```bash
-bun add -g @design-twin/dtwin   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer)
-dtwin --version
-```
-
-`npm i -g @design-twin/dtwin` works too, but `dtwin` runs on Bun either way: without Bun on PATH it stops at
-`env: bun: No such file or directory`.
-
-Or with Homebrew (macOS, Linux), which installs Bun as a dependency:
-
-```bash
-brew install its-magdy/tap/dtwin
-dtwin --version
-```
-
-Or from a clone (to work on the code):
-
-```bash
-git clone https://github.com/its-magdy/design-twin.git
-cd design-twin
-bun install
-(cd bridge && bun link)   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer); no build step
-dtwin --version
-```
-
-In a clone, if you skip `bun link`, use `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever this
-README says `dtwin` — the two flags keep your project's `.env` out of the bridge and stop Bun fetching a missing package
-from the registry (the linked `dtwin` gets them from its shebang, `#!/usr/bin/env -S bun …`, which needs an `env` with
-`-S`: GNU coreutils ≥ 8.30 or macOS; on BusyBox/Alpine, run the `bun --no-install --no-env-file …` form instead).
-
-How the Homebrew formula pins its dependencies, and the rest of the install notes, are in
-[`bridge/README.md`](bridge/README.md#install-once).
-
-### The Figma plugin
-
-```bash
-dtwin plugin install   # copies the plugin to a per-user folder that never moves, and prints its manifest path
-```
-
-Then, once, in Figma desktop: **Plugins → Development → Import plugin from manifest…** and pick that `manifest.json`
-(`dtwin plugin path` prints it again; the folder is hidden, so on macOS press ⌘⇧G in the file picker and paste the
-path). `dtwin init` does the install too. In a clone, import `design-twin/figma-plugin/manifest.json` directly instead.
-
-`code.js` and `ui.html` are pre-built (committed in the repo, copied into the package), so there is nothing to build.
-
-### The Claude Code plugin
-
-```bash
-claude plugin marketplace add its-magdy/design-twin
-claude plugin install designtwin@designtwin-marketplace
-```
-
-From a local clone, use `claude plugin marketplace add /path/to/design-twin` instead. To try it for
-one session without installing, run `claude --plugin-dir /path/to/design-twin/claude-plugin`.
-
-Skills load under the `designtwin:` namespace. Run `/designtwin:help` to confirm the plugin is installed.
-
-### Upgrading
-
-```bash
-bun add -g @design-twin/dtwin@latest   # or: brew upgrade dtwin
-dtwin plugin status                    # confirms the plugin copy matches this dtwin
-```
-
-Then reopen the plugin in Figma, with hot reload on.
-
-Upgrading the package updates the installed plugin copy in place the next time `dtwin` starts a bridge (or run
-`dtwin plugin update`): with **Plugins → Development → Hot reload plugin** on, reopen the plugin and it runs the new
-code — new manifest permissions included — with no re-import. (With hot reload off, Figma keeps running the code it
-already loaded.) Re-import only if a new permission still does not work after that. The same goes for a clone after
-`git pull`.
-
----
-
-## Set up your project
-
-Run these in the root of the app you are **building**, not in this repo.
-
-### 1. Initialise
-
-```bash
-dtwin init            # add --mcp to also register the MCP server; --dry-run to preview
-```
-
-It creates:
-
-```
-design/
-├── README.md        # explains which half of design/ is safe to delete
-├── target.json      # detected stack profile (or null — build-screen asks on first run)
-└── export/          # every pull lands here, and nowhere else
-```
-
-It also creates the bridge token if one doesn't exist, and it never overwrites an existing file.
-With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json` (it runs the server with the absolute path of the
-`bun` that ran `dtwin init`, as `bun --no-install --no-env-file <package>/src/figma-mcp.ts` — `<package>` is the installed package, or `bridge/` in a clone). Enable it with `/mcp`, then
-restart Claude Code.
-
-### 2. Connect the Figma plugin
-
-```bash
-dtwin token show      # prints the per-user bridge token (~/.config/design-twin/bridge-token)
-```
-
-Open your Figma file and run **Plugins → Development → Design Twin**. Expand **Connect to Claude Code
-(optional)**, paste the token into **Bridge token**, and press **Save**. You only have to do this once.
-
-The plugin only reads until you tick **Allow edits** in its window. Tick it only when you want Claude to write to
-the file through `figma_write`. The setting is per user, so untick it when you are done.
-
-### 3. Check everything
-
-```bash
-dtwin doctor
-```
-
-`dtwin doctor` checks the token, the port, the daemon, the plugin connection and the project layout.
-It changes nothing, and for each problem it prints the next step to take.
-
-### 4. Map your code (recommended)
-
-Without these files, Claude writes new components instead of reusing yours, and the drift check has
-nothing to compare against:
-
-| File | Maps | Written by |
-|---|---|---|
-| `design/codeconnect.local.json` | Figma component `key` → your component + import | Scaffolded by `/designtwin:build-screen` on first build; you confirm the stubs |
-| `design/tokens.json` | Figma variable path → your token, e.g. `{ "color": { "color/primary": "colors.primary" } }` | You. Optional: variables with a `codeSyntax` in Figma need no entry |
-
----
-
 ## Usage
 
 Keep the Figma file open with the Design Twin plugin running.
 
-### 1. Find the screen
+### Find the screen
 
 ```bash
 dtwin list                    # pages + top-level layers, with node ids
@@ -346,7 +188,7 @@ dtwin list children 12:34     # peek inside one frame or section
 dtwin screenshot 12:34        # reference PNG of one node — look before you pull
 ```
 
-### 2. Pull it
+### Pull it
 
 ```bash
 dtwin pull --node 12:34                                   # one screen (tree, variables, assets)
@@ -358,7 +200,7 @@ dtwin pull --design-system                                # tokens/styles/compon
 Each pull writes to `design/export/` by default. To write somewhere else, pass a directory as the
 first argument, for example `dtwin pull design/lib --node 12:34`.
 
-### 3. Audit, build, verify, sync
+### Audit, build, verify, sync
 
 In Claude Code:
 
@@ -380,11 +222,44 @@ Plain-language requests work too, for example "is this design ready to build?" o
   reported as `not-probed`, never as passed.
 - **sync-design** keeps the hand edits you made after the build. Commit `design/` so a previous export exists to diff against.
 
+### Map your code to the design
+
+Recommended. Without these files, Claude writes new components instead of reusing yours, and the drift check has
+nothing to compare against:
+
+| File | Maps | Written by |
+|---|---|---|
+| `design/codeconnect.local.json` | Figma component `key` → your component + import | Scaffolded by `/designtwin:build-screen` on first build; you confirm the stubs |
+| `design/tokens.json` | Figma variable path → your token, e.g. `{ "color": { "color/primary": "colors.primary" } }` | You. Optional: variables with a `codeSyntax` in Figma need no entry |
+
 ### No terminal?
 
 Skip the bridge entirely. In the Figma plugin, click **Export current selection** and save the
 **Download …** links into `design/export/`, putting assets under `design/export/assets/`. The skills
 work the same way on those files.
+
+### Good to know
+
+- **One bridge, one port.** The MCP server or a `dtwin serve` daemon holds port `8787` and shares it with later
+  `dtwin` commands. A plain one-shot `dtwin pull` does not share: a second pull started while it runs exits with
+  `EADDRINUSE`. If another program is using the port, set `FIGMA_BRIDGE_PORT` to `8788` or `8789`.
+- **Several Figma files open?** With more than one connected, every command needs `--client` to say which.
+  `dtwin list clients` lists them.
+- **Big files are slow.** A whole-file pull of a large file can take many minutes (the default budget is 300 s, and
+  900 s with `--all-pages`), so pull one screen or page at a time.
+- **Allow edits** is off by default and nothing on the bridge or MCP side can turn it on. Once ticked, it stays on for
+  every file until you untick it. `figma_write` runs no arbitrary code.
+- **Windows details.** The `dtwin serve` daemon runs over a named pipe with a token handshake there
+  ([#61](https://github.com/its-magdy/design-twin/pull/61), closing [#12](https://github.com/its-magdy/design-twin/issues/12)).
+  A few raw-socket daemon checks are POSIX-only and skipped on Windows CI.
+- **The skills need Claude Code.** The `dtwin` CLI and the MCP server (a standard stdio MCP server) work without it.
+- **Bun details.** Two of the Claude Code plugin's three hooks run on Bun, and the start-up check is a small `sh`
+  script. Node alone won't run `dtwin`, even when installed with `npm`.
+- **drift-lint and Figma's REST API.** drift-lint calls it for file metadata only if you set `FIGMA_FILE_KEY` and
+  `FIGMA_TOKEN`.
+- **Native stacks.** `verify` has no node-by-node probe there: the agent renders the screen with the stack's own tools
+  (simulator, emulator, Flutter golden tests, which you set up) and compares images. Swift token output was
+  type-checked with `swiftc` when the emitter was written; Kotlin and Dart never have been.
 
 ---
 
@@ -450,9 +325,7 @@ already on disk and need no Figma connection: `design_get_component` and `design
 code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**.
 
 Pass `writeToDisk: true` to the export tools for anything large. It's also the only way to get asset
-files through MCP. A running MCP server or `dtwin serve` daemon owns port `8787` and shares it with
-later `dtwin` commands. If another program is using the port, set `FIGMA_BRIDGE_PORT` to `8788` or
-`8789`.
+files through MCP.
 
 ---
 
@@ -471,51 +344,32 @@ later `dtwin` commands. If another program is using the port, set `FIGMA_BRIDGE_
   `codeconnect.local.json`, and the `plan/`, `audit/`, `verify/` and `changes/` directories. Skills
   write these, and they can't be regenerated. Commit them.
 
-Projects set up before this split keep their export directly in `design/`. Everything still finds
+Projects set up before `design/export/` existed keep their export directly in `design/`. Everything still finds
 it there, and `dtwin doctor` reports which layout it found.
 
 ---
 
-## Running tests
+## Contributing and tests
 
 Everything runs offline, without Figma:
 
 ```bash
 bun install --frozen-lockfile
-bun test/harness.ts              # Figma plugin extractor, against a mock `figma`
-bun test/bridge.test.ts          # CLI + bridge
-bun test/design-to-code.test.ts  # tokens, maps, drift-lint
+bun run test         # every suite, in order, with a summary
+bun run test:fast    # skips the slow browser e2e suites: about 3 minutes instead of ~20
 ```
 
-Every other `test/*.test.ts` suite runs the same way.
+Working on this repo itself (human or agent)? The `designtwin` Claude Code plugin isn't installed here, and `dtwin`
+is `bun bridge/src/figma-pull.ts`; read [`CLAUDE.md`](CLAUDE.md) first.
 
-- `bun run test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1
-  if any failed, no suite is skipped after a failure. `bun test/run-suites.ts <name>…` runs a subset.
-- `bun run test:fast` skips four of the slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so
-  loudly at the end; CI's other matrix legs run them. Run `bun run test` before committing.
-- A bare `bun test` is Bun's own test runner, pointed by `bunfig.toml` at `test/spawn-stress/` only.
-- `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once.
-
-[`TESTING.md`](TESTING.md) lists each suite and the live-Figma checks (the run-suites summary is the authority for
-check counts).
-
-The plugin's `code.js` and `ui.html` and `claude-plugin/scripts/` are committed build output (the bridge has none: it
-runs and ships as TypeScript). After editing their sources, rebuild them:
-
-```bash
-bun run build
-```
-
-That runs each workspace's own build — esbuild → `figma-plugin/code.js` and `figma-plugin/ui.html` for the plugin
-(the bridge has nothing to build) — and then `bun claude-plugin/build-scripts.ts` to re-bundle
-`claude-plugin/scripts/`.
-
-CI fails if the committed build output doesn't match what the sources produce.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, running single suites, rebuilding the committed build output, and
+the rules CI enforces. [`TESTING.md`](TESTING.md) lists each suite and the live-Figma checks.
 
 ---
 
 ## Further reading
 
+- [`docs/setup.md`](docs/setup.md): every install route, project setup, the agent setup steps, and upgrading
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): the plugin's two-context model, CLI vs MCP, and the security model
 - [`bridge/README.md`](bridge/README.md): every CLI flag, the daemon, MCP tools, and limits
 - [`figma-plugin/README.md`](figma-plugin/README.md): editing the extractor

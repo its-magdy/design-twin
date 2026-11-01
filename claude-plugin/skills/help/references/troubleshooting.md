@@ -137,8 +137,10 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (the Design Twin repo itself registers none, by choice). Run `dtwin init --mcp` there: it adds a `.mcp.json`
   entry whose `command` is the absolute path of `bun` and whose `args` are
   `["--no-install", "--no-env-file", "<package>/src/figma-mcp.ts"]` (`bridge/src/…` in a clone) — no token needed
-  in it, since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
-  and restart.
+  in it, since the MCP server reads the same per-user stored token the CLI does. Then restart Claude Code in
+  that project and approve the `designtwin` server when it asks. `/mcp` shows its status: `⏸ Pending approval`
+  means it was never approved (start `claude` there interactively to approve it), and a server turned off in `/mcp`
+  can be turned back on there.
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs (or `dtwin init`). Export first: `/designtwin:extract`.
 - **Wrong stack generated** → set `profile` in `design/target.json`. For a stack the plugin does not bundle, write
