@@ -741,8 +741,8 @@ console.log("build-screen docs (quick keys + export docs):");
   check("[ir-fields] hidden sits on the layer switched off (descendants not flagged on its account); box x/y presence rule + group container rule; children[] order line",
     /sits on the layer that was switched off itself/.test(ir) && /present only where the parent does not lay the node out/.test(ir) && /skips GROUP and boolean-operation parents/.test(ir) && /\*\*`children\[\]`\*\* is Figma's layer order, normally bottom → top/.test(ir));
   // one wording — a consuming file's --design-system is not the library's catalog.
-  check("extract theme input 1 is libraries/<slug>/tokens.json (--as-library) for CONSUMING screens; design-system/tokens.json only from the DEFINING file",
-    /1\. `design\/export\/libraries\/<slug>\/tokens\.json` \(from `--as-library`\) when the screens CONSUME a library/.test(ext) && /pulled from the file that DEFINES\s+the tokens/.test(ext) && !/it is the library's own definition of every token/.test(ext));
+  check("extract theme input 1 is libraries/<slug>-<fileKey8>/tokens.json (--as-library) for CONSUMING screens; design-system/tokens.json only from the DEFINING file",
+    /1\. `design\/export\/libraries\/<slug>-<fileKey8>\/tokens\.json` \(from `--as-library`\) when the screens CONSUME a library/.test(ext) && /pulled from the file that DEFINES\s+the tokens/.test(ext) && !/it is the library's own definition of every token/.test(ext));
   const mcpSrc = read("bridge/src/figma-mcp.ts");
   check("README, help, extract and the MCP description: --design-system on a consuming file is that file's own tokens + referenced library variables, never the catalog; no 'fewer of them than a full pull would'",
     [readme, help, ext].every((d) => /CONSUMES a library/.test(d) && /--as-library/.test(d) && /never the library's catalog/.test(d)) && ![readme, help, ext, flat(mcpSrc)].some((d) => /fewer of them than a full pull would/.test(d)));

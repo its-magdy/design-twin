@@ -35,8 +35,8 @@ its export directly in `design/` — every path below works either way, just dro
   `assets/<id>_ref.png`), held by the `reference` field: **`nodes[0].reference`** in a single-screen
   pull (the field sits on the node), or the **root `reference`** of a page-walk layer file — check the right one
   before concluding there is none. A hand-exported PNG is the fallback for when the field is absent. **Always read it.**
-- **`…__<id>.vars.json`** beside the screen — the variables of every collection THAT screen
-  references (a superset of what its nodes bind; the node's own `tokens` say what is bound).
+- **`…__<id>.vars.json`** beside the screen — every variable defined in the file plus the library variables
+  THAT screen or those variables reference, directly or through an alias (a superset of what its nodes bind; the node's own `tokens` say what is bound).
   **`design/export/variables.json`** — the union of every screen pulled so far. It **accumulates**:
   a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Names
   are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
@@ -143,7 +143,7 @@ above — to learn the system before building.
 ## `libraries/` — a separately pulled LIBRARY file
 
 `design/export/libraries/index.json` is **optional, present only if a LIBRARY file was pulled separately**
-(`figma-pull --as-library`). Each row points at `libraries/<slug>-<fileKey8>/index.json`, whose
+(`dtwin pull --as-library`). Each row points at `libraries/<slug>-<fileKey8>/index.json`, whose
 `tokens.json` / `styles.*.json` / `components.json` have the SAME shape as their `design-system/`
 twins. Use it as a **secondary lookup, never as the codegen source**:
 
@@ -201,13 +201,13 @@ JSON is missing/empty), ask — don't guess or build from the `.png` alone.
 
 ## Browser "Download layers" flat naming
 
-If the export came from the plugin's **Download layers** button instead of the `figma-pull` CLI, the
+If the export came from the plugin's **Download layers** button instead of the `dtwin` CLI, the
 same files arrive FLAT with `__` where the CLI writes `/`:
 `pages__<dir>__<name>__<id>.json`, `pages__<dir>__index.json`, `pages__index.json`.
 
 Browsers are required to strip directory information from a download, so the hierarchy is encoded in
 the filename. Each `file` pointer already matches what landed on disk, so **the rule is unchanged**:
-open `design/<file>` verbatim, whichever layout you're looking at. Either re-nest them into
+open `design/export/<file>` verbatim, whichever layout you're looking at. Either re-nest them into
 `design/export/pages/…` or just follow the pointers.
 
 ## Single-screen exports, assets, config maps
@@ -216,7 +216,8 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   `--node <id>` or a selection. Root keys are `exportedAt`, `screen` (the human label), `page`,
   `pageId`, `nodeId`, `nodes[]` (the trees, same shape as a layer file's `tree`) and `manifest`.
   It writes three siblings and one shared file:
-  - `…__<id>.vars.json` — exactly the variables THIS screen binds, verbatim, as this pull saw them; each row
+  - `…__<id>.vars.json` — this pull's variable slice, verbatim: every variable defined in the file plus the
+    library variables THIS screen or those variables reference, directly or through an alias (more than its nodes bind; their own `tokens` say what is bound); each row
     names its `collection` and (newer exports) `collectionKey` — collection names repeat, the key does not.
   - `…__<id>.assets.json` — every asset the screen references, with a content hash per file, plus
     `duplicates` (the same artwork under different names — compared tolerantly: def ids and numbers
@@ -247,10 +248,10 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   outside strokes, so a popup with a 21 px shadow has `referenceOffset: {x: -21, y: -1}` while a
   shadowless frame has `{x: 0, y: 0}` — subtract it before comparing a crop against box coordinates.
 - The reference screenshot (visual ground truth) — held by the `reference` field — **`nodes[0].reference` in a single-screen
-  `design/<screen>.json`** (the field sits on the node, and there is one per exported node), or the
+  `design/export/pages/<Page>/<Screen>__<id>.json`** (the field sits on the node, and there is one per exported node), or the
   **root `reference`** of a page-walk layer file (`design/export/pages/<page>/<name>__<id>.json`, where it
   sits beside `tree`), as a path relative to
-  `design/` (e.g. `assets/<id>_ref.png`). A hand-exported `design/<screen>.png` is the fallback when
+  `design/export/` (e.g. `assets/<id>_ref.png`). A hand-exported PNG of the screen is the fallback when
   the field is genuinely absent — not when you looked in the other file's place for it. **Always read it** — JSON gives exact values, the image
   tells you if the result *looks* right.
 - `design/export/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an

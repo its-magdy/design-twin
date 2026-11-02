@@ -17,13 +17,13 @@ you here gives its real path.
 
 The choice changes values, not just coverage:
 
-1. `design/export/libraries/<slug>/tokens.json` (from `--as-library`) when the screens CONSUME a
+1. `design/export/libraries/<slug>-<fileKey8>/tokens.json` (from `--as-library`) when the screens CONSUME a
    library — the library's own definition of every token, one variable per name.
    `design/export/design-system/tokens.json` is that only when it was pulled from the file that DEFINES
    the tokens (its variables are not `remote: true`); pulled from a consuming file it holds just the
    library variables something there references.
-2. Otherwise, the screen's own `design/export/pages/<Page>/<Screen>__<id>.vars.json` — the variables
-   that screen's file references, so its names mean what that screen means.
+2. Otherwise, the screen's own `design/export/pages/<Page>/<Screen>__<id>.vars.json` — the file's own
+   variables plus the library variables that screen or those variables reference (directly or through an alias), so its names mean what that screen means.
 3. `design/export/variables.json` (the union of every pull) only when you need every screen's tokens
    in one file — a shell shared by several screens does — and then read its `_conflicts` first, and pick, per
    key-suffixed name, the key each screen's `.vars.json` carries (record it in the plan's token row).

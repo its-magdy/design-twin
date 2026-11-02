@@ -11,9 +11,6 @@
 Design Twin reads a Figma screen through a local plugin and has Claude Code build it in your stack, with your own
 components and tokens, then checks the result against the design.
 
-<!-- demo.gif goes here -->
-<!-- TODO(owner): record a ~15 s demo (pull a frame → /designtwin:build-screen → verify report) and embed it here. -->
-
 [![test](https://github.com/its-magdy/design-twin/actions/workflows/test.yml/badge.svg)](https://github.com/its-magdy/design-twin/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -299,7 +296,7 @@ Every command accepts `--help`. Unknown flags are rejected, not ignored.
 | `--design-system` | Tokens, styles, components, hygiene report. No page walk |
 | `--as-library <name>` | The full catalog of a **library** file (run it with the library file open) |
 | `--client <fileKey\|name>` | Which file, when several are connected |
-| `--timeout N` | Seconds to wait (default 300; 900 with `--all-pages`) |
+| `--timeout N` | Seconds to allow, for the plugin to connect and for the export (export default 300; 900 with `--all-pages`; 120 with `--selection`. Connect default 10 min at a terminal, 90 s otherwise) |
 | `--css` `--measurements` `--motion` `--variant-visuals` `--plugin-data` `--shared-data` | Opt-in extra reads |
 
 ### Claude Code skills
@@ -343,6 +340,8 @@ files through MCP.
 - **Everything else is yours.** This includes `target.json`, `tokens.json`,
   `codeconnect.local.json`, and the `plan/`, `audit/`, `verify/` and `changes/` directories. Skills
   write these, and they can't be regenerated. Commit them.
+  - `.sync/` is the exception: the sync-design skill's snapshot of the export taken before a re-pull. No pull
+    writes it, and you can delete it any time; it only changes what the next diff compares against.
 
 Projects set up before `design/export/` existed keep their export directly in `design/`. Everything still finds
 it there, and `dtwin doctor` reports which layout it found.

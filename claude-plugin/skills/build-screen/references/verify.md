@@ -21,7 +21,7 @@ Step 5 of build-screen, every command and rule; the skill body has the loop.
 
 - Static: build + typecheck + lint; grep the new code for raw hex/px literals and inline SVG.
 - **Live render is the default path, not the fallback.** Check `package.json`/`node_modules` for a dev server
-  and Playwright (or the stack's equivalent from `verify.md`'s table); if present, render the actual screen and
+  and Playwright (or the stack's equivalent from the table under *Per-stack rendering* below); if present, render the actual screen and
   diff **computed styles** (`getComputedStyle` — `backgroundColor`, padding, gap, font metrics, or the platform
   equivalent) against the IR's `layout`/`fills`/token values, not just a visual read of the `.png`. Computed
   colours come back as `rgb()`/`rgba()` — convert one side rather than string-matching `rgb(229, 231, 235)` against `#E5E7EB`.
@@ -62,7 +62,7 @@ Step 5 of build-screen, every command and rule; the skill body has the loop.
   delta (`overflowX`) on the root frame.
 
   What `--expect` emits, what `--compare` grades, and the run a probe without `--run` starts (it is refused while
-  a verifier's run of the screen is open) are in `references/verify.md` (*Numbers*). Read the expectation's rows rather than retyping
+  a verifier's run of the screen is open) are under *Compare in layers* below (*Numbers*). Read the expectation's rows rather than retyping
   them into a code comment, and report the verdict `--compare` computes: it exits non-zero unless the verdict is
   `pass` or `pass-with-deviations` — waivers and descopes are the user's word, never yours.
 - Render the screen at the frame's exact size (`box.w`×`box.h`, fonts loaded, animations off) with
@@ -75,7 +75,7 @@ Step 5 of build-screen, every command and rule; the skill body has the loop.
   depict the build it claims to depict is worse than none.
 - Re-render key states, a large font scale, the other theme, and RTL when supported.
 - Fix the largest discrepancy first, at most **5 rounds** per component, and never buy pixels with worse code —
-  `references/verify.md` (*The fix loop*) has the rules; a residual difference goes in `deviations[]` with its reason.
+  *The fix loop* below has the rules; a residual difference goes in `deviations[]` with its reason.
 - Only if the project genuinely has no dev server/rendering tooling available (checked, not
   assumed) fall back to a structural + visual self-review against the `.png` — and report it as
   "not rendered — reviewed statically", never as a verified match.
@@ -204,7 +204,7 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    `<Layer>__<id>.diff.png`; start at the hot regions, then still compare the whole reference and build side by side
    (1-px lines, light greys/tints and text-only changes rarely become regions). The diff is pixelmatch-style
    YIQ with anti-aliasing detection and shift tolerance; informational, never the verdict; a 1–3 % text-edge
-   floor is normal. Other stacks: side-by-side or overlay against `design/<screen>.png` (or a fresh `--screenshot <id>`
+   floor is normal. Other stacks: side-by-side or overlay against the screen's reference PNG (`design/export/assets/<id>_ref.png`) (or a fresh `--screenshot <id>`
    for one component). Look first for clipped or overlapping text and missing elements, then
    alignment and spacing, then color and effects. When a pixel-diff tool is available, align the images
    before diffing so a 1px global offset doesn't drown real differences; prefer a perceptual/SSIM
