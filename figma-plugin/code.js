@@ -1776,6 +1776,67 @@
     return out.length ? out : void 0;
   }
 
+  // src/node-visuals.ts
+  async function nodePaints(node) {
+    const [fills, strokes, effects] = await Promise.all([
+      simplifyFills("fills" in node ? node.fills : void 0),
+      simplifyStrokes(node),
+      simplifyEffects("effects" in node ? node.effects : void 0)
+    ]);
+    const out = {};
+    if (fills) out.fills = fills;
+    if (strokes) out.strokes = strokes;
+    if (effects) out.effects = effects;
+    return out;
+  }
+  var CORNER_KEYS = [
+    ["topLeftRadius", "tl"],
+    ["topRightRadius", "tr"],
+    ["bottomRightRadius", "br"],
+    ["bottomLeftRadius", "bl"]
+  ];
+  var RADIUS_SENTINEL = 1e4;
+  function radiusOut(raw, size, flag) {
+    if (raw < RADIUS_SENTINEL) return round(raw);
+    flag.full = true;
+    const w = size && typeof size.w === "number" ? size.w : void 0;
+    const h = size && typeof size.h === "number" ? size.h : void 0;
+    if (w === void 0 && h === void 0) return round(raw);
+    return round(Math.min(w === void 0 ? Infinity : w, h === void 0 ? Infinity : h) / 2);
+  }
+  function nodeCorners(node, size) {
+    const out = {};
+    if (!("cornerRadius" in node)) return out;
+    const flag = {};
+    let radius;
+    if (node.cornerRadius !== figma.mixed && node.cornerRadius) radius = radiusOut(node.cornerRadius, size, flag);
+    else if (node.cornerRadius === figma.mixed) {
+      const corners = {};
+      for (const [k, s] of CORNER_KEYS) {
+        const v = numProp(node, k);
+        if (k in node && typeof v === "number" && v) corners[s] = radiusOut(v, size, flag);
+      }
+      radius = nonEmpty(corners);
+    }
+    if (flag.full) out.radiusFull = true;
+    if (radius !== void 0) out.radius = radius;
+    return out;
+  }
+  function nodeOpacity(node) {
+    return "opacity" in node && typeof node.opacity === "number" && node.opacity < 1 ? round(node.opacity) : void 0;
+  }
+  function nodeBlendMode(node) {
+    return "blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH" ? String(node.blendMode).toLowerCase() : void 0;
+  }
+  async function nodeVisuals(node, size) {
+    const out = { ...await nodePaints(node), ...nodeCorners(node, size) };
+    const opacity = nodeOpacity(node);
+    if (opacity !== void 0) out.opacity = opacity;
+    const blendMode = nodeBlendMode(node);
+    if (blendMode) out.blendMode = blendMode;
+    return nonEmpty(out);
+  }
+
   // src/text.ts
   var lenUnit = (v) => ({ value: round(v.value), unit: v.unit === "PERCENT" ? "percent" : "px" });
   function lineH(v) {
@@ -2056,6 +2117,583 @@
   // ../bridge/src/instance-overrides.ts
   var OVERRIDE_CAP = 100;
 
+  // src/instance-refs.ts
+  async function instanceComponentRef(node) {
+    if (node.type !== "INSTANCE") return void 0;
+    try {
+      const main = await node.getMainComponentAsync();
+      if (!main) return void 0;
+      const ref = { name: main.name };
+      if (main.id) ref.id = main.id;
+      if (main.key) ref.key = main.key;
+      if (main.remote) ref.remote = true;
+      const parent = main.parent;
+      if (parent && parent.type === "COMPONENT_SET") {
+        ref.setId = parent.id;
+        if (parent.key) ref.setKey = parent.key;
+        ref.setName = parent.name;
+        ref.variant = main.name;
+      }
+      return ref;
+    } catch (e) {
+      return void 0;
+    }
+  }
+  var PROP_REF_KEYS = ["visible", "characters", "mainComponent"];
+  function componentPropRefs(node) {
+    if (!("componentPropertyReferences" in node)) return void 0;
+    const refs = node.componentPropertyReferences;
+    if (!refs) return void 0;
+    const out = {};
+    for (const k of PROP_REF_KEYS) {
+      const ref = refs[k];
+      if (ref) out[k] = propName(ref);
+    }
+    return nonEmpty(out);
+  }
+  function instanceOverrides(node) {
+    if (node.type !== "INSTANCE") return void 0;
+    const overrides = node.overrides;
+    if (!Array.isArray(overrides) || !overrides.length) return void 0;
+    const list = overrides.filter((o) => o && Array.isArray(o.overriddenFields) && o.overriddenFields.length).map((o) => ({ id: o.id, fields: o.overriddenFields }));
+    if (!list.length) return void 0;
+    if (list.length > OVERRIDE_CAP) {
+      run().warn("instance '" + node.name + "' has " + list.length + " overrides \u2014 truncated to " + OVERRIDE_CAP);
+      return list.slice(0, OVERRIDE_CAP);
+    }
+    return list;
+  }
+
+  // src/motion.ts
+  function keyframeValue(kv) {
+    if (!kv || typeof kv !== "object") return kv;
+    switch (kv.type) {
+      case "FLOAT":
+        return round(kv.value);
+      case "COLOR":
+        return kv.value ? rgbaToHex(kv.value) : void 0;
+      case "VECTOR":
+        return kv.value ? { ...xy(kv.value) } : void 0;
+      case "CIRCLE":
+        return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
+      case "LINE":
+        return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : void 0;
+      case "BOOL":
+      case "TEXT_DATA":
+      case "CIRCLE_POINT":
+        return kv.value;
+      // no transformation needed
+      // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
+      // same keys, same order, same JSON.
+      case "COLOR_POINT": {
+        const cp = kv.value;
+        return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
+      }
+      default: {
+        const unknownMember = kv;
+        return asJson(unknownMember.value);
+      }
+    }
+  }
+  async function aliasValue2(id) {
+    return { aliasOf: await run().varName(id) || id };
+  }
+  async function motionEasing(ez) {
+    if (!ez || !ez.type) return void 0;
+    if (ez.type === "VARIABLE_ALIAS") return aliasValue2(ez.id);
+    return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
+  }
+  async function keyframes(list) {
+    if (!isList(list) || !list.length) return void 0;
+    return Promise.all(list.map(async (k) => {
+      const o = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) };
+      const ez = await motionEasing(k.easing);
+      if (ez) o.easing = ez;
+      return o;
+    }));
+  }
+  async function manualTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
+    const kf = await keyframes(binding.keyframes);
+    if (kf) o.keyframes = kf;
+    return o;
+  }
+  async function animationTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
+    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+    if (isList(binding.tracks) && binding.tracks.length) {
+      o.tracks = await Promise.all(binding.tracks.map(async (t) => {
+        const to = {};
+        if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
+        const kf = await keyframes(t.keyframes);
+        if (kf) to.keyframes = kf;
+        return to;
+      }));
+    }
+    return o;
+  }
+  async function stylePropValue(v) {
+    if (v === void 0 || v === null) return void 0;
+    if (typeof v === "object") return motionEasing(v);
+    return v;
+  }
+  function isPropertyBindings(t) {
+    return "properties" in t;
+  }
+  async function bindingMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const entries = Object.entries(map);
+    const converted = await Promise.all(entries.map(([, binding]) => conv(binding)));
+    const out = {};
+    entries.forEach(([key], i) => putNonEmpty(out, key, converted[i]));
+    return nonEmpty(out);
+  }
+  async function paintMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const out = {};
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      if (isPropertyBindings(entry)) {
+        const properties = await bindingMap(entry.properties, conv);
+        if (properties) out[index] = { properties };
+      } else {
+        putNonEmpty(out, index, await conv(entry));
+      }
+    }
+    return nonEmpty(out);
+  }
+  async function effectMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const out = {};
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      const { properties, ...fields } = entry;
+      const extra = {};
+      putNonEmpty(extra, "properties", await bindingMap(properties, conv));
+      putNonEmpty(out, index, Object.assign(await bindingMap(fields, conv) || {}, extra));
+    }
+    return nonEmpty(out);
+  }
+  async function motionMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const { fills, strokes, effects, ...scalars } = map;
+    const indexed = {};
+    putNonEmpty(indexed, "fills", await paintMap(fills, conv));
+    putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
+    putNonEmpty(indexed, "effects", await effectMap(effects, conv));
+    return nonEmpty(Object.assign(await bindingMap(scalars, conv) || {}, indexed));
+  }
+  async function collectMotion(node) {
+    const out = {};
+    if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
+      out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
+    }
+    if ("manualKeyframeTracks" in node) {
+      const tracks = await motionMap(node.manualKeyframeTracks, manualTrack);
+      if (tracks) out.manualTracks = tracks;
+    }
+    if ("animations" in node) {
+      const anims = await motionMap(node.animations, animationTrack);
+      if (anims) out.animations = anims;
+    }
+    if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
+      out.styles = await Promise.all(node.animationStyles.map(async (s) => {
+        const kind = s.type;
+        if (typeof kind === "string" && kind !== "" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
+        if (s.type === "CUSTOM") {
+          const o = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
+          if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+          return Object.assign(o, await customStyleDetail(s.styleId));
+        }
+        return animationStyleEntry(s);
+      }));
+    }
+    return nonEmpty(out);
+  }
+  function unknownKindStyle(s, kind) {
+    const fields = s;
+    const o = {};
+    if (typeof fields.id === "string") o.id = fields.id;
+    if (typeof fields.name === "string") o.name = fields.name;
+    if (typeof fields.styleId === "string") o.styleId = fields.styleId;
+    o.kind = kind.toLowerCase();
+    if (typeof fields.timelineOffset === "number" && fields.timelineOffset) o.timelineOffset = round(fields.timelineOffset);
+    return o;
+  }
+  async function animationStyleEntry(s) {
+    const o = { id: s.id, name: s.name, styleId: s.styleId };
+    if (typeof s.description === "string" && s.description) o.description = s.description;
+    if (typeof s.duration === "number") o.duration = round(s.duration);
+    if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+    if (s.props) {
+      const entries = Object.entries(s.props);
+      const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
+      const props = {};
+      entries.forEach(([key], i) => {
+        const c = converted[i];
+        if (c !== void 0) props[key] = c;
+      });
+      if (Object.keys(props).length) o.props = props;
+    }
+    return o;
+  }
+  async function customAnimationEntries(style) {
+    try {
+      const list = style.animationEntries;
+      if (!isList(list)) return void 0;
+      return await Promise.all(list.map(animationStyleEntry));
+    } catch (e) {
+      return void 0;
+    }
+  }
+  async function customStyleDetail(styleId) {
+    const style = await run().styleName.obj(styleId);
+    if (!style || style.type !== "CUSTOM_ANIMATION") return {};
+    try {
+      const detail = {};
+      if (typeof style.description === "string" && style.description) detail.description = style.description;
+      const entries = await customAnimationEntries(style);
+      if (entries) detail.entries = entries;
+      return detail;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // src/serialize.ts
+  var MAX_DEPTH = 60;
+  var SIZE_LIMIT_KEYS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
+  function pluginData(node) {
+    let keys = [];
+    try {
+      keys = node.getPluginDataKeys();
+    } catch (e) {
+      return void 0;
+    }
+    if (!keys || !keys.length) return void 0;
+    const out = {};
+    for (const k of keys) {
+      try {
+        const v = node.getPluginData(k);
+        if (v) out[k] = v;
+      } catch (e) {
+      }
+    }
+    return nonEmpty(out);
+  }
+  var SHARED_NAMESPACES = ["tokens"];
+  function sharedData(node) {
+    const out = {};
+    for (const ns of SHARED_NAMESPACES) {
+      let keys = [];
+      try {
+        keys = node.getSharedPluginDataKeys(ns) || [];
+      } catch (e) {
+        continue;
+      }
+      const bucket = {};
+      for (const k of keys) {
+        try {
+          const v = node.getSharedPluginData(ns, k);
+          if (v) bucket[k] = v;
+        } catch (e) {
+        }
+      }
+      putNonEmpty(out, ns, bucket);
+    }
+    return nonEmpty(out);
+  }
+  async function nodeCss(node) {
+    try {
+      const css = await node.getCSSAsync();
+      return css && Object.keys(css).length ? css : void 0;
+    } catch (e) {
+      return void 0;
+    }
+  }
+  function leaf(out) {
+    delete out.layout;
+    return out;
+  }
+  function bakeTransform(out) {
+    const st = {};
+    if (out.rotation !== void 0) {
+      st.rotation = out.rotation;
+      delete out.rotation;
+    }
+    if (out.flipped) {
+      st.flipped = true;
+      delete out.flipped;
+    }
+    if (out.skew !== void 0) {
+      st.skew = out.skew;
+      delete out.skew;
+    }
+    putNonEmpty(out, "sourceTransform", st);
+  }
+  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid, assets = "run") {
+    checkCancelled();
+    const r = run();
+    const stats = r.stats;
+    if (depth > MAX_DEPTH) {
+      stats.truncated++;
+      if (stats.truncated === 1) r.warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
+      return null;
+    }
+    stats.nodes++;
+    const out = { type: node.type, name: node.name, id: node.id };
+    if ("visible" in node && node.visible === false) out.hidden = true;
+    const hidden = !!out.hidden || !!underHidden;
+    if (hidden) stats.hiddenNodes++;
+    if (node.type === "INSTANCE" && node.componentProperties) {
+      const props = {};
+      const propTokens = {};
+      const propEntries = Object.entries(node.componentProperties);
+      const bound = await Promise.all(propEntries.map(([, cp]) => resolveBoundMap(cp.boundVariables)));
+      propEntries.forEach(([k, cp], i) => {
+        props[propName(k)] = cp.value;
+        const bv = bound[i];
+        if (bv && bv.value) propTokens[propName(k)] = bv.value;
+      });
+      putNonEmpty(out, "props", props);
+      putNonEmpty(out, "propTokens", propTokens);
+    }
+    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") out.component = node.name;
+    const lay = layout(node);
+    if (lay) out.layout = lay;
+    const absoluteInParent = "layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE";
+    if (absoluteInParent) out.absolute = true;
+    if ("layoutGrow" in node && node.layoutGrow) out.grow = node.layoutGrow;
+    if ("layoutAlign" in node && node.layoutAlign && node.layoutAlign !== "INHERIT") out.alignSelf = lower(node.layoutAlign);
+    if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal && node.layoutSizingHorizontal !== "FIXED") out.widthMode = lower(node.layoutSizingHorizontal);
+    if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
+    if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
+    if (inGrid && !absoluteInParent) {
+      if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+      if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+      if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex;
+      if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
+      if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+      if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+    }
+    if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
+      out.x = round(node.x);
+      out.y = round(node.y);
+    }
+    if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
+      const b = node.absoluteBoundingBox;
+      const box = { w: round(b.width), h: round(b.height) };
+      out.box = box;
+      if (!parentControlsLayout || absoluteInParent) {
+        box.x = round(b.x);
+        box.y = round(b.y);
+      }
+      const rb = "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null;
+      if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
+        out.renderBox = { ...xy(rb), w: round(rb.width), h: round(rb.height) };
+      }
+    }
+    if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
+      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter((g) => !!g);
+    }
+    if ("annotations" in node && isList(node.annotations) && node.annotations.length) {
+      out.annotations = node.annotations.map((a) => {
+        const o = {};
+        if (a.label) o.label = a.label;
+        if (a.labelMarkdown) o.markdown = a.labelMarkdown;
+        if (a.categoryId) o.categoryId = a.categoryId;
+        if (isList(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
+        return o;
+      });
+    }
+    if ("devStatus" in node && node.devStatus && node.devStatus.type) {
+      out.devStatus = lower(node.devStatus.type);
+      if (node.devStatus.description) out.devStatusNote = node.devStatus.description;
+    }
+    let sizeLimits;
+    for (const k of SIZE_LIMIT_KEYS) {
+      const v = numProp(node, k);
+      if (k in node && typeof v === "number") (sizeLimits || (sizeLimits = {}))[k] = round(v);
+    }
+    if (sizeLimits) out.sizeLimits = sizeLimits;
+    if ("constraints" in node && node.constraints && (node.constraints.horizontal !== "MIN" || node.constraints.vertical !== "MIN")) {
+      out.pin = { h: lower(node.constraints.horizontal), v: lower(node.constraints.vertical) };
+    }
+    if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
+      out.fixedChildren = node.numberOfFixedChildren;
+    }
+    if ("clipsContent" in node && node.clipsContent) out.clip = true;
+    const { fills, strokes, effects } = await nodePaints(node);
+    if (fills) out.fills = fills;
+    if (strokes) out.strokes = strokes;
+    if ("strokesIncludedInLayout" in node && node.strokesIncludedInLayout) out.strokesInLayout = true;
+    if (effects) out.effects = effects;
+    const { radiusFull, radius } = nodeCorners(node, out.box);
+    if (radiusFull) out.radiusFull = true;
+    if (radius !== void 0) out.radius = radius;
+    const opacity = nodeOpacity(node);
+    if (opacity !== void 0) out.opacity = opacity;
+    if ("rotation" in node && node.rotation) out.rotation = round(node.rotation);
+    if ("relativeTransform" in node && Array.isArray(node.relativeTransform) && node.relativeTransform.length === 2) {
+      const m = node.relativeTransform;
+      const a = m[0][0], c = m[0][1], b = m[1][0], d = m[1][1];
+      if (a * d - c * b < 0) out.flipped = true;
+      const sx = Math.sqrt(a * a + b * b);
+      if (sx > 1e-6) {
+        const skewDeg = Math.atan2(a * c + b * d, sx * sx) * 180 / Math.PI;
+        if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
+      }
+    }
+    const blendMode = nodeBlendMode(node);
+    if (blendMode) out.blendMode = blendMode;
+    if ("isMask" in node && node.isMask) out.mask = true;
+    if (out.mask && "maskType" in node && node.maskType && node.maskType !== "ALPHA") out.maskType = String(node.maskType).toLowerCase();
+    if ("cornerSmoothing" in node && typeof node.cornerSmoothing === "number" && node.cornerSmoothing) out.cornerSmoothing = round(node.cornerSmoothing);
+    if ("targetAspectRatio" in node && node.targetAspectRatio && node.targetAspectRatio.y) out.aspectRatio = round(node.targetAspectRatio.x / node.targetAspectRatio.y);
+    if (node.type === "ELLIPSE" && node.arcData) {
+      const a = node.arcData;
+      const isFull = (!a.startingAngle || a.startingAngle === 0) && Math.abs((a.endingAngle || 0) - Math.PI * 2) < 1e-4 && !a.innerRadius;
+      if (!isFull) {
+        const arc = {};
+        if (typeof a.startingAngle === "number") arc.start = round(a.startingAngle);
+        if (typeof a.endingAngle === "number") arc.end = round(a.endingAngle);
+        if (typeof a.innerRadius === "number" && a.innerRadius) arc.innerRadius = round(a.innerRadius);
+        putNonEmpty(out, "arc", arc);
+      }
+    }
+    if (node.type === "STAR") {
+      const shape = {};
+      if (typeof node.pointCount === "number") shape.points = node.pointCount;
+      if (typeof node.innerRadius === "number") shape.innerRadius = round(node.innerRadius);
+      putNonEmpty(out, "shape", shape);
+    }
+    if (node.type === "POLYGON" && typeof node.pointCount === "number") out.shape = { points: node.pointCount };
+    if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = lower(node.booleanOperation);
+    if ("exportSettings" in node && isList(node.exportSettings) && node.exportSettings.length) {
+      out.exportSettings = node.exportSettings.map((es) => {
+        const o = { format: String(es.format || "").toLowerCase() };
+        if ("suffix" in es && es.suffix) o.suffix = es.suffix;
+        const con = "constraint" in es ? es.constraint : void 0;
+        if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
+          o.constraint = { type: String(con.type || "").toLowerCase(), value: round(con.value) };
+        }
+        return o;
+      });
+    }
+    if ("detachedInfo" in node && node.detachedInfo) {
+      out.detachedFrom = node.detachedInfo.type === "library" ? { key: node.detachedInfo.componentKey } : { componentId: node.detachedInfo.componentId };
+    }
+    if (node.type === "INSTANCE" && "exposedInstances" in node) {
+      try {
+        if (Array.isArray(node.exposedInstances) && node.exposedInstances.length) out.exposedInstances = node.exposedInstances.map((i) => i.id);
+      } catch (e) {
+      }
+    }
+    if ("overlayPositionType" in node) {
+      const hasScrim = node.overlayBackground && node.overlayBackground.type === "SOLID_COLOR" && node.overlayBackground.color;
+      const closeOutside = node.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
+      const posSet = node.overlayPositionType && node.overlayPositionType !== "CENTER";
+      if (hasScrim || closeOutside || posSet) {
+        const ov = {};
+        if (node.overlayPositionType) ov.position = node.overlayPositionType.toLowerCase();
+        if (closeOutside) ov.closeOnClickOutside = true;
+        if (hasScrim && node.overlayBackground.type === "SOLID_COLOR") ov.background = rgbaToHex(node.overlayBackground.color);
+        out.overlay = ov;
+      }
+    }
+    if (node.type === "TEXT" || node.type === "TEXT_PATH") Object.assign(out, await serializeText(node));
+    const propRefs = componentPropRefs(node);
+    if (propRefs) out.propRefs = propRefs;
+    const overrides = instanceOverrides(node);
+    if (overrides) out.overrides = overrides;
+    if (r.reads.pluginData) {
+      const pd = pluginData(node);
+      if (pd) out.pluginData = pd;
+    }
+    if (r.reads.motion) {
+      const m = await collectMotion(node);
+      if (m) out.motion = m;
+    }
+    if (r.reads.sharedData) {
+      const sd = sharedData(node);
+      if (sd) out.sharedData = sd;
+    }
+    const [mainRef, tokens, styles, asset, reactions, varModes, css] = await Promise.all([
+      instanceComponentRef(node),
+      boundTokens(node),
+      nodeStyles(node),
+      collectAsset(node, hidden, assets),
+      simplifyReactions(node),
+      variableModes(node),
+      r.reads.css ? nodeCss(node) : Promise.resolve(void 0)
+    ]);
+    if (mainRef) {
+      out.component = mainRef.name;
+      out.mainComponent = mainRef;
+    }
+    if (tokens) out.tokens = tokens;
+    if (styles) out.styles = styles;
+    if (reactions) out.reactions = reactions;
+    if (varModes) out.variableModes = varModes;
+    if (css) out.css = css;
+    if (asset && "skipped" in asset) {
+      out.assetSkipped = asset.skipped;
+      return leaf(out);
+    }
+    if (asset && "geometry" in asset) {
+      out.geometry = asset.geometry;
+      return leaf(out);
+    }
+    if (asset) {
+      out.asset = asset.path;
+      bakeTransform(out);
+      return leaf(out);
+    }
+    if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
+      const grid = await Promise.all(
+        Array.from({ length: node.numRows }, (_, r2) => Promise.all(
+          Array.from({ length: node.numColumns }, async (__, cc) => {
+            try {
+              const cell = node.cellAt(r2, cc);
+              if (!cell) return void 0;
+              const co = { row: r2, col: cc };
+              if (cell.text) Object.assign(co, await serializeText(cell.text));
+              const cfills = await simplifyFills(cell.fills);
+              if (cfills) co.fills = cfills;
+              return co;
+            } catch (e) {
+              return void 0;
+            }
+          })
+        ))
+      );
+      const rows = grid.map((row) => row.filter((c) => !!c)).filter((row) => row.length);
+      if (rows.length) out.tableCells = rows;
+    }
+    const children = "children" in node ? node.children : void 0;
+    if (children && children.length) {
+      const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
+      const grid = "layoutMode" in node && node.layoutMode === "GRID";
+      const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
+      const pinnedFrom = children.length - nFixed;
+      const kids = [];
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        if (!c) continue;
+        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid, assets);
+        if (s) kids.push(s);
+      }
+      if (kids.length) out.children = kids;
+    }
+    return out;
+  }
+
   // src/libraries.ts
   var UNKNOWN_LIBRARY = "unknown-library";
   function readRegistry(sink) {
@@ -2304,285 +2942,9 @@
     return { exportedAt: exportedAt(), ...ifDefined("file", figma.root && figma.root.name || void 0), libraries, warnings };
   }
 
-  // src/motion.ts
-  function keyframeValue(kv) {
-    if (!kv || typeof kv !== "object") return kv;
-    switch (kv.type) {
-      case "FLOAT":
-        return round(kv.value);
-      case "COLOR":
-        return kv.value ? rgbaToHex(kv.value) : void 0;
-      case "VECTOR":
-        return kv.value ? { ...xy(kv.value) } : void 0;
-      case "CIRCLE":
-        return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
-      case "LINE":
-        return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : void 0;
-      case "BOOL":
-      case "TEXT_DATA":
-      case "CIRCLE_POINT":
-        return kv.value;
-      // no transformation needed
-      // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
-      // same keys, same order, same JSON.
-      case "COLOR_POINT": {
-        const cp = kv.value;
-        return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
-      }
-      default: {
-        const unknownMember = kv;
-        return asJson(unknownMember.value);
-      }
-    }
-  }
-  async function aliasValue2(id) {
-    return { aliasOf: await run().varName(id) || id };
-  }
-  async function motionEasing(ez) {
-    if (!ez || !ez.type) return void 0;
-    if (ez.type === "VARIABLE_ALIAS") return aliasValue2(ez.id);
-    return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
-  }
-  async function keyframes(list) {
-    if (!isList(list) || !list.length) return void 0;
-    return Promise.all(list.map(async (k) => {
-      const o = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) };
-      const ez = await motionEasing(k.easing);
-      if (ez) o.easing = ez;
-      return o;
-    }));
-  }
-  async function manualTrack(binding) {
-    if (!binding || typeof binding !== "object") return void 0;
-    const o = {};
-    const base = keyframeValue(binding.baseValue);
-    if (base !== void 0) o.base = base;
-    const kf = await keyframes(binding.keyframes);
-    if (kf) o.keyframes = kf;
-    return o;
-  }
-  async function animationTrack(binding) {
-    if (!binding || typeof binding !== "object") return void 0;
-    const o = {};
-    const base = keyframeValue(binding.baseValue);
-    if (base !== void 0) o.base = base;
-    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
-    if (isList(binding.tracks) && binding.tracks.length) {
-      o.tracks = await Promise.all(binding.tracks.map(async (t) => {
-        const to = {};
-        if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
-        const kf = await keyframes(t.keyframes);
-        if (kf) to.keyframes = kf;
-        return to;
-      }));
-    }
-    return o;
-  }
-  async function stylePropValue(v) {
-    if (v === void 0 || v === null) return void 0;
-    if (typeof v === "object") return motionEasing(v);
-    return v;
-  }
-  function isPropertyBindings(t) {
-    return "properties" in t;
-  }
-  async function bindingMap(map, conv) {
-    if (!map || typeof map !== "object") return void 0;
-    const entries = Object.entries(map);
-    const converted = await Promise.all(entries.map(([, binding]) => conv(binding)));
-    const out = {};
-    entries.forEach(([key], i) => putNonEmpty(out, key, converted[i]));
-    return nonEmpty(out);
-  }
-  async function paintMap(map, conv) {
-    if (!map || typeof map !== "object") return void 0;
-    const out = {};
-    for (const [index, entry] of Object.entries(map)) {
-      if (!entry || typeof entry !== "object") continue;
-      if (isPropertyBindings(entry)) {
-        const properties = await bindingMap(entry.properties, conv);
-        if (properties) out[index] = { properties };
-      } else {
-        putNonEmpty(out, index, await conv(entry));
-      }
-    }
-    return nonEmpty(out);
-  }
-  async function effectMap(map, conv) {
-    if (!map || typeof map !== "object") return void 0;
-    const out = {};
-    for (const [index, entry] of Object.entries(map)) {
-      if (!entry || typeof entry !== "object") continue;
-      const { properties, ...fields } = entry;
-      const extra = {};
-      putNonEmpty(extra, "properties", await bindingMap(properties, conv));
-      putNonEmpty(out, index, Object.assign(await bindingMap(fields, conv) || {}, extra));
-    }
-    return nonEmpty(out);
-  }
-  async function motionMap(map, conv) {
-    if (!map || typeof map !== "object") return void 0;
-    const { fills, strokes, effects, ...scalars } = map;
-    const indexed = {};
-    putNonEmpty(indexed, "fills", await paintMap(fills, conv));
-    putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
-    putNonEmpty(indexed, "effects", await effectMap(effects, conv));
-    return nonEmpty(Object.assign(await bindingMap(scalars, conv) || {}, indexed));
-  }
-  async function collectMotion(node) {
-    const out = {};
-    if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
-      out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
-    }
-    if ("manualKeyframeTracks" in node) {
-      const tracks = await motionMap(node.manualKeyframeTracks, manualTrack);
-      if (tracks) out.manualTracks = tracks;
-    }
-    if ("animations" in node) {
-      const anims = await motionMap(node.animations, animationTrack);
-      if (anims) out.animations = anims;
-    }
-    if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
-      out.styles = await Promise.all(node.animationStyles.map(async (s) => {
-        const kind = s.type;
-        if (typeof kind === "string" && kind !== "" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
-        if (s.type === "CUSTOM") {
-          const o = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
-          if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
-          return Object.assign(o, await customStyleDetail(s.styleId));
-        }
-        return animationStyleEntry(s);
-      }));
-    }
-    return nonEmpty(out);
-  }
-  function unknownKindStyle(s, kind) {
-    const fields = s;
-    const o = {};
-    if (typeof fields.id === "string") o.id = fields.id;
-    if (typeof fields.name === "string") o.name = fields.name;
-    if (typeof fields.styleId === "string") o.styleId = fields.styleId;
-    o.kind = kind.toLowerCase();
-    if (typeof fields.timelineOffset === "number" && fields.timelineOffset) o.timelineOffset = round(fields.timelineOffset);
-    return o;
-  }
-  async function animationStyleEntry(s) {
-    const o = { id: s.id, name: s.name, styleId: s.styleId };
-    if (typeof s.description === "string" && s.description) o.description = s.description;
-    if (typeof s.duration === "number") o.duration = round(s.duration);
-    if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
-    if (s.props) {
-      const entries = Object.entries(s.props);
-      const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
-      const props = {};
-      entries.forEach(([key], i) => {
-        const c = converted[i];
-        if (c !== void 0) props[key] = c;
-      });
-      if (Object.keys(props).length) o.props = props;
-    }
-    return o;
-  }
-  async function customAnimationEntries(style) {
-    try {
-      const list = style.animationEntries;
-      if (!isList(list)) return void 0;
-      return await Promise.all(list.map(animationStyleEntry));
-    } catch (e) {
-      return void 0;
-    }
-  }
-  async function customStyleDetail(styleId) {
-    const style = await run().styleName.obj(styleId);
-    if (!style || style.type !== "CUSTOM_ANIMATION") return {};
-    try {
-      const detail = {};
-      if (typeof style.description === "string" && style.description) detail.description = style.description;
-      const entries = await customAnimationEntries(style);
-      if (entries) detail.entries = entries;
-      return detail;
-    } catch (e) {
-      return {};
-    }
-  }
-
   // src/components.ts
-  async function instanceComponentRef(node) {
-    if (node.type !== "INSTANCE") return void 0;
-    try {
-      const main = await node.getMainComponentAsync();
-      if (!main) return void 0;
-      const ref = { name: main.name };
-      if (main.id) ref.id = main.id;
-      if (main.key) ref.key = main.key;
-      if (main.remote) ref.remote = true;
-      const parent = main.parent;
-      if (parent && parent.type === "COMPONENT_SET") {
-        ref.setId = parent.id;
-        if (parent.key) ref.setKey = parent.key;
-        ref.setName = parent.name;
-        ref.variant = main.name;
-      }
-      return ref;
-    } catch (e) {
-      return void 0;
-    }
-  }
-  var PROP_REF_KEYS = ["visible", "characters", "mainComponent"];
-  function componentPropRefs(node) {
-    if (!("componentPropertyReferences" in node)) return void 0;
-    const refs = node.componentPropertyReferences;
-    if (!refs) return void 0;
-    const out = {};
-    for (const k of PROP_REF_KEYS) {
-      const ref = refs[k];
-      if (ref) out[k] = propName(ref);
-    }
-    return nonEmpty(out);
-  }
-  function instanceOverrides(node) {
-    if (node.type !== "INSTANCE") return void 0;
-    const overrides = node.overrides;
-    if (!Array.isArray(overrides) || !overrides.length) return void 0;
-    const list = overrides.filter((o) => o && Array.isArray(o.overriddenFields) && o.overriddenFields.length).map((o) => ({ id: o.id, fields: o.overriddenFields }));
-    if (!list.length) return void 0;
-    if (list.length > OVERRIDE_CAP) {
-      run().warn("instance '" + node.name + "' has " + list.length + " overrides \u2014 truncated to " + OVERRIDE_CAP);
-      return list.slice(0, OVERRIDE_CAP);
-    }
-    return list;
-  }
-  var VISUAL_CORNER_KEYS = [
-    ["topLeftRadius", "tl"],
-    ["topRightRadius", "tr"],
-    ["bottomRightRadius", "br"],
-    ["bottomLeftRadius", "bl"]
-  ];
-  async function simplifyVisuals(node) {
-    const out = {};
-    const [fills, strokes, effects] = await Promise.all([
-      simplifyFills("fills" in node ? node.fills : void 0),
-      simplifyStrokes(node),
-      simplifyEffects("effects" in node ? node.effects : void 0)
-    ]);
-    if (fills) out.fills = fills;
-    if (strokes) out.strokes = strokes;
-    if (effects) out.effects = effects;
-    if ("cornerRadius" in node) {
-      if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = node.cornerRadius;
-      else if (node.cornerRadius === figma.mixed) {
-        const corners = {};
-        for (const [k, s] of VISUAL_CORNER_KEYS) {
-          if (!(k in node)) continue;
-          const r = node[k];
-          if (typeof r === "number" && r) corners[s] = r;
-        }
-        putNonEmpty(out, "radius", corners);
-      }
-    }
-    if ("opacity" in node && typeof node.opacity === "number" && node.opacity < 1) out.opacity = round(node.opacity);
-    if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = String(node.blendMode).toLowerCase();
-    return nonEmpty(out);
+  function componentVisuals(node) {
+    return nodeVisuals(node, { w: node.width, h: node.height });
   }
   function variantValues(main) {
     try {
@@ -2601,10 +2963,10 @@
     return nonEmpty(out);
   }
   var VARIANT_WALK_DEPTH = 3;
-  function serializeVariant(main, serialize2) {
-    return serialize2(main, 60 - VARIANT_WALK_DEPTH, void 0, void 0, void 0, "none");
+  function serializeVariant(main) {
+    return serialize(main, 60 - VARIANT_WALK_DEPTH, void 0, void 0, void 0, "none");
   }
-  async function collectComponentCatalog(hygiene, asLibrary, serialize2) {
+  async function collectComponentCatalog(hygiene, asLibrary) {
     const variantVisuals = run().reads.variantVisuals;
     const components = [];
     const pendingPublish = [];
@@ -2686,7 +3048,7 @@
           if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
           seenNames.add(n.name);
           try {
-            const visuals = await simplifyVisuals(n);
+            const visuals = await componentVisuals(n);
             if (visuals) entry.visuals = visuals;
           } catch (e) {
             run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 visuals omitted");
@@ -2703,24 +3065,22 @@
       } catch (e) {
       }
     }
-    if (serialize2) {
-      for (const { entry, node: n } of standalone) {
-        try {
-          const node = await serializeVariant(n, serialize2);
-          if (node) entry.node = node;
-        } catch (e) {
-          run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
-        }
+    for (const { entry, node: n } of standalone) {
+      try {
+        const node = await serializeVariant(n);
+        if (node) entry.node = node;
+      } catch (e) {
+        run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
       }
     }
-    if (variantVisuals && serialize2 && variantsBySet.size) {
+    if (variantVisuals && variantsBySet.size) {
       for (const [setId, variants] of variantsBySet) {
         const entry = entriesBySetId.get(setId);
         if (!entry) continue;
         const out = [];
         for (const v of variants) {
           try {
-            const node = await serializeVariant(v, serialize2);
+            const node = await serializeVariant(v);
             const o = { id: v.id, name: v.name };
             if (v.key) o.key = v.key;
             const values = variantValues(v);
@@ -2752,7 +3112,7 @@
       return void 0;
     }
   }
-  async function buildDesignSystem(opts, serialize2) {
+  async function buildDesignSystem(opts) {
     const asLibrary = !!(opts && opts.asLibrary);
     const safeList = async (fn) => {
       try {
@@ -2770,7 +3130,7 @@
     ]);
     const hygiene = [];
     await loadAllPages("component catalog may be incomplete", (m) => run().warn(m));
-    const components = await collectComponentCatalog(hygiene, asLibrary, serialize2);
+    const components = await collectComponentCatalog(hygiene, asLibrary);
     if (asLibrary) {
       hygiene.push(
         "library mode: this catalog is the COMPLETE set of components defined in this library file. Publish status is per-object (publish: current | changed | unpublished); Figma exposes no way to list what the last PUBLISHED snapshot contained, so a component deleted here but still live in the library is not visible."
@@ -2898,360 +3258,6 @@
       hygiene: vars.hygiene.concat(hygiene)
       // variable hygiene first, then component hygiene
     };
-  }
-
-  // src/serialize.ts
-  var MAX_DEPTH = 60;
-  var SIZE_LIMIT_KEYS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
-  var CORNER_KEYS = [
-    ["topLeftRadius", "tl"],
-    ["topRightRadius", "tr"],
-    ["bottomRightRadius", "br"],
-    ["bottomLeftRadius", "bl"]
-  ];
-  var RADIUS_SENTINEL = 1e4;
-  function radiusOut(out, raw) {
-    if (raw < RADIUS_SENTINEL) return round(raw);
-    out.radiusFull = true;
-    const box = out.box;
-    const w = box && typeof box.w === "number" ? box.w : void 0;
-    const h = box && typeof box.h === "number" ? box.h : void 0;
-    if (w === void 0 && h === void 0) return round(raw);
-    return round(Math.min(w === void 0 ? Infinity : w, h === void 0 ? Infinity : h) / 2);
-  }
-  function pluginData(node) {
-    let keys = [];
-    try {
-      keys = node.getPluginDataKeys();
-    } catch (e) {
-      return void 0;
-    }
-    if (!keys || !keys.length) return void 0;
-    const out = {};
-    for (const k of keys) {
-      try {
-        const v = node.getPluginData(k);
-        if (v) out[k] = v;
-      } catch (e) {
-      }
-    }
-    return nonEmpty(out);
-  }
-  var SHARED_NAMESPACES = ["tokens"];
-  function sharedData(node) {
-    const out = {};
-    for (const ns of SHARED_NAMESPACES) {
-      let keys = [];
-      try {
-        keys = node.getSharedPluginDataKeys(ns) || [];
-      } catch (e) {
-        continue;
-      }
-      const bucket = {};
-      for (const k of keys) {
-        try {
-          const v = node.getSharedPluginData(ns, k);
-          if (v) bucket[k] = v;
-        } catch (e) {
-        }
-      }
-      putNonEmpty(out, ns, bucket);
-    }
-    return nonEmpty(out);
-  }
-  async function nodeCss(node) {
-    try {
-      const css = await node.getCSSAsync();
-      return css && Object.keys(css).length ? css : void 0;
-    } catch (e) {
-      return void 0;
-    }
-  }
-  function leaf(out) {
-    delete out.layout;
-    return out;
-  }
-  function bakeTransform(out) {
-    const st = {};
-    if (out.rotation !== void 0) {
-      st.rotation = out.rotation;
-      delete out.rotation;
-    }
-    if (out.flipped) {
-      st.flipped = true;
-      delete out.flipped;
-    }
-    if (out.skew !== void 0) {
-      st.skew = out.skew;
-      delete out.skew;
-    }
-    putNonEmpty(out, "sourceTransform", st);
-  }
-  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid, assets = "run") {
-    checkCancelled();
-    const r = run();
-    const stats = r.stats;
-    if (depth > MAX_DEPTH) {
-      stats.truncated++;
-      if (stats.truncated === 1) r.warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
-      return null;
-    }
-    stats.nodes++;
-    const out = { type: node.type, name: node.name, id: node.id };
-    if ("visible" in node && node.visible === false) out.hidden = true;
-    const hidden = !!out.hidden || !!underHidden;
-    if (hidden) stats.hiddenNodes++;
-    if (node.type === "INSTANCE" && node.componentProperties) {
-      const props = {};
-      const propTokens = {};
-      const propEntries = Object.entries(node.componentProperties);
-      const bound = await Promise.all(propEntries.map(([, cp]) => resolveBoundMap(cp.boundVariables)));
-      propEntries.forEach(([k, cp], i) => {
-        props[propName(k)] = cp.value;
-        const bv = bound[i];
-        if (bv && bv.value) propTokens[propName(k)] = bv.value;
-      });
-      putNonEmpty(out, "props", props);
-      putNonEmpty(out, "propTokens", propTokens);
-    }
-    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") out.component = node.name;
-    const lay = layout(node);
-    if (lay) out.layout = lay;
-    const absoluteInParent = "layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE";
-    if (absoluteInParent) out.absolute = true;
-    if ("layoutGrow" in node && node.layoutGrow) out.grow = node.layoutGrow;
-    if ("layoutAlign" in node && node.layoutAlign && node.layoutAlign !== "INHERIT") out.alignSelf = lower(node.layoutAlign);
-    if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal && node.layoutSizingHorizontal !== "FIXED") out.widthMode = lower(node.layoutSizingHorizontal);
-    if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
-    if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
-    if (inGrid && !absoluteInParent) {
-      if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
-      if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
-      if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex;
-      if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
-      if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
-      if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
-    }
-    if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
-      out.x = round(node.x);
-      out.y = round(node.y);
-    }
-    if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
-      const b = node.absoluteBoundingBox;
-      const box = { w: round(b.width), h: round(b.height) };
-      out.box = box;
-      if (!parentControlsLayout || absoluteInParent) {
-        box.x = round(b.x);
-        box.y = round(b.y);
-      }
-      const rb = "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null;
-      if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
-        out.renderBox = { ...xy(rb), w: round(rb.width), h: round(rb.height) };
-      }
-    }
-    if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
-      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter((g) => !!g);
-    }
-    if ("annotations" in node && isList(node.annotations) && node.annotations.length) {
-      out.annotations = node.annotations.map((a) => {
-        const o = {};
-        if (a.label) o.label = a.label;
-        if (a.labelMarkdown) o.markdown = a.labelMarkdown;
-        if (a.categoryId) o.categoryId = a.categoryId;
-        if (isList(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
-        return o;
-      });
-    }
-    if ("devStatus" in node && node.devStatus && node.devStatus.type) {
-      out.devStatus = lower(node.devStatus.type);
-      if (node.devStatus.description) out.devStatusNote = node.devStatus.description;
-    }
-    let sizeLimits;
-    for (const k of SIZE_LIMIT_KEYS) {
-      const v = numProp(node, k);
-      if (k in node && typeof v === "number") (sizeLimits || (sizeLimits = {}))[k] = round(v);
-    }
-    if (sizeLimits) out.sizeLimits = sizeLimits;
-    if ("constraints" in node && node.constraints && (node.constraints.horizontal !== "MIN" || node.constraints.vertical !== "MIN")) {
-      out.pin = { h: lower(node.constraints.horizontal), v: lower(node.constraints.vertical) };
-    }
-    if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
-      out.fixedChildren = node.numberOfFixedChildren;
-    }
-    if ("clipsContent" in node && node.clipsContent) out.clip = true;
-    const [fills, strokes, effects] = await Promise.all([
-      simplifyFills("fills" in node ? node.fills : void 0),
-      simplifyStrokes(node),
-      simplifyEffects("effects" in node ? node.effects : void 0)
-    ]);
-    if (fills) out.fills = fills;
-    if (strokes) out.strokes = strokes;
-    if ("strokesIncludedInLayout" in node && node.strokesIncludedInLayout) out.strokesInLayout = true;
-    if (effects) out.effects = effects;
-    if ("cornerRadius" in node) {
-      if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = radiusOut(out, node.cornerRadius);
-      else if (node.cornerRadius === figma.mixed) {
-        const corners = {};
-        for (const [k, s] of CORNER_KEYS) {
-          const v = numProp(node, k);
-          if (k in node && typeof v === "number" && v) corners[s] = radiusOut(out, v);
-        }
-        putNonEmpty(out, "radius", corners);
-      }
-    }
-    if ("opacity" in node && node.opacity < 1) out.opacity = round(node.opacity);
-    if ("rotation" in node && node.rotation) out.rotation = round(node.rotation);
-    if ("relativeTransform" in node && Array.isArray(node.relativeTransform) && node.relativeTransform.length === 2) {
-      const m = node.relativeTransform;
-      const a = m[0][0], c = m[0][1], b = m[1][0], d = m[1][1];
-      if (a * d - c * b < 0) out.flipped = true;
-      const sx = Math.sqrt(a * a + b * b);
-      if (sx > 1e-6) {
-        const skewDeg = Math.atan2(a * c + b * d, sx * sx) * 180 / Math.PI;
-        if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
-      }
-    }
-    if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = node.blendMode.toLowerCase();
-    if ("isMask" in node && node.isMask) out.mask = true;
-    if (out.mask && "maskType" in node && node.maskType && node.maskType !== "ALPHA") out.maskType = String(node.maskType).toLowerCase();
-    if ("cornerSmoothing" in node && typeof node.cornerSmoothing === "number" && node.cornerSmoothing) out.cornerSmoothing = round(node.cornerSmoothing);
-    if ("targetAspectRatio" in node && node.targetAspectRatio && node.targetAspectRatio.y) out.aspectRatio = round(node.targetAspectRatio.x / node.targetAspectRatio.y);
-    if (node.type === "ELLIPSE" && node.arcData) {
-      const a = node.arcData;
-      const isFull = (!a.startingAngle || a.startingAngle === 0) && Math.abs((a.endingAngle || 0) - Math.PI * 2) < 1e-4 && !a.innerRadius;
-      if (!isFull) {
-        const arc = {};
-        if (typeof a.startingAngle === "number") arc.start = round(a.startingAngle);
-        if (typeof a.endingAngle === "number") arc.end = round(a.endingAngle);
-        if (typeof a.innerRadius === "number" && a.innerRadius) arc.innerRadius = round(a.innerRadius);
-        putNonEmpty(out, "arc", arc);
-      }
-    }
-    if (node.type === "STAR") {
-      const shape = {};
-      if (typeof node.pointCount === "number") shape.points = node.pointCount;
-      if (typeof node.innerRadius === "number") shape.innerRadius = round(node.innerRadius);
-      putNonEmpty(out, "shape", shape);
-    }
-    if (node.type === "POLYGON" && typeof node.pointCount === "number") out.shape = { points: node.pointCount };
-    if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = lower(node.booleanOperation);
-    if ("exportSettings" in node && isList(node.exportSettings) && node.exportSettings.length) {
-      out.exportSettings = node.exportSettings.map((es) => {
-        const o = { format: String(es.format || "").toLowerCase() };
-        if ("suffix" in es && es.suffix) o.suffix = es.suffix;
-        const con = "constraint" in es ? es.constraint : void 0;
-        if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
-          o.constraint = { type: String(con.type || "").toLowerCase(), value: round(con.value) };
-        }
-        return o;
-      });
-    }
-    if ("detachedInfo" in node && node.detachedInfo) {
-      out.detachedFrom = node.detachedInfo.type === "library" ? { key: node.detachedInfo.componentKey } : { componentId: node.detachedInfo.componentId };
-    }
-    if (node.type === "INSTANCE" && "exposedInstances" in node) {
-      try {
-        if (Array.isArray(node.exposedInstances) && node.exposedInstances.length) out.exposedInstances = node.exposedInstances.map((i) => i.id);
-      } catch (e) {
-      }
-    }
-    if ("overlayPositionType" in node) {
-      const hasScrim = node.overlayBackground && node.overlayBackground.type === "SOLID_COLOR" && node.overlayBackground.color;
-      const closeOutside = node.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
-      const posSet = node.overlayPositionType && node.overlayPositionType !== "CENTER";
-      if (hasScrim || closeOutside || posSet) {
-        const ov = {};
-        if (node.overlayPositionType) ov.position = node.overlayPositionType.toLowerCase();
-        if (closeOutside) ov.closeOnClickOutside = true;
-        if (hasScrim && node.overlayBackground.type === "SOLID_COLOR") ov.background = rgbaToHex(node.overlayBackground.color);
-        out.overlay = ov;
-      }
-    }
-    if (node.type === "TEXT" || node.type === "TEXT_PATH") Object.assign(out, await serializeText(node));
-    const propRefs = componentPropRefs(node);
-    if (propRefs) out.propRefs = propRefs;
-    const overrides = instanceOverrides(node);
-    if (overrides) out.overrides = overrides;
-    if (r.reads.pluginData) {
-      const pd = pluginData(node);
-      if (pd) out.pluginData = pd;
-    }
-    if (r.reads.motion) {
-      const m = await collectMotion(node);
-      if (m) out.motion = m;
-    }
-    if (r.reads.sharedData) {
-      const sd = sharedData(node);
-      if (sd) out.sharedData = sd;
-    }
-    const [mainRef, tokens, styles, asset, reactions, varModes, css] = await Promise.all([
-      instanceComponentRef(node),
-      boundTokens(node),
-      nodeStyles(node),
-      collectAsset(node, hidden, assets),
-      simplifyReactions(node),
-      variableModes(node),
-      r.reads.css ? nodeCss(node) : Promise.resolve(void 0)
-    ]);
-    if (mainRef) {
-      out.component = mainRef.name;
-      out.mainComponent = mainRef;
-    }
-    if (tokens) out.tokens = tokens;
-    if (styles) out.styles = styles;
-    if (reactions) out.reactions = reactions;
-    if (varModes) out.variableModes = varModes;
-    if (css) out.css = css;
-    if (asset && "skipped" in asset) {
-      out.assetSkipped = asset.skipped;
-      return leaf(out);
-    }
-    if (asset && "geometry" in asset) {
-      out.geometry = asset.geometry;
-      return leaf(out);
-    }
-    if (asset) {
-      out.asset = asset.path;
-      bakeTransform(out);
-      return leaf(out);
-    }
-    if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
-      const grid = await Promise.all(
-        Array.from({ length: node.numRows }, (_, r2) => Promise.all(
-          Array.from({ length: node.numColumns }, async (__, cc) => {
-            try {
-              const cell = node.cellAt(r2, cc);
-              if (!cell) return void 0;
-              const co = { row: r2, col: cc };
-              if (cell.text) Object.assign(co, await serializeText(cell.text));
-              const cfills = await simplifyFills(cell.fills);
-              if (cfills) co.fills = cfills;
-              return co;
-            } catch (e) {
-              return void 0;
-            }
-          })
-        ))
-      );
-      const rows = grid.map((row) => row.filter((c) => !!c)).filter((row) => row.length);
-      if (rows.length) out.tableCells = rows;
-    }
-    const children = "children" in node ? node.children : void 0;
-    if (children && children.length) {
-      const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
-      const grid = "layoutMode" in node && node.layoutMode === "GRID";
-      const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
-      const pinnedFrom = children.length - nFixed;
-      const kids = [];
-      for (let i = 0; i < children.length; i++) {
-        const c = children[i];
-        if (!c) continue;
-        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid, assets);
-        if (s) kids.push(s);
-      }
-      if (kids.length) out.children = kids;
-    }
-    return out;
   }
 
   // src/collect.ts
@@ -3734,7 +3740,7 @@
   async function collectDesignSystemTree(opts) {
     const r = claimRun({ sourceBytes: false });
     r.useReads(opts);
-    const designSystem = await buildDesignSystem(void 0, serialize);
+    const designSystem = await buildDesignSystem();
     checkCancelled();
     if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
       designSystem.hygiene = [
@@ -3751,7 +3757,7 @@
     const r = claimRun({ sourceBytes: false });
     r.useReads(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
-    const designSystem = await buildDesignSystem({ asLibrary }, serialize);
+    const designSystem = await buildDesignSystem({ asLibrary });
     checkCancelled();
     designSystem.hygiene = [
       "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' \u2014 variables, styles and components, with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what consumers see: `publish` reports each object's own status (current | changed | unpublished).",
@@ -3825,7 +3831,7 @@
     }
     checkCancelled();
     progress("design-system", { nodes: r.stats.nodes, assets: r.assets.length }, true);
-    const designSystem = await buildDesignSystem(void 0, serialize);
+    const designSystem = await buildDesignSystem();
     checkCancelled();
     const measurements = collectMeasurements(r, pages);
     const layersDoc = {
