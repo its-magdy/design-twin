@@ -38,9 +38,12 @@ export function changelogEntry(text: string, version: string): string | null {
   return body === "" ? null : body;
 }
 
-/** A changelog entry as GitHub Release notes: a list item's wrapped lines joined (GitHub renders a newline as a break). */
+/**
+ * A changelog entry as GitHub Release notes: a list item's wrapped lines joined (GitHub renders a newline as a break).
+ * A nested item (`  - …`) keeps its own line; its wrapped lines join it.
+ */
 export function releaseNotes(entry: string): string {
-  return entry.replace(/\n {2}(?=\S)/g, " ");
+  return entry.replace(/\n +(?!- )(?=\S)/g, " ");
 }
 
 /**

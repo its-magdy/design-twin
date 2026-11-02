@@ -33,5 +33,7 @@ let threw = false;
 try { promoteUnreleased(after, "1.0.2", "2026-03-03"); } catch { threw = true; }
 check("refuses a release with no Unreleased notes", threw);
 check("release notes join a list item's wrapped lines", releaseNotes("### Added\n\n- one\n  two\n- three") === "### Added\n\n- one two\n- three");
+check("release notes keep a nested item on its own line and join its wrapped lines",
+  releaseNotes("- parent:\n  - child\n    wrapped\n  - next\n- last") === "- parent:\n  - child wrapped\n  - next\n- last");
 
 report();
