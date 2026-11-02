@@ -259,7 +259,8 @@ questions.
 **`design/export/variables.json` accumulates — it is not per-pull state.** Each single-screen pull
 merges its slice in, keyed on each variable's Figma key, so pulling screen B keeps screen
 A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json` (every variable
-defined in the file plus the library variables that screen references — more than the ones its nodes actually bind). Names are
+defined in the file plus the library variables that screen or those variables reference, directly or through an
+alias — more than the ones its nodes actually bind). Names are
 not unique across the union: two different variables (two keys) can both be called `Space 4` with
 different values. Such a pair, and a variable two pulls resolve differently, is recorded under
 `_conflicts` and as a `CONFLICT` line in `hygiene` — read those before generating a theme.

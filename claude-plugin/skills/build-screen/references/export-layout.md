@@ -36,7 +36,7 @@ its export directly in `design/` — every path below works either way, just dro
   pull (the field sits on the node), or the **root `reference`** of a page-walk layer file — check the right one
   before concluding there is none. A hand-exported PNG is the fallback for when the field is absent. **Always read it.**
 - **`…__<id>.vars.json`** beside the screen — every variable defined in the file plus the library variables
-  THAT screen references (a superset of what its nodes bind; the node's own `tokens` say what is bound).
+  THAT screen or those variables reference, directly or through an alias (a superset of what its nodes bind; the node's own `tokens` say what is bound).
   **`design/export/variables.json`** — the union of every screen pulled so far. It **accumulates**:
   a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Names
   are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
@@ -217,7 +217,7 @@ open `design/export/<file>` verbatim, whichever layout you're looking at. Either
   `pageId`, `nodeId`, `nodes[]` (the trees, same shape as a layer file's `tree`) and `manifest`.
   It writes three siblings and one shared file:
   - `…__<id>.vars.json` — this pull's variable slice, verbatim: every variable defined in the file plus the
-    library variables THIS screen references (more than its nodes bind; their own `tokens` say what is bound); each row
+    library variables THIS screen or those variables reference, directly or through an alias (more than its nodes bind; their own `tokens` say what is bound); each row
     names its `collection` and (newer exports) `collectionKey` — collection names repeat, the key does not.
   - `…__<id>.assets.json` — every asset the screen references, with a content hash per file, plus
     `duplicates` (the same artwork under different names — compared tolerantly: def ids and numbers
