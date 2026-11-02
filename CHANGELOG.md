@@ -27,6 +27,7 @@ list of merged PRs.
   edits" as unknown instead.
 - The web probe's `--ready` screen gate (what each page load waits for, and how a page without the frame's tag is
   judged) is now one module with its own tests. The probe's output is unchanged.
+- README: an illustrated demo loop under the intro (`assets/demo.gif`).
 
 ### Fixed
 

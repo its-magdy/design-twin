@@ -11,6 +11,12 @@
 Design Twin reads a Figma screen through a local plugin and has Claude Code build it in your stack, with your own
 components and tokens, then checks the result against the design.
 
+<p align="center">
+  <img src="assets/demo.gif" alt="Illustration of the Design Twin loop: the plugin connects over localhost, Claude Code runs audit-design, build-screen and verify, a drifted node is fixed and the verify passes." width="800">
+</p>
+<p align="center"><sub>An illustration of the loop, not a recording. The plugin window and the skill names are real; the app screen and the counts are stand-ins.</sub></p>
+<!-- TODO(owner): replace with a real ~20 s screen recording once one exists. -->
+
 [![test](https://github.com/its-magdy/design-twin/actions/workflows/test.yml/badge.svg)](https://github.com/its-magdy/design-twin/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

@@ -17,6 +17,7 @@ sprite in `dtwin --version`, and the companion character.
 | `social-preview.svg` / `social-preview.png` | GitHub's social preview, 1280×640. Upload the PNG in the repo's Settings → General → Social preview. |
 | `bo.svg` | Bo, the character (hello pose). |
 | `bo-states.svg` | Bo's states: hello, reading, drawing, matched, off. |
+| `demo.gif` | The README's demo loop: an illustration of connect → audit-design → build-screen → verify → fix, drawn from the launch video. Not a screen recording. |
 
 ## Colour
 
