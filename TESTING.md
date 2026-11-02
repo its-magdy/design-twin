@@ -345,7 +345,8 @@ no-recursion, no-asset cost as `--list`), which is otherwise a jump straight to 
 
 ### Visually checking one component after generating code for it
 
-`bun bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `assets/<id>_ref.png` —
+`bun bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `assets/<id>_ref.png`
+(with `--scale N`: `assets/<id>_shot@<N>x.png`) —
 skips `serialize()` and the recursive asset walk, so it stays cheap even on a node deep inside a large
 tree. Use it after `build-screen` generates code for a specific component in a dense screen, where the
 one whole-frame reference PNG every export already carries is too zoomed-out to compare against.
@@ -477,15 +478,14 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
 | `bun test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect all checks to pass |
 | `bun test/cross-check.test.ts` | Screen-vs-design-system join — expect all checks to pass |
 | `bun test/verify-screen.test.ts` | Per-node verification and its verdict — expect all checks to pass |
-| `bun test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/forwarding/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
-and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect all checks to pass |
+| `bun test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/forwarding/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect all checks to pass |
 | `bun bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `bun bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
 | `bun bridge/src/figma-pull.ts --list-libraries` | Slowest discovery read (a few s to ~15 s): which design libraries this file draws on (prints a table to stdout) |
 | `bun bridge/src/figma-pull.ts --list-pages` | Cheap: page names only, no page load (prints to stdout) |
 | `bun bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
 | `bun bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
-| `bun bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `assets/<id>_ref.png` (writes a file, unlike the row above) |
+| `bun bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `assets/<id>_ref.png`, or `assets/<id>_shot@<N>x.png` with `--scale N` (writes a file, unlike the row above) |
 | `bun bridge/src/figma-pull.ts --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
 | `bun bridge/src/figma-pull.ts --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
 | `bun bridge/src/figma-pull.ts --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
