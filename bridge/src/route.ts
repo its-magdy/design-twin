@@ -26,6 +26,7 @@
 import { TIMEOUTS, daemonGuardMs } from "./timeouts.ts";
 import { ifDefined } from "./json-util.ts";
 import { isExportCmd } from "./commands.ts";
+import { runPlugin } from "./hints.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { DaemonBridge, DaemonConnection, DaemonStatusView } from "./daemon.ts";
@@ -181,7 +182,7 @@ export interface Route {
 
 /** The window's text for the never-connected guard. */
 const neverConnected = (windowMs: number): Error => new Error(
-  `no Figma plugin connected within ${Math.round(windowMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`,
+  `no Figma plugin connected within ${Math.round(windowMs / 1000)}s — ${runPlugin}, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`,
 );
 
 const stallFromEnv = (): number => Number(process.env.FIGMA_BRIDGE_STALL_MS) || 20000;

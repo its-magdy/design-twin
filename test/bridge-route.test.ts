@@ -18,6 +18,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { ProgressTick } from "../bridge/src/server-core.ts";
 import type { Route, RoutePolicy } from "../bridge/src/route.ts";
 import type { ListPagesReply, PingReply } from "../bridge/src/commands.ts";
+import { runPlugin } from "../bridge/src/hints.ts";
+
+// resolveClient's text for nothing connected: the plugin step (hints.ts), whole.
+const NOT_CONNECTED = { test: (s: string): boolean => s === `Figma plugin not connected — ${runPlugin}.` };
 
 const TOKEN = "bridge-route-test-token";
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
@@ -94,7 +98,7 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
     const route = rig.route(PERSISTENT);
     try {
       check(`${t} nothing connected: resolveClient's not-connected text, at once`,
-        /^Figma plugin not connected\. Open the file in Figma and run the plugin\.$/.test(await failure(route.request("ping", {}))));
+        NOT_CONNECTED.test(await failure(route.request("ping", {}))));
       check(`${t} nothing connected: listClients is empty`, (await route.listClients()).length === 0);
 
       const a = await plugin(rig.port, "Alpha");
@@ -256,9 +260,9 @@ async function rules(): Promise<void> {
       check("[never] nothing ever connected: listClients is a legitimate empty answer", (await route.listClients()).length === 0);
       const never = await failure(route.request("ping", {}));
       check("[never] …and a command is the never-connected text, naming the window",
-        /^no Figma plugin connected within 0s\. In Figma DESKTOP open the file/.test(never));
+        /^no Figma plugin connected within 0s — in Figma DESKTOP open the file/.test(never));
       check("[never] …and so is connect(), before the caller says it is connected",
-        /^no Figma plugin connected within 0s\. In Figma DESKTOP open the file/.test(await failure(route.connect())));
+        /^no Figma plugin connected within 0s — in Figma DESKTOP open the file/.test(await failure(route.connect())));
       check("[never] …but connect() for the clients listing answers, the empty list is its result",
         typeof (await route.connect(null, { listing: true })).waitedMs === "number");
     } finally {
@@ -289,7 +293,7 @@ async function rules(): Promise<void> {
       const t0 = Date.now();
       const left = await failure(route.request("ping", {}));
       check("[connect] a file that connected and left: resolveClient's text, not the never-connected one",
-        /^Figma plugin not connected\. Open the file in Figma and run the plugin\.$/.test(left));
+        NOT_CONNECTED.test(left));
       check(`[connect] …at once, not after another connect window (${Date.now() - t0} ms)`, Date.now() - t0 < 1000);
     } finally {
       rig.stop();

@@ -90,7 +90,10 @@ Those rules live in one module, `bridge/src/bridge-holder.ts`: each front-end pi
 command, `serve`, an MCP session) and turns its own events into "release" or "the client left"; the holder
 probes or binds, publishes, watches whether anyone else used the socket, and lets go exactly once. What it
 works from — port, effective token and its source, payload cap, idle window — is read once at the entry
-(`bridge/src/settings.ts`) and passed in; no bridge module reads them at load.
+(`bridge/src/settings.ts`) and passed in; no bridge module reads them at load. `dtwin doctor` uses the holder's
+read-only side (`bridge/src/bridge-observer.ts`): the daemon at the settings' address, else what holds the port,
+else a probe bridge of its own for the wait — no publish, no token commit, no plugin refresh. Doctor only words
+what it says.
 Neither front-end nor the daemon orders requests: which commands may run alongside which is declared once
 per command (`bridge/src/commands.ts` `runKind` — exclusive, scene read, identity read) and enforced by the
 plugin's run scheduler (`figma-plugin/src/state.ts` `scheduleRun`) for every caller, the plugin window's
@@ -102,7 +105,10 @@ file and the library it draws on are both connected and separately addressable. 
 them through one route (`bridge/src/route.ts`) over two adapters — the bridge this process holds, or the
 daemon socket of the process that does — and the route owns the rules: the routing target (`--client` /
 `client`), the connect window (a named file waits up to `NAMED_CLIENT_WAIT_MS`), the stall check (a
-one-shot CLI bridge only), and where `listClients` / the socket stats come from. Once a command is sent, how it
+one-shot CLI bridge only), and where `listClients` / the socket stats come from. Which file a target names
+(none, one, or several) is one pure decision (`bridge/src/presence.ts`) that routing, `figma_status`, the
+clients listing and doctor all use, and the next step each prints (run the plugin, pick a client, paste the
+token) is one sentence in `bridge/src/hints.ts`. Once a command is sent, how it
 settles — its budget (re-armed by the request's own `start`), the stall check, a cancel when this side gives up,
 a reply only from the connection it went to, a closing connection failing its own — is one module the socket
 handlers feed events to (`bridge/src/pending-requests.ts`), on a substitutable clock (`bridge/src/clock.ts`). What a read SENDS is one
