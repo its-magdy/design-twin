@@ -96,4 +96,6 @@ neighbours), theme (one source of truth — the project's existing theme beats a
 dependencies (use what is installed; ask before adding), and version checks for any API you mark with
 one. A profile without this produces screens that match the design and fail code review.
 
-**Output** — file type, one-screen-per-what, where under `outputDir`, any preview/boilerplate.
+**Output** — file type, one-screen-per-what, where under `outputDir`, any preview/boilerplate. (`outputDir` is the
+directory the plan's `architecture` records for the screen — `references/architecture.md` decides it; it is not a
+`target.json` field.)

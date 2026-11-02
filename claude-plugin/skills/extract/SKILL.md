@@ -153,9 +153,9 @@ costs nothing and leaves no duplicate. A cheap `--scale 0.25` thumbnail is writt
 `<id>_shot@0.25x.png` instead, so it never stands in for the full-size reference. Ask the user if the renders don't settle it.
 
 **A state you need may be a sibling frame, not a missing design.** Before reporting "there is no
-populated/empty/error state", run `dtwin list children <the parent section>`. On the live file the
-populated table sat beside the empty one, named for what it holds rather than for the screen beside it — and a
-three-second sweep answered what would otherwise have been a blocking designer question.
+populated/empty/error state", run `dtwin list children <the parent section>`. The populated state often
+sits beside the empty one, named for what it holds rather than for the screen beside it — and a
+three-second sweep answers what would otherwise be a blocking designer question.
 
 **The full command + flag surface is `dtwin help`** (and `bridge/README.md` in a clone) — read it
 rather than guessing; an unknown flag is refused with a suggestion. This skill owns the decision of
@@ -167,18 +167,21 @@ A server registered as `designtwin` in the project's `.mcp.json` (what `dtwin in
 tools `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_list_pages`) — call it by that name if the
 short one isn't found; under another registration the prefix differs.
 
-**Pass `writeToDisk: true` on any export past a quick look.** Inline results are capped (25k tokens by
-default). An export too large to return is written to disk on its own and the result's `note` says
-so, but asking for it up front is cheaper than discovering it — and asset bytes are never returned
-inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
-characters. Every export result (written or inline) carries `sourceFile` — the Figma file it came from —
-and `durationMs`; when an implicit spill replaces a file whose content differs (the `exportedAt`/`generatedAt` stamps aside), the old one is
-kept one level and the `note` names it — a screen spill keeps ONLY `<screen>.json.prev` (`wrote.prev`;
-its `.vars.json`/`.assets.json`, `pages/index.json` and `variables.json` are replaced with no copy), a
-page/full/design-system spill a `<file>.prev` per changed JSON under `pages/`, `design-system/` and
-`design-system.json` (`wrote.prevKept`). `figma_status` shows `lastScreenExport` and `lastWrite`.
-With `writeToDisk`/`outDir`, a bad `outDir` is refused before the export runs.
-A cancelled tool call cancels the read in the plugin.
+**Pass `writeToDisk: true` on any export past a quick look.**
+- Inline results are capped (25k tokens by default). An export too large to return is written to disk on its own
+  and the result's `note` says so, but asking for it up front is cheaper than discovering it — and asset bytes are
+  never returned inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
+  characters.
+- Every export result (written or inline) carries `sourceFile` — the Figma file it came from — and `durationMs`.
+- When an implicit spill replaces a file whose content differs (the `exportedAt`/`generatedAt` stamps aside), the
+  old one is kept one level and the `note` names it:
+  - a screen spill keeps ONLY `<screen>.json.prev` (`wrote.prev`; its `.vars.json`/`.assets.json`,
+    `pages/index.json` and `variables.json` are replaced with no copy);
+  - a page/full/design-system spill a `<file>.prev` per changed JSON under `pages/`, `design-system/` and
+    `design-system.json` (`wrote.prevKept`).
+- `figma_status` shows `lastScreenExport` and `lastWrite`.
+- With `writeToDisk`/`outDir`, a bad `outDir` is refused before the export runs.
+- A cancelled tool call cancels the read in the plugin.
 
 ## Check what landed before declaring success
 
@@ -193,7 +196,7 @@ obviously about failure:
 | `warnings` | read every line |
 | `assetsHidden` | hidden graphics not exported (`assetSkipped:"hidden"`). Normal, not a failure; the pull prints an info line, and the bridge reuses a visible twin's file where one matches. |
 | `hiddenNodes` | nodes hidden themselves or under a hidden ancestor, kept in the tree (only the first carry `hidden:true`). Informational. |
-| `assetsGeometry` | that many VISIBLE nodes took the **fallback** path: the render failed and their vector paths were inlined instead (any fallback warns and names them). `assetsFailed` stays 0, so the three obvious fields say "clean" while 13% of the nodes took a degraded route. Expect to hand-check those nodes. |
+| `assetsGeometry` | that many VISIBLE nodes took the **fallback** path: the render failed and their vector paths were inlined instead (any fallback warns and names them). `assetsFailed` stays 0, so the three obvious fields say "clean" while some of the nodes took a degraded route. Expect to hand-check those nodes. |
 | `assetsSkippedInvisible` | vector nodes with nothing visible to render. Normal, and not a failure. |
 
 Before scripting against these files (a walker, a count, a check), read **`design/export/SCHEMA.md`** —
@@ -282,8 +285,7 @@ carry a `hash` rather than a path, and the byte lands at `assets/img_<hash>.<ext
 `…__<id>.assets.json` indexes all of it, so read that instead of deriving the convention.
 
 **A pull warns about assets too heavy to inline.** A flattened illustration exports as one SVG with
-thousands of paths — the live run hit 2.47 MB, which inlined into a 2.71 MB JS bundle until it was
-moved to a URL import. Import those by URL, or ask the designer to re-export as a PNG; leave the artwork as
+thousands of paths — it can reach megabytes, all of which land in the JS bundle when it is inlined. Import those by URL, or ask the designer to re-export as a PNG; leave the artwork as
 exported rather than redrawing or simplifying it.
 
 ## Is this screen even from that design system?

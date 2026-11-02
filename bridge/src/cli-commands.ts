@@ -319,7 +319,7 @@ export const VERB_ROWS = [
       "                       On a file that CONSUMES a library it holds that file's own tokens plus only the\n" +
       "                       library variables something in it references (`remote: true`) — never the library's\n" +
       "                       catalog; for that run --as-library from inside the library file\n" +
-      "    --as-library <n>   the same, from INSIDE a library file, into libraries/<slug>/\n\n" +
+      "    --as-library <n>   the same, from INSIDE a library file, into libraries/<slug>-<fileKey8>/\n\n" +
       "  Run `dtwin --help` for the full flag reference (read options, timeouts, the daemon).",
   },
   {

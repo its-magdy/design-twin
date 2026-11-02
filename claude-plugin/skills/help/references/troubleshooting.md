@@ -202,26 +202,19 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   says what to do instead. This is by design, not a fault to work round: a needed install (e.g. the probe's exit 3)
   is the user's to run, and the verifier stops its own server with `kill <pid>`, `kill -- -<pgid>` or `pkill -P <pid>`.
 - **`verify-screen` / `verify-probe` exit 2: "legacy-named verify set … run verify-screen --migrate"** → the
-  project has verify sets from before sets were named by node (a nickname, `<Screen>@320`, `<Screen>-r1`). Every set
-  is now `<Layer>__<id>` (a variant `<Layer>__<id>.<slug>`); `--compare` and the probe refuse a legacy-named
-  expectation, and `--status` a node that has only legacy-named sets. From the project root run
-  `bun --no-install --no-env-file "<plugin>/scripts/verify-screen.js" --migrate` — a dry run that lists each rename and each set it skips, with why —
-  then `--migrate --apply`, which renames every file of each set (the live status too) and rewrites the paths a
-  plan's `verification` records. Only a legacy base set beside an existing `<Layer>__<id>` base set is retired (its
-  expectation gets `.retired`); a legacy variant becomes `<Layer>__<id>.<slug>`. A set it skips, the dry run says why,
-  and each has its own way on: an open run — end or finish that run first; a plan that finds the set by its name
-  alone — add `"nodeId"` to that plan; a plan that still records a retired set's report — re-run `--compare
-  --record-plan` on the node's existing `<Layer>__<id>` set, then `--migrate`; a plan of a set to rename whose record
-  was edited by hand — restore the block (`--compare` refuses a legacy-named set, so it cannot be re-recorded under that
-  name); one whose record no longer names the report on disk — restore the report the record names; for either,
-  instead run `--expect` (no `--variant`; it writes the node's `<Layer>__<id>` base set), measure it and `--compare
-  --record-plan` on it (it replaces the block), then `--migrate` retires the legacy set (a base set) or renames it (a
-  variant); two legacy sets of one node that neither extends the other — retire the others by hand, as the dry run
-  says; a node that is unknown or ambiguous, a new name that is taken, or a variant slug that is reserved, longer than
-  32 characters or overlaps another — rename by hand. For any other skip, follow the line the dry run prints. A run cut
-  short leaves `design/verify/.migrate-<S>.json`: the next `--migrate --apply` rolls it back first. **"--out takes the verify
-  directory"** / **"--force is gone"** → `--out` names the directory, never the set; a second set of one node is
-  `--expect --variant <slug>`.
+  project has verify sets from before sets were named by node (a nickname, `<Screen>@320`, `<Screen>-r1`).
+  - Every set is now `<Layer>__<id>` (a variant `<Layer>__<id>.<slug>`); `--compare` and the probe refuse a
+    legacy-named expectation, and `--status` a node that has only legacy-named sets.
+  - From the project root run `bun --no-install --no-env-file "<plugin>/scripts/verify-screen.js" --migrate` — a dry
+    run that lists each rename and each set it skips, with why — then `--migrate --apply`, which renames every file
+    of each set (the live status too) and rewrites the paths a plan's `verification` records.
+  - Only a legacy base set beside an existing `<Layer>__<id>` base set is retired (its expectation gets `.retired`);
+    a legacy variant becomes `<Layer>__<id>.<slug>`.
+  - Each set it skips has its own way on: the dry run says why, and the verify skill (step 2, "A legacy-named set")
+    lists what to do for each reason. A run cut short leaves `design/verify/.migrate-<S>.json`: the next
+    `--migrate --apply` rolls it back first.
+- **"--out takes the verify directory"** / **"--force is gone"** → `--out` names the directory, never the set; a
+  second set of one node is `--expect --variant <slug>`.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.

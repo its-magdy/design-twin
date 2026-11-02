@@ -1,5 +1,5 @@
 // Shared bridge core: hosts a localhost WebSocket server that the Figma plugin's
-// hidden UI iframe connects to, and correlates request/response by id.
+// UI iframe (the plugin window) connects to, and correlates request/response by id.
 // Used by both figma-pull (CLI, read) and figma-mcp (write server).
 //
 // The plugin is always the WebSocket CLIENT (a browser iframe cannot listen);

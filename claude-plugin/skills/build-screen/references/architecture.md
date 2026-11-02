@@ -4,7 +4,7 @@
 how to decide what goes in it.
 
 The reason it is a recorded decision rather than a matter of taste: a build that picks a layout ad
-hoc produces something nobody can extend. The live run that prompted this file emitted a flat
+hoc produces something nobody can extend. One such build emitted a flat
 `src/{screens,components/{ui,layout,orders},data,lib,styles}` — two screens of one feature in a
 global `screens/`, that feature's own table and modals under `components/orders/` beside the
 generic `Button`/`Field`/`Modal`, mock data and the provider global, and the generic set named by the
@@ -69,7 +69,7 @@ Record it as `{convention: "proposed", shared: "src/components", features: "src/
 
 ## 3. The catalog decides shared-vs-feature, not taste
 
-This is the part that was an accident on the live run, and it does not have to be a judgement call.
+This part does not have to be a judgement call.
 
 - A component whose `mainComponent.setKey` resolves in `design-system/components.local.json` is a
   **design-system component**. It goes in the shared directory and takes the catalog entry's name and

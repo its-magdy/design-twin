@@ -55,7 +55,7 @@ ones) means this same folder** — those files are read as-is, so they can't car
 | `references/ir-fields.md` | Before mapping (step 2) — what every node field means, with units; re-open it for a key you don't recognise. Its top block is also `design/export/SCHEMA.md` — read one of the two before scripting against the JSON. |
 | `references/gates.md` + `${CLAUDE_PLUGIN_ROOT}/skills/extract/references/cross-check.md` | Step 1 — the cross-file check's findings, the component-map branches, the audit and building past a blocked audit (`auditGate`). |
 | `references/plan.md` | Steps 2–3 — what `plan-skeleton` writes, the decisions you fill (architecture, components, tokens and MISSING rows, deviations, native-control substitution), and the build rules in full. |
-| `references/names.md` · `references/architecture.md` | Step 2 — before naming a token, component or asset · where the code goes. |
+| `references/names.md` · `references/architecture.md` | Step 2 — before naming a token, component or asset · where the code goes (the plan's `architecture`; a profile's `outputDir` means the directory recorded there for the screen, not a `target.json` field). |
 | `${CLAUDE_PLUGIN_ROOT}/skills/extract/references/theme-tokens.md` | Step 2, when the project has no token source yet. |
 | `references/assets.md` · `references/measurable.md` | Step 3 — `heavy`/`monochrome`/`duplicates` assets · tagging nodes with their ids, `plan.navigate`, `plan.interactions`. |
 | `references/verify.md` | Step 5 — the commands and what they grade, rendering per stack, the fix loop, the visual-verifier, several frames. |

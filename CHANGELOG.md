@@ -34,6 +34,8 @@ list of merged PRs.
 
 ### Fixed
 
+- `dtwin pull --help` now names the folder an `--as-library` pull really writes, `libraries/<slug>-<fileKey8>/`
+  (it said `libraries/<slug>/`).
 - `dtwin whoami` through a daemon too old to relay its socket stats no longer says no daemon is running.
 - A component's `visuals.radius` in `design-system/components.local.json` is now written the way a page pull writes
   a node's radius. A fully rounded (pill) component used to show Figma's raw `1000000000`, and a resized one could

@@ -134,7 +134,7 @@ center → `outline outline-[w] -outline-offset-[w/2]`. Per-side `weights` → `
 - v4's `outline-hidden` sets `outline-style: none`, so `focus-visible:outline-2` on top draws nothing: add
   `focus-visible:outline-solid`. `hover:` is gated on `@media (hover:hover)` by default in v4; also `active:`,
   `disabled:`/`aria-disabled:`.
-- v4 buttons default to `cursor: default` (why every button showed an arrow on the field run). Once, in the CSS
+- v4 buttons default to `cursor: default` (so every button shows an arrow). Once, in the CSS
   entry, unless the app already sets it: `@layer base { button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; } }`.
 - Pressed feedback on every pointer type: a design with no Pressed variant still gets a default `active:` treatment
   (the app's own, else a small darken/overlay), recorded as a defaulted state and listed as a designer question.

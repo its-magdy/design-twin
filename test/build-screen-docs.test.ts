@@ -1001,11 +1001,17 @@ console.log("build-screen docs:");
     /verify-screen\.js" --migrate` first/.test(verifySkill) && /a dry run that lists each rename/.test(verifySkill) && /then `--migrate --apply`/.test(verifySkill)
     && /`verify-screen\.js --migrate` \(a dry run\)/.test(skill) && /then `--migrate --apply`/.test(skill) && /`--expect --variant <slug>`/.test(skill)
     && /verify-screen\.js" --migrate` — a dry run/.test(trouble) && /then `--migrate --apply`/.test(trouble));
-  // each skip --migrate prints has its own way on; only a legacy BASE set beside a canonical base set is retired
-  check("--migrate: each skip says what to do (open run: end it; a plan found by name: add nodeId; a plan still recording the old report: re-record; taken name / reserved or overlapping slug / unknown node: by hand), in the verify skill and troubleshooting",
-    [verifySkill, trouble].every((t) => /open run/.test(t) && /end( or finish)? (that|the) run( first)?/.test(t) && /add `"nodeId"` to\s+that plan/.test(t) && /--compare --record-plan/.test(t)
+  // each skip --migrate prints has its own way on; only a legacy BASE set beside a canonical base set is retired.
+  // The skip list lives once, in the verify skill; troubleshooting summarises and points there.
+  check("troubleshooting: --migrate skips are summarised with a pointer to the verify skill's step 2, not repeated",
+    /the verify skill \(step 2, "A legacy-named set"\)\s+lists what to do for each reason/.test(trouble)
+    && !/add `"nodeId"` to\s+that plan/.test(trouble) && !/two legacy sets of one node that neither extends the other/.test(trouble));
+  check("--migrate: each skip says what to do (open run: end it; a plan found by name: add nodeId; a plan still recording the old report: re-record; taken name / reserved or overlapping slug / unknown node: by hand), in the verify skill",
+    [verifySkill].every((t) => /open run/.test(t) && /end( or finish)? (that|the) run( first)?/.test(t) && /add `"nodeId"` to\s+that plan/.test(t) && /--compare --record-plan/.test(t)
       && /rename by hand/.test(t) && /name that is taken/.test(t) && /(variant )?slug that is reserved/.test(t) && /overlaps another/.test(t))
     && ![verifySkill, trouble].some((t) => /stay for you to rename by hand|rename those by hand/.test(t)));
+  check("--migrate: a run cut short leaves design/verify/.migrate-<S>.json, rolled back by the next --apply (verify skill, troubleshooting)",
+    [verifySkill, trouble].every((t) => /A run cut short leaves\s+`design\/verify\/\.migrate-<S>\.json`: the next\s+`--migrate --apply` rolls it back first/.test(t)));
   check("--migrate retires only a legacy BASE set beside an existing <Layer>__<id> base set (its expectation gets .retired); a legacy variant becomes <Layer>__<id>.<slug> (verify skill, troubleshooting)",
     [verifySkill, trouble].every((t) => /legacy base set beside an existing `<Layer>__<id>` base\s+set/i.test(t) && /\.retired|`\.retired`/.test(t) && /legacy variant.{0,300}becomes\s+`<Layer>__<id>\.<slug>`/.test(t))
     && !/A legacy set whose node already has its/.test(verifySkill + trouble));
@@ -1014,16 +1020,16 @@ console.log("build-screen docs:");
     && /or the frame's layer name with a suffix after `\.` or `@` even with no other set \(a lone `<Screen>\.dark`, `<Screen>@320`\)/.test(verifySkill)
     && /a lone `<Screen>-r1` is a base set, not a variant \(a `-` suffix counts only beside another set/.test(verifySkill));
   // a legacy-named set is never sent to --compare --record-plan: --compare refuses it (verify-sets, verify-screen)
-  check("--migrate skips: a hand-edited record is restored, a record whose sha misses the report is fixed by restoring the report or --expect + --compare --record-plan on the node's NEW set; only a retired set's plan is re-recorded (verify skill, troubleshooting)",
-    [verifySkill, trouble].every((t) => /a plan of a set to rename whose record was edited by hand — restore the block \(`--compare` refuses a legacy-named set, so it cannot be re-recorded under that name\)/.test(t)
+  check("--migrate skips: a hand-edited record is restored, a record whose sha misses the report is fixed by restoring the report or --expect + --compare --record-plan on the node's NEW set; only a retired set's plan is re-recorded (verify skill)",
+    [verifySkill].every((t) => /a plan of a set to rename whose record was edited by hand — restore the block \(`--compare` refuses a legacy-named set, so it cannot be re-recorded under that name\)/.test(t)
       && /restore the report the record names; for either, instead run `--expect` \(no `--variant`; it writes the node's `<Layer>__<id>` base set\), measure (that set|it) and `--compare --record-plan` on it \(it replaces the block\), then `--migrate` retires the legacy set \(a base set\) or renames it \(a variant\)/.test(t)
       && !/retires the legacy set;/.test(t)
       && /still records a retired set's report — re-run `--compare --record-plan` on the node's existing `<Layer>__<id>` set/.test(t)
       && !/or whose record was edited by hand/.test(t) && !/re-run `--compare --record-plan`, then `--migrate`/.test(t)));
   check("sync-design: a plan the tools do not find is passed as --plan to --expect/--compare and as the probe's --steps (the probe has no --plan)",
     /pass that plan as `--plan` to `--expect`\/`--compare` and as the probe's `--steps`/.test(syncDoc) && !/pass that plan as `--plan` to the verify tools/.test(syncDoc));
-  check("--migrate skips: two legacy sets of one node that neither extends the other (retire the others by hand), a slug longer than 32 characters beside the reserved one, and \"follow the line the dry run prints\" for any other (verify skill, troubleshooting)",
-    [verifySkill, trouble].every((t) => /two legacy sets of one node that neither extends the other — retire the others by hand/.test(t) && /reserved[^;]{0,40}longer than 32\s+characters/.test(t) && /For any other skip, follow the line the dry run prints/.test(t)));
+  check("--migrate skips: two legacy sets of one node that neither extends the other (retire the others by hand), a slug longer than 32 characters beside the reserved one, and \"follow the line the dry run prints\" for any other (verify skill)",
+    [verifySkill].every((t) => /two legacy sets of one node that neither extends the other — retire the others by hand/.test(t) && /reserved[^;]{0,40}longer than 32\s+characters/.test(t) && /For any other skip, follow the line the dry run prints/.test(t)));
   const planDocs = { verifier, verifySkill, verifyRef, skill, builder, syncDoc, trouble };
   check("no verify-related doc writes `--steps design/plan/<Layer>__<id>.json` or hands verify-build `design/plan/<Layer>__<id>.json` as if every plan had the canonical name: the plan path found earlier is `<plan.json>`",
     Object.values(planDocs).every((t) => !/--steps\s+design\/plan\//.test(t) && !/verify-build\.js"( --status)? design\/plan\/<Layer>/.test(t) && !/\(`design\/plan\/<Layer>__<id>\.json`, or the multi-frame plan/.test(t))
