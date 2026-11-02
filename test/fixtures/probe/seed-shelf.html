@@ -35,6 +35,8 @@
   .m-hover-only #ship { opacity: 0; }
   .m-hover-only .actions:hover #ship { opacity: 1; }
   .cover { position: absolute; inset: 0; background: rgba(0, 0, 0, 0); }
+  /* ?mode=uncover-hover: the layer lets the pointer through only while its slot is hovered (a hover-revealed hit area) */
+  .m-uncover-hover .slot:hover .cover { pointer-events: none; }
   /* compiled Tailwind v4 (DT-76): outline-hidden + focus-visible:outline-2 draws nothing without outline-solid */
   .outline-hidden { --tw-outline-style: none; outline-style: none; }
   .focus-visible\:outline-2:focus-visible { outline-style: var(--tw-outline-style); outline-width: 2px; outline-color: #1d1d1f; outline-offset: 2px; }
@@ -120,7 +122,7 @@
           <button type="button" data-dt-node="80:18" id="stack">Stack crate</button>
           <button type="button" data-dt-node="80:22" id="plant">Plant crate</button>
           ${on("div-button") ? `<div class="btn" role="button" tabindex="0" data-dt-node="80:23" id="ship">Ship crate</div>` : `<button type="button" data-dt-node="80:23" id="ship">Ship crate</button>`}
-          <span class="slot"><button type="button" data-dt-node="80:24" id="weigh">Weigh crate</button><span class="cover"></span></span>
+          <span class="slot">${on("uncover-hover") ? `<span class="btn" data-dt-node="80:24" id="weigh">Weigh crate</span>` : `<button type="button" data-dt-node="80:24" id="weigh">Weigh crate</button>`}<span class="cover"></span></span>
           <button type="button" data-dt-node="80:21" id="filter"${on("unnamed-icon") ? "" : ` aria-label="Filter crates"`}><span class="icon" data-dt-node="80:20"></span></button>
           <span class="tools"><button type="button" data-dt-node="80:19" class="outline-hidden focus-visible:outline-2${on("outline-hidden") ? "" : " focus-visible:outline-solid"}">Print labels</button>
           <button type="button" data-dt-node="80:25" class="outline-hidden focus-visible:ring-2">Export</button></span>

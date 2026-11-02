@@ -190,6 +190,14 @@ export interface PageRuntime {
   viewport(): { w: number; h: number };
   /** Playwright's click point (null: no size) */
   clickPoint(el: PageElement): { x: number; y: number; onScreen: boolean } | null;
+  /** what the mouse presses at a viewport point: the deepest element there through open shadow roots (slotted text: its
+   *  slot), null when nothing is there */
+  hitAt(x: number, y: number): PageElement | null;
+  /** is `el` `anc` or below it in the flat tree (through slots and shadow roots)? */
+  within(el: PageElement | null, anc: PageElement): boolean;
+  /** the 9 sample points of a rect, inset `inset` px — 4 corners, 4 edge midpoints, the centre (`order` "centre" puts the
+   *  centre first) — that lie in the viewport; none when the inset rect is empty */
+  samplePoints(rect: { x: number; y: number; width: number; height: number }, o: { inset: number; order: "corners" | "centre" }): Array<[number, number]>;
   /** the deep active element (through open shadow roots) */
   active(): PageElement | null;
   /** the attribute selector for a data-dt-node id */

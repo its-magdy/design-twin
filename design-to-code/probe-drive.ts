@@ -14,7 +14,7 @@
 // missing piece named. The probe never writes ok:false ("nothing detected" is not-probed, never fail).
 //
 // The page-side functions (readPageOverflow, openerState, armDetector, pollDetector, saveScroll, restoreScroll, scrollHeld, syntheticClick, submitGuard,
-// clickPointControl, and ownMark / ownShot / ownClear)
+// clickPointControl, pointOn, and ownMark / ownShot / ownClear)
 // are handed to page.evaluate, so — as in probe-page.ts — each one is SELF-CONTAINED: no reference to anything
 // outside its own body but the page's globals and the probe's page runtime (window.__dt, page-runtime.ts), plain JSON in and out. The DOM is typed by page-dom.ts (types only; this layer
 // has no DOM lib); test/verify-probe-drive-e2e.test.ts runs the BUILT bundle in a real browser to prove it.
@@ -589,7 +589,7 @@ export function syntheticClick(path: string): boolean {
  *  line fragment — getClientRects) whose part inside the viewport has an area (> 0.99 px²), clipped to the viewport, after
  *  scrolling it into view (the caller runs scrollIntoViewIfNeeded first) — so an oversized wrapper is clicked at the middle
  *  of what shows, and an inline element wrapping over lines on its first line, never at the middle of its bounding box
- *  — elementFromPoint there; when nothing of it is on screen, the visible controls whose box holds the full centre.
+ *  — what the mouse presses there (window.__dt.hitAt, through open shadow roots); when nothing of it is on screen, the visible controls whose box holds the full centre.
  *  (Playwright uses the true transformed quad; for a rotated/skewed element partly off screen this axis-aligned rect's
  *  centre can differ slightly.)
  *  SELF-CONTAINED. */
@@ -605,12 +605,14 @@ export function submitGuard(el: PageElement): string | null {
   };
   const own = why(el);
   if (own !== null) return own;
-  const pt = window.__dt.clickPoint(el);
+  const dt = window.__dt;
+  const pt = dt.clickPoint(el);
   if (!pt) return null;
   const { onScreen, x: cx, y: cy } = pt;
   const at: PageElement[] = [];
-  const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
-  if (hit && hit !== el && el.contains(hit)) at.push(hit);
+  // what the mouse presses there, through open shadow roots (a web component's own submit button)
+  const hit = onScreen ? dt.hitAt(cx, cy) : null;
+  if (hit && hit !== el && dt.within(hit, el)) at.push(hit);
   else if (!hit) {
     // off screen (Playwright scrolls it in first): the controls inside whose box holds the centre
     for (const c of Array.from(el.querySelectorAll("button, input"))) {
@@ -653,7 +655,7 @@ export function clickPointControl(el: PageElement, arg?: { mark: boolean }): str
   if (!pt) return null;
   const { onScreen, x: cx, y: cy } = pt;
   const inner = Array.from(el.querySelectorAll(FOC));
-  // what the mouse presses at the point — the deepest element there, through open shadow roots (a web
+  // what the mouse presses at the point — the deepest element there, through open shadow roots (dt.hitAt: a web
   // component's own <button>; text slotted into a shadow control starts at its <slot>), then up the flat tree (a slotted node's
   // slot, a shadow root's host — the path the click's event takes) to the opener: the first focusable or activating element (a
   // role=button span without tabindex too), or a <label> with a control (its click toggles that control). An
@@ -667,22 +669,7 @@ export function clickPointControl(el: PageElement, arg?: { mark: boolean }): str
   const presses = (e: PageElement | null): e is PageElement => !!e && (e.matches(ACT) || framed(e));
   let at: PageElement | null = null;
   if (onScreen) {
-    let hit = document.elementFromPoint(cx, cy), from = hit;
-    for (let i = 0; hit && hit.shadowRoot && i < 32; i++) {
-      const host: PageElement = hit, sr = hit.shadowRoot;
-      const deeper = sr.elementFromPoint ? sr.elementFromPoint(cx, cy) : null;
-      let under = false;
-      for (let p = deeper; p; p = up(p)) if (p === host) { under = true; break; }
-      if (deeper && deeper !== host && under) { hit = deeper; from = deeper; continue; }
-      const slotted = Array.from(host.childNodes).find((t) => {
-        if (t.nodeType !== 3 || !t.assignedSlot) return false;
-        const rg = document.createRange();
-        rg.selectNodeContents(t);
-        return Array.from(rg.getClientRects()).some((q) => cx >= q.x && cx <= q.right && cy >= q.y && cy <= q.bottom);
-      });
-      from = slotted && slotted.assignedSlot ? slotted.assignedSlot : host;
-      break;
-    }
+    const from = dt.hitAt(cx, cy);
     let found: PageElement | null = null;
     for (let p = from; p; p = up(p)) {
       if (p === el) { at = found; break; }
@@ -897,93 +884,257 @@ async function restoreSettled(page: Page): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- opening an overlay: one protocol
+// The drive (driveRow) and the behaviour battery (its key unit's mouse and key opens, its scroll unit's open at a scroll)
+// open an overlay the same way, here: find the opener, scroll it in (or not), the submit guard, the hover reveal, the
+// pointer on the click point, the guard again, the click point's own control (DOM, then pixels), arm the detector, activate
+// (a real click with a synthetic fallback, a click at the point without scrolling, or a key the caller presses), and poll.
+// The callers only judge what came back.
+
+/** In the page: where the mouse would press the element at `path` without scrolling — Playwright's click point
+ *  (window.__dt.clickPoint), whether it is on screen, and whether what the mouse presses there (window.__dt.hitAt, through
+ *  open shadow roots) is the element or inside it. null: it is gone or has no size. SELF-CONTAINED. */
+export function pointOn(path: string): { x: number; y: number; onScreen: boolean; hits: boolean } | null {
+  const dt = window.__dt;
+  const el = dt.find(path);
+  const pt = el ? dt.clickPoint(el) : null;
+  if (!el || !pt) return null;
+  return { x: pt.x, y: pt.y, onScreen: pt.onScreen, hits: pt.onScreen && dt.within(dt.hitAt(pt.x, pt.y), el) };
+}
+
+/** Why openOverlay did not activate the opener. */
+export type OpenRefusal =
+  | { kind: "count"; count: number }
+  | { kind: "disabled" }
+  | { kind: "submits"; what: string }
+  | { kind: "hidden" }
+  | { kind: "not-own"; ctl: string; why?: string }
+  /** scroll:false — its click point is off screen at this scroll, or something else is on top there */
+  | { kind: "off-screen" }
+  /** synthetic:false — the real click could not land */
+  | { kind: "click"; what: string }
+  /** the key was not pressed (the caller's press said why) */
+  | { kind: "key"; what: string };
+/** How the opener was activated: the real mouse, a synthetic click in the page (never a user activation), or a key. */
+export type OpenActivation = ProbeActivation | "key";
+export interface OpenOverlayOptions {
+  activation: "mouse" | "key";
+  /** key: press the key on the opener (the caller focused it) — why it was NOT pressed, or null when it was */
+  press?: () => Promise<string | null>;
+  /** mouse: false — open at the page's current scroll: the pointer moves to the points (a locator action would scroll the
+   *  opener in), and the click lands only where the opener is on top at its on-screen click point. Default true. */
+  scroll?: boolean;
+  /** mouse: when the real click cannot land (hidden, covered), a synthetic click in the page. Default true; false refuses
+   *  instead. */
+  synthetic?: boolean;
+  /** before each page action (the behaviour unit arms its write block and records the action) */
+  act?: () => void;
+  /** after every guard, just before the detector is armed (the drive reads its load count, the battery marks the opener) */
+  beforeActivate?: () => Promise<void>;
+}
+export interface OverlayOpen {
+  /** what opened (null: nothing within OPEN_POLL_MS, a document load, or not activated) */
+  opened: DetectorRead["opened"];
+  /** why the opener was not activated (refused, in words), or null */
+  why: string | null;
+  refused: OpenRefusal | null;
+  /** null when not activated */
+  activation: OpenActivation | null;
+  detectedBy: string | null;
+  /** the detector's last read (dest, lost) */
+  read: DetectorRead;
+  /** elements tagged with the opener's id (outside a closed dialog) */
+  selectorCount: number;
+  /** the ancestor hovered to reveal it */
+  revealedBy?: string;
+  /** a synthetic click: why the real one could not land */
+  clickWhy?: string;
+}
+/** The detector polls every 100 ms for ≤ OPEN_POLL_MS after the activation; once something opened, ≤ OPEN_GRACE_MS more
+ *  (from that first detection) for the destination tag to land inside it. */
+export const OPEN_POLL_MS = 2_000;
+export const OPEN_GRACE_MS = 500;
+const NO_READ: DetectorRead = { lost: false, detectedBy: null, opened: null, dest: null };
+/** The refusal in words (the behaviour battery's not-run reasons; the drive words its own). */
+export function refusalWhy(r: OpenRefusal, selector: string, revealedBy?: string): string {
+  switch (r.kind) {
+    case "count": return `the opener ${selector} matched ${r.count} element(s) outside a closed dialog`;
+    case "disabled": return "the opener is disabled";
+    case "submits": return `the opener would submit a form (${r.what})`;
+    case "hidden": return `the opener is not visible even on hover${revealedBy !== undefined ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"}`;
+    case "not-own": return `the opener's click point is another control inside it (${r.ctl}) — tag that control or the opener's own clickable element${r.why !== undefined ? ` (${r.why})` : ""}`;
+    case "off-screen": return "the opener's click point is off screen at this scroll, or something else is on top there";
+    case "click": return `the real click could not land (${r.what})`;
+    case "key": return r.what;
+  }
+}
+/** Poll the armed detector: ≤ OPEN_POLL_MS, and ≤ OPEN_GRACE_MS after the first detection for the destination tag. A
+ *  replaced document is read as lost; a closed or crashed page, or any other failure, throws. */
+async function detectOpen(page: Page, destId: string | null, contract: readonly string[]): Promise<DetectorRead> {
+  const t0 = Date.now();
+  let read: DetectorRead = NO_READ;
+  let detectedAt: number | null = null;
+  for (;;) {
+    try { read = await page.evaluate(pollDetector, { destId, contract }); } catch (e) {
+      if (pwErrorKind(e, page) !== "navigated") throw e;
+      return { lost: true, detectedBy: null, opened: null, dest: null };
+    }
+    if (read.lost) return read;
+    if (read.opened !== null && detectedAt === null) detectedAt = Date.now();
+    if (read.opened !== null && (destId === null || (read.dest !== null && read.dest.inside))) return read;
+    if (detectedAt !== null && Date.now() - detectedAt >= OPEN_GRACE_MS) return read;
+    if (Date.now() - t0 >= OPEN_POLL_MS) return read;
+    await sleep(100);
+  }
+}
+/**
+ * Open the row's overlay: the one sequence the drive and the behaviour battery share. Mouse: the opener (exactly one,
+ * enabled), scrolled into view as Playwright's click does it (scroll:false: not), the submit guard, a hover-hidden opener
+ * revealed by hovering its nearest visible (tagged) ancestor, the pointer on the click point first (a control revealed on
+ * :hover is under it only then), the submit guard again, the click point's own control (clickPointControl, then ownPixels),
+ * then the detector armed and the click — a real one with a synthetic fallback (synthetic:false: refused), or with
+ * scroll:false a mouse click at the on-screen point only where the opener is on top. Key: the detector armed and the
+ * caller's press. Then the poll (OPEN_POLL_MS, OPEN_GRACE_MS after the first detection). Never judges what opened.
+ */
+export async function openOverlay(page: Page, row: VerifyInteraction, o: OpenOverlayOptions): Promise<OverlayOpen> {
+  const act = o.act ?? ((): void => undefined);
+  const destId = row.destinationId ?? null;
+  const contract = [...DIALOG_CONTRACT];
+  const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
+  let selectorCount = 1;
+  let revealedBy: string | undefined;
+  const refuse = (r: OpenRefusal): OverlayOpen => ({ opened: null, why: refusalWhy(r, selector, revealedBy), refused: r, activation: null, detectedBy: null, read: NO_READ, selectorCount,
+    ...(revealedBy !== undefined ? { revealedBy } : {}) });
+  const finish = async (activation: OpenActivation, clickWhy?: string): Promise<OverlayOpen> => {
+    const read = await detectOpen(page, destId, contract);
+    return { opened: read.lost ? null : read.opened, why: null, refused: null, activation, detectedBy: read.lost ? null : read.detectedBy, read, selectorCount,
+      ...(revealedBy !== undefined ? { revealedBy } : {}), ...(clickWhy !== undefined ? { clickWhy } : {}) };
+  };
+  if (o.activation === "key") {
+    if (o.beforeActivate) await o.beforeActivate();
+    await page.evaluate(armDetector, { destId, contract });
+    const blocked = o.press ? await o.press() : "no key to press";
+    return blocked !== null ? refuse({ kind: "key", what: blocked }) : finish("key");
+  }
+  const scroll = o.scroll !== false;
+  let st = await page.evaluate(openerState, { id: row.nodeId });
+  selectorCount = st.count;
+  if (st.count !== 1 || st.path === null) return refuse({ kind: "count", count: st.count });
+  // a disabled opener is not clicked (an aria-disabled one would still run the app's handler — a real write)
+  if (st.disabled) return refuse({ kind: "disabled" });
+  // nor one whose click submits a form (the probe navigates and opens, never submits) — judged where the click will land,
+  // scrolled into view the way Playwright's click does it first
+  if (scroll && st.visible) { act(); await byPath(page, st.path).first().scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined); }
+  const submits = await byPath(page, st.path).first().evaluate(submitGuard);
+  if (submits !== null) return refuse({ kind: "submits", what: submits });
+  // what is on screen before the probe's first hover — a tooltip shown before it is not the control's
+  await page.evaluate(tipPreMark, null).catch(() => false);
+  if (!st.visible) {
+    // hover-reveal path: park the pointer, hover the nearest visible (tagged) ancestor, two frames, look again
+    if (st.hoverPath !== null) {
+      revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
+      act();
+      await page.mouse.move(0, 0);
+      if (scroll) await byPath(page, st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
+      else {
+        const hp = await page.evaluate(pointOn, st.hoverPath);
+        if (hp !== null && hp.onScreen) await page.mouse.move(hp.x, hp.y);
+      }
+      await raf2(page);
+      st = await page.evaluate(openerState, { id: row.nodeId });
+    }
+    if (!st.visible || st.path === null) return refuse({ kind: "hidden" });
+  }
+  const openerPath = st.path;
+  const loc = byPath(page, openerPath).first();
+  // the pointer goes where the click will put it FIRST — a row action revealed on :hover (by visibility, display or
+  // pointer-events) is under the click point only then, and the click would land on it. force: no 2 s actionability wait
+  // (a covered opener); two frames for the hover styles; the submit guard looks again
+  act();
+  if (scroll) await loc.hover({ timeout: 2000, force: true }).catch(() => undefined);
+  else {
+    const p = await page.evaluate(pointOn, openerPath);
+    if (p === null || !p.onScreen) return refuse({ kind: "off-screen" });
+    await page.mouse.move(p.x, p.y);
+  }
+  await raf2(page);
+  const submitsHovered = await loc.evaluate(submitGuard);
+  if (submitsHovered !== null) return refuse({ kind: "submits", what: submitsHovered });
+  // nor one whose click point is another control inside it (a card's centred Delete)
+  const inner = await loc.evaluate(clickPointControl, { mark: true });
+  if (inner !== null) {
+    const why = await page.evaluate(ownWhy, null).catch(() => null);
+    return refuse({ kind: "not-own", ctl: inner, ...(why !== null ? { why } : {}) });
+  }
+  // a container's sole control the DOM check let through — the pixels decide (the pointer parked away, unless the opener
+  // only shows while its ancestor is hovered: the hover-reveal path keeps that hover). It may scroll the container in and back.
+  act();
+  const px = await ownPixels(page, { park: revealedBy === undefined });
+  if (px !== null && px.why !== null) return refuse({ kind: "not-own", ctl: px.ctl, why: px.why });
+  if (o.beforeActivate) await o.beforeActivate();
+  await page.evaluate(armDetector, { destId, contract });
+  if (!scroll) {
+    // the pointer back on the point (the pixel check may have parked it), two frames, and the opener must be on top there
+    let p = await page.evaluate(pointOn, openerPath);
+    if (p !== null && p.onScreen) {
+      act();
+      await page.mouse.move(p.x, p.y);
+      await raf2(page);
+      p = await page.evaluate(pointOn, openerPath);
+    }
+    if (p === null || !p.hits) return refuse({ kind: "off-screen" });
+    act();
+    await page.mouse.click(p.x, p.y);
+    return finish("mouse");
+  }
+  await loc.evaluate(saveScroll);
+  act();
+  try {
+    await loc.click({ timeout: 2000 });
+  } catch (e) {
+    const kind = pwErrorKind(e, page);
+    if (kind === "gone") throw e;
+    if (kind !== "navigated") {
+      // hidden or covered (TimeoutError after the full 2 s)
+      const what = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(errMsg(e)) || [firstLine(e)])[0] ?? "";
+      // from the scroll the probe had, never from where the retries left the page — and still there two frames later,
+      // twice in a row: a smooth scroll Playwright's last retry started can outlive one restore
+      await restoreSettled(page);
+      if (o.synthetic === false) return refuse({ kind: "click", what });
+      // a click in the page — never a user activation
+      await page.evaluate(syntheticClick, openerPath);
+      return finish("synthetic", what);
+    }
+  }
+  return finish("mouse");
+}
+
 /** One row on the screen its unit reached (the session closes the context after it). */
 async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks: DriveHooks | undefined): Promise<InteractionEvidence> {
   const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
   const destId = row.destinationId ?? null;
   const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
-  let st = await page.evaluate(openerState, { id: row.nodeId });
-  const base: InteractionEvidence = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
-  if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog — not driven` };
-  // a disabled opener is not clicked (an aria-disabled one would still run the app's handler — a real write)
-  if (st.disabled) return { ...base, ok: null, detail: "opener is disabled — not driven" };
-  // nor one whose click submits a form (the probe navigates and opens, never submits)
-  // judged where the click will land — scrolled into view the way Playwright's click does it first
-  if (st.visible) await byPath(page, st.path).first().scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
-  const submits = await byPath(page, st.path).first().evaluate(submitGuard);
-  if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) — not driven` };
-  // what is on screen before the probe's first hover — a tooltip shown before it is not the control's
-  await page.evaluate(tipPreMark, null).catch(() => false);
-  let revealedBy: string | undefined;
-  if (!st.visible) {
-    // hover-reveal path: park the pointer, hover the nearest visible (tagged) ancestor, two frames, look again
-    if (st.hoverPath !== null) {
-      revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
-      await page.mouse.move(0, 0);
-      await byPath(page, st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
-      await raf2(page);
-      st = await page.evaluate(openerState, { id: row.nodeId });
-    }
-    if (!st.visible || st.path === null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener not visible even on hover${revealedBy !== undefined ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} — not driven` };
+  let tokenBefore = "", loadsBefore = 0;
+  const r = await openOverlay(page, row, { activation: "mouse", beforeActivate: async () => {
+    tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
+    loadsBefore = loads();
+  } });
+  const base: InteractionEvidence = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: r.selectorCount };
+  const revealedBy = r.revealedBy;
+  const revealed = revealedBy !== undefined ? { revealedBy } : {};
+  if (r.refused !== null) {
+    const f = r.refused;
+    const detail = f.kind === "count" ? `the opener ${selector} matched ${f.count} element(s) outside a closed dialog — not driven`
+      : f.kind === "disabled" ? "opener is disabled — not driven"
+      : f.kind === "submits" ? `opener would submit a form (${f.what}) — not driven`
+      : f.kind === "hidden" ? `opener not visible even on hover${revealedBy !== undefined ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} — not driven`
+      // the drive has no write block
+      : f.kind === "not-own" ? `the opener's click point is another control inside it (${f.ctl}) — tag that control or the opener's own clickable element — not driven${f.why !== undefined ? ` (${f.why})` : ""}`
+      : `${r.why ?? "not activated"} — not driven`;
+    return { ...base, ok: null, ...(f.kind === "count" || f.kind === "disabled" ? {} : revealed), detail };
   }
-  const openerPath = st.path;
-  // the pointer goes where the click will put it FIRST — a row action revealed on :hover (by visibility,
-  // display or pointer-events) is under the click point only then, and Playwright's click would land on it. force: no 2 s
-  // actionability wait (a covered opener); two frames for the hover styles; the submit guard looks again
-  await byPath(page, openerPath).first().hover({ timeout: 2000, force: true }).catch(() => undefined);
-  await raf2(page);
-  const submitsHovered = await byPath(page, openerPath).first().evaluate(submitGuard);
-  if (submitsHovered !== null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener would submit a form (${submitsHovered}) — not driven` };
-  // nor one whose click point is another control inside it (a card's centred Delete) — the drive has no
-  // write block
-  const notOwn = (ctl: string, why?: string): InteractionEvidence => ({ ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}),
-    detail: `the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element — not driven${why !== undefined ? ` (${why})` : ""}` });
-  const inner = await byPath(page, openerPath).first().evaluate(clickPointControl, { mark: true });
-  if (inner !== null) return notOwn(inner, (await page.evaluate(ownWhy, null).catch(() => null)) ?? undefined);
-  // a container's sole control the DOM check let through — the pixels decide (the pointer parked away, unless the opener
-  // only shows while its ancestor is hovered: the hover-reveal path keeps that hover)
-  const px = await ownPixels(page, { park: revealedBy === undefined });
-  if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
-  const contract = [...DIALOG_CONTRACT];
-  await page.evaluate(armDetector, { destId, contract });
-  const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
-  const loadsBefore = loads();
-  let activation: ProbeActivation = "mouse", clickWhy = "";
-  await byPath(page, openerPath).first().evaluate(saveScroll);
-  try {
-    await byPath(page, openerPath).first().click({ timeout: 2000 });
-  } catch (e) {
-    const m = errMsg(e);
-    const kind = pwErrorKind(e, page);
-    if (kind === "gone") throw e;
-    if (kind !== "navigated") {
-      // hidden or covered (TimeoutError after the full 2 s): click in the page — never a user activation
-      clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
-      activation = "synthetic";
-      // from the scroll the drive had, never from where the retries left the page — and still
-      // there two frames later, twice in a row: a smooth scroll Playwright's last retry started can outlive one restore
-      await restoreSettled(page);
-      await page.evaluate(syntheticClick, openerPath);
-    }
-  }
-  // poll ≤ 2 s; once a contract element opened, wait ≤ 0.5 s more for the destination tag to land inside it
-  const t0 = Date.now();
-  let read: DetectorRead = { lost: false, detectedBy: null, opened: null, dest: null };
-  let detectedAt: number | null = null;
-  for (;;) {
-    try { read = await page.evaluate(pollDetector, { destId, contract }); } catch (e) {
-      // a closed or crashed page, or any other failure, ends the row; only a replaced document is read as "lost"
-      if (pwErrorKind(e, page) !== "navigated") throw e;
-      read = { lost: true, detectedBy: null, opened: null, dest: null };
-    }
-    if (read.lost) break;
-    if (read.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
-    const destDone = destId === null || (read.dest !== null && read.dest.inside);
-    if (read.opened && destDone) break;
-    if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
-    if (Date.now() - t0 >= 2000) break;
-    await sleep(100);
-  }
+  const read = r.read;
+  const activation: ProbeActivation = r.activation === "synthetic" ? "synthetic" : "mouse";
   if (read.lost) await page.waitForLoadState("load", { timeout: 2000 }).catch(() => undefined);
   let tokenAfter = "";
   try { tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''")); } catch { tokenAfter = ""; }
@@ -992,12 +1143,12 @@ async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks:
   const ev: InteractionEvidence = {
     ...base, outcome, navEvents, activation,
     ...(detectedBy !== undefined ? { detectedBy } : {}),
-    ...(revealedBy !== undefined ? { revealedBy } : {}),
+    ...revealed,
     ...(destId !== null ? { destination: { nodeId: destId, inside: !read.lost && !!read.dest && read.dest.inside, count: read.dest ? read.dest.count : 0 } } : {}),
     ...(read.opened && !read.lost ? { opened: read.opened } : {}),
   };
   const j = judge(action, ev);
-  const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== undefined ? ` after hovering ${revealedBy}` : ""}`;
+  const how = `${activation === "mouse" ? "clicked" : `synthetic click (${r.clickWhy ?? ""})`}${revealedBy !== undefined ? ` after hovering ${revealedBy}` : ""}`;
   const saw = read.lost ? "the page loaded a new document" : detectedBy !== undefined ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
   ev.ok = j.ok;
   ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} — ${j.missing.join("; ")}`;
