@@ -15,7 +15,7 @@
 //       pages/<Page>/<Screen>__<id>.json      the screen tree, its .vars.json and .assets.json
 //       pages/index.json                      every screen pulled, whatever the pull shape
 //       design-system/                        tokens, styles, component catalogs
-//       libraries/<slug>/                     a --as-library export
+//       libraries/<slug>-<fileKey8>/          a --as-library export
 //       assets/                               shared, cumulative
 //       variables.json                        the union of every screen slice
 //     target.json              <- the stack. Written by init, confirmed by build-screen.
