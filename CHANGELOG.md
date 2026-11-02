@@ -31,6 +31,7 @@ list of merged PRs.
   and per-corner radii are one row, as are a single border width and per-side widths). Every gap ("not reported",
   null, unreadable, impossible) is worded in one place. Findings and their wording are the same as before, except
   for the fixes below.
+- README: an illustrated demo loop under the intro (`assets/demo.gif`).
 
 ### Fixed
 
