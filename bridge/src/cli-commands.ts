@@ -24,6 +24,7 @@
 
 import { READ_OPT_ROWS } from "./read-opts.ts";
 import type { ReadScopeKind } from "./read-opts.ts";
+import { DISK_READS, LIVE_READS, MCP_TOOLS, WRITES } from "./mcp-tools.ts";
 
 // ---- families
 
@@ -280,11 +281,24 @@ export const MCP_HELP =
   "  (`dtwin init --mcp` writes one); you do not normally run it by hand.\n\n" +
   "  It takes no flags. While it runs it owns the bridge, so ordinary `dtwin` commands\n" +
   "  route through it rather than starting a second one — `dtwin doctor` says who holds the port.\n\n" +
-  "  Its tools mirror the CLI: figma_status / figma_whoami / figma_list_clients / figma_list_pages /\n" +
-  "  figma_list_children / figma_list_libraries / figma_get_selection / figma_screenshot / figma_export_*,\n" +
-  "  plus figma_write (refused until the designer ticks \"Allow edits\" in the plugin) and two that read\n" +
-  "  the export on disk: design_get_component / design_drift_lint. Pass writeToDisk:true to get\n" +
-  "  files plus a compact index instead of node payloads inline — asset bytes are never returned inline.";
+  wrapHelp(
+    `Its ${MCP_TOOLS.length} tools: ${LIVE_READS.length} that read the live file and mirror the CLI (${LIVE_READS.join(", ")}), ` +
+    `${WRITES.join(" / ")} (refused until the designer ticks "Allow edits" in the plugin) and ${DISK_READS.length} that read ` +
+    `the export on disk (${DISK_READS.join(", ")}). Pass writeToDisk:true to get files plus a compact index instead of ` +
+    "node payloads inline — asset bytes are never returned inline.",
+  );
+
+/** `text` as help lines: two-space indent, wrapped at word breaks to fit 100 columns. */
+function wrapHelp(text: string): string {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if (line && line.length + 1 + word.length > 98) { lines.push(line); line = word; }
+    else line = line ? line + " " + word : word;
+  }
+  if (line) lines.push(line);
+  return lines.map((l) => "  " + l).join("\n");
+}
 
 // Row order is the order of `dtwin --help`'s command summary.
 export const VERB_ROWS = [
