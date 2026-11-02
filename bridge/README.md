@@ -88,19 +88,6 @@ validated against them and exits rather than binding a port nothing could ever r
 > manifest…). Updates need no re-import: `dtwin plugin update` (or any dtwin that starts a bridge) replaces the files
 > in place, and with hot reload on, reopening the plugin runs them — a changed manifest's permissions included.
 
-**Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
-`server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
-Bun runs it directly with **zero build** (`bun bridge/src/figma-pull.ts …`, `bun bridge/src/figma-mcp.ts`), and the
-package ships the same TypeScript: its `dtwin` bin — what `bun add -g` or `bun link` puts on your PATH — is `src/figma-pull.ts`,
-whose shebang is `#!/usr/bin/env -S bun --no-install --no-env-file` (so a `.env` or a missing package in the
-project you run it from can neither change its environment nor make Bun fetch a module from the registry;
-`env -S` needs GNU coreutils ≥ 8.30 or a BSD/macOS `env` — on BusyBox, call `bun --no-install --no-env-file` on
-the file yourself, see Install above).
-The WebSocket server is Bun's own (`Bun.serve`), so the only runtime dependencies are the MCP SDK and zod.
-```
-bun run typecheck   # tsc --noEmit (the only check there is no emit step)
-```
-
 ### Bridge token (required)
 The bridge authenticates every connection with a shared token — loopback binding alone is not
 access control (a sandboxed browser iframe on any site the user visits sends `Origin: null` and
@@ -211,7 +198,7 @@ steps it cannot do — importing the plugin into Figma and pasting the token —
 
 ```
 dtwin list                        # what is in the file: pages + top-level frames, with ids
-dtwin pull --page Screens  # export ONE page into ./design/export
+dtwin pull --page Screens         # export ONE page into ./design/export
 dtwin screenshot 12:34            # a reference PNG of one node
 dtwin doctor                      # something not working? start here
 dtwin seed                        # components.json from the Code Connect files in your code (offline)
@@ -241,6 +228,9 @@ only by the `FIGMA_BRIDGE_PORT` environment variable (8787, 8788 or 8789; there 
 
 A command is only recognised as the **first** argument, so `dtwin my-dir` still means "pull into
 `./my-dir`". For an output directory spelled like a command, write `dtwin pull list` or `dtwin ./list`.
+A first word that is not a verb but is an obvious guess at one (`dtwin export`, `dtwin ls`, `dtwin check`) is
+refused with the real verb instead of being taken as an output folder; `dtwin pull export` still exports into
+`./export`.
 With no outDir the export lands in `design/export` — the only place doctor, cross-check, audit and
 build-screen read. Never pull into bare `design`: that writes a second, parallel export tree beside
 `design/export/` (dtwin warns when it sees one).
@@ -374,7 +364,8 @@ are NOT inlined here; they live in a sibling `design-system/components/<name>__<
 by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `design-to-code/get-component.ts`
 below), `components.library.json` (`remote: true` —
 consumed from a published library, recovered from instances, props possibly inferred) and
-`hygiene.json` (the lint report). Every part repeats the
+`hygiene.json` (the lint report: notes on the file's upkeep, such as unnamed or duplicate components, variant
+explosions, broken aliases and `ALL_SCOPES` variables). Every part repeats the
 `exportedAt` stamp, so `design-to-code/` reads freshness off whichever part it is handed. The split files sit
 in a subdirectory because `design/tokens.json` and `design/components.json` are your
 hand-authored, non-regenerable config maps.
@@ -385,11 +376,12 @@ dtwin pull                    # design-system.json + design-system/ + CURRENT-pa
 dtwin pull --all-pages        # like above, but frame trees from EVERY page
 dtwin pull --selection        # just the current selection
 dtwin pull --design-system    # ONLY design-system.json + design-system/ — no page
-                                                   # walk, no assets/ (the cheap "tokens only" pull)
-dtwin pull --as-library "Acme UI"    # the COMPLETE catalog of a LIBRARY file — run this
-                                                   # with the LIBRARY open, not the file that uses it
+                              # walk, no assets/ (the cheap "tokens only" pull)
+dtwin pull --as-library "Acme UI"
+                              # the COMPLETE catalog of a LIBRARY file — run this
+                              # with the LIBRARY open, not the file that uses it
 dtwin pull --node <id>        # ONE node, fully exported (properties + assets) —
-                                                   # see "--node <id>" below
+                              # see "--node <id>" below
 ```
 **Pull flags.** Each read below is opt-in (it costs extra Plugin-API work) and applies to a pull that walks
 nodes (`--node`, `--page`, `--selection`, `--all-pages` or a plain `dtwin pull`):
@@ -403,7 +395,7 @@ nodes (`--node`, `--page`, `--selection`, `--all-pages` or a plain `dtwin pull`)
 | `--shared-data` | Cross-plugin shared data (`getSharedPluginData`), notably Tokens Studio applied tokens on files without native Figma Variables |
 | `--variant-visuals` | Walks each `COMPONENT_SET`'s variants and records their real layout/fills/radius/tokens/css; slower on large systems. The one read option `--design-system` and `--as-library` also accept |
 | `--no-assets` | Skips the per-node SVG/PNG export pass (the dominant cost on a big file); structure and tokens are unaffected, and the manifest reports how many were skipped |
-| `--timeout N` | Seconds to allow; see "Waiting for the plugin" under `--list-libraries` below |
+| `--timeout N` | Seconds to allow; see "`--timeout <seconds>`" below |
 | `--client <connId\|fileKey\|name>` | Which file, when several are connected; see `--list-clients` below |
 
 The list commands (`list`, `list pages`, `list children`, `list clients`, `list libraries`, `whoami`) take
@@ -427,6 +419,18 @@ library owns a token, or before an `--as-library` pull.
 (The flag spellings — `--whoami`, `--list-libraries`, `--list-pages`, `--list`, `--children`,
 `--screenshot` — are the same commands; the sections below are titled by flag.)
 
+### `--timeout <seconds>` — waiting for the plugin
+
+Every command that needs Figma first waits for the plugin to connect:
+`--timeout <seconds>` bounds that wait as well as the command itself. Without the flag it is 10
+minutes at a terminal and 90 seconds when stderr is not a TTY (an agent's shell, CI) — then
+`no Figma plugin connected within Ns`, exit 1, with the next step. Once connected, the command has its
+own budget: 300 s for a plain pull, `--page` or `--node`, 900 s with `--all-pages`, 120 s for `--selection`,
+and 300 s for the list commands. `--timeout N` replaces both the connect wait and that budget with N seconds.
+`--timeout` takes at most 2147483 seconds (about 24 days, the longest delay one JavaScript timer holds);
+`Infinity`, `0`, a negative or a larger number is refused with a usage error rather than run as an
+export that times out at once.
+
 ### `--node <id>` — one node, fully exported
 
 ```
@@ -435,7 +439,7 @@ dtwin pull --node "https://figma.com/design/KEY/App?node-id=123-456"   # a paste
 ```
 
 A REAL export scoped to exactly one node — the CLI twin of the MCP `figma_export_url` tool ("paste a
-link and ask about it," see below). It runs the full `serialize()` walk on that node's subtree and
+link and ask about it," see below). It runs the full `serialize()` walk (the plugin's node-to-JSON tree walk) on that node's subtree and
 exports the assets found inside it, exactly as a `--page` pull would for that subtree, just rooted
 lower. Accepts a bare id, dash form, percent-encoded id, a nested-instance path, or a whole figma.com
 URL — the same lenient parsing `--children`/`--screenshot` use.
@@ -499,7 +503,9 @@ Three consequences worth knowing:
   differently the newest wins and the disagreement is recorded under `_conflicts` and in `hygiene`.
   It holds only the variables bound by the pulled nodes — to find the variable behind a library colour,
   look it up on the library catalog: `bun --no-install --no-env-file <scripts>/tokens.js <library>/tokens.json --lookup <hex>` (`ffbc1c`, or a quoted `'#ffbc1c'`:
-  an unquoted `#` starts a shell comment).
+  an unquoted `#` starts a shell comment). `<scripts>` is the Claude Code plugin's `scripts/` folder:
+  `claude-plugin/scripts/` in a clone of the repo, or `${CLAUDE_PLUGIN_ROOT}/scripts` in a Claude Code session
+  with the `designtwin` plugin installed.
 - **Assets are named after their Figma layer and deduped by content.** `icons/linear/arrow-down` lands
   as `arrow-down.svg`; the same artwork reached through several instance paths is one file carrying
   every node id that resolved to it; two different icons whose leaf names collide are separated by a
@@ -669,18 +675,6 @@ many of its components this file uses. It's the library-scoped sibling of `--lis
 properties, no assets, same `--timeout`, prints to stdout and writes nothing — but the slowest read there
 is, a few seconds up to ~15 s (about 2 s on a file with no libraries enabled), because it walks every
 instance in the file and makes one Figma call per enabled library variable collection.
-
-**Waiting for the plugin.** Every command that needs Figma first waits for the plugin to connect:
-`--timeout <seconds>` bounds that wait as well as the command itself. Without the flag it is 10
-minutes at a terminal and 90 seconds when stderr is not a TTY (an agent's shell, CI) — then
-`no Figma plugin connected within Ns`, exit 1, with the next step. Once connected, the command has its
-own budget: 300 s for a plain pull, `--page` or `--node`, 900 s with `--all-pages`, 120 s for `--selection`,
-and 300 s for the list commands. `--timeout N` replaces both the connect wait and that budget with N seconds. A first word that is not a verb
-but is an obvious guess at one (`dtwin export`, `dtwin ls`, `dtwin check`) is refused with the real
-verb instead of being taken as an output folder; `dtwin pull export` still exports into `./export`.
-`--timeout` takes at most 2147483 seconds (about 24 days, the longest delay one JavaScript timer holds);
-`Infinity`, `0`, a negative or a larger number is refused with a usage error rather than run as an
-export that times out at once.
 
 Three honest limits, because they change what the numbers mean:
 - **Component counts are usage-derived.** Figma exposes **no API to enumerate a library's contents**,
@@ -898,8 +892,7 @@ Behaviour worth knowing:
   SIGTERM and SIGHUP cancel in-flight reads, remove the socket and exit 0, even while serving others.
 
 ## Write / interactive: figma-mcp (MCP over stdio)
-**Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
-while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
+Register it in the project you are *building*: a `.mcp.json`
 there that runs `bridge/src/figma-mcp.ts` on Bun — `"command"`: the absolute path of `bun`, `"args"`:
 `["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` — under the key `designtwin` (`dtwin init --mcp`
 writes exactly that, with the `bun` and the install — package or clone — that ran it; an absolute `bun` keeps working when Claude Code is
@@ -927,6 +920,40 @@ need no Figma connection — `design_get_component` (one component's variant nod
 `css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
 take them (it never walks a node — see below) but DOES take `variantVisuals`, since the component
 catalog it builds is exactly what that flag enriches.
+
+**Parameters.** Every `figma_*` tool also takes an optional `client` (a connId, fileKey or part of the file name;
+needed only when several files are connected), except `figma_list_clients`, which takes nothing. Every export tool
+and `figma_screenshot` also take the optional `writeToDisk` and `outDir` (see `writeToDisk` below). "Walk options" are the optional
+booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVisuals` and `skipAssets` (the
+`dtwin pull` flags of the same meaning).
+
+| Tool | Required | Optional | Returns |
+|---|---|---|---|
+| `figma_status` | — | — | connected files (`clients`), the export on disk (`snapshot`), the last export and write |
+| `figma_list_clients` | — | — | one row per connected file: `connId`, name, `fileKey`, open page |
+| `figma_whoami` | — | — | one plugin's identity: `instanceId`, file and page, `editsAllowed` |
+| `figma_get_selection` | — | — | what is selected in Figma right now |
+| `figma_list_libraries` | — | — | the libraries the file uses, with their collections and component counts |
+| `figma_list_pages` | — | `depth` (`1` page names only, `2` pages + top-level frames; default 2) | pages, and their top-level frames with ids |
+| `figma_list_children` | `nodeId` (an id or a figma.com URL) | — | one node's direct children |
+| `figma_export_full` | — | `page` (ids or names), `allPages` (not both), walk options | design system + frame trees (inline, or an index with `writeToDisk`) |
+| `figma_export_design_system` | — | `variantVisuals` | variables, styles, components, hygiene |
+| `figma_export_selection` | — | walk options | the selection's node JSON, variables, assets |
+| `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | walk options | that node's node JSON, variables, assets |
+| `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
+| `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops; with `dryRun`, a preview and `editsAllowed` |
+| `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
+| `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
+
+`figma_write`'s ops (a hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`; a create with no `parentId` lands on
+the current page):
+
+| `op` | Required | Optional |
+|---|---|---|
+| `createFrame` | — | `parentId`, `name`, `width` + `height` (both, or no resize), `layoutMode` (`HORIZONTAL` \| `VERTICAL`), `itemSpacing`, `padding` (`[top, right, bottom, left]`), `fill` (hex, or `""` for none) |
+| `createText` | `text` | `parentId`, `fontSize`, `fill` (hex, or `""` for none) |
+| `setFill` | `nodeId`, `color` (hex) | — |
+| `setText` | `nodeId`, `text` | — |
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:
@@ -1066,7 +1093,7 @@ Pre-approve tools in `.claude/settings.json`:
   first (`daemon-auth.ts`). A daemon started under an EARLIER token cannot be found or stopped by name —
   `--rotate-token` stops it before rotating, so that only happens to one started with a different
   `FIGMA_BRIDGE_TOKEN`.
-- One WebSocket frame may be at most `FIGMA_BRIDGE_MAX_PAYLOAD_MB` (default 128; clamped just under
+- Each response travels as one WebSocket frame, and a frame may be at most `FIGMA_BRIDGE_MAX_PAYLOAD_MB` (default 128; clamped just under
   4096). A value that is not a number above 0 falls back to 128 with a warning — there is no "unlimited".
   An export over it fails with a message quoting the cap in force.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
@@ -1075,8 +1102,6 @@ Pre-approve tools in `.claude/settings.json`:
   connect / export / write split, when each plugin phase (`queued`, `page`, `designSystem`, `assets`, …)
   was first and last heard, the queue wait, the reply's asset count and decoded bytes, and peak RSS —
   counts and times only, never a file, page or layer name, a key or document content. Off by default.
-- v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
-  (see [ARCHITECTURE.md, "Verified mechanism details"](https://github.com/its-magdy/design-twin/blob/main/ARCHITECTURE.md#verified-mechanism-details-build-to-these)).
 - Hidden-graphic reuse (`assetFrom`) compares the node's own rotation/flip and box only, not an
   ancestor's, and not which slot of its parent the icon sits in (two icons of one component in one
   parent variant count as one, even if that variant colours them differently); across screens it depends on pull order (a screen pulled before its twin's screen keeps
@@ -1090,5 +1115,24 @@ Pre-approve tools in `.claude/settings.json`:
   cap (a very large frame), the row's `title` falls back to the first text — which can differ from the
   title the pages index gives the same screen after a pull. `distinctTexts` reads the same way, with a
   budget of 20000 node reads for the whole listing (a group with a row it cuts off gets none — see the warning).
-- Write ops are a deliberately small, explicit set — extend `applyWrite()` in
-  `../figma-plugin/src/writes.ts` (rebuild `code.js`) and add a matching `registerTool` here as needed.
+
+## For contributors
+
+Notes for working on the bridge itself, in a clone of the repo.
+
+- **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
+  `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
+  Bun runs it directly with **zero build** (`bun bridge/src/figma-pull.ts …`, `bun bridge/src/figma-mcp.ts`), and the
+  package ships the same TypeScript: its `dtwin` bin — what `bun add -g` or `bun link` puts on your PATH — is `src/figma-pull.ts`,
+  whose shebang is `#!/usr/bin/env -S bun --no-install --no-env-file` (so a `.env` or a missing package in the
+  project you run it from can neither change its environment nor make Bun fetch a module from the registry;
+  `env -S` needs GNU coreutils ≥ 8.30 or a BSD/macOS `env` — on BusyBox, call `bun --no-install --no-env-file` on
+  the file yourself, see Install above).
+  The WebSocket server is Bun's own (`Bun.serve`), so the only runtime dependencies are the MCP SDK and zod.
+  `bun run typecheck` is `tsc --noEmit` (the only check: there is no emit step).
+- This repo has no `.mcp.json` on purpose, so the MCP server never starts while you are working *on* the bridge.
+- Responses are not chunked. If very large pages outgrow the frame cap, chunking is the fix (see
+  [ARCHITECTURE.md, "Verified mechanism details"](https://github.com/its-magdy/design-twin/blob/main/ARCHITECTURE.md#verified-mechanism-details-build-to-these)).
+- Write ops are a deliberately small, explicit set — a new op is a name in `WRITE_OP_NAMES` and a row in `WRITE_OPS`
+  (`src/commands.ts`), its fields in `figma_write`'s op schema (`src/figma-mcp.ts`), and a case in `applyWrite()` in
+  `../figma-plugin/src/writes.ts` (rebuild `code.js`).
