@@ -18,6 +18,8 @@ components and tokens, then checks the result against the design.
 <!-- TODO(owner): replace with a real ~20 s screen recording once one exists. -->
 
 [![test](https://github.com/its-magdy/design-twin/actions/workflows/test.yml/badge.svg)](https://github.com/its-magdy/design-twin/actions/workflows/test.yml)
+[![npm version](https://img.shields.io/npm/v/@design-twin/dtwin)](https://www.npmjs.com/package/@design-twin/dtwin)
+[![npm downloads](https://img.shields.io/npm/dm/@design-twin/dtwin)](https://www.npmjs.com/package/@design-twin/dtwin)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
