@@ -13,9 +13,12 @@
 // ESM TypeScript like the rest of bridge/src/ (the MCP SDK is ESM-only). The bridge core and the other
 // bridge modules are imported directly, typed by their own source.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { AnySchema, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { MCP_TOOLS, planeOf, type McpToolName } from "./mcp-tools.ts";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import fs from "node:fs";
 
 // The bridge core. `request`'s `timeoutMs` (3rd) is server-core's default-120s budget: exports on a
 // real design-system file routinely run longer than that — the dtwin CLI scales its own default
@@ -63,6 +66,8 @@ import { readSettings } from "./settings.ts";
 import * as daemon from "./daemon.ts";
 import { exitFlushed, installQueuedConsole } from "./stdio.ts";
 import { clientPresence, processIO } from "./client-presence.ts";
+import { presence as pluginPresence } from "./presence.ts";
+import { pickClient, runPlugin, sentence, whoHolds } from "./hints.ts";
 // The holder, made on first use from the settings this process was started with (startServer reads them first and
 // exits on a bad port; a suite that loads this module in process has set its environment before the first call).
 let holder: Holder | null = null;
@@ -89,15 +94,11 @@ function session(): Holder {
 const route = createRoute(() => session().upstream(), { connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS });
 /** A request's reply alone. */
 const ask = async <C extends Cmd>(cmd: C, args: Commands[C]["args"], o: RouteRequest): Promise<Commands[C]["reply"]> => (await route.request(cmd, args, o)).reply;
-// The socket half of whoami for `connId` — the connection a request was answered by, not the first live one.
-// Through a daemon `via` names the shared bridge; only a daemon too old to send its connection gets the 3-field
-// stub, its missing fields reported as undefined, never guessed.
-async function connectionInfo(connId: string | null): Promise<ConnectionInfo | (ConnectionInfo & { via: string }) | { via: string; port: number | undefined; pluginConnected: boolean | undefined } | null> {
-  const { connection, owner } = await route.connectionInfo(connId);
-  if (owner.kind === "own") return connection;
-  const via = "shared bridge (pid " + (owner.pid ?? "?") + ")";
-  if (connection) return { via, ...connection };
-  return { via, port: owner.port ?? undefined, pluginConnected: owner.pluginConnected ?? undefined };
+// The socket half of whoami for `connId` — the connection a request was answered by, not the first live one — and
+// who holds it, in the CLI's words (hints.ts whoHolds). Null from a daemon too old to relay its connection.
+async function connectionInfo(connId: string | null): Promise<{ connection: ConnectionInfo | null; connectionFrom: string }> {
+  const rc = await route.connectionInfo(connId);
+  return { connection: rc.connection, connectionFrom: whoHolds(rc) };
 }
 
 // ---- result helpers ----
@@ -147,6 +148,7 @@ import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
 import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
 import { findMapFile } from "./project-layout.ts";
+import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile } from "./doc-types.ts";
@@ -321,7 +323,21 @@ import { readExportVerdict, statusSnapshot } from "./export-verdict.ts";
 import pkg from "../package.json" with { type: "json" };
 const server = new McpServer({ name: "designtwin", version: pkg.version });
 
-server.registerTool(
+// Every tool is registered through here, by a name in MCP_TOOLS (mcp-tools.ts, the list `dtwin mcp --help` and the
+// docs test read): a registration whose readOnlyHint disagrees with the list's plane stops the server at start-up, and
+// so does a tool in the list that was never registered (checked once all are, below).
+const registered = new Set<McpToolName>();
+function registerTool<I extends undefined | ZodRawShapeCompat | AnySchema = undefined>(
+  name: McpToolName,
+  config: { description: string; inputSchema?: I; annotations: ToolAnnotations },
+  cb: ToolCallback<I>,
+): void {
+  if ((config.annotations.readOnlyHint === true) !== (planeOf(name) === "read")) throw new Error(`${name}: its readOnlyHint disagrees with its plane in MCP_TOOLS (${planeOf(name) ?? "?"})`);
+  registered.add(name);
+  server.registerTool(name, config, cb);
+}
+
+registerTool(
   "figma_status",
   {
     description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the export on disk, if any, as `snapshot`: the newest stamp's exportedAt/ageMs/sourceFile, `stale` (older than `staleAfterMs`), `sources` (the screens of each Figma file, and the design system, each with its own age) and `problems` (files there but unusable) — so an agent can tell whether it's about to read a stale or mixed snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
@@ -336,16 +352,17 @@ server.registerTool(
     const ledger = { lastScreenExport: verdict.lastScreen, lastWrite };
     if (!(a && a.client)) {
       const clients = await route.listClients();
-      if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot, ...ledger });
+      const p = pluginPresence(clients);
+      if (p.kind === "none") return textResult({ connected: false, hint: sentence(runPlugin), snapshot, ...ledger });
       // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
       // failing. "Which files can I talk to?" is exactly what this tool is for.
-      if (clients.length > 1) {
+      if (p.kind === "ambiguous") {
         return textResult({
           connected: true,
           clients,
           snapshot,
           ...ledger,
-          note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant.",
+          note: `Several Figma files are connected: on every tool call, ${pickClient}, or it will be refused rather than guess which file you meant.`,
         });
       }
     }
@@ -365,7 +382,7 @@ server.registerTool(
 // the bridge's OWN registry and never touches the plugin, so it answers instantly even while every
 // connected file is mid-export — the same "cheap index you consult before committing" role
 // figma_list_pages plays for a file's contents.
-server.registerTool(
+registerTool(
   "figma_list_clients",
   {
     description:
@@ -386,7 +403,7 @@ server.registerTool(
       // The EMPTY case has to explain itself: nothing connected is the normal state before the plugin
       // is opened, not a broken bridge.
       ...(clients.length ? {} : {
-        note: "Nothing connected. Open a file in Figma and run \"Design Twin\" (Plugins → Development) — it auto-connects and announces itself. You can open it in several files at once; each becomes a separate row here.",
+        note: `Nothing connected — ${runPlugin}: it connects and announces itself. You can run it in several files at once; each becomes a separate row here.`,
       }),
       ...(clients.some((c) => !c.identified) ? {
         identifiedNote: "A row with identified:false is connected but has not announced itself yet (or is an older plugin build that does not) — address it by connId.",
@@ -398,7 +415,7 @@ server.registerTool(
 // Identity of ONE connection. Distinct from figma_list_clients (which files are there?) — this asks a
 // specific plugin instance who it is, which is how a runtime teardown is detected: the socket survives
 // and the connId is unchanged, but the instanceId is new.
-server.registerTool(
+registerTool(
   "figma_whoami",
   {
     description:
@@ -414,11 +431,11 @@ server.registerTool(
   // `connection` describes the socket that ANSWERED, not whichever file connected first.
   guarded(async (a, extra) => {
     const sent = await route.request("whoami", {}, { target: a && a.client, signal: callSignal(extra) });
-    return textResult({ plugin: sent.reply, connection: await connectionInfo(sent.client ? sent.client.connId : null) });
+    return textResult({ plugin: sent.reply, ...(await connectionInfo(sent.client ? sent.client.connId : null)) });
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_get_selection",
   {
     description: "List the currently selected nodes (id, name, type) in a connected Figma file.",
@@ -431,7 +448,7 @@ server.registerTool(
 // The cheap map. This is the tool an agent should reach for FIRST: every other read here
 // deep-serializes, so without it the only way to learn what a file holds was to export all of it —
 // measured 12+ minutes and tens of MB on a real design system, straight into the context window.
-server.registerTool(
+registerTool(
   "figma_list_pages",
   {
     description:
@@ -455,7 +472,7 @@ server.registerTool(
 // answers WHERE things are in this file, this one answers WHICH design libraries the file draws on.
 // Same cheap tier (TIMEOUTS.list), no arguments, and the result is deliberately COMPACT — a handful
 // of rows — because a discovery call that costs real context defeats its own purpose.
-server.registerTool(
+registerTool(
   "figma_list_libraries",
   {
     description:
@@ -505,7 +522,7 @@ server.registerTool(
 
 // The node-scoped twin: listPages depth 2 stops at a page's top-level frames, and peeking INSIDE one
 // otherwise meant a full recursive export of it.
-server.registerTool(
+registerTool(
   "figma_list_children",
   {
     description:
@@ -525,7 +542,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_full",
   {
     description:
@@ -559,7 +576,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_design_system",
   {
     description:
@@ -589,7 +606,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_selection",
   {
     description: "Export the current selection as compacted node JSON + variables + assets.",
@@ -602,7 +619,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_export_url",
   {
     description:
@@ -626,7 +643,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "figma_screenshot",
   {
     description:
@@ -705,11 +722,12 @@ function previewWrites(ops: WriteOp[], editsAllowed: boolean | null) {
 }
 
 // The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
-// with none): nothing connected, several connected with no `client` named, or any failure, is `null` (unknown).
+// with none): no connected file that `client` names (or none at all), several it could mean, or any failure, is
+// `null` (unknown) — so a named file not connected yet is not waited for.
 async function readEditsAllowed(a: { client?: string | undefined } | undefined): Promise<boolean | null> {
   try {
-    const n = (await route.listClients()).length;
-    if (n === 0 || (!(a && a.client) && n > 1)) return null;
+    const p = pluginPresence(await route.listClients(), a && a.client);
+    if (p.kind !== "one") return null;
     const who = await ask("whoami", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client });
     return typeof who.editsAllowed === "boolean" ? who.editsAllowed : null;
   } catch {
@@ -717,7 +735,7 @@ async function readEditsAllowed(a: { client?: string | undefined } | undefined):
   }
 }
 
-server.registerTool(
+registerTool(
   "figma_write",
   {
     description:
@@ -811,7 +829,7 @@ async function loadLayer<T>(mod: string, tool: string): Promise<T> {
   // dependency OF the layer fails the same way, and the error's code and url fields differ between
   // runtimes (Bun reports neither the way Node did). Any error from an import of a file that IS there
   // is passed on as it is.
-  const url = [new URL(`../../design-to-code/${mod}.ts`, import.meta.url), new URL(`../layer/${mod}.js`, import.meta.url)].find((u) => fs.existsSync(u));
+  const url = installOf().layerUrl(mod);
   if (!url) {
     throw new Error(
       `${tool} needs the design-to-code layer, which is not present in this install: neither a repo checkout's ` +
@@ -849,7 +867,7 @@ const exportDirShape = {
     ),
 };
 
-server.registerTool(
+registerTool(
   "design_get_component",
   {
     description:
@@ -876,7 +894,7 @@ server.registerTool(
   })
 );
 
-server.registerTool(
+registerTool(
   "design_drift_lint",
   {
     description:
@@ -917,6 +935,9 @@ server.registerTool(
     });
   })
 );
+
+const unregistered = MCP_TOOLS.filter((t) => !registered.has(t.name)).map((t) => t.name);
+if (unregistered.length) throw new Error(`MCP_TOOLS lists ${unregistered.join(", ")}, which the server never registers`);
 
 // The server, started: stdio guards, signal handlers, the stdio transport, then the bridge. NOT run at import — only
 // when this file is the process entry (`bun figma-mcp.ts`, the .mcp.json entry) or `dtwin mcp` calls runServer() once

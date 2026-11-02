@@ -26,6 +26,7 @@ import type * as GetComponentMod from "../design-to-code/get-component.ts";
 import type * as DriftLintMod from "../design-to-code/drift-lint.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
 import { LAYER, missingHints } from "../bridge/pack.ts";
+import { MCP_TOOLS, planeOf } from "../bridge/src/mcp-tools.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
@@ -77,7 +78,8 @@ void (async () => {
 
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    ok("lists the full tool surface (15)", tools.length === 15 && ["figma_status", "figma_export_url", "figma_screenshot", "figma_write", "design_drift_lint"].every((n) => names.includes(n)));
+    ok(`lists exactly MCP_TOOLS, in its order (${MCP_TOOLS.length})`, names.join() === MCP_TOOLS.map((t) => t.name).join());
+    ok("each tool's readOnlyHint is its plane in MCP_TOOLS", tools.every((t) => (t.annotations?.readOnlyHint === true) === (planeOf(t.name) === "read")));
     ok("every tool has a description and an object input schema", tools.every((t) => t.description && t.inputSchema && t.inputSchema.type === "object"));
     const write = tools.find((t) => t.name === "figma_write");
     if (!write) throw new Error("figma_write is not listed");
