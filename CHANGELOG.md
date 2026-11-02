@@ -9,8 +9,51 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Changed
+
+- `dtwin mcp --help` now lists all 15 MCP tools by name, grouped as live reads, the one write and the two that read
+  the export on disk. Before, it named some and shortened the export tools to `figma_export_*`.
+- Internal: one module now decides where a dtwin is installed (a repo checkout, the npm package, a Homebrew keg or a
+  bunx cache). `dtwin init`, `dtwin plugin`, the MCP server and the package build all use it, so the paths they hand
+  out cannot drift apart. A test now checks that the MCP tool list, `dtwin mcp --help` and the docs name the same
+  tools and the same counts.
+- When no Figma plugin is connected, the CLI, the MCP server, `dtwin doctor` and `dtwin init` now give the same next
+  step: in Figma desktop, open the file and run Plugins → Development → Design Twin, and keep its window open. The
+  steps for picking one of several connected files and for pasting the bridge token are also worded the same
+  everywhere.
+- `figma_whoami` now says who holds the bridge in a `connectionFrom` field, as `dtwin whoami` does ("this process" or
+  "the daemon (pid N)"). It used to put a `via` field inside `connection`.
+- The dry run of `figma_write` no longer waits for a named `client` that is not connected yet. It reports "Allow
+  edits" as unknown instead.
+- The web probe's `--ready` screen gate (what each page load waits for, and how a page without the frame's tag is
+  judged) is now one module with its own tests. The probe's output is unchanged.
+- `verify-screen --compare` checks every property of a node from one table: one row per property (a single radius
+  and per-corner radii are one row, as are a single border width and per-side widths). Every gap ("not reported",
+  null, unreadable, impossible) is worded in one place. Findings and their wording are the same as before, except
+  for the fixes below.
+
 ### Fixed
 
+- `dtwin whoami` through a daemon too old to relay its socket stats no longer says no daemon is running.
+- A component's `visuals.radius` in `design-system/components.local.json` is now written the way a page pull writes
+  a node's radius. A fully rounded (pill) component used to show Figma's raw `1000000000`, and a resized one could
+  show float dust like `12.000000476837158`. It is now half the shorter side with `radiusFull: true`, or the radius
+  rounded to 2 decimal places.
+- Docs: the npm page now lists every `dtwin pull` flag (including `--motion`, `--plugin-data`, `--shared-data` and
+  `--no-assets`) and `dtwin version`, and says once how `--timeout` works. The Figma plugin README no longer claims
+  token suggestions (`inferredVariables`) are exported, and the docs now agree on what blocks an audit, where
+  generated token files go and where a library pull lands.
+- `verify-screen --compare` now applies its element rules the same way to every property:
+  - Padding on a leaf element, an inline element or a `<tr>` says why it is not compared even when the probe left
+    padding out. Before, it said "the probe did not report this property" and counted as lost coverage.
+  - The same holds for a TEXT's box width on a container element (a padded element, a `<td>`, a `<button>`).
+  - A negative box width is a measuring artefact, as a negative width already was. Before, it was compared.
+  - A per-corner radius on a leaf or inline element counts toward coverage, as a single radius already did.
+  - A layer drawn in a hover state that renders 0×0 at rest now lists every property it states as not measured,
+    including padding, per-corner radii, per-side borders and its copy. Before, only the single-value fields were
+    listed.
+- A waiver on one side of a border (`border-width (bottom)`) now matches within the border tolerance, as one on
+  `border-width` does. Before, it had to match exactly.
 - `/designtwin:verify`'s behaviour checks now open an overlay the way the interaction drive does: scrolled into view,
   the pointer on the click point first, and the same guards. An opener that is hover-revealed or only clickable while
   hovered used to end the dialog checks with "the check could not run", though the drive had opened it. The two

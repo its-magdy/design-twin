@@ -29,7 +29,7 @@ is the calling convention, spelled out under the diagram.
 ```
                          CLI front-end: batch reads → files on disk  — you need this
   Figma (file open)
-    code.js (Plugin API reads) ──postMessage──► ui.html [hidden iframe, WS client]
+    code.js (Plugin API reads) ──postMessage──► ui.html [plugin window iframe, WS client]
                                                        │ ws://localhost:PORT
     figma-pull (CLI)  ── hosts WS server, requests export, writes files, exits ──►
           design/export/design-system.json (manifest) · design-system/{tokens,styles.paint,styles.text,
@@ -90,7 +90,10 @@ Those rules live in one module, `bridge/src/bridge-holder.ts`: each front-end pi
 command, `serve`, an MCP session) and turns its own events into "release" or "the client left"; the holder
 probes or binds, publishes, watches whether anyone else used the socket, and lets go exactly once. What it
 works from — port, effective token and its source, payload cap, idle window — is read once at the entry
-(`bridge/src/settings.ts`) and passed in; no bridge module reads them at load.
+(`bridge/src/settings.ts`) and passed in; no bridge module reads them at load. `dtwin doctor` uses the holder's
+read-only side (`bridge/src/bridge-observer.ts`): the daemon at the settings' address, else what holds the port,
+else a probe bridge of its own for the wait — no publish, no token commit, no plugin refresh. Doctor only words
+what it says.
 Neither front-end nor the daemon orders requests: which commands may run alongside which is declared once
 per command (`bridge/src/commands.ts` `runKind` — exclusive, scene read, identity read) and enforced by the
 plugin's run scheduler (`figma-plugin/src/state.ts` `scheduleRun`) for every caller, the plugin window's
@@ -102,7 +105,10 @@ file and the library it draws on are both connected and separately addressable. 
 them through one route (`bridge/src/route.ts`) over two adapters — the bridge this process holds, or the
 daemon socket of the process that does — and the route owns the rules: the routing target (`--client` /
 `client`), the connect window (a named file waits up to `NAMED_CLIENT_WAIT_MS`), the stall check (a
-one-shot CLI bridge only), and where `listClients` / the socket stats come from. Once a command is sent, how it
+one-shot CLI bridge only), and where `listClients` / the socket stats come from. Which file a target names
+(none, one, or several) is one pure decision (`bridge/src/presence.ts`) that routing, `figma_status`, the
+clients listing and doctor all use, and the next step each prints (run the plugin, pick a client, paste the
+token) is one sentence in `bridge/src/hints.ts`. Once a command is sent, how it
 settles — its budget (re-armed by the request's own `start`), the stall check, a cancel when this side gives up,
 a reply only from the connection it went to, a closing connection failing its own — is one module the socket
 handlers feed events to (`bridge/src/pending-requests.ts`), on a substitutable clock (`bridge/src/clock.ts`). What a read SENDS is one
@@ -139,9 +145,10 @@ Design decisions worth not re-litigating:
 - **Ambiguity is refused, not guessed.** An unaddressed command with several files connected errors
   and lists them (the `adb` "more than one device" call). A wrong-file export is indistinguishable
   from a correct one, so guessing is the one unrecoverable failure here.
-- **Not two ports.** `devAllowedDomains` pins each port literally — the only wildcard syntax is for
-  subdomains (`*.example.com`) or fully-open `*`, never ports. A second port costs a manifest edit
-  plus a plugin re-import, i.e. all the friction of the real fix with none of the benefit.
+- **Not one port per file.** `devAllowedDomains` pins each port literally — the only wildcard syntax is for
+  subdomains (`*.example.com`) or fully-open `*`, never ports. The manifest lists three (8787–8789, below), and
+  every plugin window walks all three and stays on whichever bridge answers, so a port cannot pick a file.
+  One bridge that admits every file and routes by `connId` can.
 - **Output.** `write-out.ts` resolves `outDir` from an argument or `FIGMA_EXPORT_DIR`, so give each
   connected file its own directory and their exports never collide.
 - **Isolation.** Pending requests record their `connId`, so one file closing its plugin window fails
@@ -351,7 +358,7 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   per-platform token names, the Code-Connect data model (property `#uid` key + type + `defaultValue` +
   `componentPropertyReferences`) for a richer `components.json`, and the `figma-swiftui` structural rules
   (recognize `List`/`NavigationStack`/`TabView`; HIG semantic colors → dark mode; SF Symbols by name).
-- **Typings:** ✅ pulled from **npm `@figma/plugin-typings`** (properly licensed, ^1.141.0) — not the
+- **Typings:** ✅ pulled from **npm `@figma/plugin-typings`** (properly licensed, ^1.142.0) — not the
   unlicensed vendored copy in mcp-server-guide. The plugin source is TypeScript checked against it, so there is
   no hand-maintained API list.
 - **Community skills (third-party, MIT/CC0):** `export-tokens-figma`, `design-react-api`, the a11y set
@@ -368,7 +375,7 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    (`src/relay.ts`, typed against `bridge/src/plugin-frames.ts`) bundled in. Both are committed so import
    stays zero-build. `tsc --noEmit`
    is the first test gate. See `figma-plugin/README.md`.
-2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
+2. ✅ **`dtwin` CLI** (done, optional) — the plugin's UI iframe is the WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
    the same files, exits. Removes the manual click. No MCP. Published to npm as `@design-twin/dtwin`
    (`bun add -g @design-twin/dtwin`, or `brew install its-magdy/tap/dtwin`; or from a clone: `bun install`, then
@@ -443,9 +450,6 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   `bun figma-mcp.ts` does. The exits that wait on stderr are capped short where something must let go fast: a crash
   releases its port and socket synchronously, then waits ≤ 200 ms; the daemon's first SIGINT/SIGTERM ≤ 300 ms, a second
   one not at all.
-- Daemon socket: unauthenticated, and it forwards every command a bridge takes, writes included, so
-  its only protection is its directory — private to the user (`0700`, owner-checked, never a symlink),
-  and refused otherwise (`daemon.ts` sockDir).
 - **Design content is data, not instructions.** Layer names, text-node characters, annotations,
   component descriptions and variable names are written by whoever can edit the Figma file (or a
   library it pulls in), and every read path hands them to the agent. The skills say so explicitly:

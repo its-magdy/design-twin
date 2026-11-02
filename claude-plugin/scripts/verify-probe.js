@@ -14,7 +14,7 @@ var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex")
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
-import { setTimeout as sleep6 } from "node:timers/promises";
+import { setTimeout as sleep7 } from "node:timers/promises";
 
 // design-to-code/probe-page.ts
 function collectCandidates(input) {
@@ -222,7 +222,7 @@ function measureElements(input) {
     const first = owners[0];
     return first ? { owner: first, mixed } : null;
   };
-  const SHAPES = "path, rect, circle, ellipse, polygon, polyline, line, use, text";
+  const SHAPES2 = "path, rect, circle, ellipse, polygon, polyline, line, use, text";
   return input.items.map((item) => {
     const styles = {};
     const unmeasured = {};
@@ -381,7 +381,7 @@ function measureElements(input) {
     const fill2 = () => {
       if (!item.isPaint) return { v: null, why: "not a vector/SVG node \u2014 its colour is backgroundColor" };
       if (tag === "img" || tag === "canvas" || tag === "picture") return { v: null, why: `an <${tag}>: its paint is pixels, not a CSS property`, source: "img" };
-      const shapes = [...el.matches(SHAPES) ? [el] : [], ...Array.from(el.querySelectorAll(SHAPES))];
+      const shapes = [...el.matches(SHAPES2) ? [el] : [], ...Array.from(el.querySelectorAll(SHAPES2))];
       let stroke = null;
       for (const s of shapes) {
         const scs = getComputedStyle(s);
@@ -1613,28 +1613,135 @@ function normFamily(v) {
   if (v == null) return null;
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
+var PAD_SIDES = ["top", "right", "bottom", "left"];
 var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+var BOX_RULES = ["leaf", "inline"];
+var CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
+var field = (key, label, tol, extra = {}) => ({ spec: key, label, measured: key, census: key, parse: tol !== null && !extra.parse ? "px" : "norm", compare: "field", tol, ...extra });
+var PROPERTIES = [
+  { key: "fontFamily", norm: normFamily, typography: true, applies: [], shapes: [field("fontFamily", "font-family", null)] },
+  { key: "fontSize", unit: "px", high: true, typography: true, applies: [], shapes: [field("fontSize", "font-size", TOLERANCE.fontSize, { nonNegative: true, paints: true })] },
+  { key: "fontWeight", norm: normWeight, high: true, typography: true, applies: [], shapes: [field("fontWeight", "font-weight", TOLERANCE.fontWeight, { parse: "norm" })] },
+  { key: "lineHeight", unit: "px", typography: true, applies: [], shapes: [field("lineHeight", "line-height", TOLERANCE.lineHeight, { nonNegative: true })] },
+  { key: "letterSpacing", unit: "px", typography: true, applies: [], shapes: [field("letterSpacing", "letter-spacing", TOLERANCE.letterSpacing)] },
+  { key: "color", norm: normColor, high: true, colour: true, typography: true, applies: ["drawnState"], shapes: [field("color", "color", null, { paints: true })] },
+  { key: "backgroundColor", norm: normColor, high: true, colour: true, applies: ["drawnState", "leaf"], shapes: [field("backgroundColor", "background", null, { paints: true })] },
+  { key: "fill", norm: normColor, high: true, colour: true, pixels: true, applies: ["drawnState"], shapes: [field("fill", "fill (SVG paint)", null, { paints: true, doc: "an SVG's paint" })] },
+  {
+    key: "placeholderColor",
+    norm: normColor,
+    high: true,
+    colour: true,
+    optional: true,
+    applies: ["drawnState"],
+    shapes: [field("placeholderColor", "placeholder colour", null, {
+      doc: "the ::placeholder colour",
+      absentWhy: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked"
+    })]
+  },
+  { key: "borderColor", norm: normColor, colour: true, applies: ["drawnState", "leaf"], shapes: [field("borderColor", "border-color", null, { paints: true })] },
+  // one border width, or four sides (a divider with only a bottom stroke) — read off a border, or a ring (box-shadow/outline)
+  { key: "border", unit: "px", applies: ["leaf"], shapes: [
+    field("borderWidth", "border-width", TOLERANCE.stroke, { nonNegative: true, paints: true }),
+    {
+      spec: "borderWidths",
+      label: "border-width",
+      parts: PAD_SIDES,
+      measured: "borderWidths",
+      census: "borderWidths",
+      parse: "sides",
+      compare: "sides",
+      tol: TOLERANCE.stroke,
+      as: "px border widths [t,r,b,l]",
+      noun: "a border width",
+      doc: "[t,r,b,l] \u2014 a ring's sides when it draws the stroke",
+      paints: true
+    }
+  ] },
+  // one radius, or four unequal corners (a table header rounded only at the top) — both read off borderRadius
+  { key: "radius", unit: "px", applies: [...BOX_RULES, "rowTag"], shapes: [
+    field("borderRadius", "border-radius", TOLERANCE.radius, { parse: "corners", as: "a px radius", noun: "a radius", doc: "number | [tl,tr,br,bl]", paints: true }),
+    {
+      spec: "radiusCorners",
+      label: "border-radius",
+      parts: CORNERS,
+      measured: "borderRadius",
+      census: "borderRadius",
+      parse: "corners",
+      compare: "corners",
+      tol: TOLERANCE.radius,
+      as: "a px radius",
+      noun: "a radius",
+      paints: true
+    }
+  ] },
+  { key: "gap", unit: "px", applies: ["leaf", "tableGap"], shapes: [field("gap", "gap", TOLERANCE.gap, { read: "gapVisual", nonNegative: true })] },
+  { key: "width", unit: "px", box: true, applies: [...BOX_RULES, "textDiffers", "textBoxAbsent", "textOnContainer"], shapes: [
+    field("width", "width (text ink)", TOLERANCE.textInk, { when: "textInk", read: "textBox", nonNegative: true }),
+    field("width", "width", TOLERANCE.size, { read: "textBox", nonNegative: true })
+  ] },
+  { key: "height", unit: "px", box: true, applies: [...BOX_RULES, "textOnContainer", "textHeight"], shapes: [field("height", "height", TOLERANCE.size, { nonNegative: true })] },
+  { key: "x", unit: "px", box: true, applies: [...BOX_RULES, "textDiffers", "textBoxAbsent", "textOnContainer"], shapes: [field("x", "x (frame-relative)", TOLERANCE.position, { read: "textBox" })] },
+  { key: "y", unit: "px", box: true, applies: [...BOX_RULES, "textOnContainer"], shapes: [field("y", "y (frame-relative)", TOLERANCE.position)] },
+  { key: "opacity", applies: ["revealed"], shapes: [field("opacity", "opacity", TOLERANCE.opacity, { nonNegative: true, paints: true })] },
+  // a fixed-width TEXT's box in a parent that hugs its width: the width of the text's own element
+  {
+    key: "textBoxWidth",
+    unit: "px",
+    applies: ["boxOnContainer"],
+    shapes: [{ spec: "boxWidth", label: "width (text box)", measured: "width", census: "width", parse: "px", compare: "textBox", tol: TOLERANCE.size, nonNegative: true }]
+  },
+  {
+    key: "padding",
+    unit: "px",
+    applies: ["tableRow", ...BOX_RULES],
+    shapes: [{ spec: "padding", label: "padding", measured: "padding", census: "padding", parse: "sides", compare: "padding", tol: TOLERANCE.padding, as: "px padding [t,r,b,l]", noun: "padding", doc: "[t,r,b,l]" }]
+  },
+  { key: "placeholderText", applies: [], shapes: [{
+    spec: "placeholderText",
+    label: "placeholder text",
+    measured: "placeholderText",
+    census: "placeholderText",
+    parse: "string",
+    compare: "placeholder",
+    tol: null,
+    doc: "el.placeholder",
+    absentWhy: "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')",
+    paints: true
+  }] },
+  { key: "text", applies: [], shapes: [{
+    spec: "text",
+    label: "text",
+    measured: "text",
+    census: "text",
+    parse: "string",
+    compare: "copy",
+    tol: null,
+    absent: "unlisted",
+    nullWhy: "the probe reported text: null \u2014 an element with child elements still has text; report its textContent",
+    paints: true
+  }] }
 ];
+var SHAPES = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
+var isFieldKey = (k) => SHAPES.some(({ s }) => s.compare === "field" && s.spec === k);
+var FIELDS = SHAPES.filter(({ s }) => s.compare === "field" && !s.when).flatMap(({ p, s }) => isFieldKey(s.spec) ? [{
+  key: s.spec,
+  tol: s.tol,
+  ...p.norm ? { norm: p.norm } : {},
+  label: s.label,
+  ...p.unit ? { unit: p.unit } : {},
+  ...p.high ? { high: true } : {},
+  ...p.colour ? { colour: true } : {},
+  ...p.box ? { box: true } : {},
+  ...p.optional ? { optional: true } : {}
+}] : []);
 var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  ...Object.fromEntries(SHAPES.flatMap(({ s }) => s.doc ? [[s.measured, s.doc]] : [])),
+  textBox: "{x,w} of a Range over the text",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
 var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 
 // design-to-code/types.ts
@@ -6812,6 +6919,162 @@ function joinRun(base, o) {
   return { kind: "joined", participant };
 }
 
+// design-to-code/screen-gate.ts
+import { setTimeout as sleep6 } from "node:timers/promises";
+var POLL_MS3 = 100;
+var SCREEN_LOOK_CAP_MS = 2e3;
+var READY_NONE = "none";
+function readyOf(flag, frameId, taggingOff = false) {
+  if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
+  if (flag !== void 0) return { ready: flag, note: `ready  ${flag}` };
+  if (taggingOff) return { note: "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <root selector>)" };
+  if (frameId === void 0 || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <selector>)" };
+  const ready = attrSelector(frameId);
+  return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
+}
+function ownTagsOf(exp, frameId) {
+  const hidden = new Set(exp.hidden && exp.hidden.ids || []);
+  const ids = /* @__PURE__ */ new Set(), others = /* @__PURE__ */ new Set(), known = /* @__PURE__ */ new Set([frameId, ...hidden]);
+  const otherRoot = (f) => f !== void 0 && f !== frameId;
+  for (const s of exp.nodes || []) {
+    known.add(s.nodeId);
+    if (otherRoot(s.frameId)) others.add(s.nodeId);
+    else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
+  }
+  for (const i of exp.instances || []) {
+    known.add(i.nodeId);
+    if (otherRoot(i.frameId)) others.add(i.nodeId);
+    else if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
+  }
+  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
+  ids.delete(frameId);
+  const alias = /* @__PURE__ */ new Map();
+  const named = new Set(known);
+  for (const s of exp.nodes || []) {
+    for (const a of s.aliases || []) {
+      known.add(a);
+      if (ids.has(s.nodeId) && !named.has(a) && !alias.has(a)) alias.set(a, s.nodeId);
+    }
+  }
+  const w = exp.frame?.w, h = exp.frame?.h;
+  return ids.size ? { ids: [...ids], known: [...known], alias: Object.fromEntries(alias), frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
+}
+var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
+var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
+var refusingRoot = (s, total) => takesForScreen(s.shown, total) ? s.foreign : null;
+async function screenTagsNow(page, own, capMs) {
+  const look = (async () => {
+    try {
+      return await page.evaluate(screenTags, { ids: own.ids, known: own.known, alias: own.alias, frame: own.frame });
+    } catch (e) {
+      if (pwErrorKind(e, page) === "gone") throw e;
+      return { shown: 0, foreign: null };
+    }
+  })();
+  look.catch(() => void 0);
+  return Promise.race([look, sleep6(Math.max(1, capMs), null, { ref: false })]);
+}
+var WaitTimeoutError = class extends Error {
+  constructor(what, ms) {
+    super(`${what}: Timeout ${ms}ms exceeded.`);
+    this.name = "TimeoutError";
+  }
+};
+async function waitForScreenTags(page, own, timeout) {
+  const end = Date.now() + timeout;
+  for (; ; ) {
+    const look = await screenTagsNow(page, own, end - Date.now());
+    if (look !== null && screenTagsMet(look, own.ids.length)) return;
+    const left = end - Date.now();
+    if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
+    await sleep6(Math.min(POLL_MS3, left));
+  }
+}
+function screenTagsWhy(s, total) {
+  const f = refusingRoot(s, total);
+  if (f !== null) {
+    return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
+  }
+  const amb = s.ambiguous ?? 0;
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half${amb > 0 ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, which do not count \u2014 tag them with their own ids` : ""})`;
+}
+function settleMiss(s) {
+  if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
+  if (s.moved) return s.pastDocDeadline ? "kept" : "retry";
+  if (s.navigated && !s.pastDocDeadline) return "retry";
+  return "unreachable";
+}
+var untaggedRootFound = (via) => via === "size-and-fill" ? "its root found as the outermost element with the frame's size (\xB12 px) and a fill" : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)" : "its root not found";
+function untaggedRootNote(ready, waitedMs, via) {
+  if (via === "tag") return null;
+  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} \u2014 tag the root ${ready.slice(1, -1)}, or pass --ready <root selector>`;
+}
+function defaultReadyMissed(ready, withSteps) {
+  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page the probe reached is not the screen \u2014 a redirect (a login page, another origin) or another section (${withSteps ? "the --steps ended somewhere else: check the plan's navigate list" : "a screen that is a section of the app is reached with --steps <plan.json>"}) \u2014 or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing) \u2014 or the root is untagged and most of its tags are not visible at load: tag the root ${ready.slice(1, -1)} or pass --ready <root selector>`;
+}
+function foreignRootHint(ready, f, withSteps) {
+  return `${ready} is the default --ready (the frame's tag), and the page shows another screen's tagged root (data-dt-node="${f.id}" ${f.by === "size" ? "has this frame's size" : "encloses most of this screen's visible tags"}): the probe reached another screen \u2014 check ${withSteps ? "the --steps plan's navigate list" : "the --url, or reach the screen with --steps <plan.json>"}; if that element is a wrapper of this screen tagged with another id, tag this screen's root ${ready.slice(1, -1)} or pass --ready <root selector>`;
+}
+var visibleOnly = (sel) => `${sel} >> visible=true`;
+var ScreenGate = class {
+  ready;
+  startNote;
+  #byDefault;
+  #own;
+  /** how long the frame's tag was waited for when the untagged root was first taken for the screen (null: never) */
+  #waitedMs = null;
+  constructor(o) {
+    const pick = readyOf(o.flag, o.frameId, o.taggingOff ?? false);
+    this.ready = pick.ready;
+    this.startNote = pick.note;
+    this.#byDefault = o.flag === void 0 && pick.ready !== void 0;
+    this.#own = this.#byDefault && o.expectation !== null && o.frameId !== void 0 ? ownTagsOf(o.expectation, o.frameId) : null;
+  }
+  /** Whether an untagged root was taken for the screen (every later wait() is on the own tags). */
+  get untaggedRootSeen() {
+    return this.#waitedMs !== null;
+  }
+  /** Wait (≤ `timeoutMs`) for the page to show the screen: a visible match of `ready` (the first visible one counts), or — once an untagged root was
+   *  taken for the screen — at least half of the own tags and no other screen's tagged root. Throws what the wait threw
+   *  (a Playwright TimeoutError on a run out wait); a no-op without a selector. */
+  async wait(page, timeoutMs) {
+    if (this.ready === void 0) return;
+    if (this.#own !== null && this.#waitedMs !== null) return waitForScreenTags(page, this.#own, timeoutMs);
+    await page.locator(visibleOnly(this.ready)).first().waitFor({ state: "visible", timeout: timeoutMs });
+  }
+  /** Judge a load / fonts / wait() failure `e` on a document that stayed (settleMiss's "unreachable"); `readyWait` — it was
+   *  wait() that threw, given `waitedMs`. Only a wait() that ran out (a timeout) on the default gate looks at the page
+   *  (≤ SCREEN_LOOK_CAP_MS); it is the screen when the look meets the untagged-root rule. A page or browser gone during
+   *  the look rethrows its error. Without a selector there is no gate to judge: the miss is the error's own line. */
+  async judge(page, e, readyWait, waitedMs) {
+    const own = this.#own;
+    const asked = readyWait && own !== null && pwErrorKind(e) === "timeout";
+    const look = asked ? await screenTagsNow(page, own, SCREEN_LOOK_CAP_MS) : null;
+    if (own !== null && look !== null && screenTagsMet(look, own.ids.length)) {
+      this.#waitedMs ??= waitedMs;
+      return { kind: "screen" };
+    }
+    if (this.ready === void 0) return { kind: "miss", message: firstLine(e), miss: { byDefault: false, foreign: null, look: null } };
+    const why = look === null || own === null ? asked ? ` (the page did not answer within ${SCREEN_LOOK_CAP_MS / 1e3}s when its tags were counted)` : "" : screenTagsWhy(look, own.ids.length);
+    return {
+      kind: "miss",
+      message: `--ready '${this.ready}' never became visible${why}: ${firstLine(e)}`,
+      miss: { byDefault: this.#byDefault, foreign: look !== null && own !== null ? refusingRoot(look, own.ids.length) : null, look }
+    };
+  }
+  /** The exit-4 hint of a miss: what the page is instead, for a miss of the default (the frame's tag); "" otherwise. */
+  hint(miss, withSteps) {
+    if (!miss.byDefault || this.ready === void 0) return "";
+    return miss.foreign !== null ? foreignRootHint(this.ready, miss.foreign, withSteps) : defaultReadyMissed(this.ready, withSteps);
+  }
+  /** The measured file's note once an untagged root was taken for the screen (`via` — how the measurement found the
+   *  root); null when none was, or the measurement found the root by its tag after all. */
+  note(via) {
+    if (this.#waitedMs === null || this.ready === void 0) return null;
+    return untaggedRootNote(this.ready, this.#waitedMs, via);
+  }
+};
+
 // design-to-code/verify-probe.ts
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
 function isPlaywrightModule(x) {
@@ -6990,7 +7253,7 @@ var INIT_SCRIPT = `try { ${PAGE_RUNTIME} } catch (e) {}
 })();`;
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
-var POLL_MS3 = 100;
+var POLL_MS4 = 100;
 function errorKind(e, page) {
   const kind = pwErrorKind(e, page);
   return kind === "timeout" ? "other" : kind;
@@ -7005,11 +7268,11 @@ var gone = (e) => new BrowserGoneError(`the page or browser closed or crashed du
 var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
-  /** the default --ready missed on a page that shows another screen's tagged root (its exit-4 hint is foreignRootHint) */
-  foreign;
-  constructor(m, foreign = null) {
+  /** the screen gate's miss, when its --ready wait is what missed (its exit-4 hint is ScreenGate.hint) */
+  miss;
+  constructor(m, miss = null) {
     super(m);
-    this.foreign = foreign;
+    this.miss = miss;
   }
 };
 var docUrl = (u) => {
@@ -7032,56 +7295,9 @@ async function docTokenOrNull(page) {
 async function docTokenWithin(page, capMs) {
   const read2 = docTokenOrNull(page);
   read2.catch(() => void 0);
-  return Promise.race([read2, sleep6(Math.max(1, capMs), void 0, { ref: false })]);
+  return Promise.race([read2, sleep7(Math.max(1, capMs), void 0, { ref: false })]);
 }
-var visibleOnly = (sel) => `${sel} >> visible=true`;
-var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
-var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
-var SCREEN_LOOK_CAP_MS = 2e3;
-async function screenTagsNow(page, root, capMs) {
-  const look = (async () => {
-    try {
-      return await page.evaluate(screenTags, { ids: root.ids, known: root.known, alias: root.alias, frame: root.frame });
-    } catch (e) {
-      if (errorKind(e, page) === "gone") throw gone(e);
-      return { shown: 0, foreign: null };
-    }
-  })();
-  look.catch(() => void 0);
-  return Promise.race([look, sleep6(Math.max(1, capMs), null, { ref: false })]);
-}
-var WaitTimeoutError = class extends Error {
-  constructor(what, ms) {
-    super(`${what}: Timeout ${ms}ms exceeded.`);
-    this.name = "TimeoutError";
-  }
-};
-async function waitForScreenTags(page, root, timeout) {
-  const end = Date.now() + timeout;
-  for (; ; ) {
-    const look = await screenTagsNow(page, root, end - Date.now());
-    if (look !== null && screenTagsMet(look, root.ids.length)) return;
-    const left = end - Date.now();
-    if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
-    await sleep6(Math.min(POLL_MS3, left));
-  }
-}
-var refusingRoot = (s, total) => takesForScreen(s.shown, total) ? s.foreign : null;
-function screenTagsWhy(s, total) {
-  const f = refusingRoot(s, total);
-  if (f !== null) {
-    return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
-  }
-  const amb = s.ambiguous ?? 0;
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half${amb > 0 ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, which do not count \u2014 tag them with their own ids` : ""})`;
-}
-function settleMiss(s) {
-  if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
-  if (s.moved) return s.pastDocDeadline ? "kept" : "retry";
-  if (s.navigated && !s.pastDocDeadline) return "retry";
-  return "unreachable";
-}
-async function settle(page, log, ready, timeout, root) {
+async function settle(page, log, gate, timeout) {
   const cap = Math.min(QUIET_CAP_MS, timeout);
   const deadline = Date.now() + cap;
   let docDeadline = deadline;
@@ -7144,11 +7360,10 @@ async function settle(page, log, ready, timeout, root) {
         stateLost();
       }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
-      if (ready) {
+      if (gate?.ready !== void 0) {
         readyWait = true;
         readyMs = moved() ? Math.max(1, docDeadline - Date.now()) : timeout;
-        if (root?.seen === true) await waitForScreenTags(page, root, readyMs);
-        else await page.locator(visibleOnly(ready)).first().waitFor({ state: "visible", timeout: readyMs });
+        await gate.wait(page, readyMs);
       }
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
@@ -7163,24 +7378,25 @@ async function settle(page, log, ready, timeout, root) {
       if (token === null && !unanswered && now !== null) token = now;
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") {
-        await sleep6(POLL_MS3);
+        await sleep7(POLL_MS4);
         continue;
       }
       if (next === "kept") throw kept();
-      const asked = readyWait && root !== void 0 && pwErrorKind(e) === "timeout";
-      const look = asked && root !== void 0 ? await screenTagsNow(page, root, SCREEN_LOOK_CAP_MS) : null;
-      if (root === void 0 || look === null || !screenTagsMet(look, root.ids.length)) {
-        const why = look === null || root === void 0 ? asked ? ` (the page did not answer within ${SCREEN_LOOK_CAP_MS / 1e3}s when its tags were counted)` : "" : screenTagsWhy(look, root.ids.length);
-        throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e), look !== null && root !== void 0 ? refusingRoot(look, root.ids.length) : null);
+      if (gate === void 0) throw new UnreachableError(firstLine(e));
+      let judged;
+      try {
+        judged = await gate.judge(page, e, readyWait, readyMs);
+      } catch (e2) {
+        if (errorKind(e2, page) === "gone") throw gone(e2);
+        throw e2;
       }
-      if (!root.seen) root.waitedMs = readyMs;
-      root.seen = true;
+      if (judged.kind === "miss") throw new UnreachableError(judged.message, judged.miss);
       docDeadline = Date.now() + cap;
     }
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep6(POLL_MS3);
+      await sleep7(POLL_MS4);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -7233,7 +7449,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep6(POLL_MS3);
+    await sleep7(POLL_MS4);
   }
 }
 function linkHref(el) {
@@ -7374,11 +7590,11 @@ async function reachPage(page, log, o) {
     throw new UnreachableError(`could not load ${o.url}: ${loadFailureWhy(errMsg(e))}`);
   }
   const steps = o.steps || [];
-  if (!steps.length) return settle(page, log, o.ready, o.timeout, o.untaggedRoot);
+  if (!steps.length) return settle(page, log, o.gate, o.timeout);
   try {
     await settle(page, log, void 0, o.timeout);
     await runSteps(page, log, o);
-    const last = await settle(page, log, o.ready, o.timeout, o.untaggedRoot);
+    const last = await settle(page, log, o.gate, o.timeout);
     if (log.lost !== null) throw new StepStateLostError(log.lost);
     return { note: last.note, token: last.token };
   } finally {
@@ -7635,7 +7851,7 @@ function hoverTarget(c, byTag) {
 }
 var BODY_WAIT_MS = 2e3;
 async function bodiesRead(reads, served) {
-  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep6(BODY_WAIT_MS, void 0, { ref: false })]);
+  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep7(BODY_WAIT_MS, void 0, { ref: false })]);
   const missed = /* @__PURE__ */ new Map();
   for (const r of reads) {
     if (served.has(r.path) || r.state !== "pending" && r.state !== "failed") continue;
@@ -7811,57 +8027,10 @@ exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the p
 var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
-var READY_NONE = "none";
-function readyOf(flag, frameId, taggingOff = false) {
-  if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
-  if (flag !== void 0) return { ready: flag, note: `ready  ${flag}` };
-  if (taggingOff) return { note: "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <root selector>)" };
-  if (frameId === void 0 || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <selector>)" };
-  const ready = attrSelector(frameId);
-  return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
-}
 function planTaggingOff(doc) {
   if (!isJsonObject(doc) || !isJsonObject(doc.tagging)) return false;
   const { off, reason } = doc.tagging;
   return off === true && typeof reason === "string" && reason.trim() !== "";
-}
-function ownTagsOf(exp, frameId) {
-  const hidden = new Set(exp.hidden && exp.hidden.ids || []);
-  const ids = /* @__PURE__ */ new Set(), others = /* @__PURE__ */ new Set(), known = /* @__PURE__ */ new Set([frameId, ...hidden]);
-  const otherRoot = (f) => f !== void 0 && f !== frameId;
-  for (const s of exp.nodes || []) {
-    known.add(s.nodeId);
-    if (otherRoot(s.frameId)) others.add(s.nodeId);
-    else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
-  }
-  for (const i of exp.instances || []) {
-    known.add(i.nodeId);
-    if (otherRoot(i.frameId)) others.add(i.nodeId);
-    else if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
-  }
-  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
-  ids.delete(frameId);
-  const alias = /* @__PURE__ */ new Map();
-  const named = new Set(known);
-  for (const s of exp.nodes || []) {
-    for (const a of s.aliases || []) {
-      known.add(a);
-      if (ids.has(s.nodeId) && !named.has(a) && !alias.has(a)) alias.set(a, s.nodeId);
-    }
-  }
-  const w = exp.frame?.w, h = exp.frame?.h;
-  return ids.size ? { ids: [...ids], known: [...known], alias: Object.fromEntries(alias), frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
-}
-var untaggedRootFound = (via) => via === "size-and-fill" ? "its root found as the outermost element with the frame's size (\xB12 px) and a fill" : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)" : "its root not found";
-function untaggedRootNote(ready, waitedMs, via) {
-  if (via === "tag") return null;
-  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} \u2014 tag the root ${ready.slice(1, -1)}, or pass --ready <root selector>`;
-}
-function defaultReadyMissed(ready, withSteps) {
-  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page the probe reached is not the screen \u2014 a redirect (a login page, another origin) or another section (${withSteps ? "the --steps ended somewhere else: check the plan's navigate list" : "a screen that is a section of the app is reached with --steps <plan.json>"}) \u2014 or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing) \u2014 or the root is untagged and most of its tags are not visible at load: tag the root ${ready.slice(1, -1)} or pass --ready <root selector>`;
-}
-function foreignRootHint(ready, f, withSteps) {
-  return `${ready} is the default --ready (the frame's tag), and the page shows another screen's tagged root (data-dt-node="${f.id}" ${f.by === "size" ? "has this frame's size" : "encloses most of this screen's visible tags"}): the probe reached another screen \u2014 check ${withSteps ? "the --steps plan's navigate list" : "the --url, or reach the screen with --steps <plan.json>"}; if that element is a wrapper of this screen tagged with another id, tag this screen's root ${ready.slice(1, -1)} or pass --ready <root selector>`;
 }
 var STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 async function main(argv) {
@@ -8018,10 +8187,8 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
-  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId, taggingOff);
   const frameNodeId = expectation?.frame?.nodeId;
-  const ownTags = f.ready === void 0 && readyPick?.ready !== void 0 && expectation && frameNodeId !== void 0 ? ownTagsOf(expectation, frameNodeId) : null;
-  const untaggedRoot = ownTags !== null ? { ...ownTags, seen: false } : void 0;
+  const gate = f.check ? null : new ScreenGate({ flag: f.ready, frameId: frameNodeId, expectation: expectation ?? null, taggingOff });
   let outBase = "", statusBase = "";
   if (!f.check && f.expected) {
     const set = openVerifySet(f.expected, frameNodeId, f.out);
@@ -8054,7 +8221,7 @@ ${USAGE}`);
   if (measuring?.kind === "over") return measuring.exit;
   if (participant?.own) console.error(`run    ${participant.runId} \u2014 this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
   if (participant?.measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
-  if (readyPick) console.error(readyPick.note);
+  if (gate) console.error(gate.startNote);
   const held = {};
   let timer;
   const runDeadline = Date.now() + maxTime;
@@ -8081,24 +8248,13 @@ ${USAGE}`);
       return 0;
     }
     let run2;
-    const ready = readyPick?.ready;
-    const probeOpts = {
-      expectation,
-      url: f.url,
-      ...ready !== void 0 ? { ready } : {},
-      viewport,
-      position: !!f.position,
-      timeout,
-      ...steps.length ? { steps } : {},
-      ...untaggedRoot !== void 0 ? { untaggedRoot } : {}
-    };
+    const probeOpts = { expectation, url: f.url, ...gate !== null ? { gate } : {}, viewport, position: !!f.position, timeout, ...steps.length ? { steps } : {} };
     try {
       run2 = await runProbe(browser, probeOpts);
     } catch (e) {
       await browser.close().catch(() => void 0);
       if (e instanceof UnreachableError) {
-        const byDefault = f.ready === void 0 && ready !== void 0 && e.message.startsWith(`--ready '${ready}'`);
-        const hint = !byDefault ? "" : e.foreign !== null ? foreignRootHint(ready, e.foreign, steps.length > 0) : defaultReadyMissed(ready, steps.length > 0);
+        const hint = e.miss !== null && gate !== null ? gate.hint(e.miss, steps.length > 0) : "";
         console.error(`verify-probe: ${e.message} \u2014 nothing written.` + (hint ? `
   ${hint}` : ""));
         return 4;
@@ -8113,10 +8269,8 @@ ${USAGE}`);
       }
       throw e;
     }
-    if (untaggedRoot?.seen === true && ready !== void 0) {
-      const note = untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run2.kind === "ok" ? run2.result.frames[0]?.via : void 0);
-      if (note !== null) notes.push(note);
-    }
+    const gateNote = gate?.note(run2.kind === "ok" ? run2.result.frames[0]?.via : void 0) ?? null;
+    if (gateNote !== null) notes.push(gateNote);
     const session = openSession(browser, {
       viewport,
       timeout,
@@ -8318,15 +8472,12 @@ export {
   INIT_SCRIPT,
   LAUNCH_ARGS,
   PLAYWRIGHT_PACKAGES,
-  READY_NONE,
   behaviourLine,
   browserPathError,
   buildFrom,
-  defaultReadyMissed,
   docTokenWithin,
   driveOutcome,
   errorKind,
-  foreignRootHint,
   foreignTags,
   installHint,
   installedInProject,
@@ -8335,23 +8486,12 @@ export {
   linkHref,
   loadFailureWhy,
   main,
-  ownTagsOf,
   packageDirInProject,
   planTaggingOff,
   projectRequire,
-  readyOf,
-  refusingRoot,
   resolveAxe,
   resolvePlaywright,
-  runProbe,
-  screenTagsMet,
-  screenTagsNow,
-  screenTagsWhy,
-  settleMiss,
-  takesForScreen,
-  untaggedRootNote,
-  visibleOnly,
-  waitForScreenTags
+  runProbe
 };
 /*! visual-diff.ts — colorDelta, antialiased and hasManySiblings are a port of pixelmatch v6.0.0 (index.js,
  * https://github.com/mapbox/pixelmatch/tree/v6.0.0), under its licence:

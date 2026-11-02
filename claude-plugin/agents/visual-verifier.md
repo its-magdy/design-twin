@@ -218,8 +218,8 @@ Report anything the measurement cannot express as a `note` (name the region and 
 - Leave out differences the plan marks as deliberate approximations or decided defaults.
 - **Every defect you put in `notes` quotes the line it contradicts**: the expectation row
   (`nodeId`, field, value) AND the export node's own value (`"text": …`, `"radius": …`). Open the
-  export and check before you write it. A reported "lodge specific vs Lodge Specific" copy bug was
-  fabricated — the export itself says `"text": "lodge specific"`; the build was right. If you cannot
+  export and check before you write it. A reported "order summary vs Order Summary" copy bug was
+  fabricated — the export itself says `"text": "order summary"`; the build was right. If you cannot
   quote a contradicting line, it is not a defect. Quote the report's own delta text — it names the axis or
   dimension — and never restate a bound from memory.
 

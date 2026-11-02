@@ -3452,17 +3452,19 @@ void (async () => {
   // probePlugin against the REAL handshake: a plugin-shaped client (Origin "null") with each token.
   const pluginLike = (port: number, tok: string) => setTimeout(() => { const c = new WsClient(`ws://127.0.0.1:${port}/?token=${tok}`, { origin: "null" }); c.on("error", () => {}); }, 150);
   pluginLike(nextPort, "not-the-token");
-  const refusedProbe = await doctor.probePlugin(nextPort++, 3000);
+  // The own view, or a failure naming the error it carried (a probe that could not open its bridge).
+  const ownView = (v: Awaited<ReturnType<typeof doctor.probePlugin>>) => { if ("error" in v) throw new Error("probePlugin: " + v.error); return v; };
+  const refusedProbe = ownView(await doctor.probePlugin(settingsAt(nextPort++), 3000));
   ok("[doctor] probePlugin: a wrong-token plugin is reported by fingerprint, not as 'nothing running'",!!(
-    refusedProbe.clients?.length === 0 && refusedProbe.badToken && refusedProbe.badToken.fingerprint === store.fingerprint("not-the-token")
+    refusedProbe.clients.length === 0 && refusedProbe.badToken && refusedProbe.badToken.fingerprint === store.fingerprint("not-the-token")
     && refusedProbe.expected === store.fingerprint(TOKEN)));
   pluginLike(nextPort, TOKEN);
-  const goodProbe = await doctor.probePlugin(nextPort++, 3000);
-  ok("[doctor] probePlugin: a right-token plugin is reported connected", goodProbe.clients?.length === 1 && !goodProbe.badToken);
+  const goodProbe = ownView(await doctor.probePlugin(settingsAt(nextPort++), 3000));
+  ok("[doctor] probePlugin: a right-token plugin is reported connected", goodProbe.clients.length === 1 && !goodProbe.badToken);
   const t0 = Date.now();
-  const nobody = await doctor.probePlugin(nextPort, 400);
+  const nobody = ownView(await doctor.probePlugin(settingsAt(nextPort), 400));
   ok("[doctor] probePlugin: nobody there → empty after the wait, and a stale refusal from an earlier probe is not blamed",
-    nobody.clients?.length === 0 && !nobody.badToken && Date.now() - t0 >= 400);
+    nobody.clients.length === 0 && !nobody.badToken && Date.now() - t0 >= 400);
   ok("[doctor] probePlugin always closes its bridge (the port is free again)", (await doctor.probePort(nextPort++)).free === true);
 
   console.log("\ndoctor — end to end (subprocess):");
@@ -3637,15 +3639,7 @@ void (async () => {
     daemonRowStalenessNote({ pluginVersion: null }) === null && daemonRowStalenessNote({ pluginVersion: "1.2.3" }) === null);
   ok("[version] daemonRowStalenessNote fires for a row with the key entirely ABSENT, naming a daemon restart",
     (() => { const n = daemonRowStalenessNote({ file: "A" }); return typeof n === "string" && /dtwin serve/.test(n) && /restart/.test(n); })());
-  ok("[doctor-version] a daemon-sourced client row missing pluginVersion entirely still demotes doctor's daemon-plugin check to warn",
-    (() => {
-      // Mirrors the daemon branch of doctor.run() directly (that branch requires server-core lazily
-      // the same way connectedDetail does), using a client shaped exactly like an old daemon's own
-      // describe() output — no pluginVersion/pluginStale keys at all.
-      const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TideStack (Copy)", identified: true }];
-      const stale = oldDaemonClients.some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
-      return stale === true;
-    })());
+  // doctor.run()'s daemon branch with such a row (a warn naming the restart): test/doctor-run.test.ts, over a fake observer.
 
   // ---------------------------------------------------------------- cancel frames
   // Whenever the bridge gives up on a request it already sent — the stall check, the per-command
