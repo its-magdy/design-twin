@@ -9,6 +9,8 @@ list of merged PRs.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-02
+
 ### Changed
 
 - `dtwin mcp --help` now lists all 15 MCP tools by name, grouped as live reads, the one write and the two that read
@@ -143,7 +145,8 @@ The first release on npm: `@design-twin/dtwin`, published from CI with provenanc
 - Verify: compares a built screen with the design, including per-side borders and inset rings (#114), form-control
   values (#85), focus and hover states (#115), and the cause of size differences (#117).
 
-[Unreleased]: https://github.com/its-magdy/design-twin/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/its-magdy/design-twin/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/its-magdy/design-twin/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/its-magdy/design-twin/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/its-magdy/design-twin/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/its-magdy/design-twin/compare/v0.1.2...v0.1.3
