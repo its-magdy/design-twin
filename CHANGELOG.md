@@ -25,6 +25,8 @@ list of merged PRs.
   "the daemon (pid N)"). It used to put a `via` field inside `connection`.
 - The dry run of `figma_write` no longer waits for a named `client` that is not connected yet. It reports "Allow
   edits" as unknown instead.
+- The web probe's `--ready` screen gate (what each page load waits for, and how a page without the frame's tag is
+  judged) is now one module with its own tests. The probe's output is unchanged.
 
 ### Fixed
 
