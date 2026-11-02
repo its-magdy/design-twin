@@ -9,6 +9,13 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Fixed
+
+- A component's `visuals.radius` in `design-system/components.local.json` is now written the way a page pull writes
+  a node's radius. A fully rounded (pill) component used to show Figma's raw `1000000000`, and a resized one could
+  show float dust like `12.000000476837158`. It is now half the shorter side with `radiusFull: true`, or the radius
+  rounded to 2 decimal places.
+
 ## [0.1.5] - 2026-11-01
 
 ### Added
