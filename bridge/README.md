@@ -950,8 +950,8 @@ the current page):
 
 | `op` | Required | Optional |
 |---|---|---|
-| `createFrame` | — | `parentId`, `name`, `width` + `height` (both, or no resize), `layoutMode` (`HORIZONTAL` \| `VERTICAL`), `itemSpacing`, `padding` (`[top, right, bottom, left]`), `fill` (hex, or `""` for none) |
-| `createText` | `text` | `parentId`, `fontSize`, `fill` (hex, or `""` for none) |
+| `createFrame` | — | `parentId`, `name`, `width` + `height` (both, or no resize), `layoutMode` (`HORIZONTAL` \| `VERTICAL`), `itemSpacing`, `padding` (`[top, right, bottom, left]`), `fill` (hex; `""` is the same as leaving it out: Figma's default fill stays) |
+| `createText` | `text` | `parentId`, `fontSize`, `fill` (hex; `""` is the same as leaving it out: Figma's default fill stays) |
 | `setFill` | `nodeId`, `color` (hex) | — |
 | `setText` | `nodeId`, `text` | — |
 
