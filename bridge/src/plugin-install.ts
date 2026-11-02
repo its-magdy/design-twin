@@ -33,6 +33,7 @@ import { BRIDGE_VERSION } from "./staleness.ts";
 import { exitCli } from "./stdio.ts";
 import { configDir } from "./token-store.ts";
 import { installOf, PLUGIN_FILES, type PluginSource } from "./install-layout.ts";
+import { PLUGIN_MENU } from "./hints.ts";
 
 export { PLUGIN_FILES };
 export type { PluginSource };
@@ -143,7 +144,7 @@ export function uninstallPlugin(home: string = pluginHome()): string[] {
 }
 
 // Reopening runs replaced files only while Figma's hot reload is on; with it off, Figma kept the old code.
-const REOPEN = "reopen the plugin in Figma (Plugins → Development → Design Twin) with Plugins → Development → Hot reload plugin on, to run the new code";
+const REOPEN = `reopen the plugin in Figma (${PLUGIN_MENU}) with Plugins → Development → Hot reload plugin on, to run the new code`;
 /** The one-time import step, naming `manifest` (init prints it too). */
 export const importStep = (manifest: string): string => "Plugins → Development → Import plugin from manifest… → " + manifest;
 /** The manifest's folder is hidden in a file picker (a dot folder, or AppData on Windows): how to get there anyway. */

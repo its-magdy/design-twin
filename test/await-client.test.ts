@@ -4,6 +4,7 @@
 // Run with:  bun test/await-client.test.ts
 import { getEventListeners } from "node:events";
 import { ok, report } from "./assert.ts";
+import { runPlugin } from "../bridge/src/hints.ts";
 
 // server-core resolves the bridge token when it loads; a fixed one keeps this suite off the user's token file.
 process.env.FIGMA_BRIDGE_TOKEN = "await-client-test-token";
@@ -78,8 +79,8 @@ console.log("\nawaitClient — nothing connected:");
   ok("[none] a named target with nothing connected: the connect window, not the name cap on top of it", b.ms >= 140 && b.ms < 400 && clean(b));
   let caught = "";
   try { r.resolveClient(null); } catch (e) { caught = e instanceof Error ? e.message : String(e); }
-  ok("[none] the request's resolveClient then says what to do (text unchanged)",
-    caught === "Figma plugin not connected. Open the file in Figma and run the plugin.");
+  ok("[none] the request's resolveClient then says what to do (hints.ts runPlugin)",
+    caught === `Figma plugin not connected — ${runPlugin}.`);
   const z = await timed(r, () => r.awaitClient(null, 0));
   const n = await timed(r, () => r.awaitClient("x", Number.NaN));
   ok("[none] a zero or non-numeric window does not wait", z.ms < 20 && n.ms < 20 && clean(z) && clean(n));
