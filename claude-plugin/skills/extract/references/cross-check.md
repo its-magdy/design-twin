@@ -19,8 +19,8 @@ real path.
 Pulling a design system and then pulling a screen does **not** mean the two are related. Both may be copies of one
 original — duplicating a Figma file re-keys every collection and every component while leaving names and values
 identical — or the screen may consume a library nobody exported. That failure is invisible in either file alone and
-produces a build that looks plausible and is themed from the wrong source. On the live run that produced this
-check, 0 of 65 instance keys on the screen matched any of the 318 components in the catalog beside it, and 12 of
+produces a build that looks plausible and is themed from the wrong source. In one such
+case, 0 of 65 instance keys on the screen matched any of the 318 components in the catalog beside it, and 12 of
 13 variable collections were foreign; nothing said so, and the build generated 24 "new" components with invented
 names that reproduce the visuals and are not a port of the catalog.
 

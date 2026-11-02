@@ -29,8 +29,8 @@ All three render perfectly in the exported mode:
   mode), say so once on the sharing row — `"acknowledged": "<why>"` — and the hook stops repeating it.
 - **Renaming by role or usage.** A colour named `Outline Variant` that you happen to use on text is still
   `outline-variant`, not `text-outline-variant`. Re-labelling it hides which token it is and makes the next
-  person's grep fail. (One real build named `Scheme/On Surface` "on-primary" and `Scheme/On Primary` "on-surface"
-  — the two ended up exactly inverted, and it looked right.)
+  person's grep fail. (Naming `Scheme/On Surface` "on-primary" and `Scheme/On Primary` "on-surface" inverts the two
+  exactly, and it still looks right.)
 - **Inventing a name for a value that has one.** If the export binds it, the name exists; go and read it rather
   than describing the colour you see.
 

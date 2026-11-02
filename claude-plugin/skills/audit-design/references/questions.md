@@ -11,8 +11,8 @@ meeting.
   should come from the design system or platform convention, never taste.
 - **A default must never be an approximation of a value that is already in the design.** "Bind to the
   nearest 4px step", "use the closest existing token", "round 14 up to 16" all ask the build to
-  silently change what the designer drew — and build-screen forbids exactly that (its rule 5: an
-  approximate match is hardcoding by proxy). For an off-grid or unbound value the default is always
+  silently change what the designer drew — and build-screen forbids exactly that (item 5 of its "Where the answer
+  comes from" list: an approximate match is hardcoding by proxy). For an off-grid or unbound value the default is always
   *use the exact value and flag it*; the question is whether the DESIGN should change, which only the
   designer can answer. Same for a colour with no token: the default is the literal plus a recorded
   decision, never the nearest palette entry.

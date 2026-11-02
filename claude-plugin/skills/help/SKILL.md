@@ -7,7 +7,7 @@ argument-hint: "[question or symptom]"
 # Design Twin — what it is, how to connect, what to do when it breaks
 
 Design Twin feeds a Figma design to Claude Code **on a free Figma plan, with no network egress of its own** (the design goes from Figma to your coding agent and nowhere else).
-A self-authored Figma plugin (`allowedDomains`: loopback only) extracts the design as stack-neutral
+A self-authored Figma plugin (its manifest's `allowedDomains`, the network addresses Figma lets it reach: loopback only) extracts the design as stack-neutral
 JSON + real assets into **`design/export/`**; `/designtwin:audit-design` reviews it for
 implementation gaps, and `/designtwin:build-screen` turns it into code for any stack.
 
@@ -28,9 +28,9 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 
 ## The three ways to reach a Figma file
 
-| | Manual export | `dtwin` CLI | `figma-mcp` server |
+| | Manual export | `dtwin` CLI | `figma-mcp` server (`dtwin mcp`) |
 |---|---|---|---|
-| What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
+| What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `dtwin serve` daemon, also spelled `--serve`) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
 | Setup | **None** beyond importing the plugin — no bridge, no token | Once: `bun add -g @design-twin/dtwin` or `brew install its-magdy/tap/dtwin` (Bun ≥ 1.4.2 — the CLI, the MCP server and the plugin's scripts all run on it); the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration (`dtwin init --mcp`) — same token, nothing extra |
 | Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |

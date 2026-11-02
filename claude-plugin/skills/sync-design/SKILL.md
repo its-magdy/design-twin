@@ -119,16 +119,17 @@ writes the real path here, not there).
    re-pull a narrower scope rather than acting on those removals).
 
    **Also re-pull the design system when tokens, styles or components may have changed** —
-   `dtwin pull --design-system` rewrites the design-system files snapshotted in step 2. **The design system
-   almost always lives in a DIFFERENT Figma file than the screen** (a library file the screen's file
-   only consumes), so this is not the same re-pull with a flag added: it needs that OTHER file open
-   in Figma, connected, and named explicitly —
+   `dtwin pull --design-system`, with the SCREEN's file open, rewrites the `design-system/` files snapshotted in
+   step 2. **The design system often lives in a DIFFERENT Figma file than the screen** (a library the screen's
+   file only consumes). Its catalog comes from `--as-library`, which writes `libraries/<slug>-<fileKey8>/` and
+   never touches `design-system/` — never `--design-system` from that file, which would replace the screen
+   file's `design-system/` with the library's. It needs that OTHER file open in Figma, connected, and named
+   explicitly —
    ```bash
-   dtwin list clients                                  # confirm the design-system file is connected
-   dtwin pull --design-system --client "<the design-system file's name>"
+   dtwin list clients                                  # confirm the library file is connected
+   dtwin pull --as-library "<library name>" --client "<the library file's name>"
    ```
-   (`--as-library "<name>"` instead of `--design-system` when that file is a Figma library rather than
-   a plain design-system file the export already recognises — the extract skill says which.) Skip this
+   (the extract skill says how to tell a consumed library from the screen file's own tokens). Skip this
    re-pull only when you have already confirmed nothing token/style/component-shaped changed.
 
 4. **Diff, and show it before editing.**

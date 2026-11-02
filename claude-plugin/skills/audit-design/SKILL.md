@@ -20,7 +20,7 @@ You are reviewing, not implementing. Write no app code here — the output is a 
 
 
 **Disk-only unless told otherwise.** This skill runs in its own context and cannot see the caller's
-constraints — on a field run it called Figma while the caller had said not to (the plugin serves one
+constraints — it could call Figma while the caller has said not to (the plugin serves one
 request at a time, so a stray call can collide with the caller's own). So everything here works from
 `design/export/` on disk. Only when the `ARGUMENTS` line ends with the flag `--live` (a screen name
 that merely contains the word, like "Live Events", does not count) may you run `dtwin` commands or
@@ -121,8 +121,8 @@ report the pair once, not once per screen.
    with the same fact and offer to write `design/target.json` so the next run and `build-screen` agree.
 
    **If you are guessing, do not pass `--platform`.** Passing it is how you tell the script you know;
-   the script then records `platformAssumed: false`, and a live run ended up with a report whose prose
-   said "ASSUMED — not detected" while its own JSON said the opposite. `build-screen` reads the JSON
+   the script then records `platformAssumed: false`, and you end up with a report whose prose
+   says "ASSUMED — not detected" while its own JSON says the opposite. `build-screen` reads the JSON
    to decide whether to ask the user again, so the boolean is the field that acts. Let it be true when
    it is true, and make your prose agree with it rather than the other way round.
 
@@ -161,8 +161,8 @@ report the pair once, not once per screen.
    the audit (exit 2, the file named), and its cross-file blockers gate the build. A screen whose own export has no
    `design-system/` gets none — never another export's. With no design system at all, every check reasons inside the screen's own JSON, and the token-binding table means "this node
    binds SOME variable" — not "it binds a variable your design system defines". Those read identically
-   and are wildly different facts: on the live run the audit reported 96% of colours bound on a screen
-   whose every collection key belonged to a different library than the design system sitting beside
+   and are wildly different facts: an audit can report 96% of colours bound on a screen
+   whose every collection key belongs to a different library than the design system sitting beside
    it. With the flag, the report leads with **"Does this screen come from that design system?"** and
    the cross-file findings (`foreign-token-library`, `catalog-covers-nothing`, `catalog-rekeyed`, `token-name-collision`,
    `text-style-near-miss`, `font-not-in-design-system`, `sentinel-token-value`, `single-mode-export`,
@@ -181,8 +181,8 @@ report the pair once, not once per screen.
    catalog of a LIBRARY file to `design/export/libraries/<dir>/` (listed in
    `design/export/libraries/index.json` with each library's `collectionKeys`), beside the design file's
    own `design/export/design-system/`. When the screen's tokens and components come from that library,
-   `design-system/` is the wrong yardstick — the field run saw 30 "missing" token names against it and
-   6 plus a real collision against the library. `--design-system` takes either directory. The audit
+   `design-system/` is the wrong yardstick — against it the library's token names read as "missing",
+   which hides the few that really are missing and any real collision. `--design-system` takes either directory. The audit
    finds `libraries/` on its own: it reads each library's `components.json` for the component-state
    check, and when it was not run against a library it says so under **Not checked**, with how many of
    the screen's variable collections that library owns by key and the exact `--design-system
@@ -212,8 +212,8 @@ report the pair once, not once per screen.
    cross-file half did not run.
 
    **A question's default keeps the exact value; it never tells the build to approximate one.** "Bind to the nearest 4px
-   step" and "use the closest existing token" both contradict `build-screen`'s rule 5, which treats an
-   approximate match as silent hardcoding-by-proxy — the build uses exact values. An off-grid spacing
+   step" and "use the closest existing token" both contradict item 5 of `build-screen`'s "Where the answer comes
+   from" list, which treats an approximate match as silent hardcoding-by-proxy — the build uses exact values. An off-grid spacing
    or an unbound colour is a question about whether the *design* should change; the default is always
    "use the exact value and flag it". See `references/questions.md`. The script ships with the plugin
    (`${CLAUDE_PLUGIN_ROOT}/scripts/audit.js`; `<scripts>` in the `references/` and `profiles/` files this skill loads (its own, build-screen's and extract's `cross-check.md`)
@@ -235,8 +235,8 @@ report the pair once, not once per screen.
      SECTION or in another frame has no index row of its own, so search `design/export/pages` for the
      id first — it may already be inside an exported file.
 
-   On the field run the populated table was right there, named for what it holds rather than for the
-   screen beside it, and the audit's single blocking question was answerable without the designer.
+   The populated state is often right there, named for what it holds rather than for the
+   screen beside it, and then the audit's blocking question is answerable without the designer.
    **Live only** (the `--live` flag): `dtwin list children <the parent section>` also lists frames
    that were never exported. Without `--live`, list the unexported candidates as a question instead.
 
