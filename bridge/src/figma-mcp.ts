@@ -63,6 +63,8 @@ import { readSettings } from "./settings.ts";
 import * as daemon from "./daemon.ts";
 import { exitFlushed, installQueuedConsole } from "./stdio.ts";
 import { clientPresence, processIO } from "./client-presence.ts";
+import { presence as pluginPresence } from "./presence.ts";
+import { pickClient, runPlugin, sentence, whoHolds } from "./hints.ts";
 // The holder, made on first use from the settings this process was started with (startServer reads them first and
 // exits on a bad port; a suite that loads this module in process has set its environment before the first call).
 let holder: Holder | null = null;
@@ -89,15 +91,11 @@ function session(): Holder {
 const route = createRoute(() => session().upstream(), { connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS });
 /** A request's reply alone. */
 const ask = async <C extends Cmd>(cmd: C, args: Commands[C]["args"], o: RouteRequest): Promise<Commands[C]["reply"]> => (await route.request(cmd, args, o)).reply;
-// The socket half of whoami for `connId` — the connection a request was answered by, not the first live one.
-// Through a daemon `via` names the shared bridge; only a daemon too old to send its connection gets the 3-field
-// stub, its missing fields reported as undefined, never guessed.
-async function connectionInfo(connId: string | null): Promise<ConnectionInfo | (ConnectionInfo & { via: string }) | { via: string; port: number | undefined; pluginConnected: boolean | undefined } | null> {
-  const { connection, owner } = await route.connectionInfo(connId);
-  if (owner.kind === "own") return connection;
-  const via = "shared bridge (pid " + (owner.pid ?? "?") + ")";
-  if (connection) return { via, ...connection };
-  return { via, port: owner.port ?? undefined, pluginConnected: owner.pluginConnected ?? undefined };
+// The socket half of whoami for `connId` — the connection a request was answered by, not the first live one — and
+// who holds it, in the CLI's words (hints.ts whoHolds). Null from a daemon too old to relay its connection.
+async function connectionInfo(connId: string | null): Promise<{ connection: ConnectionInfo | null; connectionFrom: string }> {
+  const rc = await route.connectionInfo(connId);
+  return { connection: rc.connection, connectionFrom: whoHolds(rc) };
 }
 
 // ---- result helpers ----
@@ -336,16 +334,17 @@ server.registerTool(
     const ledger = { lastScreenExport: verdict.lastScreen, lastWrite };
     if (!(a && a.client)) {
       const clients = await route.listClients();
-      if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot, ...ledger });
+      const p = pluginPresence(clients);
+      if (p.kind === "none") return textResult({ connected: false, hint: sentence(runPlugin), snapshot, ...ledger });
       // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
       // failing. "Which files can I talk to?" is exactly what this tool is for.
-      if (clients.length > 1) {
+      if (p.kind === "ambiguous") {
         return textResult({
           connected: true,
           clients,
           snapshot,
           ...ledger,
-          note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant.",
+          note: `Several Figma files are connected: on every tool call, ${pickClient}, or it will be refused rather than guess which file you meant.`,
         });
       }
     }
@@ -386,7 +385,7 @@ server.registerTool(
       // The EMPTY case has to explain itself: nothing connected is the normal state before the plugin
       // is opened, not a broken bridge.
       ...(clients.length ? {} : {
-        note: "Nothing connected. Open a file in Figma and run \"Design Twin\" (Plugins → Development) — it auto-connects and announces itself. You can open it in several files at once; each becomes a separate row here.",
+        note: `Nothing connected — ${runPlugin}: it connects and announces itself. You can run it in several files at once; each becomes a separate row here.`,
       }),
       ...(clients.some((c) => !c.identified) ? {
         identifiedNote: "A row with identified:false is connected but has not announced itself yet (or is an older plugin build that does not) — address it by connId.",
@@ -414,7 +413,7 @@ server.registerTool(
   // `connection` describes the socket that ANSWERED, not whichever file connected first.
   guarded(async (a, extra) => {
     const sent = await route.request("whoami", {}, { target: a && a.client, signal: callSignal(extra) });
-    return textResult({ plugin: sent.reply, connection: await connectionInfo(sent.client ? sent.client.connId : null) });
+    return textResult({ plugin: sent.reply, ...(await connectionInfo(sent.client ? sent.client.connId : null)) });
   })
 );
 
@@ -705,11 +704,12 @@ function previewWrites(ops: WriteOp[], editsAllowed: boolean | null) {
 }
 
 // The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
-// with none): nothing connected, several connected with no `client` named, or any failure, is `null` (unknown).
+// with none): no connected file that `client` names (or none at all), several it could mean, or any failure, is
+// `null` (unknown) — so a named file not connected yet is not waited for.
 async function readEditsAllowed(a: { client?: string | undefined } | undefined): Promise<boolean | null> {
   try {
-    const n = (await route.listClients()).length;
-    if (n === 0 || (!(a && a.client) && n > 1)) return null;
+    const p = pluginPresence(await route.listClients(), a && a.client);
+    if (p.kind !== "one") return null;
     const who = await ask("whoami", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client });
     return typeof who.editsAllowed === "boolean" ? who.editsAllowed : null;
   } catch {

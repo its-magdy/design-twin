@@ -14,23 +14,21 @@
 //     wrong-token probe spams its log). A held port is identified with a plain HTTP GET instead — a
 //     bridge answers 426 Upgrade Required.
 //   - A bridge is only created once the port is known to be valid and free: createBridge exits the
-//     process on EADDRINUSE, which is a finding for doctor to report, not a way for it to die. Its
-//     settings (port, token) come from settings.ts like every other entry's. server-core is imported
-//     LAZILY (probePlugin's `await import()`) so a doctor run that never probes does not load it. The one
-//     server-core helper doctor needs outside that probe, daemonRowStalenessNote, lives in staleness.ts.
+//     process on EADDRINUSE, which is a finding for doctor to report, not a way for it to die.
+//   - The settings are read ONCE, at the entry (main), and passed in with an observer: bridge-observer.ts, the
+//     bridge holder's read-only lifetime, says who holds the bridge and whether a plugin is on it; run() only
+//     words what it says (a suite passes a fake observer). server-core is loaded only by the observer's own
+//     probe bridge; the one server-core helper doctor needs, daemonRowStalenessNote, lives in staleness.ts.
 //
 //   dtwin doctor            # human report; exit 1 only if a check is ✗
 //   dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s)
 //   dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next, skipped }] }
 
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
-import http from "node:http";
 import path from "node:path";
 import * as tokenStore from "./token-store.ts";
 import type { TokenStatus } from "./token-store.ts";
-import * as daemon from "./daemon.ts";
 import type { DaemonStatusView } from "./daemon.ts";
 import { readExportVerdict } from "./export-verdict.ts";
 import type { ExportSource, ExportVerdict } from "./export-verdict.ts";
@@ -48,9 +46,14 @@ import { dtwinPortWarning } from "./verbs.ts";
 // The package's own package.json, imported rather than read by a path at run time (so it resolves in a
 // compiled binary too): engines.bun is the Bun version this install needs.
 import pkg from "../package.json" with { type: "json" };
-import type { ClientRow, Bridge } from "./server-core.ts";
+import type { ClientRow } from "./server-core.ts";
 import { exitCli } from "./stdio.ts";
-import { daemonAddressOf, readSettings, tokenSetting } from "./settings.ts";
+import { readSettings } from "./settings.ts";
+import type { BridgeSettings, SettingsResult } from "./settings.ts";
+import { bridgeObserver, probePlugin, probePort } from "./bridge-observer.ts";
+import type { BadToken, BridgeObserver, PortProbe } from "./bridge-observer.ts";
+import { presence } from "./presence.ts";
+import { pasteToken, pickClient, runPlugin } from "./hints.ts";
 
 /** Every check this report can carry, by id — what `--json` consumers key on. */
 export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "plugin-files" | "project" | "profile" | "layout" | "export" | "map" | "mcp";
@@ -75,19 +78,13 @@ export interface Report {
  *  daemon (possibly an older one whose rows lack newer fields). */
 type ClientRowLike = Partial<ClientRow>;
 
-/** probePort()'s answer. */
-export interface PortProbe {
-  free: boolean;
-  holder?: "websocket" | "http" | "unknown";
-  detail?: string;
-}
-
-/** probePlugin()'s answer, or `{ skipped }` when the probe could not run (see checkPlugin). */
+/** What the observer's own probe bridge saw (bridge-observer.ts OwnView), or `{ skipped }` when it could not run
+ *  (see checkPlugin). */
 export interface PluginProbe {
   skipped?: string;
   next?: string;
   clients?: ClientRowLike[];
-  badToken?: { at: number; fingerprint: string | null } | null;
+  badToken?: BadToken | null;
   expected?: string | null;
   error?: string;
 }
@@ -168,12 +165,13 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
   // restarting the daemon will. `list clients`/`whoami` name it per-row (figma-pull.ts); doctor folds
   // it into this same summary line so it's never a silent gap here either.
   const daemonStale = [...new Set((clients || []).map(daemonRowStalenessNote).filter((n): n is string => Boolean(n)))];
-  if ((clients || []).length < 2 && !stale.length && !daemonStale.length) return { detail };
   const list = clients ?? [];
+  const ambiguous = presence(list).kind === "ambiguous";
+  if (!ambiguous && !stale.length && !daemonStale.length) return { detail };
   const bits: string[] = [];
-  if (list.length >= 2) bits.push(`${detail} — ${list.length} files, so commands must say which`);
+  if (ambiguous) bits.push(`${detail} — ${list.length} files, so commands must say which`);
   const nexts: string[] = [];
-  if (list.length >= 2) nexts.push("add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)");
+  if (ambiguous) nexts.push(`on every command that reaches the plugin, ${pickClient}`);
   if (stale.length) nexts.push(...new Set(stale));
   if (daemonStale.length) nexts.push(...daemonStale);
   return {
@@ -271,19 +269,19 @@ function checkPort(port: number, probe: PortProbe, st: DaemonStatusView | null |
 function checkPlugin(r: PluginProbe, waitSec?: number): Check {
   const title = "Figma plugin";
   if (r.skipped) return { ...warn("plugin", title, `not checked — ${r.skipped}`, r.next), skipped: true };
-  if (r.clients && r.clients.length) {
+  if (presence(r.clients ?? []).kind !== "none") {
     const c = connectedDetail(r.clients, "connected");
     // A stale plugin bundle IS a problem worth a warn, unlike the multi-client case (still `ok` — being
     // connected to several files at once is healthy, it just needs `--client`). Only staleness demotes
     // the status; an ambiguous-but-current multi-client connection stays `ok`.
-    const stale = r.clients.some((cl) => cl.pluginStale);
+    const stale = (r.clients ?? []).some((cl) => cl.pluginStale);
     return { id: "plugin", title, status: stale ? "warn" as const : "ok" as const, detail: c.detail, ...(c.next ? { next: c.next } : {}) };
   }
   if (r.badToken) {
-    return fail("plugin", title, `a plugin IS running, but with a different token (fingerprint ${r.badToken.fingerprint || "none — its token field is empty"} vs expected ${r.expected})`, "run `dtwin --show-token`, paste it into the plugin's \"Bridge token\" field, Save");
+    return fail("plugin", title, `a plugin IS running, but with a different token (fingerprint ${r.badToken.fingerprint || "none — its token field is empty"} vs expected ${r.expected})`, pasteToken);
   }
   if (r.error) return fail("plugin", title, `could not open a bridge to check: ${r.error}`);
-  return fail("plugin", title, `no plugin connected within ${waitSec}s`, "in Figma DESKTOP open the file and run Plugins → Development → Design Twin (keep its window open); `--wait 30` waits longer");
+  return fail("plugin", title, `no plugin connected within ${waitSec}s`, `${runPlugin}; \`--wait 30\` waits longer`);
 }
 
 const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
@@ -418,145 +416,89 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
   return out;
 }
 
-// ---------------------------------------------------------------- probes (I/O)
-
-// Is the port free, and if not, what kind of thing holds it? Binds exactly as the bridge does
-// (127.0.0.1), then lets go at once. Never opens a WebSocket — see the header.
-function probePort(port: number): Promise<PortProbe> {
-  return new Promise<PortProbe>((resolve) => {
-    const srv = net.createServer();
-    srv.once("error", (e: NodeJS.ErrnoException) => {
-      if (e.code !== "EADDRINUSE") return resolve({ free: false, holder: "unknown", detail: errMsg(e) });
-      const req = http.get({ host: "127.0.0.1", port, path: "/", timeout: 1500 }, (res) => {
-        res.resume();
-        resolve(res.statusCode === 426 ? { free: false, holder: "websocket" } : { free: false, holder: "http", detail: `an HTTP server, answered ${res.statusCode}` });
-      });
-      req.on("timeout", () => req.destroy(new Error("no HTTP answer")));
-      req.on("error", (err) => resolve({ free: false, holder: "unknown", detail: "not an HTTP server: " + errMsg(err) }));
-    });
-    srv.listen(port, "127.0.0.1", () => srv.close(() => resolve({ free: true })));
-  });
-}
-
-// Open a real bridge on the (free) port and see whether a plugin shows up. The plugin retries every
-// second, one of three ports at a time (slower in a background window), hence the wait. The bridge's own
-// stderr chatter is muted for the duration: doctor reports the same facts itself, in one place. ALWAYS closes.
-async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
-  const realError = console.error;
-  console.error = () => {};
-  let bridge: Bridge | null = null;
-  try {
-    const read = readSettings();
-    if (!read.ok) return { clients: [], error: read.problem };
-    const core = await import("./server-core.ts");
-    const b = core.createBridge({ ...read.settings, port });
-    bridge = b;
-    const start = Date.now();
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    // Only a refusal from THIS probe counts — the last bad token is kept process-wide.
-    const refused = () => { const bad = b.authStats().lastBadToken; return bad && bad.at >= start ? bad : null; };
-    while (Date.now() - start < waitMs && !b.isConnected() && !refused()) await sleep(200);
-    if (b.isConnected()) {
-      // The file name arrives in a hello just after the socket opens, and a second open file may be a
-      // redial behind: the bridge's own unaddressed wait (server-core awaitClient) covers both — the
-      // settle, then each socket's hello or its identification grace — so the files are listed by name.
-      // Not bounded by the wait: every window is stretched to the settle, so a probe whose plugin connects
-      // pays the settle (3.5 s) after it even with one file open; a window that leaves meanwhile restarts the
-      // settle, up to the bridge's cap. A diagnostic can afford that; naming a second open file is worth it.
-      await b.awaitClient(null, Math.max(1, waitMs - (Date.now() - start)));
-      return { clients: b.listClients() };
-    }
-    return { clients: [], badToken: refused(), expected: b.authStats().expected };
-  } catch (e) {
-    return { clients: [], error: errMsg(e) };
-  } finally {
-    if (bridge) bridge.close();
-    console.error = realError;
-  }
-}
-
 // ---------------------------------------------------------------- run + report
 
 // `onCheck` sees each result the moment it is known, and `onWait` fires before the one slow step (the
 // plugin wait). Printing only at the end meant a caller with a short timeout — an agent shelling out —
 // got NOTHING, not even the instant Bun/token answers, if the plugin wait outlived it.
+// The rest are the dependencies, resolved once at the entry (main): `settings` (settings.ts readSettings, from
+// `env`), the `observer` for them (bridge-observer.ts), the token's status (token-store.ts status) and the
+// environment the warnings read. A suite passes fakes.
 export interface RunOptions {
   cwd?: string;
   waitSec?: number;
   onCheck?: (c: Check) => void;
   onWait?: (sec: number) => void;
+  settings: SettingsResult;
+  observer: (settings: BridgeSettings) => BridgeObserver;
+  token?: TokenStatus;
+  env?: NodeJS.ProcessEnv;
 }
 
-async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOptions = {}): Promise<Report> {
+// The plugin check when a daemon holds the bridge: its view IS the answer — no second bridge needed (or possible).
+// Status is `ok` unless a connected client is running a stale plugin bundle — that demotion is independent of, and
+// composes with, the shadowed-token classification, which reads the plugin check's status to decide whether the
+// token warning is real.
+function checkDaemonPlugin(st: DaemonStatusView): Check {
+  if (!st.pluginConnected) {
+    return fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", `${runPlugin}; if its window says the token is wrong, ${pasteToken}`);
+  }
+  // daemonRowStalenessNote: staleness.ts, not server-core — see connectedDetail's comment
+  const c = connectedDetail(st.clients, "connected (through the daemon)");
+  // Two independent kinds of stale, either one is a warn: a stale PLUGIN bundle (pluginStale, set by an up-to-date
+  // daemon that saw a version-less/old `hello`), or the DAEMON itself predating version reporting (its rows have no
+  // `pluginVersion` key at all — the live case this was found in: a long-running `dtwin serve` older than this bridge).
+  const stale = (st.clients ?? []).some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
+  return { id: "plugin", title: "Figma plugin", status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
+}
+
+async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait, settings, observer, token, env = process.env }: RunOptions): Promise<Report> {
   const checks: Check[] = [];
   const add = (...cs: Check[]) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
   // A package.json without `engines.bun` reads as null — checkBun then reports the range as unreadable.
   add(checkBun(Bun.version, (pkg as { engines?: { bun?: string } }).engines?.bun ?? null));
 
-  const tok = tokenStore.status();
+  const tok = token ?? tokenStore.status();
   // A shadowed token's real answer depends on the plugin check below — emit it
   // once that is known, rather than a static "make sure" note before anything has actually been
   // checked. Every other case is unaffected and keeps its original position, right after Bun.
   if (!tok.shadowed) add(checkToken(tok));
 
   // DTWIN_PORT is not read anywhere; a person who set it believes the bridge moved.
-  const portWarning = dtwinPortWarning(process.env);
+  const portWarning = dtwinPortWarning(env);
   if (portWarning) add(warn("port", "Port", portWarning));
-  const seam = ephemeralPortWarning(process.env);
+  const seam = ephemeralPortWarning(env);
   if (seam) add(seam);
-  const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
   let pluginCheck: Check;
   let viaDaemon = false;
-  if (problem) {
-    add(problem);
+  if (!settings.ok) {
+    // The one setting that fails to read is the port (settings.ts readSettings); worded as doctor words it.
+    add(resolvePort(env.FIGMA_BRIDGE_PORT).problem ?? fail("port", "Port", settings.problem));
     pluginCheck = checkPlugin({ skipped: "the port setting has to be fixed first" });
     add(pluginCheck);
   } else {
-    // The daemon is looked up where every other command looks it up: the address the settings resolve to — its
-    // socket, or on Windows the pipe named from the token as the settings have it. A refused socket location is
-    // reported, not read as "no daemon" (status() alone would only warn on stderr and return null).
-    const read = readSettings();
-    const at = read.ok ? daemonAddressOf(read.settings, port) : null;
-    const refused = at ? daemon.sockProblem(at) : null;
-    const st = refused || !at ? null : await daemon.status(at).catch(() => null);
+    const s = settings.settings;
+    const look = observer(s);
+    const seen = await look.holder();
+    const st = "via" in seen && seen.via === "daemon" ? seen.status : null;
     // The file the effective token is read from (none for FIGMA_BRIDGE_TOKEN); a token file that cannot be read
     // is still the one the setup points at.
-    const token = read.ok ? read.settings.token : tokenSetting();
-    const tokenFile = token.ok ? token.resolved.path : (process.env.FIGMA_BRIDGE_TOKEN_FILE || null);
-    add(checkDaemon(st, port, refused, sharedTokenNote(tokenFile, process.env.USERPROFILE || os.homedir())));
-    const probe = await probePort(port);
-    add(checkPort(port, probe, st, process.env.FIGMA_BRIDGE_PORT));
+    const tokenFile = s.token.ok ? s.token.resolved.path : (env.FIGMA_BRIDGE_TOKEN_FILE || null);
+    add(checkDaemon(st, s.port, seen.refused, sharedTokenNote(tokenFile, env.USERPROFILE || os.homedir())));
+    add(checkPort(s.port, seen.port, st, env.FIGMA_BRIDGE_PORT));
 
     if (st) {
       viaDaemon = true;
-      // The daemon owns the bridge, so its view IS the answer — no second bridge needed (or possible).
-      // Status is `ok` unless a connected client is running a stale plugin bundle — that
-      // demotion is independent of, and composes with, the shadowed-token classification below,
-      // which reads `pluginCheck.status` to decide whether the token warning is real.
-      pluginCheck = st.pluginConnected
-        ? ((): Check => {
-            // daemonRowStalenessNote: staleness.ts, not server-core — see connectedDetail's comment
-            const c = connectedDetail(st.clients, "connected (through the daemon)");
-            // Two independent kinds of stale, either one is a warn: a stale PLUGIN bundle (pluginStale,
-            // set by an up-to-date daemon that saw a version-less/old `hello`), or the DAEMON itself
-            // predating version reporting (its rows have no `pluginVersion` key at all — the live case
-            // this was found in: a long-running `dtwin serve` older than this bridge).
-            const stale = (st.clients ?? []).some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
-            return { id: "plugin", title: "Figma plugin", status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
-          })()
-        : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`");
-      add(pluginCheck);
-    } else if (!probe.free) {
-      pluginCheck = checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, ...(probe.holder === "websocket" ? { next: "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" } : {}) });
-      add(pluginCheck);
-    } else if (tok.activeSource === "ephemeral") {
+      pluginCheck = checkDaemonPlugin(st);
+    } else if ("heldBy" in seen) {
+      pluginCheck = checkPlugin({ skipped: `port ${s.port} is held by something else, and probing it would disturb it`, ...(seen.heldBy === "websocket" ? { next: "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" } : {}) });
+    } else if (s.token.ok && s.token.resolved.source === "ephemeral") {
       pluginCheck = checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" });
-      add(pluginCheck);
     } else {
       if (onWait) onWait(waitSec);
-      pluginCheck = checkPlugin(await probePlugin(port, waitSec * 1000), waitSec);
-      add(pluginCheck);
+      pluginCheck = checkPlugin(await look.watch(waitSec * 1000), waitSec);
     }
+    add(pluginCheck);
   }
   if (tok.shadowed) add(checkToken(tok, pluginCheck, viaDaemon));
   add(checkPluginFiles(pluginState()));
@@ -600,7 +542,11 @@ async function main(argv: string[]): Promise<void> {
     } else { console.error(`[dtwin doctor] error: unknown argument: ${a}. ${usage}`); exitCli(1); }
   }
   // Human output streams; --json stays one document at the end (a consumer parses it whole).
-  const report = await run(json ? { waitSec } : {
+  // The settings, read once: the observer and every check below see the same ones.
+  const settings = readSettings();
+  const deps = { settings, observer: bridgeObserver };
+  const report = await run(json ? { waitSec, ...deps } : {
+    ...deps,
     waitSec,
     onCheck: (c) => console.log(formatCheck(c)),
     onWait: (sec) => console.log(`… waiting up to ${sec}s for the Figma plugin to connect, then a few seconds more for every open file to say its name (run it in Figma now; --wait 0 skips)`),
@@ -610,4 +556,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkPluginFiles, checkProject, exportChecks, reportOk, probePort, probePlugin, run, main };
+export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkPluginFiles, checkProject, exportChecks, reportOk, probePort, probePlugin, checkDaemonPlugin, run, main };
