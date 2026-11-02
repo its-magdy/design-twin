@@ -13,7 +13,7 @@
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { canonical, ifDefined } from "../bridge/src/json-util.ts";
 import { isPlanDescope, isPlanWaiver } from "./doc-guards.ts";
-import { FIELDS, TOLERANCE, fmt } from "./verify-shared.ts";
+import { TOLERANCE, fmt, toleranceOf } from "./verify-shared.ts";
 import { isJsonObject } from "./types.ts";
 import type { JsonValue, Plan, PlanDescope, PlanWaiver, VerifyDelta, VerifyInteraction, VerifyReport, VerifyReportV2 } from "./types.ts";
 
@@ -135,13 +135,10 @@ export function descopeRound<I extends DesignedInteraction>(rows: readonly unkno
 
 /** The slack a waiver's designed/built values are matched with — the field's own tolerance (null = exact). */
 function waiverTolerance(label: string): number | null {
-  const f = FIELDS.find((x) => x.label === label);
-  if (f) return f.tol;
-  if (label === "padding") return TOLERANCE.padding;
-  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
+  // a property's own (verify-shared.ts PROPERTIES — a per-side or per-corner field included), else the derived rows'
+  const own = toleranceOf(label);
+  if (own !== undefined) return own;
   if (label === "placement") return TOLERANCE.position;
-  if (label === "width (text ink)") return TOLERANCE.textInk;
-  if (label === "width (text box)") return TOLERANCE.size;
   if (label === "match (size)") return TOLERANCE.size;
   if (label === "overflowX") return TOLERANCE.position;
   return null;

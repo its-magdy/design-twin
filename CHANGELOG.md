@@ -27,6 +27,10 @@ list of merged PRs.
   edits" as unknown instead.
 - The web probe's `--ready` screen gate (what each page load waits for, and how a page without the frame's tag is
   judged) is now one module with its own tests. The probe's output is unchanged.
+- `verify-screen --compare` checks every property of a node from one table: one row per property (a single radius
+  and per-corner radii are one row, as are a single border width and per-side widths). Every gap ("not reported",
+  null, unreadable, impossible) is worded in one place. Findings and their wording are the same as before, except
+  for the fixes below.
 - README: an illustrated demo loop under the intro (`assets/demo.gif`).
 
 ### Fixed
@@ -40,6 +44,17 @@ list of merged PRs.
   `--no-assets`) and `dtwin version`, and says once how `--timeout` works. The Figma plugin README no longer claims
   token suggestions (`inferredVariables`) are exported, and the docs now agree on what blocks an audit, where
   generated token files go and where a library pull lands.
+- `verify-screen --compare` now applies its element rules the same way to every property:
+  - Padding on a leaf element, an inline element or a `<tr>` says why it is not compared even when the probe left
+    padding out. Before, it said "the probe did not report this property" and counted as lost coverage.
+  - The same holds for a TEXT's box width on a container element (a padded element, a `<td>`, a `<button>`).
+  - A negative box width is a measuring artefact, as a negative width already was. Before, it was compared.
+  - A per-corner radius on a leaf or inline element counts toward coverage, as a single radius already did.
+  - A layer drawn in a hover state that renders 0×0 at rest now lists every property it states as not measured,
+    including padding, per-corner radii, per-side borders and its copy. Before, only the single-value fields were
+    listed.
+- A waiver on one side of a border (`border-width (bottom)`) now matches within the border tolerance, as one on
+  `border-width` does. Before, it had to match exactly.
 
 ## [0.1.5] - 2026-11-01
 
