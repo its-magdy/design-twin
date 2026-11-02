@@ -33,6 +33,10 @@ list of merged PRs.
   a node's radius. A fully rounded (pill) component used to show Figma's raw `1000000000`, and a resized one could
   show float dust like `12.000000476837158`. It is now half the shorter side with `radiusFull: true`, or the radius
   rounded to 2 decimal places.
+- Docs: the npm page now lists every `dtwin pull` flag (including `--motion`, `--plugin-data`, `--shared-data` and
+  `--no-assets`) and `dtwin version`, and says once how `--timeout` works. The Figma plugin README no longer claims
+  token suggestions (`inferredVariables`) are exported, and the docs now agree on what blocks an audit, where
+  generated token files go and where a library pull lands.
 
 ## [0.1.5] - 2026-11-01
 

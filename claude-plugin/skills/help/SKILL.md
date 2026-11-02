@@ -115,7 +115,7 @@ writeToDisk:true}` for look-alikes) → `figma_export_url {url:"<node id>", writ
 installs the Figma plugin's per-user copy (step 2), merges `.mcp.json` without overwriting anything, and prints the steps that are clicks in Figma. The
 manual version:
 
-**Bun first, whichever lane.** The plugin's scripts and hooks, the `dtwin` CLI and the MCP server all run on
+**Bun first, whichever export path.** The plugin's scripts and hooks, the `dtwin` CLI and the MCP server all run on
 **Bun ≥ 1.4.2** (Node is not supported). Install it from https://bun.sh/install — `curl -fsSL https://bun.sh/install | bash`
 (macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows) — and restart Claude Code so `bun` is on
 its PATH. The plugin's SessionStart hook prints this when `bun` is missing or older than 1.4.2.
@@ -124,7 +124,7 @@ its PATH. The plugin's SessionStart hook prints this when `bun` is missing or ol
 its-magdy/design-twin`, then `claude plugin install designtwin@designtwin-marketplace`;
 `claude plugin update designtwin@designtwin-marketplace` (then restart) picks up a release.
 
-1. **Install `dtwin`** — it also carries the Figma plugin, so even the manual lane wants it. `which dtwin`; if it
+1. **Install `dtwin`** — it also carries the Figma plugin, so even the manual export path wants it. `which dtwin`; if it
    isn't there: `bun add -g @design-twin/dtwin` (it needs Bun on PATH, even installed with npm; `dtwin` lands in
    `~/.bun/bin`), or `brew install its-magdy/tap/dtwin` (Homebrew installs Bun with it; `brew upgrade` keeps both
    current, and the paths `dtwin init` writes survive it), or in a clone of the Design Twin repo `bun install`, then
@@ -141,7 +141,7 @@ its-magdy/design-twin`, then `claude plugin install designtwin@designtwin-market
    on, reopening the plugin runs them (with it off, Figma keeps the old code); re-import only if a new permission
    still does not work after that. Already imported from somewhere else (the package folder, an old clone)?
    Remove that one in Plugins → Manage plugins; `dtwin plugin status` says which copy is current.
-3. **Pick a lane:**
+3. **Pick an export path:**
    - **Just one screen, no bridge** → click the plugin's export buttons and save the downloads
      into `design/export/`. Done.
    - **The CLI** → there is no token to make by hand: the first bridge start generates one, saves it per-user
