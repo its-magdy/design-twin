@@ -118,7 +118,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 ## Exports
 
 - **An export slowed to a crawl — a progress tick every ~3 s and the node counter barely moving** → the
-  file's tab is not the *active* tab in Figma Desktop. Measured live (2026-09-25, one page, daemon):
+  file's tab is not the *active* tab in Figma Desktop. Measured on a real file (one page, through the daemon):
   31–38 ticks and ~2,500 nodes per 10 s with the file's tab in front; 3–5 ticks and ~15 nodes per 10 s
   while another file's tab was in front (about 100× slower); then 27 ticks in the first 10 s after
   switching back and the normal 31–38 from the second window on. Nothing is lost — the export
@@ -157,8 +157,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 ## Audit, scripts and the verify probe
 
 - **Audit verdict is "Blocked"** → only four things block: a truncated export, failed assets, a missing
-  font, or a frame not marked ready for dev. Re-export a narrower scope / install the font / confirm
-  with the designer; everything else is a warning with a stated default and doesn't stop the build.
+  font, or a token-name collision that a visible layer on this screen binds. Re-export a narrower scope /
+  install the font / ask the designer to rename the clashing token; a frame not marked ready for dev is a
+  warning to confirm with the designer, and everything else is a warning with a stated default and doesn't stop the build.
 - **Audit says a state is "not found" but the designer drew it** → states are detected by layer NAME
   (Loading/Skeleton/Empty/Error/Offline…) in the exported layers only. Export the page that holds it, or
   rename the frame. Library components' states show as "sampled" — pull the library with

@@ -132,7 +132,7 @@ token); `dtwin pull --as-library "<name>"` gets a library file's complete catalo
 **On a file that CONSUMES a library, `--design-system` returns that file's OWN tokens, styles and
 components plus only the library variables something in the file references** (a page pull adds the ones
 its nodes bind) — never the library's catalog. For that, open the LIBRARY file and
-`dtwin pull --as-library "<name>"` (CLI only); theme from `libraries/<slug>/tokens.json`. The tell:
+`dtwin pull --as-library "<name>"` (CLI only); theme from `libraries/<slug>-<fileKey8>/tokens.json`. The tell:
 `remote: true` on the variables, and `hygiene.json`'s count line.
 
 Pulling a design system to BUILD from (component states, variant looks)? Add `--variant-visuals` (MCP:
@@ -259,7 +259,8 @@ questions.
 **`design/export/variables.json` accumulates — it is not per-pull state.** Each single-screen pull
 merges its slice in, keyed on each variable's Figma key, so pulling screen B keeps screen
 A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json` (every variable
-in the collections that screen references — more than the ones its nodes actually bind). Names are
+defined in the file plus the library variables that screen or those variables reference, directly or through an
+alias — more than the ones its nodes actually bind). Names are
 not unique across the union: two different variables (two keys) can both be called `Space 4` with
 different values. Such a pair, and a variable two pulls resolve differently, is recorded under
 `_conflicts` and as a `CONFLICT` line in `hygiene` — read those before generating a theme.
@@ -309,7 +310,7 @@ its report; this is the standalone form for when you have only just pulled.
 into the stack's own theme file once, instead of re-mapping values on every screen:
 
 ```bash
-bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> design/export/   # DTCG json + tokens.css + a tokens/ set dir
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> design/   # DTCG json + tokens.css + a tokens/ set dir
 bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <css dir> --web tailwind
 bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <theme dir> --native swiftui   # or compose | flutter | react-native
 ```

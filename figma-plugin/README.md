@@ -132,7 +132,7 @@ The flag is cleared at the *start* of every run, so a stale cancel cannot kill t
   `COMPONENT` (not inside a set) gets the same walk and its tree attached as `entry.node` instead. One
   node walk per variant/component, so it's slower on large systems; off by default.
 
-`inferredVariables` token suggestions (for fields with no explicit binding) are always on. Image
+Image
 `intrinsicSize` + original source bytes (`getImageByHash`) and parametric shape reads (ellipse
 `arc`, star/polygon `shape`, `booleanOp`) are always on. Every `INSTANCE` also emits `mainComponent`
 (`{name,id,key,remote,setId,setKey,setName,variant}`) alongside the unchanged `component` name string —
