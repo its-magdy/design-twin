@@ -3000,27 +3000,134 @@ function normFamily(v) {
   if (v == null) return null;
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+var PAD_SIDES = ["top", "right", "bottom", "left"];
+var BOX_RULES = ["leaf", "inline"];
+var CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
+var field = (key, label, tol, extra = {}) => ({ spec: key, label, measured: key, census: key, parse: tol !== null && !extra.parse ? "px" : "norm", compare: "field", tol, ...extra });
+var PROPERTIES = [
+  { key: "fontFamily", norm: normFamily, typography: true, applies: [], shapes: [field("fontFamily", "font-family", null)] },
+  { key: "fontSize", unit: "px", high: true, typography: true, applies: [], shapes: [field("fontSize", "font-size", TOLERANCE.fontSize, { nonNegative: true, paints: true })] },
+  { key: "fontWeight", norm: normWeight, high: true, typography: true, applies: [], shapes: [field("fontWeight", "font-weight", TOLERANCE.fontWeight, { parse: "norm" })] },
+  { key: "lineHeight", unit: "px", typography: true, applies: [], shapes: [field("lineHeight", "line-height", TOLERANCE.lineHeight, { nonNegative: true })] },
+  { key: "letterSpacing", unit: "px", typography: true, applies: [], shapes: [field("letterSpacing", "letter-spacing", TOLERANCE.letterSpacing)] },
+  { key: "color", norm: normColor, high: true, colour: true, typography: true, applies: ["drawnState"], shapes: [field("color", "color", null, { paints: true })] },
+  { key: "backgroundColor", norm: normColor, high: true, colour: true, applies: ["drawnState", "leaf"], shapes: [field("backgroundColor", "background", null, { paints: true })] },
+  { key: "fill", norm: normColor, high: true, colour: true, pixels: true, applies: ["drawnState"], shapes: [field("fill", "fill (SVG paint)", null, { paints: true, doc: "an SVG's paint" })] },
+  {
+    key: "placeholderColor",
+    norm: normColor,
+    high: true,
+    colour: true,
+    optional: true,
+    applies: ["drawnState"],
+    shapes: [field("placeholderColor", "placeholder colour", null, {
+      doc: "the ::placeholder colour",
+      absentWhy: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked"
+    })]
+  },
+  { key: "borderColor", norm: normColor, colour: true, applies: ["drawnState", "leaf"], shapes: [field("borderColor", "border-color", null, { paints: true })] },
+  // one border width, or four sides (a divider with only a bottom stroke) — read off a border, or a ring (box-shadow/outline)
+  { key: "border", unit: "px", applies: ["leaf"], shapes: [
+    field("borderWidth", "border-width", TOLERANCE.stroke, { nonNegative: true, paints: true }),
+    {
+      spec: "borderWidths",
+      label: "border-width",
+      parts: PAD_SIDES,
+      measured: "borderWidths",
+      census: "borderWidths",
+      parse: "sides",
+      compare: "sides",
+      tol: TOLERANCE.stroke,
+      as: "px border widths [t,r,b,l]",
+      noun: "a border width",
+      doc: "[t,r,b,l] \u2014 a ring's sides when it draws the stroke",
+      paints: true
+    }
+  ] },
+  // one radius, or four unequal corners (a table header rounded only at the top) — both read off borderRadius
+  { key: "radius", unit: "px", applies: [...BOX_RULES, "rowTag"], shapes: [
+    field("borderRadius", "border-radius", TOLERANCE.radius, { parse: "corners", as: "a px radius", noun: "a radius", doc: "number | [tl,tr,br,bl]", paints: true }),
+    {
+      spec: "radiusCorners",
+      label: "border-radius",
+      parts: CORNERS,
+      measured: "borderRadius",
+      census: "borderRadius",
+      parse: "corners",
+      compare: "corners",
+      tol: TOLERANCE.radius,
+      as: "a px radius",
+      noun: "a radius",
+      paints: true
+    }
+  ] },
+  { key: "gap", unit: "px", applies: ["leaf", "tableGap"], shapes: [field("gap", "gap", TOLERANCE.gap, { read: "gapVisual", nonNegative: true })] },
+  { key: "width", unit: "px", box: true, applies: [...BOX_RULES, "textDiffers", "textBoxAbsent", "textOnContainer"], shapes: [
+    field("width", "width (text ink)", TOLERANCE.textInk, { when: "textInk", read: "textBox", nonNegative: true }),
+    field("width", "width", TOLERANCE.size, { read: "textBox", nonNegative: true })
+  ] },
+  { key: "height", unit: "px", box: true, applies: [...BOX_RULES, "textOnContainer", "textHeight"], shapes: [field("height", "height", TOLERANCE.size, { nonNegative: true })] },
+  { key: "x", unit: "px", box: true, applies: [...BOX_RULES, "textDiffers", "textBoxAbsent", "textOnContainer"], shapes: [field("x", "x (frame-relative)", TOLERANCE.position, { read: "textBox" })] },
+  { key: "y", unit: "px", box: true, applies: [...BOX_RULES, "textOnContainer"], shapes: [field("y", "y (frame-relative)", TOLERANCE.position)] },
+  { key: "opacity", applies: ["revealed"], shapes: [field("opacity", "opacity", TOLERANCE.opacity, { nonNegative: true, paints: true })] },
+  // a fixed-width TEXT's box in a parent that hugs its width: the width of the text's own element
+  {
+    key: "textBoxWidth",
+    unit: "px",
+    applies: ["boxOnContainer"],
+    shapes: [{ spec: "boxWidth", label: "width (text box)", measured: "width", census: "width", parse: "px", compare: "textBox", tol: TOLERANCE.size, nonNegative: true }]
+  },
+  {
+    key: "padding",
+    unit: "px",
+    applies: ["tableRow", ...BOX_RULES],
+    shapes: [{ spec: "padding", label: "padding", measured: "padding", census: "padding", parse: "sides", compare: "padding", tol: TOLERANCE.padding, as: "px padding [t,r,b,l]", noun: "padding", doc: "[t,r,b,l]" }]
+  },
+  { key: "placeholderText", applies: [], shapes: [{
+    spec: "placeholderText",
+    label: "placeholder text",
+    measured: "placeholderText",
+    census: "placeholderText",
+    parse: "string",
+    compare: "placeholder",
+    tol: null,
+    doc: "el.placeholder",
+    absentWhy: "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')",
+    paints: true
+  }] },
+  { key: "text", applies: [], shapes: [{
+    spec: "text",
+    label: "text",
+    measured: "text",
+    census: "text",
+    parse: "string",
+    compare: "copy",
+    tol: null,
+    absent: "unlisted",
+    nullWhy: "the probe reported text: null \u2014 an element with child elements still has text; report its textContent",
+    paints: true
+  }] }
 ];
+var SHAPES = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
+var isFieldKey = (k) => SHAPES.some(({ s }) => s.compare === "field" && s.spec === k);
+var FIELDS = SHAPES.filter(({ s }) => s.compare === "field" && !s.when).flatMap(({ p, s }) => isFieldKey(s.spec) ? [{
+  key: s.spec,
+  tol: s.tol,
+  ...p.norm ? { norm: p.norm } : {},
+  label: s.label,
+  ...p.unit ? { unit: p.unit } : {},
+  ...p.high ? { high: true } : {},
+  ...p.colour ? { colour: true } : {},
+  ...p.box ? { box: true } : {},
+  ...p.optional ? { optional: true } : {}
+}] : []);
 var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  ...Object.fromEntries(SHAPES.flatMap(({ s }) => s.doc ? [[s.measured, s.doc]] : [])),
+  textBox: "{x,w} of a Range over the text",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
 
 // design-to-code/owner-decisions.ts
 function waiversHash(plan) {
@@ -4071,8 +4178,8 @@ function deviationConflicts(plan) {
   const anchors = plan.anchors || {};
   (plan.deviations || []).forEach((d, i) => {
     if (!d) return;
-    const field = typeof d.field === "string" ? d.field.trim().toLowerCase().split(/[.[\]\s/]+/).filter(Boolean).pop() ?? "" : "";
-    if (STYLE_FIELDS.has(field)) return;
+    const field2 = typeof d.field === "string" ? d.field.trim().toLowerCase().split(/[.[\]\s/]+/).filter(Boolean).pop() ?? "" : "";
+    if (STYLE_FIELDS.has(field2)) return;
     const built = d.built;
     const omitted = built === null || built === false || typeof built === "string" && /^(omitted|not built|not rendered|removed)/i.test(built.trim());
     if (!omitted) return;

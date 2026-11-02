@@ -2171,35 +2171,184 @@ function fourSides(v) {
 var PAD_SIDES = ["top", "right", "bottom", "left"];
 var TEXT_BOX_HEIGHT = "text box height";
 var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+var RULES = [
+  "drawnState",
+  // a colour of a layer the designer drew in a state, measured at rest
+  "revealed",
+  // the opacity of any layer inside a drawn state, measured at rest (hover-revealed content reads 0)
+  "tableRow",
+  // padding on a <tr>: it lives on the cells
+  "leaf",
+  // a FRAME/INSTANCE id spread onto a leaf <input>/<img>/<svg> inside the element that implements it
+  "inline",
+  // a FRAME/INSTANCE id on an inline element, whose box is its text's
+  "rowTag",
+  // a radius on a table row or row group, which draws none
+  "textDiffers",
+  // a TEXT's x/width while its copy differs
+  "textBoxAbsent",
+  // a TEXT's x/width without a textBox
+  "textOnContainer",
+  // a TEXT's box read off a container element
+  "boxOnContainer",
+  // a TEXT's box width read off a container element
+  "textHeight",
+  // a TEXT's height from a Range — the font's content area, not the line box (skipped, not listed)
+  "tableGap"
+  // a gap on a <table>, which spaces rows with border-spacing
 ];
+var BOX_RULES = ["leaf", "inline"];
+var CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
+var field = (key, label, tol, extra = {}) => ({ spec: key, label, measured: key, census: key, parse: tol !== null && !extra.parse ? "px" : "norm", compare: "field", tol, ...extra });
+var PROPERTIES = [
+  { key: "fontFamily", norm: normFamily, typography: true, applies: [], shapes: [field("fontFamily", "font-family", null)] },
+  { key: "fontSize", unit: "px", high: true, typography: true, applies: [], shapes: [field("fontSize", "font-size", TOLERANCE.fontSize, { nonNegative: true, paints: true })] },
+  { key: "fontWeight", norm: normWeight, high: true, typography: true, applies: [], shapes: [field("fontWeight", "font-weight", TOLERANCE.fontWeight, { parse: "norm" })] },
+  { key: "lineHeight", unit: "px", typography: true, applies: [], shapes: [field("lineHeight", "line-height", TOLERANCE.lineHeight, { nonNegative: true })] },
+  { key: "letterSpacing", unit: "px", typography: true, applies: [], shapes: [field("letterSpacing", "letter-spacing", TOLERANCE.letterSpacing)] },
+  { key: "color", norm: normColor, high: true, colour: true, typography: true, applies: ["drawnState"], shapes: [field("color", "color", null, { paints: true })] },
+  { key: "backgroundColor", norm: normColor, high: true, colour: true, applies: ["drawnState", "leaf"], shapes: [field("backgroundColor", "background", null, { paints: true })] },
+  { key: "fill", norm: normColor, high: true, colour: true, pixels: true, applies: ["drawnState"], shapes: [field("fill", "fill (SVG paint)", null, { paints: true, doc: "an SVG's paint" })] },
+  {
+    key: "placeholderColor",
+    norm: normColor,
+    high: true,
+    colour: true,
+    optional: true,
+    applies: ["drawnState"],
+    shapes: [field("placeholderColor", "placeholder colour", null, {
+      doc: "the ::placeholder colour",
+      absentWhy: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked"
+    })]
+  },
+  { key: "borderColor", norm: normColor, colour: true, applies: ["drawnState", "leaf"], shapes: [field("borderColor", "border-color", null, { paints: true })] },
+  // one border width, or four sides (a divider with only a bottom stroke) — read off a border, or a ring (box-shadow/outline)
+  { key: "border", unit: "px", applies: ["leaf"], shapes: [
+    field("borderWidth", "border-width", TOLERANCE.stroke, { nonNegative: true, paints: true }),
+    {
+      spec: "borderWidths",
+      label: "border-width",
+      parts: PAD_SIDES,
+      measured: "borderWidths",
+      census: "borderWidths",
+      parse: "sides",
+      compare: "sides",
+      tol: TOLERANCE.stroke,
+      as: "px border widths [t,r,b,l]",
+      noun: "a border width",
+      doc: "[t,r,b,l] \u2014 a ring's sides when it draws the stroke",
+      paints: true
+    }
+  ] },
+  // one radius, or four unequal corners (a table header rounded only at the top) — both read off borderRadius
+  { key: "radius", unit: "px", applies: [...BOX_RULES, "rowTag"], shapes: [
+    field("borderRadius", "border-radius", TOLERANCE.radius, { parse: "corners", as: "a px radius", noun: "a radius", doc: "number | [tl,tr,br,bl]", paints: true }),
+    {
+      spec: "radiusCorners",
+      label: "border-radius",
+      parts: CORNERS,
+      measured: "borderRadius",
+      census: "borderRadius",
+      parse: "corners",
+      compare: "corners",
+      tol: TOLERANCE.radius,
+      as: "a px radius",
+      noun: "a radius",
+      paints: true
+    }
+  ] },
+  { key: "gap", unit: "px", applies: ["leaf", "tableGap"], shapes: [field("gap", "gap", TOLERANCE.gap, { read: "gapVisual", nonNegative: true })] },
+  { key: "width", unit: "px", box: true, applies: [...BOX_RULES, "textDiffers", "textBoxAbsent", "textOnContainer"], shapes: [
+    field("width", "width (text ink)", TOLERANCE.textInk, { when: "textInk", read: "textBox", nonNegative: true }),
+    field("width", "width", TOLERANCE.size, { read: "textBox", nonNegative: true })
+  ] },
+  { key: "height", unit: "px", box: true, applies: [...BOX_RULES, "textOnContainer", "textHeight"], shapes: [field("height", "height", TOLERANCE.size, { nonNegative: true })] },
+  { key: "x", unit: "px", box: true, applies: [...BOX_RULES, "textDiffers", "textBoxAbsent", "textOnContainer"], shapes: [field("x", "x (frame-relative)", TOLERANCE.position, { read: "textBox" })] },
+  { key: "y", unit: "px", box: true, applies: [...BOX_RULES, "textOnContainer"], shapes: [field("y", "y (frame-relative)", TOLERANCE.position)] },
+  { key: "opacity", applies: ["revealed"], shapes: [field("opacity", "opacity", TOLERANCE.opacity, { nonNegative: true, paints: true })] },
+  // a fixed-width TEXT's box in a parent that hugs its width: the width of the text's own element
+  {
+    key: "textBoxWidth",
+    unit: "px",
+    applies: ["boxOnContainer"],
+    shapes: [{ spec: "boxWidth", label: "width (text box)", measured: "width", census: "width", parse: "px", compare: "textBox", tol: TOLERANCE.size, nonNegative: true }]
+  },
+  {
+    key: "padding",
+    unit: "px",
+    applies: ["tableRow", ...BOX_RULES],
+    shapes: [{ spec: "padding", label: "padding", measured: "padding", census: "padding", parse: "sides", compare: "padding", tol: TOLERANCE.padding, as: "px padding [t,r,b,l]", noun: "padding", doc: "[t,r,b,l]" }]
+  },
+  { key: "placeholderText", applies: [], shapes: [{
+    spec: "placeholderText",
+    label: "placeholder text",
+    measured: "placeholderText",
+    census: "placeholderText",
+    parse: "string",
+    compare: "placeholder",
+    tol: null,
+    doc: "el.placeholder",
+    absentWhy: "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')",
+    paints: true
+  }] },
+  { key: "text", applies: [], shapes: [{
+    spec: "text",
+    label: "text",
+    measured: "text",
+    census: "text",
+    parse: "string",
+    compare: "copy",
+    tol: null,
+    absent: "unlisted",
+    nullWhy: "the probe reported text: null \u2014 an element with child elements still has text; report its textContent",
+    paints: true
+  }] }
+];
+var CHECK_ORDER = [
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "lineHeight",
+  "letterSpacing",
+  "color",
+  "backgroundColor",
+  "fill",
+  "placeholderColor",
+  "borderColor",
+  "borderWidth",
+  "borderRadius",
+  "gap",
+  "width",
+  "height",
+  "x",
+  "y",
+  "opacity",
+  "boxWidth",
+  "radiusCorners",
+  "borderWidths",
+  "padding",
+  "placeholderText",
+  "text"
+];
+var SHAPES = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
+var labelsOf = (s) => s.parts ? s.parts.map((x) => `${s.label} (${x})`) : [s.label];
+var toleranceOf = (label) => SHAPES.find(({ s }) => labelsOf(s).includes(label))?.s.tol;
+var isFieldKey = (k) => SHAPES.some(({ s }) => s.compare === "field" && s.spec === k);
+var FIELDS = SHAPES.filter(({ s }) => s.compare === "field" && !s.when).flatMap(({ p, s }) => isFieldKey(s.spec) ? [{
+  key: s.spec,
+  tol: s.tol,
+  ...p.norm ? { norm: p.norm } : {},
+  label: s.label,
+  ...p.unit ? { unit: p.unit } : {},
+  ...p.high ? { high: true } : {},
+  ...p.colour ? { colour: true } : {},
+  ...p.box ? { box: true } : {},
+  ...p.optional ? { optional: true } : {}
+}] : []);
 var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  borderWidths: "[t,r,b,l] \u2014 a ring's sides when it draws the stroke",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
+  ...Object.fromEntries(SHAPES.flatMap(({ s }) => s.doc ? [[s.measured, s.doc]] : [])),
   textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
   tag: "tagName, lower-case",
   display: "getComputedStyle(el).display"
 };
@@ -2236,12 +2385,12 @@ function waiversHash(plan) {
 function waiversChanged(recorded, plan) {
   return (recorded || waiversHash(null)) !== waiversHash(plan);
 }
-function whyNotWaivable(gaps, nodeId, field) {
+function whyNotWaivable(gaps, nodeId, field2) {
   const absent = gaps.componentsAbsent.find((c) => c.nodeIds.includes(nodeId));
   if (absent) return `component set '${absent.setName}' is reported ABSENT \u2014 a missing component is never waivable; build it`;
   if (gaps.interactionsFailed.some((i) => i.nodeId === nodeId)) return "a failed interaction is never waivable \u2014 fix it, or have the owner descope it (plan.descopes) if it is deliberately inert";
   if (gaps.notMeasured.some((n) => n.nodeId === nodeId)) return "the node was not measured \u2014 only a measured delta can be accepted; measure it (or fold it: plan anchor foldedInto) first";
-  if (field !== void 0 && gaps.fieldsNotMeasured.some((g) => g.nodeId === nodeId && g.field === field)) return "that value was not measured this round \u2014 only a measured delta can be accepted";
+  if (field2 !== void 0 && gaps.fieldsNotMeasured.some((g) => g.nodeId === nodeId && g.field === field2)) return "that value was not measured this round \u2014 only a measured delta can be accepted";
   return null;
 }
 var gapsOfReport = (rep) => ({
@@ -2301,13 +2450,9 @@ function descopeRound(rows, interactions, exportSha) {
   return { notes, reopened, unused, descopeOf: (i) => descoped.get(i) };
 }
 function waiverTolerance(label) {
-  const f = FIELDS.find((x) => x.label === label);
-  if (f) return f.tol;
-  if (label === "padding") return TOLERANCE.padding;
-  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
+  const own = toleranceOf(label);
+  if (own !== void 0) return own;
   if (label === "placement") return TOLERANCE.position;
-  if (label === "width (text ink)") return TOLERANCE.textInk;
-  if (label === "width (text box)") return TOLERANCE.size;
   if (label === "match (size)") return TOLERANCE.size;
   if (label === "overflowX") return TOLERANCE.position;
   return null;
@@ -3885,9 +4030,9 @@ async function waitMain(screen, f, usage) {
   const t0 = Date.now();
   let lastKey = "", lastChange = Date.now(), noted = "";
   for (; ; ) {
-    const unreadable = cacheUnreadable(base);
-    if (unreadable) {
-      console.error(unreadable.message);
+    const unreadable2 = cacheUnreadable(base);
+    if (unreadable2) {
+      console.error(unreadable2.message);
       return EXIT_RUN_CACHE;
     }
     const at = readStatusAt(base);
@@ -4407,7 +4552,7 @@ var lineBoxWhy = (lh, h) => `the line box (${r2(lh)}px) is taller than the fixed
 function expectNode(n, ctx = {}) {
   const spec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable = [];
-  const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
+  const skip = (field2, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field: field2, value, why });
   const placeholder = n.type === "TEXT" && (ctx.planPlaceholder === true || isPlaceholder(n));
   const x = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...ifDefined("parentWidthMode", ctx.parentWidthMode), ...placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" } : {} };
   expectText(x);
@@ -5121,32 +5266,8 @@ var KNOWN_NODE_KEYS = /* @__PURE__ */ new Set([
   "fillSource"
 ]);
 var KNOWN_STYLE_KEYS = /* @__PURE__ */ new Set([
-  "fontFamily",
-  "fontSize",
-  "fontWeight",
-  "lineHeight",
-  "letterSpacing",
-  "color",
-  "backgroundColor",
-  "fill",
-  "borderColor",
-  "borderWidth",
-  "borderWidths",
-  "borderRadius",
-  "gap",
-  "gapVisual",
-  "width",
-  "height",
-  "x",
-  "y",
-  "opacity",
-  "padding",
-  "text",
-  "placeholderText",
-  "placeholderColor",
-  "tag",
-  "textBox",
-  "display",
+  // every key a probe is told to send (verify-shared.ts STYLE_KEYS), and the optional ones it may add:
+  ...STYLE_KEYS,
   "transform",
   "rotate",
   "visible",
@@ -5204,15 +5325,15 @@ function tokenFor(spec, key) {
   const names = [...new Set((TOKEN_KEYS[key] || []).map((k) => t[k]).filter((v) => typeof v === "string"))];
   return names.length ? names.join(" / ") : void 0;
 }
-function compareField(f, want, got) {
-  const nw = f.norm ? f.norm(want) : want;
-  const ng = f.norm ? f.norm(got) : got;
+function compareField(p, s, want, got) {
+  const nw = p.norm ? p.norm(want) : want;
+  const ng = p.norm ? p.norm(got) : got;
   if (nw == null || ng == null) return null;
-  if (f.tol == null) return nw === ng ? null : { want: nw, got: ng, delta: null };
+  if (s.tol == null) return nw === ng ? null : { want: nw, got: ng, delta: null };
   const a = Number(nw), b = Number(ng);
   if (Number.isNaN(a) || Number.isNaN(b)) return nw === ng ? null : { want: nw, got: ng, delta: null };
   const delta = Math.abs(a - b);
-  return delta <= f.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
+  return delta <= s.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
 }
 function comparePadding(want, got, skip) {
   if (!Array.isArray(want)) return null;
@@ -5225,12 +5346,18 @@ function radiusCorners(v) {
   return v == null ? null : fourSides(v);
 }
 var clampRadius = (r, w, h) => num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r;
+var designRadius = (spec, r) => clampRadius(r, spec.width, spec.height);
+var builtRadius = (spec, got, r) => clampRadius(r, num(got.width) ? got.width : spec.width, num(got.height) ? got.height : spec.height);
 var TABLE_TAGS = /* @__PURE__ */ new Set(["table", "thead", "tbody", "tfoot", "tr"]);
 var ROW_TAGS = /* @__PURE__ */ new Set(["tr", "thead", "tbody", "tfoot"]);
 var ROW_RADIUS_WHY = "a table row/row-group does not draw border-radius \u2014 report the corner cells' radii under this id, or tag the cells";
-var INLINE_BOX_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "borderRadius"]);
 var inlineWhy = (tag) => `the id sits on an inline <${tag || "element"}>, whose box is its text's \u2014 tag the element that owns the box`;
 var cssBorderWidth = (d) => d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d);
+var isRing = (got) => got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
+function drawnStroke(want, ring) {
+  const w = ring ? want : cssBorderWidth(want);
+  return w === want ? { want } : { want: w, note: `the design's ${want}px stroke draws as a ${w}px CSS border (computed border widths are whole px, at least 1)` };
+}
 var STROKE_LAYOUT_NOTE = "stroke drawn without layout space \u2014 the design's stroke takes layout space (strokesInLayout); use a real border with box-sizing: border-box, not a box-shadow ring";
 var isPaintedBy = (x) => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child") && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === void 0 || typeof x.dt === "string");
 function applyFigmaCase(t, c) {
@@ -5335,8 +5462,6 @@ var CONTAINER_TAGS = /* @__PURE__ */ new Set(["th", "td", "tr", "button", "label
 var LEAF_TAGS = /* @__PURE__ */ new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
 var CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
 var PIXEL_TAGS = /* @__PURE__ */ new Set(["img", "picture", "canvas", "object", "embed"]);
-var NON_NEGATIVE = /* @__PURE__ */ new Set(["fontSize", "lineHeight", "borderWidth", "gap", "width", "height", "opacity"]);
-var LEAF_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
 var isContainer = (got) => !!(got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase()) || Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0));
 var LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
@@ -5443,7 +5568,12 @@ function deltaChanges(prev, cur, now) {
   }
   return nowUnverifiable.length ? { ...out, nowUnverifiable } : out;
 }
-var PAINT_KEYS = ["decorated", "text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderColor", "borderWidth", "borderWidths", "borderRadius", "radiusCorners", "opacity"];
+var PAINT_SHAPES = PROPERTIES.flatMap((p) => p.shapes.filter((s) => s.paints));
+var PAINT_KEYS = [
+  "decorated",
+  ...PAINT_SHAPES.filter((s) => s.parse === "string").map((s) => s.spec),
+  ...PAINT_SHAPES.filter((s) => s.parse !== "string").map((s) => s.spec)
+];
 var paintOf = (s) => PAINT_KEYS.filter((k) => s[k] !== void 0);
 var MATCH_BUCKET = {
   tag: "tag",
@@ -5473,7 +5603,6 @@ var CANONICAL_MATCH = new Set(CANONICAL_MATCHED_BY);
 var MATCH_SYNONYM = { "data-dt-node": "tag", id: "tag" };
 var NO_CAP = /* @__PURE__ */ new Set(["tag", "tag-shared-path", "text", "frame"]);
 var MEDIUM_CAP = /* @__PURE__ */ new Set(["text-ordinal", "tag-alias"]);
-var TYPO_FIELDS = /* @__PURE__ */ new Set(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
 var SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 var NEVER_MEASURED_HEADLINE_MIN = 2;
 var MEASURED_TOP_KEYS = {
@@ -5750,16 +5879,16 @@ function compareCtx(expectation, measured, opts) {
   const undrawnStates = [];
   const paintedVia = [];
   const lineBoxWhyOf = new Map((expectation.notComparable || []).filter((g) => g.field === TEXT_BOX_HEIGHT).map((g) => [g.nodeId, g.why]));
-  const gap = (spec, field, why, absent = false) => {
-    if (absent) absentGaps.add(`${spec.nodeId}\0${field}`);
-    return fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
+  const gap = (spec, field2, why, absent = false) => {
+    if (absent) absentGaps.add(`${spec.nodeId}\0${field2}`);
+    return fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field: field2, why });
   };
-  const push = (spec, field, severity, bad, extra) => deltas.push(Object.assign({
+  const push = (spec, field2, severity, bad, extra) => deltas.push(Object.assign({
     severity,
     nodeId: spec.nodeId,
     name: spec.name,
     ...ifDefined("path", spec.path),
-    field,
+    field: field2,
     expected: bad.want,
     actual: bad.got,
     delta: bad.delta
@@ -5831,13 +5960,7 @@ function compareSpec(cx, spec) {
   if (!hit) return;
   const n = readNode(cx, spec, hit.m, hit.matchedBy);
   if (!n) return;
-  checkFields(cx, n);
-  checkTextBoxWidth(cx, n);
-  checkCorners(cx, n);
-  checkBorderSides(cx, n);
-  checkPadding(cx, n);
-  checkPlaceholderText(cx, n);
-  checkText(cx, n);
+  checkProperties(cx, n);
   checkPlacement(cx, n);
   const { own, sizeRow } = checkMatchSize(cx, n);
   capSeverity(cx, n, own, sizeRow);
@@ -5897,23 +6020,23 @@ function readNode(cx, spec, m, matchedBy) {
     ...isJsonObject(m.unmeasured) ? m.unmeasured : {},
     ...isJsonObject(stUm) ? Object.fromEntries(Object.entries(stUm).filter((e) => typeof e[1] === "string")) : {}
   };
-  const nullWhy = (...keys) => {
+  const nullWhy = (keys, fallback) => {
     for (const k of keys) {
       const w = um[k];
       if (typeof w === "string" && w) return w;
     }
-    return "reported null";
+    return fallback;
   };
-  const gapNull = (field, ...keys) => {
+  const gapNull = (field2, keys, fallback = "reported null") => {
     cx.fieldsReportedNull++;
-    gap(spec, field, nullWhy(...keys), true);
+    gap(spec, field2, nullWhy(keys, fallback), true);
   };
   const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
   const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) \u2014 measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
   if (state && measuredIn === "rest" && zeroAtRest) {
-    for (const f of FIELDS) if (spec[f.key] !== void 0) {
-      tally(f.key, false);
-      gap(spec, f.label, `renders 0\xD70 at rest: ${stateWhy}`);
+    for (const { s } of statedShapes(spec, spec.type === "TEXT")) {
+      tally(s.census, false);
+      gap(spec, s.label, `renders 0\xD70 at rest: ${stateWhy}`);
     }
     placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0\xD70 at rest: ${stateWhy}` });
     return null;
@@ -5933,415 +6056,295 @@ function readNode(cx, spec, m, matchedBy) {
   const firstDelta = deltas.length;
   return { spec, m, matchedBy, rawMatch, base, got, measuredIn, state, st, um, gapNull, zeroAtRest, stateWhy, isText, container, tb, tagLc, table, onLeaf, assetLeaf, leafWhy, rowTag, inline, textDiffers, firstDelta };
 }
-function checkFields(cx, n) {
-  const { unverifiable, tally, paintedVia, lineBoxWhyOf, gap, push } = cx;
-  const {
-    spec,
-    m,
-    matchedBy,
-    base,
-    got,
-    measuredIn,
-    state,
-    st,
-    gapNull,
-    stateWhy,
-    isText,
-    container,
-    tb,
-    tagLc,
-    table,
-    onLeaf,
-    assetLeaf,
-    leafWhy,
-    rowTag,
-    inline,
-    textDiffers
-  } = n;
-  for (const f0 of FIELDS) {
-    const want0 = spec[f0.key];
-    if (want0 === void 0) continue;
-    const f = isText && f0.key === "width" && spec.widthFrom === "renderBox" ? { ...f0, label: "width (text ink)", tol: TOLERANCE.textInk } : f0;
-    let val = got[f.key];
-    let nullKeys = [f.key];
-    let present = val !== void 0;
-    const textXW = isText && (f.key === "x" || f.key === "width");
-    if (textXW) {
-      val = tb ? f.key === "x" ? tb.x : tb.w : got.textBox === null ? null : void 0;
-      present = val !== void 0;
-      nullKeys = ["textBox", f.key];
+var SHAPES_OF = /* @__PURE__ */ new Map();
+for (const p of PROPERTIES) for (const s of p.shapes) getOrInit(SHAPES_OF, s.spec, () => []).push({ p, s });
+var ABSENT = "the probe did not report this property";
+var NEGATIVE = "CSS cannot make it negative";
+var unreadable = (shown, as) => `could not read '${shown}' as ${as}`;
+var impossible = (shown, noun, range = NEGATIVE) => `${shown} is impossible for ${noun} (${range})`;
+var artefact = (claim2, hint = "") => `${claim2} \u2014 a measuring artefact${hint}; not compared`;
+var ACROSS = " (children not laid out in one line, or rows read across columns?)";
+var quoted = (v) => typeof v === "string" ? v : JSON.stringify(v);
+var TR_PADDING_WHY = "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id";
+var TEXT_DIFFERS_WHY = "the text differs from the design's, so its width (and a centred or right-aligned start) does too \u2014 compared once the copy matches";
+var TEXT_BOX_WHY = "report textBox {x,w} \u2014 a Range over the text's characters; a TEXT's x/width are never read off its element's box";
+var onContainer = (got) => `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's`;
+function statedShapes(spec, isText) {
+  const out = [];
+  for (const key of CHECK_ORDER) {
+    const want = spec[key];
+    if (want === void 0) continue;
+    const hit = SHAPES_OF.get(key)?.find(({ s }) => !(s.when === "textInk" && !(isText && spec.widthFrom === "renderBox")));
+    if (hit) out.push({ ...hit, want });
+  }
+  return out;
+}
+function readShape(n, s) {
+  const { got, isText, tb } = n;
+  const own = got[s.measured];
+  if (s.read === "textBox" && isText) {
+    const val = tb ? s.spec === "x" ? tb.x : tb.w : got.textBox === null ? null : void 0;
+    return { val, present: val !== void 0, nullKeys: ["textBox", s.measured] };
+  }
+  if (s.read === "gapVisual" && got.gapVisual !== void 0 && (got.gapVisual !== null || own == null)) return { val: got.gapVisual, present: true, nullKeys: ["gapVisual", "gap"] };
+  return { val: own, present: own !== void 0, nullKeys: [s.measured] };
+}
+var gapped = ({ cx, n, s }, why, absent = false) => {
+  cx.gap(n.spec, s.label, why, absent);
+  return true;
+};
+var RULE = {
+  // (opacity too — hover-revealed content reads 0 at rest; any layer inside a drawn state, not only the owner)
+  drawnState: (a) => !!a.n.state && a.n.measuredIn === "rest" && !!a.n.spec.drawnStateOwn && gapped(a, a.n.stateWhy),
+  revealed: (a) => !!a.n.state && a.n.measuredIn === "rest" && gapped(a, a.n.stateWhy),
+  tableRow: (a) => a.n.tagLc === "tr" && gapped(a, TR_PADDING_WHY),
+  leaf: (a) => a.n.onLeaf && !(a.n.assetLeaf && a.p.box) && gapped(a, a.n.leafWhy),
+  inline: (a) => a.n.inline && !(a.n.assetLeaf && a.p.box) && gapped(a, inlineWhy(a.n.tagLc)),
+  rowTag: (a) => a.n.rowTag && gapped(a, ROW_RADIUS_WHY),
+  textDiffers: (a) => a.n.isText && a.s.read === "textBox" && a.n.textDiffers && gapped(a, TEXT_DIFFERS_WHY),
+  textBoxAbsent: (a) => a.n.isText && a.s.read === "textBox" && a.r.val === void 0 && gapped(a, TEXT_BOX_WHY, true),
+  textOnContainer: (a) => {
+    const { n, s } = a;
+    if (!(n.isText && n.container && !n.tb && s.read !== "textBox")) return false;
+    if (n.got.textBox === null && s.spec !== "height") {
+      n.gapNull(s.label, ["textBox"]);
+      return true;
     }
-    if (f.key === "gap" && got.gapVisual !== void 0 && (got.gapVisual !== null || val == null)) {
-      val = got.gapVisual;
-      present = true;
-      nullKeys = ["gapVisual", "gap"];
+    return gapped(a, `${onContainer(n.got)} \u2014 report textBox (a Range over the text) instead`);
+  },
+  boxOnContainer: (a) => a.n.container && gapped(a, `${onContainer(a.n.got)} \u2014 tag the text's own element to have its fixed box width compared`),
+  textHeight: (a) => a.n.isText && !!a.n.tb && a.s.spec === "height",
+  // a Range's height is the font's content area, not the line box
+  tableGap: (a) => {
+    const { n, s } = a;
+    if (!(n.table && n.got.gapVisual == null)) return false;
+    if (n.got.gapVisual === null) {
+      n.gapNull(s.label, ["gapVisual"]);
+      return true;
     }
-    if (f.key === "fill" && (PIXEL_TAGS.has(tagLc) || m.fillSource === "img")) {
-      unverifiable.push({
-        nodeId: spec.nodeId,
-        name: spec.name,
-        field: f.label,
-        expected: want0,
-        why: `drawn by an <${PIXEL_TAGS.has(tagLc) ? tagLc : "img"}>: its paint is pixels, not a CSS property \u2014 the SVG's own fill cannot be read from the element's computed style`
+    return gapped(a, `the element is a <${n.got.tag}>, which spaces rows with border-spacing, not gap \u2014 report gapVisual (the distance between consecutive rows)`);
+  }
+};
+function admit(a, want) {
+  const { cx, n, p, s, r } = a;
+  const { spec, got } = n;
+  const val = r.val;
+  if (val === void 0) {
+    if (p.optional) cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: s.label, expected: want, why: s.absentWhy ?? ABSENT });
+    else if (s.absent === "unlisted") cx.absentGaps.add(`${spec.nodeId}\0${s.label}`);
+    else gapped(a, s.absentWhy ?? ABSENT, true);
+    return null;
+  }
+  if (val === null || s.parse !== "string" && Array.isArray(val) && val.includes(null)) {
+    n.gapNull(s.label, r.nullKeys, s.nullWhy);
+    return null;
+  }
+  if (s.parse === "corners" || s.parse === "sides") {
+    const four = s.parse === "corners" ? radiusCorners(val) : fourSides(val);
+    if (!four) {
+      gapped(a, unreadable(JSON.stringify(val), s.as ?? s.label));
+      return null;
+    }
+    if (four.some((v) => v < 0)) {
+      gapped(a, artefact(impossible(JSON.stringify(val), s.noun ?? s.label)));
+      return null;
+    }
+    return { v: val, four };
+  }
+  if (s.parse === "norm" && p.norm && (p.norm(val) == null || typeof val !== "string" && typeof val !== "number")) {
+    gapped(a, unreadable(quoted(val), s.label));
+    return null;
+  }
+  if (s.parse !== "px") return { v: val, four: null };
+  const flexOrGrid = typeof got.display === "string" && /(^|-)(flex|grid)$/.test(got.display.trim());
+  const x = val === "normal" && (s.spec === "letterSpacing" || s.spec === "gap" && flexOrGrid) ? 0 : cssPx(val);
+  if (x === null) {
+    const kw = val !== "normal" ? "" : s.spec === "gap" ? " (0 in flex/grid, not applicable in block layout \u2014 report display, or a number)" : " (its px value depends on the font's metrics)";
+    gapped(a, unreadable(quoted(val), `a px number${kw}`));
+    return null;
+  }
+  const box = Math.max(cssPx(got.width) ?? 0, cssPx(got.height) ?? 0);
+  const visual = s.spec === "gap" && r.nullKeys[0] === "gapVisual";
+  const why = s.nonNegative && x < 0 && !(s.spec === "gap" && num(want) && want < 0) ? impossible(String(r2(x)), s.label) : s.spec === "opacity" && x > 1 ? impossible(String(r2(x)), "opacity", "0 to 1") : visual && box > 0 && x > box ? `${r2(x)}px is larger than the element measured (${r2(box)}px)` : null;
+  if (!why) return { v: x, four: null };
+  const cssGap = visual && !n.table ? cssPx(got.gap) : null;
+  if (cssGap !== null && cssGap >= 0) return { v: cssGap, four: null };
+  gapped(a, artefact(why, ACROSS));
+  return null;
+}
+function checkProperties(cx, n) {
+  for (const { p, s, want } of statedShapes(n.spec, n.isText)) {
+    if (p.pixels && (PIXEL_TAGS.has(n.tagLc) || n.m.fillSource === "img")) {
+      cx.unverifiable.push({
+        nodeId: n.spec.nodeId,
+        name: n.spec.name,
+        field: s.label,
+        expected: want,
+        why: `drawn by an <${PIXEL_TAGS.has(n.tagLc) ? n.tagLc : "img"}>: its paint is pixels, not a CSS property \u2014 the SVG's own fill cannot be read from the element's computed style`
       });
       continue;
     }
-    tally(f.key, present);
-    if (state && measuredIn === "rest" && (spec.drawnStateOwn && f.colour || f.key === "opacity")) {
-      gap(spec, f.label, stateWhy);
-      continue;
-    }
-    if (onLeaf && LEAF_FIELDS.has(f.key) && !(assetLeaf && f.box)) {
-      gap(spec, f.label, leafWhy);
-      continue;
-    }
-    if (inline && INLINE_BOX_FIELDS.has(f.key) && !(assetLeaf && f.box)) {
-      gap(spec, f.label, inlineWhy(tagLc));
-      continue;
-    }
-    if (f.key === "borderRadius" && rowTag) {
-      gap(spec, f.label, ROW_RADIUS_WHY);
-      continue;
-    }
-    if (textXW && textDiffers) {
-      gap(spec, f.label, "the text differs from the design's, so its width (and a centred or right-aligned start) does too \u2014 compared once the copy matches");
-      continue;
-    }
-    if (textXW && val === void 0) {
-      gap(spec, f.label, "report textBox {x,w} \u2014 a Range over the text's characters; a TEXT's x/width are never read off its element's box", true);
-      continue;
-    }
-    if (isText && f.box && container && !tb && !textXW) {
-      if (got.textBox === null && f.key !== "height") {
-        gapNull(f.label, "textBox");
-        continue;
-      }
-      gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's \u2014 report textBox (a Range over the text) instead`);
-      continue;
-    }
-    if (isText && tb && f.key === "height") {
-      continue;
-    }
-    if (f.key === "gap" && table && got.gapVisual == null) {
-      if (got.gapVisual === null) {
-        gapNull(f.label, "gapVisual");
-        continue;
-      }
-      gap(spec, f.label, `the element is a <${got.tag}>, which spaces rows with border-spacing, not gap \u2014 report gapVisual (the distance between consecutive rows)`);
-      continue;
-    }
-    if (val === void 0) {
-      if (f.optional) {
-        unverifiable.push({
-          nodeId: spec.nodeId,
-          name: spec.name,
-          field: f.label,
-          expected: want0,
-          why: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked"
-        });
-        continue;
-      }
-      gap(spec, f.label, "the probe did not report this property", true);
-      continue;
-    }
-    if (val === null || Array.isArray(val) && val.includes(null)) {
-      gapNull(f.label, ...nullKeys);
-      continue;
-    }
-    if (f.norm && (f.norm(val) == null || typeof val !== "string" && typeof val !== "number")) {
-      gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as ${f.label}`);
-      continue;
-    }
-    if (f.tol != null && !f.norm && f.key !== "borderRadius") {
-      const flexOrGrid = typeof got.display === "string" && /(^|-)(flex|grid)$/.test(got.display.trim());
-      const n2 = val === "normal" && (f.key === "letterSpacing" || f.key === "gap" && flexOrGrid) ? 0 : cssPx(val);
-      if (n2 === null) {
-        const kw = val !== "normal" ? "" : f.key === "gap" ? " (0 in flex/grid, not applicable in block layout \u2014 report display, or a number)" : " (its px value depends on the font's metrics)";
-        gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as a px number${kw}`);
-        continue;
-      }
-      const box = Math.max(cssPx(got.width) ?? 0, cssPx(got.height) ?? 0);
-      const why = NON_NEGATIVE.has(f.key) && n2 < 0 && !(f.key === "gap" && num(want0) && want0 < 0) ? `${r2(n2)} is impossible for ${f.label} (CSS cannot make it negative)` : f.key === "opacity" && n2 > 1 ? `${r2(n2)} is impossible for opacity (0 to 1)` : f.key === "gap" && nullKeys[0] === "gapVisual" && box > 0 && n2 > box ? `${r2(n2)}px is larger than the element measured (${r2(box)}px)` : null;
-      const cssGap = why && nullKeys[0] === "gapVisual" && !table ? cssPx(got.gap) : null;
-      if (cssGap !== null && cssGap >= 0) val = cssGap;
-      else if (why) {
-        gap(spec, f.label, `${why} \u2014 a measuring artefact (children not laid out in one line, or rows read across columns?); not compared`);
-        continue;
-      } else val = n2;
-    }
+    const a = { cx, n, p, s, r: readShape(n, s) };
+    cx.tally(s.census, a.r.present);
+    if (RULES.some((rule) => p.applies.includes(rule) && RULE[rule](a))) continue;
+    const v = admit(a, want);
+    if (v) COMPARE[s.compare](a, want, v);
+  }
+}
+var matchedByOf = (n) => ifDefined("matchedBy", n.matchedBy !== "id" ? n.matchedBy || void 0 : void 0);
+var COMPARE = {
+  /** one value against one (the stroke and radius as CSS draws them, a background through its painter) */
+  field: ({ cx, n, p, s }, want0, { v, four }) => {
+    const { spec, got, base, st, measuredIn } = n;
     cx.fieldsChecked++;
-    let want = want0, have = val;
+    let want = want0, have = v;
     let strokeNote;
-    if (f.key === "borderWidth" && typeof want0 === "number") {
-      const ring = got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
-      if (!ring && cssBorderWidth(want0) !== want0) {
-        want = cssBorderWidth(want0);
-        strokeNote = `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)`;
-      }
+    if (s.spec === "borderWidth" && typeof want0 === "number") {
+      const ring = isRing(got);
+      ({ want, note: strokeNote } = drawnStroke(want0, ring));
       if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign)
         strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign === "center" ? "centred on the edge of" : got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
     }
-    if (f.key === "borderRadius") {
-      const c = radiusCorners(val);
-      if (!c) {
-        gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a px radius`);
-        cx.fieldsChecked--;
-        continue;
-      }
-      if (c.some((r) => r < 0)) {
-        gap(spec, f.label, `${JSON.stringify(val)} is impossible for a radius (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
-        cx.fieldsChecked--;
-        continue;
-      }
-      const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-      if (typeof want === "number") want = clampRadius(want, spec.width, spec.height);
+    if (s.spec === "borderRadius" && four) {
+      if (typeof want === "number") want = designRadius(spec, want);
       const target = Number(want);
-      const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => Math.abs(r - target) > Math.abs(a - target) ? r : a, clampRadius(c[0], W, H));
-      have = worst;
+      have = four.map((r) => builtRadius(spec, got, r)).reduce((acc, r) => Math.abs(r - target) > Math.abs(acc - target) ? r : acc, builtRadius(spec, got, four[0]));
     }
     let paintNote;
-    if (f.key === "backgroundColor" && normColor(have) === "transparent" && normColor(want) !== "transparent") {
+    if (s.spec === "backgroundColor" && normColor(have) === "transparent" && normColor(want) !== "transparent") {
       const stBag = st ? st.styles || st : void 0;
       const pb = isJsonObject(stBag) && stBag.backgroundColor !== void 0 ? stBag.paintedBy : base.paintedBy;
       if (isPaintedBy(pb)) {
         have = pb.backgroundColor;
         paintNote = pb.via === "child" ? `background painted by its same-box child <${pb.tag}> \u2014 the element itself is transparent` : `background painted by its <${pb.tag}>${pb.depth > 1 ? ` (${pb.depth} levels up)` : ""} \u2014 the element itself is transparent`;
-        paintedVia.push({ nodeId: spec.nodeId, how: `${pb.via === "child" ? "child" : "ancestor"} <${pb.tag}>` });
+        cx.paintedVia.push({ nodeId: spec.nodeId, how: `${pb.via === "child" ? "child" : "ancestor"} <${pb.tag}>` });
       }
     }
-    const bad = compareField(f, want, have);
+    const bad = compareField(p, s, want, have);
+    if (!bad) return;
+    const axis = s.spec === "width" ? "w" : s.spec === "height" ? "h" : null;
     let layoutNote;
-    if (bad && (f.key === "width" || f.key === "height") && spec.strokesInLayout && spec.sizing?.[f.key === "width" ? "w" : "h"] === "hug" && (got.strokeFrom === "box-shadow" || got.strokeFrom === "outline") && typeof bad.want === "number" && typeof bad.got === "number") {
+    if (axis && spec.strokesInLayout && spec.sizing?.[axis] === "hug" && isRing(got) && typeof bad.want === "number" && typeof bad.got === "number") {
       const [t = 0, r = 0, b = 0, l = 0] = spec.borderWidths ?? [];
-      const strokes = spec.borderWidths ? f.key === "width" ? l + r : t + b : 2 * (spec.borderWidth ?? 0);
+      const strokes = spec.borderWidths ? axis === "w" ? l + r : t + b : 2 * (spec.borderWidth ?? 0);
       const short2 = bad.want - bad.got;
       if (strokes > 0 && short2 > 0 && Math.abs(short2 - strokes) <= TOLERANCE.textInk) layoutNote = STROKE_LAYOUT_NOTE;
     }
-    if (bad) {
-      const over = f.key === "width" || f.key === "height" ? spec.nominalOverflow?.[f.key === "width" ? "w" : "h"] : void 0;
-      const overNote = over ? `the design's content overflows its fixed box; ${f.key}:${over.nominal} with visible overflow reproduces it (the design shows ${over.content}px)` : void 0;
-      push(spec, f.label, f.high ? "high" : "medium", bad, {
-        ...ifDefined("unit", f.unit),
-        ...ifDefined("token", tokenFor(spec, f.key)),
-        ...measuredIn !== "rest" ? { measuredIn } : {},
-        ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0),
-        ...f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${want}` } : {},
-        ...over ? { cause: "nominal-overflow" } : {},
-        ...ifDefined("note", [strokeNote, paintNote, layoutNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : void 0, overNote].filter((x) => x !== void 0).join("; ") || void 0)
-      });
-    }
-  }
-}
-function checkTextBoxWidth(cx, n) {
-  const { tally, gap, push } = cx;
-  const { spec, got, gapNull, container, matchedBy } = n;
-  const want = spec.boxWidth;
-  if (want === void 0) return;
-  const label = "width (text box)";
-  tally("width", got.width !== void 0);
-  if (got.width === void 0) {
-    gap(spec, label, "the probe did not report this property", true);
-    return;
-  }
-  if (got.width === null) {
-    gapNull(label, "width");
-    return;
-  }
-  if (container) {
-    gap(spec, label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's \u2014 tag the text's own element to have its fixed box width compared`);
-    return;
-  }
-  const have = cssPx(got.width);
-  if (have === null) {
-    gap(spec, label, `could not read '${typeof got.width === "string" ? got.width : JSON.stringify(got.width)}' as a px number`);
-    return;
-  }
-  cx.fieldsChecked++;
-  const d = Math.abs(have - want);
-  if (d > TOLERANCE.size) push(
-    spec,
-    label,
-    "medium",
-    { want, got: have, delta: Number(d.toFixed(3)) },
-    { unit: "px", ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0) }
-  );
-}
-function checkCorners(cx, n) {
-  const { tally, gap, push } = cx;
-  const { spec, got, gapNull, tagLc, onLeaf, leafWhy, rowTag, inline } = n;
-  if (spec.radiusCorners && onLeaf) gap(spec, "border-radius", leafWhy);
-  else if (spec.radiusCorners && inline) gap(spec, "border-radius", inlineWhy(tagLc));
-  else if (spec.radiusCorners && rowTag) {
-    tally("borderRadius", got.borderRadius !== void 0);
-    gap(spec, "border-radius", ROW_RADIUS_WHY);
-  } else if (spec.radiusCorners) {
-    const rc = spec.radiusCorners;
-    const c = radiusCorners(got.borderRadius);
-    tally("borderRadius", got.borderRadius !== void 0);
-    if (got.borderRadius === null || Array.isArray(got.borderRadius) && got.borderRadius.some((v) => v === null)) gapNull("border-radius", "borderRadius");
-    else if (!c) gap(
-      spec,
-      "border-radius",
-      got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`,
-      got.borderRadius === void 0
-    );
-    else if (c.some((r) => r < 0)) gap(spec, "border-radius", `${JSON.stringify(got.borderRadius)} is impossible for a radius (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
-    else {
-      const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-      const [ctl, ctr, cbr, cbl] = c;
-      const measured = { tl: ctl, tr: ctr, br: cbr, bl: cbl };
-      ["tl", "tr", "br", "bl"].forEach((k) => {
-        cx.fieldsChecked++;
-        const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(measured[k], W, H);
-        const d = Math.abs(want - have);
-        if (d > TOLERANCE.radius) push(
-          spec,
-          `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`,
-          "medium",
-          { want, got: have, delta: Number(d.toFixed(3)) },
-          { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) }
-        );
-      });
-    }
-  }
-}
-function checkBorderSides(cx, n) {
-  const { tally, gap, push } = cx;
-  const { spec, got, gapNull, onLeaf, leafWhy } = n;
-  const ws = spec.borderWidths;
-  if (!ws) return;
-  tally("borderWidths", got.borderWidths !== void 0);
-  if (onLeaf) {
-    gap(spec, "border-width", leafWhy);
-    return;
-  }
-  if (got.borderWidths === void 0) {
-    gap(spec, "border-width", "the probe did not report this property", true);
-    return;
-  }
-  if (got.borderWidths === null || Array.isArray(got.borderWidths) && got.borderWidths.some((v) => v === null)) {
-    gapNull("border-width", "borderWidths");
-    return;
-  }
-  const have = fourSides(got.borderWidths);
-  if (!have) {
-    gap(spec, "border-width", `could not read '${JSON.stringify(got.borderWidths)}' as px border widths [t,r,b,l]`);
-    return;
-  }
-  if (have.some((v) => v < 0)) {
-    gap(spec, "border-width", `${JSON.stringify(got.borderWidths)} is impossible for a border width (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
-    return;
-  }
-  const ring = got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
-  PAD_SIDES.forEach((side, i) => {
+    const over = axis ? spec.nominalOverflow?.[axis] : void 0;
+    const overNote = over ? `the design's content overflows its fixed box; ${s.spec}:${over.nominal} with visible overflow reproduces it (the design shows ${over.content}px)` : void 0;
+    cx.push(spec, s.label, p.high ? "high" : "medium", bad, {
+      ...ifDefined("unit", p.unit),
+      ...ifDefined("token", tokenFor(spec, s.spec)),
+      ...measuredIn !== "rest" ? { measuredIn } : {},
+      ...matchedByOf(n),
+      ...s.spec === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${String(want)}` } : {},
+      ...over ? { cause: "nominal-overflow" } : {},
+      ...ifDefined("note", [strokeNote, paintNote, layoutNote, s.spec === "lineHeight" ? cx.lineBoxWhyOf.get(spec.nodeId) : void 0, overNote].filter((x) => x !== void 0).join("; ") || void 0)
+    });
+  },
+  /** a fixed-width TEXT's box in a parent that hugs its width (spec.boxWidth): the box sizes the parent, so the width of the
+   *  text's own element is compared — never a container's (a padded element, a <td>, a <button>), whose box is not the text's */
+  textBox: (a, want, { v }) => {
+    const { cx, n, s } = a;
     cx.fieldsChecked++;
-    const want0 = ws[i] ?? 0, want = ring ? want0 : cssBorderWidth(want0), h = have[i] ?? 0;
-    const d = Math.abs(want - h);
-    if (d > TOLERANCE.stroke) push(
+    const have = Number(v), d = Math.abs(have - Number(want));
+    if (d > (s.tol ?? 0)) cx.push(n.spec, s.label, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", ...matchedByOf(n) });
+  },
+  /** a per-corner radius (unequal corners), corner by corner — as each corner can draw */
+  corners: ({ cx, n, s }, _want, { four }) => {
+    const { spec, got } = n;
+    const rc = spec.radiusCorners;
+    if (!rc || !four) return;
+    ["tl", "tr", "br", "bl"].forEach((k, i) => {
+      cx.fieldsChecked++;
+      const want = designRadius(spec, rc[k]), have = builtRadius(spec, got, four[i] ?? 0);
+      const d = Math.abs(want - have);
+      if (d > (s.tol ?? 0)) cx.push(spec, `${s.label} (${s.parts?.[i] ?? k})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) });
+    });
+  },
+  /** per-side border widths (a divider with only a bottom stroke), side by side — as CSS draws them */
+  sides: ({ cx, n, s }, _want, { four }) => {
+    const { spec, got } = n;
+    const ws = spec.borderWidths;
+    if (!ws || !four) return;
+    const ring = isRing(got);
+    PAD_SIDES.forEach((side, i) => {
+      cx.fieldsChecked++;
+      const { want, note } = drawnStroke(ws[i] ?? 0, ring), h = four[i] ?? 0;
+      const d = Math.abs(want - h);
+      if (d > (s.tol ?? 0)) cx.push(spec, `${s.label} (${side})`, "medium", { want, got: h, delta: Number(d.toFixed(3)) }, { unit: "px", ...note ? { note } : {} });
+    });
+  },
+  /** padding, side by side (a side the design cannot show is skipped) */
+  padding: ({ cx, n }, _want, { four }) => {
+    const { spec, got } = n;
+    if (!four) return;
+    cx.fieldsChecked++;
+    const bad = comparePadding(spec.padding, four, spec.paddingSkip);
+    const allZero = four.every((v) => v === 0);
+    const skipNote = spec.paddingSkip && spec.paddingSkip.length ? `${spec.paddingSkip.join("/")} not compared (the design cannot show that padding \u2014 see notComparable)` : void 0;
+    const zeroNote = allZero && !got.tag ? "measured 0 on every side \u2014 if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" : void 0;
+    const padNote = [zeroNote, skipNote].filter((x) => !!x).join("; ");
+    if (bad) cx.push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")), ...padNote ? { note: padNote } : {} });
+  },
+  /** an input placeholder's text */
+  placeholder: ({ cx, n }, want, { v }) => {
+    cx.fieldsChecked++;
+    if (!renderedText(String(want), n.spec.textCase, String(v), void 0, nbspTrim).same) cx.push(n.spec, "placeholder text", "high", { want, got: v, delta: null });
+  },
+  /** the copy, as rendered (text case / text-transform), and a non-breaking space in it */
+  copy: ({ cx, n }) => compareCopy(cx, n)
+};
+function compareCopy(cx, n) {
+  const { deltas, push, builtTexts } = cx;
+  const { spec, got } = n;
+  if (got.text === void 0 || got.text === null) return;
+  cx.fieldsChecked++;
+  const designText = designBreaks(String(spec.text));
+  const rt = renderedText(designText, spec.textCase, String(got.text), got.textTransform, nbspTrim);
+  const w = nbspTrim(rt.want);
+  const g = nbspTrim(rt.have);
+  const caseShown = spec.textCase !== void 0 || rt.transform !== null && rt.transform.trim().toLowerCase() !== "none";
+  const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${designText.trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
+  const gc = (/\u00a0/.test(rt.want) || /\u00a0/.test(rt.have)) && rt.want !== rt.have ? gapCmp(rt.want, rt.have) : null;
+  const same = gc !== null ? gc === "same" : rt.same;
+  const wsR = same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, strictCollapse);
+  const wsOnly = gc !== null ? gc === "narrower" : wsR !== null && wsR.same;
+  const spaceKind = gc === null && !same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNorm).same;
+  if (!same) {
+    const caseOnly = !wsOnly && !spaceKind && strictCollapse(rt.want).toLowerCase() === strictCollapse(rt.have).toLowerCase();
+    const caseWs = caseOnly && w.toLowerCase() !== g.toLowerCase();
+    const nbspGap = gc === "wider" || !wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase();
+    const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && !nbspGap && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
+    const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : void 0;
+    const distinct = rowTexts ? new Set(rowTexts).size : 0;
+    const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
+    const realData = !wsOnly && !spaceKind && !caseOnly && !nbspGap && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
+    const caseHead = caseWs ? "differs only in case and whitespace" : "differs only in case";
+    const why = wsR !== null && wsOnly ? `differs only in whitespace: ${gc !== null ? whitespaceWhy(designRender(rt.want), buildRender(rt.have)) : whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}` : spaceKind ? spaceKindWhy(w, g) : nbspGap ? gapWidthWhy(rt.want, rt.have) : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} \u2014 check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` \u2014 the whitespace: ${whitespaceWhy(w, g)}` : ""}` : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
+    const note = [why, renderNote].filter((x) => x !== void 0).join(" \u2014 ");
+    push(
       spec,
-      `border-width (${side})`,
-      "medium",
-      { want, got: h, delta: Number(d.toFixed(3)) },
-      { unit: "px", ...want !== want0 ? { note: `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)` } : {} }
+      "text",
+      wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high",
+      { want: spec.textCase ? rt.want : designText, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null },
+      {
+        ...note ? { note } : {}
+      }
     );
-  });
-}
-function checkPadding(cx, n) {
-  const { tally, gap, push } = cx;
-  const { spec, got, gapNull, tagLc, onLeaf, leafWhy, inline } = n;
-  if (spec.padding !== void 0) {
-    tally("padding", got.padding !== void 0);
-    const pad = fourSides(got.padding);
-    if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property", true);
-    else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id");
-    else if (onLeaf) gap(spec, "padding", leafWhy);
-    else if (inline) gap(spec, "padding", inlineWhy(tagLc));
-    else if (got.padding === null || Array.isArray(got.padding) && got.padding.some((v) => v === null)) gapNull("padding", "padding");
-    else if (!pad) gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as px padding [t,r,b,l]`);
-    else if (pad.some((v) => v < 0)) gap(spec, "padding", `${JSON.stringify(got.padding)} is impossible for padding (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
-    else {
-      cx.fieldsChecked++;
-      const bad = comparePadding(spec.padding, pad, spec.paddingSkip);
-      const allZero = pad.every((v) => v === 0);
-      const skipNote = spec.paddingSkip && spec.paddingSkip.length ? `${spec.paddingSkip.join("/")} not compared (the design cannot show that padding \u2014 see notComparable)` : void 0;
-      const zeroNote = allZero && !got.tag ? "measured 0 on every side \u2014 if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" : void 0;
-      const padNote = [zeroNote, skipNote].filter((x) => !!x).join("; ");
-      if (bad) push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")), ...padNote ? { note: padNote } : {} });
-    }
   }
-}
-function checkPlaceholderText(cx, n) {
-  const { tally, gap, push } = cx;
-  const { spec, got, gapNull } = n;
-  if (spec.placeholderText !== void 0) {
-    tally("placeholderText", got.placeholderText !== void 0);
-    if (got.placeholderText === void 0) gap(spec, "placeholder text", "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')", true);
-    else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
-    else {
-      cx.fieldsChecked++;
-      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), void 0, nbspTrim).same)
-        push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
-    }
-  }
-}
-function checkText(cx, n) {
-  const { deltas, tally, absentGaps, gap, push, builtTexts } = cx;
-  const { spec, got, um } = n;
-  if (spec.text !== void 0) {
-    tally("text", got.text !== void 0);
-    if (got.text === null) {
-      cx.fieldsReportedNull++;
-      gap(spec, "text", um.text || "the probe reported text: null \u2014 an element with child elements still has text; report its textContent", true);
-    } else if (got.text === void 0) absentGaps.add(`${spec.nodeId}\0text`);
-    else if (got.text !== void 0) {
-      cx.fieldsChecked++;
-      const designText = designBreaks(String(spec.text));
-      const rt = renderedText(designText, spec.textCase, String(got.text), got.textTransform, nbspTrim);
-      const w = nbspTrim(rt.want);
-      const g = nbspTrim(rt.have);
-      const caseShown = spec.textCase !== void 0 || rt.transform !== null && rt.transform.trim().toLowerCase() !== "none";
-      const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${designText.trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
-      const gc = (/\u00a0/.test(rt.want) || /\u00a0/.test(rt.have)) && rt.want !== rt.have ? gapCmp(rt.want, rt.have) : null;
-      const same = gc !== null ? gc === "same" : rt.same;
-      const wsR = same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, strictCollapse);
-      const wsOnly = gc !== null ? gc === "narrower" : wsR !== null && wsR.same;
-      const spaceKind = gc === null && !same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNorm).same;
-      if (!same) {
-        const caseOnly = !wsOnly && !spaceKind && strictCollapse(rt.want).toLowerCase() === strictCollapse(rt.have).toLowerCase();
-        const caseWs = caseOnly && w.toLowerCase() !== g.toLowerCase();
-        const nbspGap = gc === "wider" || !wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase();
-        const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && !nbspGap && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
-        const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : void 0;
-        const distinct = rowTexts ? new Set(rowTexts).size : 0;
-        const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
-        const realData = !wsOnly && !spaceKind && !caseOnly && !nbspGap && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
-        const caseHead = caseWs ? "differs only in case and whitespace" : "differs only in case";
-        const why = wsR !== null && wsOnly ? `differs only in whitespace: ${gc !== null ? whitespaceWhy(designRender(rt.want), buildRender(rt.have)) : whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}` : spaceKind ? spaceKindWhy(w, g) : nbspGap ? gapWidthWhy(rt.want, rt.have) : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} \u2014 check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` \u2014 the whitespace: ${whitespaceWhy(w, g)}` : ""}` : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
-        const note = [why, renderNote].filter((x) => x !== void 0).join(" \u2014 ");
-        push(
-          spec,
-          "text",
-          wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high",
-          { want: spec.textCase ? rt.want : designText, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null },
-          {
-            ...note ? { note } : {}
-          }
-        );
-      }
-      if (/\u00a0/.test(String(spec.text))) {
-        const show = (t) => String(t).replace(/\u00a0/g, "\\u00a0");
-        const builtNbsp = /\u00a0/.test(String(got.text));
-        deltas.push({
-          severity: "low",
-          nodeId: spec.nodeId,
-          name: spec.name,
-          field: "text (invisible character)",
-          expected: show(spec.text),
-          actual: show(got.text),
-          note: builtNbsp ? "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately." : "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution; the build uses an ordinary space there, which is fine unless the non-breaking space was meant to keep the words on one line."
-        });
-      }
-    }
+  if (/\u00a0/.test(String(spec.text))) {
+    const show = (t) => String(t).replace(/\u00a0/g, "\\u00a0");
+    const builtNbsp = /\u00a0/.test(String(got.text));
+    deltas.push({
+      severity: "low",
+      nodeId: spec.nodeId,
+      name: spec.name,
+      field: "text (invisible character)",
+      expected: show(spec.text),
+      actual: show(got.text),
+      note: builtNbsp ? "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately." : "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution; the build uses an ordinary space there, which is fine unless the non-breaking space was meant to keep the words on one line."
+    });
   }
 }
 function viewportOf(measured) {
@@ -6527,7 +6530,7 @@ function typographyNotes(cx) {
   const addNote = (d, note) => {
     d.note = d.note ? `${d.note}; ${note}` : note;
   };
-  const typoLabels = new Set(FIELDS.filter((f) => TYPO_FIELDS.has(f.key)).map((f) => f.label));
+  const typoLabels = new Set(PROPERTIES.filter((p) => p.typography).flatMap((p) => p.shapes.map((s) => s.label)));
   for (const d of deltas) {
     const tag = typographyOn.get(String(d.nodeId));
     if (tag && typoLabels.has(d.field)) addNote(d, `typography read from a <${tag}>, not the text run \u2014 if the text sits in a child element, measure that element (the shipped probe does, and says textFrom)`);
@@ -6571,7 +6574,7 @@ function fieldsNeverMeasuredOf(cx) {
   const { unknownKeys, census } = cx;
   const fieldsNeverMeasured = [];
   for (const [key, c] of census) {
-    if (FIELDS.some((f) => f.key === key && f.optional)) continue;
+    if (PROPERTIES.some((p) => p.optional && p.shapes.some((s) => s.census === key))) continue;
     if (c.expected > 0 && c.present === 0) {
       const hinted = [...unknownKeys.keys()].filter((k) => KEY_HINTS[k] === key);
       fieldsNeverMeasured.push({ field: key, expectedOn: c.expected, measuredOn: 0, ...hinted.length ? { probeSent: hinted } : {} });
@@ -7742,7 +7745,7 @@ function probeInputMarkdown(r) {
   }
   return L;
 }
-var isTextRow = (field) => /^(text|placeholder text)\b/.test(field);
+var isTextRow = (field2) => /^(text|placeholder text)\b/.test(field2);
 var showText = (v) => String(v).replace(/\r\n|[\n\r]/g, "\\n").replace(/\t/g, "\\t").replace(/ {2,}/g, (m) => " " + "\xB7".repeat(m.length - 1)).replace(/[^\S \t\n\r]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
 var withUnit = (v, unit) => {
   const t = fmt(v);
@@ -8057,21 +8060,21 @@ function rewriteRefs(plan, map, write2) {
   const changed = [];
   const v = plan.verification;
   if (!isJsonObject(v)) return changed;
-  const one = (o, key, field) => {
+  const one = (o, key, field2) => {
     const ref = o[key];
     if (typeof ref !== "string") return;
-    const to = map(ref, field);
+    const to = map(ref, field2);
     if (to === null) return;
     if (write2) o[key] = to;
-    if (!changed.includes(field)) changed.push(field);
+    if (!changed.includes(field2)) changed.push(field2);
   };
-  const list = (arts, field) => {
+  const list = (arts, field2) => {
     if (Array.isArray(arts)) arts.forEach((a, i) => {
       if (typeof a !== "string") return;
-      const to = map(a, field);
+      const to = map(a, field2);
       if (to === null) return;
       if (write2) arts[i] = to;
-      if (!changed.includes(field)) changed.push(field);
+      if (!changed.includes(field2)) changed.push(field2);
     });
   };
   const rec = v.recorded;
@@ -8185,8 +8188,8 @@ function readPlans(planDir, cwd) {
   }
   return out;
 }
-function namedFile(ref, field, planFile, d) {
-  if (field !== "verification.a11y.report") {
+function namedFile(ref, field2, planFile, d) {
+  if (field2 !== "verification.a11y.report") {
     const abs = path21.resolve(d.cwd, ref);
     return path21.dirname(abs) === d.verifyDir ? path21.basename(abs) : null;
   }
@@ -8423,8 +8426,8 @@ function planMigration(d) {
       const blocks = [];
       for (const p of plans) {
         const used = /* @__PURE__ */ new Map();
-        rewriteRefs(p.plan, (ref, field) => {
-          const n = namedFile(ref, field, p.file, d);
+        rewriteRefs(p.plan, (ref, field2) => {
+          const n = namedFile(ref, field2, p.file, d);
           const nn = n === null ? void 0 : nameMap.get(n);
           if (n !== null && nn !== void 0) used.set(n, nn);
           return null;
@@ -8688,8 +8691,8 @@ function applyRename(s, d) {
     if (exists2(journal)) return { why: [`${path21.basename(journal)} already exists \u2014 run --migrate again (it rolls that migration back first)`], notes };
     const plans = readPlans(d.planDir, d.cwd);
     const nameMap = new Map(s.files.map((m) => [path21.basename(m.from), path21.basename(m.to)]));
-    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref, field) => {
-      const n = namedFile(ref, field, p.file, d);
+    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref, field2) => {
+      const n = namedFile(ref, field2, p.file, d);
       return n !== null && nameMap.has(n) ? "" : null;
     }, false).length > 0);
     const refsOf = freshRefs(d);
@@ -8733,8 +8736,8 @@ function applyRename(s, d) {
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
         const restamp = hookHashOf(hook, plan) === "legacy";
-        fields = rewriteRefs(plan, (ref, field) => {
-          const n = namedFile(ref, field, p.file, d);
+        fields = rewriteRefs(plan, (ref, field2) => {
+          const n = namedFile(ref, field2, p.file, d);
           const nn = n === null ? void 0 : nameMap.get(n);
           return n !== null && nn !== void 0 ? respell(ref, n, nn) : null;
         }, true);
