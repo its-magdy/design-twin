@@ -3,7 +3,7 @@
 **Figma → code on the free plan, verified.**
 
 Every API and behavior below was verified against official Figma / Claude Code docs
-(five parallel doc-verification passes). Time-sensitive; re-verify if Figma changes plans/APIs.
+(checked against those docs in a verification pass). Time-sensitive; re-verify if Figma changes plans/APIs.
 
 ## The core constraints (why the design is what it is)
 
@@ -27,7 +27,7 @@ export on disk), and `figma_write` is the only write surface anywhere. What actu
 is the calling convention, spelled out under the diagram.
 
 ```
-                         CLI front-end: batch reads → files on disk  — you need this
+                         CLI front-end: batch reads → files on disk  — optional (manual export needs no CLI)
   Figma (file open)
     code.js (Plugin API reads) ──postMessage──► ui.html [plugin window iframe, WS client]
                                                        │ ws://localhost:PORT
@@ -172,7 +172,10 @@ Design decisions worth not re-litigating:
   checks only as defense-in-depth. Compared as SHA-256 digests through `timingSafeEqual`: hashing first
   makes both sides a fixed 32 bytes, so unlike a raw compare guarded by a length check, neither the
   token's content nor its **length** leaks through timing.
-- **No documented payload-size cap** → **chunk large exports** across `postMessage` and add reconnect logic.
+- **No documented payload-size cap** on `postMessage`. Nothing is chunked: each response reaches the bridge
+  as one WebSocket frame, and the bridge caps a frame at `FIGMA_BRIDGE_MAX_PAYLOAD_MB` (default 128 MB).
+  Chunking would be the remedy for a file that outgrows it. The window (`ui.html`) reconnects on its own
+  when the socket drops.
 - **Network manifest:** `ws`/`wss` and `http(s)://localhost[:PORT]` are permitted in
   `networkAccess.allowedDomains` — **including for a published plugin**, which is what makes the bridge
   survive Community distribution. Figma's docs require a `reasoning` string precisely *because*
@@ -344,7 +347,7 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
   MCP/CLI **provide the data**. Complementary. The audit is offline-only (reads `design/`), like
   drift-lint.
 
-## Reuse posture — Figma's skills & knowledge (verified 2026-07)
+## Reuse posture — Figma's skills & knowledge
 
 **Reuse the knowledge, not the skills.** Figma's official skills (`figma/mcp-server-guide`:
 `figma-use`, `figma-design-to-code`, `figma-generate-design`, `figma-swiftui`, `figma-implement-motion`, …)
@@ -394,9 +397,10 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 
 ## Security posture
 
-- Exporter: no internet domain in `allowedDomains` → structurally cannot exfiltrate. Figma **publishes**
-  the declared domain list on the Community page, so this is a claim a stranger can verify without
-  reading the source — a stronger guarantee than a self-asserted one.
+- Exporter: no internet domain in `allowedDomains` → structurally cannot exfiltrate. Figma enforces the
+  manifest's `networkAccess.allowedDomains` (only `ws://localhost:8787-8789`), and the plugin is imported as a
+  development plugin from the repo's committed `manifest.json` and `code.js`, so anyone can read exactly what
+  runs. (It is not on Figma Community.)
 - Bridge: `ws://localhost` only → reaches your machine, never the internet. But loopback is *reachability*,
   not authentication — any local process, and any page in your browser, can open the port. So the bridge
   requires a **shared token**, generated on first use and persisted per-user (`bridge/src/token-store.ts`:

@@ -1,8 +1,9 @@
-# Testing the "Design Twin" plugin
+# Testing Design Twin
 
-Two layers. **Layer A runs with no Figma app** and an agent can do it alone. **Layer B needs the
+Three layers. **Layer A runs with no Figma app** and an agent can do it alone. **Layer B needs the
 Figma desktop app** (a human clicks Export; the agent reads and validates the output). Do A first —
-it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
+it catches logic bugs cheaply — then B to confirm the real `figma.*` calls. **Layer C** is a checklist
+that runs the design-to-code tools on a real export.
 
 ---
 
@@ -246,8 +247,7 @@ In the design-to-code suite, assertions pin actual VALUES (RGB channels, not jus
 drift warnings are asserted to *fire*, and every fixed bug has a tagged regression test. The validator is
 cross-checked against an ajv oracle (0 divergences over 10,733 inputs), and the whole pipeline is tested to
 compose end-to-end. The rule: assert values, mutation-test, and adversarially re-review EACH fix pass — a fix
-pass can introduce its own bugs (reviewing this suite's first round of 28 fixes found ~6 regressions those
-fixes introduced).
+pass can introduce its own bugs.
 
 When you change a `design-to-code/` script or the map shape, extend `test/design-to-code.test.ts` with the new
 behavior. `design-to-code/map-validate-core.ts` is the single source of truth for that shape — update its KEYS/PROP
@@ -319,7 +319,7 @@ index.json to find the LAYER, then read only that file — never a whole directo
 
 ### Discovering which libraries a file uses
 
-Not a default first step (the default is `--list` → `--children <id>` → `--node <id>`): when you need to
+Not a default first step (the default is `--list-pages` → `--list` → `--children <id>` → `--node <id>`): when you need to
 know which library owns a token, or before an `--as-library` pull, run
 `bun bridge/src/figma-pull.ts --list-libraries` (MCP twin: `figma_list_libraries`). It prints the local
 file's published assets plus every **enabled** team library, each with its variable collections and a
@@ -459,7 +459,7 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
 
 ### Reality check on a messy file (optional but recommended)
 - [ ] Run tokens on a file that hardcodes hex instead of using variables → `variables[]` is small/empty and
-      the token output is thin. This is the "degraded input" case the reconciliation layer (deferred) is for —
+      the token output is thin. This is the "degraded input" case the normalization pass (not built) is for —
       note how little the map/tokens can do, which is the signal to improve the Figma file or build that layer.
 
 > Anything that fails here is a **real-data** gap the mock suite couldn't see — capture the input and add a

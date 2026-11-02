@@ -1,8 +1,8 @@
 # Design-to-code layer — verified spec (ADR)
 
-Status: **accepted (repo-agnostic core built; resolver deferred to a target repo)**
+Status: **accepted (built; the codegen resolver is the `build-screen` skill; the normalization pass is not built as one step)**
 Date: 2026-07-23
-Verified by: 4 parallel research agents against authoritative sources (Figma Code Connect docs,
+Verified by: a research pass against authoritative sources (Figma Code Connect docs,
 W3C DTCG format, Style Dictionary, Tokens Studio, Anima/Locofy/Builder.io, and two Figma GitHub issues).
 
 This document is the source of truth for the layer that turns the extractor's faithful JSON into
@@ -59,8 +59,12 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
 - **Three tiers, enforced not just recorded.** Literals live only in primitives; semantic/component
   tiers must be references. A "semantic" token holding a raw hex is a themeability smell → flag it.
 - **Modes → theme axis.** Primitives once under `:root`; semantic layer per mode
-  (`[data-theme="dark"]`, …); `defaultModeId` → base. Web `[data-theme]` + `prefers-color-scheme`
-  fallback; SwiftUI asset-catalog appearances or `Color(light:dark:)`; Compose two `ColorScheme`s.
+  (`[data-theme="dark"]`, …); `defaultModeId` → base. What shipped (`tokens.ts`, `tokens-native.ts`):
+  web `[data-theme]` blocks (`[data-theme-<collection>]` when collections share a mode name); SwiftUI a
+  struct with one instance per mode and an `EnvironmentValues` entry; Compose an `@Immutable` data class
+  with one instance per mode and a `staticCompositionLocalOf`; Flutter a `ThemeExtension`; React Native
+  typed objects keyed by mode. The asset-catalog colours and Compose `ColorScheme`s first planned here
+  were not built.
 - **Color**: carry `display-p3` components when `documentColorProfile` is P3 (always with a `hex`
   sRGB fallback — do not downgrade at extraction). Keep alpha. (DTCG 2025.10 structured color.)
   Note: Style Dictionary v4 does not yet fully support 2025.10 structured `$value`; the `hex` fallback covers it.
@@ -83,7 +87,8 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
 - **No-eval is validated by Figma's own design:** Code Connect transforms are declarative value-tables;
   "files are not executed." The map is plain JSON data. Computed transforms only via a **whitelisted
   named-op registry** (e.g. `{ "transform": "pxToRem", "base": 16 }`), never inline functions.
-- **One source of truth for the map shape.** `design-to-code/map-validate.ts` both defines and enforces it,
+- **One source of truth for the map shape.** `design-to-code/map-validate-core.ts` both defines and enforces it
+  (`map-validate.ts` is its CLI),
   with structured errors and no runtime dependency (matches this repo's zero-dep style). A parallel
   hand-mirrored `map-schema.json` was deleted — nothing read it, and two representations synced by hand
   are the drift this directory exists to catch. If a published JSON Schema is ever needed, generate it
@@ -93,7 +98,9 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
   (github.com/figma/code-connect/issues/337): a deleted/moved mapped component makes `publish` succeed
   *silently* with a broken link. Because we key on the stable `key`, `design-to-code/drift-lint.ts` catches
   exactly that — plus unmapped components, prop-name mismatches, and prop-type/enum-value mismatches —
-  at lint time. A pure rename produces zero drift.
+  at lint time. A pure rename produces zero drift. Optionally, with `FIGMA_FILE_KEY` and `FIGMA_TOKEN` set,
+  the drift-lint CLI asks Figma's REST API for the file's `last_modified` and warns when the file changed after
+  the snapshot was exported; without them it makes no network call.
 
 ### Degraded input — the normalization pass (design deferred build; thresholds need research)
 Most real files are unstructured or have a decorative style-guide page. Handle via a pass that runs
@@ -125,14 +132,12 @@ Push determinism into scripts + hooks; reserve skills/agents for judgment.
   same skill — one screen per agent, so each screen's node JSON stays out of the main context.
 
 ## Build status
-- **Built (repo-agnostic, harness-tested + adversarially reviewed):** `design-to-code/tokens.ts`,
-  `design-to-code/map-validate.ts`, `design-to-code/drift-lint.ts`, `design-to-code/map-bootstrap.ts`.
-  drift-lint matches by key, so a deleted component is reported even when another has its name; the
-  ambiguous-prop guard applies to both the map and the catalog side; bootstrap always preserves an
-  existing entry (a human may have half-edited a stub). The validator is checked against an ajv oracle (0
-  divergences / 10,733 inputs) and the whole pipeline composes end-to-end. `test/design-to-code.test.ts`
-  has a tagged regression test per fixed bug, and its assertions pin values. Validate on real data via the
-  **Layer C checklist in TESTING.md**.
+- **Built:** the token emitters, the map validator, drift-lint and map-bootstrap described above, plus the
+  audit, cross-check, plan, verify (including the web probe's visual diff and accessibility checks) and
+  design-diff scripts. `design-to-code/README.md` has the table of every script and what it does;
+  `test/design-to-code.test.ts` and the other suites cover them, and the **Layer C checklist in TESTING.md**
+  validates them on real data. The codegen resolver is the `build-screen` skill: it consults
+  `codeconnect.local.json` and the emitted tokens while the model writes the code.
 
   **Documented low/pathological limitations (not fixed — would risk regressions for scenarios normal use
   can't produce):** (1) bootstrap leaves a stale *guessed* export on an untouched, catalog-renamed stub —
@@ -140,8 +145,9 @@ Push determinism into scripts + hooks; reserve skills/agents for judgment.
   first-writer-wins can silently drop a prev entry whose map key equals a *different* live component's
   key while it is itself orphaned — MEDIUM data-loss but only reachable via a hand-mangled map (a
   bootstrapped map never produces it).
-- **Deferred:** codegen resolver (needs a target repo); normalize thresholds (need ΔE + structural-
-  similarity research); the visual self-correction diff loop; a11y enrichment.
+- **Not built as one pass:** the degraded-input normalization pass (its thresholds need ΔE + structural-
+  similarity research). Parts of it exist elsewhere: `audit.ts` reports the token-binding share, and
+  `cross-check.ts` proposes component matches.
 
 ## Sources
 Figma Code Connect (react/swiftui/compose docs, CLI reference, issues #337 & #194) · W3C DTCG format

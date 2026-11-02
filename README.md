@@ -362,7 +362,7 @@ Working on this repo itself (human or agent)? The `designtwin` Claude Code plugi
 is `bun bridge/src/figma-pull.ts`; read [`CLAUDE.md`](CLAUDE.md) first.
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, running single suites, rebuilding the committed build output, and
-the rules CI enforces. [`TESTING.md`](TESTING.md) lists each suite and the live-Figma checks.
+the rules CI enforces. [`TESTING.md`](TESTING.md) describes the test layers and the live-Figma checks.
 
 ---
 

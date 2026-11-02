@@ -38,7 +38,8 @@ request; CI runs the same suites, split across several runners.
   `bun test/bridge.test.ts` (CLI + bridge), `bun test/design-to-code.test.ts` (tokens, maps, drift-lint), and every
   other `test/*.test.ts` the same way.
 - `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once.
-- [TESTING.md](TESTING.md) lists each suite; the run-suites summary is the authority for check counts.
+- [TESTING.md](TESTING.md) describes the test layers; `bun run test` prints every suite in its summary, which is the
+  authority for check counts.
 
 `bun run build` runs each workspace's own build — esbuild → `figma-plugin/code.js` and `figma-plugin/ui.html` for the
 plugin (the bridge has nothing to build: it runs and ships as TypeScript) — and then `bun claude-plugin/build-scripts.ts`
