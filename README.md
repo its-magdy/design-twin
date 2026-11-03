@@ -1,8 +1,6 @@
+<!-- One image on its own white tile, not a picture element: GitHub picks its source by the OS colour scheme, not its own theme, so the white wordmark showed on GitHub's light page. -->
 <h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
-    <img alt="Design Twin" src="assets/wordmark-light.svg" height="72">
-  </picture>
+  <img alt="Design Twin" src="assets/wordmark-tile.svg" height="72">
 </h1>
 
 > Figma → code with Claude Code, on the **free** Figma plan. No REST API key, no cloud service in between: the design

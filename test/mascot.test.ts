@@ -69,7 +69,7 @@ check("`dtwin --version --json` piped: just the version", pipedJson.status === 0
 // ---------------------------------------------------------------- the brand files
 
 const ASSETS = path.join(ROOT, "assets");
-const need = ["README.md", "logo.svg", "logo-light.svg", "logo-dark.svg", "logo-16.svg", "wordmark-light.svg", "wordmark-dark.svg", "wordmark-light.png",
+const need = ["README.md", "logo.svg", "logo-light.svg", "logo-dark.svg", "logo-16.svg", "wordmark-light.svg", "wordmark-dark.svg", "wordmark-tile.svg", "wordmark-light.png",
   "avatar.svg", "avatar-512.png", "bo.svg", "bo-states.svg", "social-preview.svg", "social-preview.png"];
 check("assets/: every brand file is there", need.every((f) => fs.existsSync(path.join(ASSETS, f))));
 const svgs = fs.readdirSync(ASSETS).filter((f) => f.endsWith(".svg"));
@@ -94,8 +94,8 @@ const [aw, ah] = pngSize("avatar-512.png");
 check("avatar-512.png: 512×512", aw === 512 && ah === 512);
 
 const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
-check("README header: a <picture> with the dark wordmark for dark themes and the light one, with alt text, as the fallback",
-  /<source media="\(prefers-color-scheme: dark\)" srcset="assets\/wordmark-dark\.svg">/.test(readme) && /<img alt="Design Twin" src="assets\/wordmark-light\.svg"/.test(readme));
+check("README header: one wordmark on its own white tile (reads on light and dark themes), with alt text, and no <picture>",
+  /<img alt="Design Twin" src="assets\/wordmark-tile\.svg"/.test(readme) && !/<picture>/.test(readme));
 const npmReadme = fs.readFileSync(path.join(ROOT, "bridge", "README.md"), "utf8");
 check("npm README (bridge/README.md): the logo by an absolute raw.githubusercontent URL to a committed PNG",
   /<img alt="Design Twin" src="https:\/\/raw\.githubusercontent\.com\/its-magdy\/design-twin\/main\/assets\/wordmark-light\.png"/.test(npmReadme));
