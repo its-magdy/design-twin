@@ -414,9 +414,12 @@ console.log("\nawaitClient — a listing or refusal waits for a just-opened wind
 // Every leave restarts the settle and every new socket brings a fresh grace: a socket that opens and closes
 // without a hello faster than the settle must not hold a wait past the cap (window or settle, plus one grace,
 // from the moment a client went live).
+// The settle sits well above the flap's leave-to-leave period (250 ms): a loaded CI runner's late timer can
+// stretch one cycle, and a cycle that outlasts the settle lets it pass with the flapper live — the short
+// windows then end at their window (correctly), not at the cap this block measures.
 console.log("\nawaitClient — a silent socket flapping faster than the settle is cut off at the cap:");
 {
-  const settle = 300;
+  const settle = 700;
   const r = reg(settle);
   connect(r, "File A");
   await sleep(settle + 20); // settled, File A identified
