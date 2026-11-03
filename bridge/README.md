@@ -1,4 +1,4 @@
-<!-- npm renders no <picture> and no repo-relative paths: one absolute PNG, dark ink, made for npm's white page. -->
+<!-- npm renders no <picture> and no repo-relative paths: one absolute PNG, dark ink on its own white tile so it reads in npm dark mode too. -->
 <img alt="Design Twin" src="https://raw.githubusercontent.com/its-magdy/design-twin/main/assets/wordmark-light.png" height="56">
 
 # Design Twin — `dtwin`
