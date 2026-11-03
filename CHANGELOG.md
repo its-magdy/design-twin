@@ -13,6 +13,8 @@ list of merged PRs.
 
 - A GitHub Release's notes keep a nested list item on its own line. Before, a CHANGELOG entry's sub-list was run
   into its parent item as one paragraph (as in 0.1.6's notes, since corrected by hand).
+- The logo reads on every theme: the npm page and the GitHub README now show the wordmark on its own white tile.
+  Before, npm's dark mode hid the dark ink, and GitHub's light theme under an OS dark setting showed the white one.
 
 ## [0.1.6] - 2026-11-02
 

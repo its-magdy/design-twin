@@ -11,8 +11,9 @@ sprite in `dtwin --version`, and the companion character.
 | `logo.svg` | The mark. The frame and eyes are `currentColor`, so use it inline, where it takes the text colour. In an `<img>`, `currentColor` turns black, so use one of the two files below instead. |
 | `logo-light.svg` / `logo-dark.svg` | The mark for light / dark backgrounds (ink `#16141f` / `#ffffff`). |
 | `logo-16.svg` | The mark drawn on a 16 px grid, crisp at exactly 16 px (the plugin window uses it inline). Use it for anything 16–23 px. |
-| `wordmark-light.svg` / `wordmark-dark.svg` | The mark plus "Design Twin", with the text converted to outlines (Inter Bold). The README header uses them in a `<picture>`. |
-| `wordmark-light.png` | The light wordmark as a PNG, for places that show neither SVG nor `<picture>`. The npm page uses it. |
+| `wordmark-light.svg` / `wordmark-dark.svg` | The mark plus "Design Twin", with the text converted to outlines (Inter Bold), for light / dark backgrounds. |
+| `wordmark-tile.svg` | The light wordmark on a white rounded tile, so one file reads on light and dark pages. The README header uses it: GitHub picks a `<picture>` source by the OS colour scheme, not its own theme. |
+| `wordmark-light.png` | The light wordmark on a white rounded tile, as a PNG, for places that show neither SVG nor `<picture>`. The npm page uses it: npm has a dark mode but drops `<picture>`, so the tile keeps the dark ink readable there and blends into the white page in light mode. |
 | `avatar.svg` / `avatar-512.png` | A square avatar for GitHub, npm or Discord. The mark sits inside the circle those sites crop to. `claude-plugin/.claude-plugin/icon.png` is a copy: the Claude Code plugin's icon. |
 | `social-preview.svg` / `social-preview.png` | GitHub's social preview, 1280×640. Upload the PNG in the repo's Settings → General → Social preview. |
 | `bo.svg` | Bo, the character (hello pose). |
