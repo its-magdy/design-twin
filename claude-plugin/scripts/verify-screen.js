@@ -1739,6 +1739,38 @@ function hookHashOf(hook, plan) {
   if (h === planHash(plan)) return "current";
   return h === legacyPlanHash(plan) ? "legacy" : null;
 }
+var SVG_GEOMETRY = {
+  path: ["d"],
+  rect: ["x", "y", "width", "height", "rx", "ry"],
+  circle: ["cx", "cy", "r"],
+  ellipse: ["cx", "cy", "rx", "ry"],
+  line: ["x1", "y1", "x2", "y2"],
+  polygon: ["points"],
+  polyline: ["points"]
+};
+var attrOf = (tag, name) => new RegExp(`(?<![\\w:-])${name}\\s*=\\s*(["'])(.*?)\\1`, "s").exec(tag)?.[2] ?? null;
+function svgGeometry(svg) {
+  const drawn = svg.replace(/<(defs|clipPath|mask|symbol|pattern)\b[\s\S]*?<\/\1\s*>/gi, "");
+  if (/<use\b/i.test(drawn)) return null;
+  const tokens = [];
+  for (const [tag = "", name = ""] of drawn.matchAll(/<(g|path|rect|circle|ellipse|line|polygon|polyline)\b[^>]*>/gi)) {
+    const kind = name.toLowerCase();
+    if (kind === "g" && attrOf(tag, "transform") === null) continue;
+    tokens.push(`${kind} ${[...SVG_GEOMETRY[kind] ?? [], "stroke-width", "transform"].map((a) => (attrOf(tag, a) ?? "").replace(/\s+/g, " ").trim()).join("|")}`);
+  }
+  for (const [tag = ""] of svg.matchAll(/<image\b[^>]*>/gi)) tokens.push(`image ${attrOf(tag, "href") ?? attrOf(tag, "xlink:href") ?? ""}`);
+  return tokens.some((t) => !t.startsWith("g ")) ? tokens.join("\n") : null;
+}
+var identityOfDrawing = (geometry) => geometry === null ? null : `s:${sha256Hex(geometry).slice(0, 16)}`;
+function assetGeometry(content) {
+  const head = Buffer.from(content.subarray(0, 4096)).toString("utf8").trimStart();
+  return head.startsWith("<") && /<svg[\s>]/i.test(head) ? svgGeometry(Buffer.from(content).toString("utf8")) : null;
+}
+function assetIdentity(content) {
+  const head = Buffer.from(content.subarray(0, 4096)).toString("utf8").trimStart();
+  if (head.startsWith("<") && /<svg[\s>]/i.test(head)) return identityOfDrawing(assetGeometry(content));
+  return content.length ? `b:${sha256Hex(content).slice(0, 16)}` : null;
+}
 
 // design-to-code/plan-record.ts
 var slash2 = (p) => p.split(path11.sep).join("/").split("\\").join("/");
@@ -2198,6 +2230,7 @@ var RULES = [
   // a gap on a <table>, which spaces rows with border-spacing
 ];
 var BOX_RULES = ["leaf", "inline"];
+var ASSET_IDENTITY = "asset identity";
 var CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
 var field = (key, label, tol, extra = {}) => ({ spec: key, label, measured: key, census: key, parse: tol !== null && !extra.parse ? "px" : "norm", compare: "field", tol, ...extra });
 var PROPERTIES = [
@@ -2302,6 +2335,18 @@ var PROPERTIES = [
     absent: "unlisted",
     nullWhy: "the probe reported text: null \u2014 an element with child elements still has text; report its textContent",
     paints: true
+  }] },
+  // the exported file this node draws: never a CSS property, so a probe that cannot say leaves it unverified, not unmeasured
+  { key: "assetIdentity", optional: true, applies: [], shapes: [{
+    spec: "assetIdentity",
+    label: ASSET_IDENTITY,
+    measured: "assetIdentity",
+    census: "assetIdentity",
+    parse: "string",
+    compare: "asset",
+    tol: null,
+    doc: "{from, src?, id?, why?} \u2014 what draws the node and its content identity (content-hash.ts assetIdentity)",
+    absentWhy: "the probe did not report which file this node draws (a native or hand-written measurement) \u2014 compare the asset by eye"
   }] }
 ];
 var CHECK_ORDER = [
@@ -2328,7 +2373,8 @@ var CHECK_ORDER = [
   "borderWidths",
   "padding",
   "placeholderText",
-  "text"
+  "text",
+  "assetIdentity"
 ];
 var SHAPES = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
 var labelsOf = (s) => s.parts ? s.parts.map((x) => `${s.label} (${x})`) : [s.label];
@@ -2345,7 +2391,7 @@ var FIELDS = SHAPES.filter(({ s }) => s.compare === "field" && !s.when).flatMap(
   ...p.box ? { box: true } : {},
   ...p.optional ? { optional: true } : {}
 }] : []);
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display", "assetIdentity"];
 var STYLE_KEY_SHAPE = {
   ...Object.fromEntries(SHAPES.flatMap(({ s }) => s.doc ? [[s.measured, s.doc]] : [])),
   textBox: "{x,w} of a Range over the text",
@@ -2977,6 +3023,9 @@ var isPageIndex = /* @__PURE__ */ Object.assign(
   (x) => isRecord(x) && isRowList(x.layers),
   { expected: "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}" }
 );
+function screenSiblingFile(screenFile, kind) {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
 var rootIndexFile = (exportRoot) => path14.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs14.existsSync(rootIndexFile(exportRoot));
 function pagesRootOfScreen(screenFile) {
@@ -4366,6 +4415,84 @@ function walkWithHidden(root, fn, opts) {
   walk(root, fn, false, opts);
 }
 
+// bridge/src/svg-normalize.ts
+var SVG_TOL = 0.01;
+var TOL_EPS = 1e-9;
+var ID_DEF_RE = /(?<![\w:-])id\s*=\s*(["'])(.*?)\1/g;
+var ID_MARK = "\0";
+var TOKEN_RE = /(\u0000id\d+\u0000)|(#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-]))|(base64,[A-Za-z0-9+/=]+)|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g;
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function canonicalIds(svg) {
+  const order = /* @__PURE__ */ new Map();
+  ID_DEF_RE.lastIndex = 0;
+  for (let m = ID_DEF_RE.exec(svg); m; m = ID_DEF_RE.exec(svg)) {
+    const id = m[2];
+    if (id && !order.has(id)) order.set(id, ID_MARK + "id" + order.size + ID_MARK);
+  }
+  if (!order.size) return svg;
+  const alts = [...order.keys()].sort((x, y) => y.length - x.length).map(escapeRe).join("|");
+  const re = new RegExp(`(?<![\\w:-])(id\\s*=\\s*["'])(` + alts + `)(?=["'])|#(` + alts + ")(?![\\w.:-])", "g");
+  return svg.replace(re, (m, attr, defined, ref) => {
+    if (attr !== void 0 && defined !== void 0) return attr + (order.get(defined) ?? defined);
+    if (ref !== void 0) return "#" + (order.get(ref) ?? ref);
+    return m;
+  });
+}
+var REL_TAG_RE = /<(?:use|image|pattern)\b[^>]*>/g;
+var TRANSFORM_ATTR_RE = /(?<![\w:-])transform\s*=\s*(["'])([^"']*)\1/g;
+var PATTERN_ATTR_RE = /(?<![\w:-])(?:x|y|width|height|patternTransform)\s*=\s*(["'])([^"']*)\1/g;
+function relSpans(svg) {
+  const spans = [];
+  REL_TAG_RE.lastIndex = 0;
+  for (let t = REL_TAG_RE.exec(svg); t; t = REL_TAG_RE.exec(svg)) {
+    const re = t[0].startsWith("<pattern") ? /patternUnits\s*=\s*["']userSpaceOnUse/.test(t[0]) ? null : PATTERN_ATTR_RE : TRANSFORM_ATTR_RE;
+    if (!re) continue;
+    re.lastIndex = 0;
+    for (let a = re.exec(t[0]); a; a = re.exec(t[0])) {
+      const start = t.index + a.index + a[0].length - 1 - (a[2] || "").length;
+      spans.push([start, start + (a[2] || "").length]);
+    }
+  }
+  return spans;
+}
+function svgFingerprint(svg) {
+  const nums = [];
+  const rel = [];
+  const text = canonicalIds(svg);
+  const spans = relSpans(text);
+  const inRel = (at) => spans.some(([s, e]) => at >= s && at < e);
+  const skeleton = text.replace(TOKEN_RE, (m, _id, _hex, _b64, num2, at) => {
+    if (num2 === void 0) return m;
+    if (spans.length && inRel(at)) {
+      rel.push(Number(num2));
+      return "%";
+    }
+    nums.push(Number(num2));
+    return "#";
+  });
+  return { skeleton, nums: Float64Array.from(nums), rel: Float64Array.from(rel) };
+}
+function numsWithin(a, b, tol = SVG_TOL) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    if (x !== y && !(Math.abs(x - y) <= tol + TOL_EPS)) return false;
+  }
+  return true;
+}
+function relWithin(a, b, tol = SVG_TOL) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    if (x !== y && !(Math.abs(x - y) <= Math.min(tol, tol * Math.max(Math.abs(x), Math.abs(y))) + TOL_EPS)) return false;
+  }
+  return true;
+}
+function sameSvg(a, b, tol = SVG_TOL) {
+  const fa = svgFingerprint(a), fb = svgFingerprint(b);
+  return fa.skeleton === fb.skeleton && numsWithin(fa.nums, fb.nums, tol) && relWithin(fa.rel, fb.rel, tol);
+}
+
 // bridge/src/png.ts
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 var PngError = class extends Error {
@@ -4866,8 +4993,49 @@ function buildExpectation(docs, opts) {
   markUndesigned(bx);
   if (bx.index && bx.readSibling) addAliases(bx, specById);
   addOverlays(bx);
+  const assetIds = bx.assets?.known();
   const referenceImage = firstReferenceImage(bx, opts);
-  return expectationOf(bx, docs, plan, referenceImage);
+  return { ...expectationOf(bx, docs, plan, referenceImage), ...ifDefined("assetIds", assetIds) };
+}
+function assetIdentities(opts) {
+  const assets = opts?.assets;
+  if (!assets) return null;
+  const memo2 = /* @__PURE__ */ new Map();
+  const read2 = (pointer) => getOrInit(memo2, pointer, () => {
+    const b = assets.read(pointer);
+    return b ? { id: assetIdentity(b), drawing: assetGeometry(b) } : { id: null, drawing: null };
+  });
+  const idOf = (pointer) => read2(pointer).id;
+  const listed3 = new Set(assets.rows.map((r) => r.file));
+  const sourceOf2 = new Map(assets.rows.flatMap((r) => r.node?.startsWith("img:") ? [[r.node.slice(4), r.file]] : []));
+  return {
+    of: (n) => {
+      if (typeof n.asset !== "string" || !listed3.has(n.asset)) return void 0;
+      const sources = (Array.isArray(n.fills) ? n.fills : []).flatMap((f) => {
+        const file = f.type === "image" && f.hash ? sourceOf2.get(f.hash) : void 0;
+        return file ? [file] : [];
+      });
+      const files = [.../* @__PURE__ */ new Set([n.asset, ...sources])].filter((f) => idOf(f) !== null);
+      if (!files.length) return void 0;
+      const drawings = files.flatMap((f) => {
+        const d = read2(f).drawing;
+        return d === null ? [] : [d];
+      });
+      const twins = [...listed3, ...assets.others].filter((p) => {
+        const d = read2(p).drawing;
+        return d !== null && drawings.some((w) => sameSvg(w, d));
+      });
+      return { files, ids: [...new Set([...files, ...twins].map((f) => idOf(f) ?? ""))] };
+    },
+    known: () => {
+      const known = {};
+      for (const pointer of [...listed3, ...assets.others]) {
+        const id = idOf(pointer);
+        if (id !== null && known[id] === void 0) known[id] = pointer;
+      }
+      return known;
+    }
+  };
 }
 function expectBuildCtx(opts) {
   const readSibling = opts && opts.readSibling;
@@ -4898,6 +5066,7 @@ function expectBuildCtx(opts) {
     index: opts && opts.index,
     readSibling,
     sibling,
+    assets: assetIdentities(opts),
     plan: planAtExpect(opts && opts.plan)
   };
 }
@@ -4988,7 +5157,19 @@ function visibleNode(bx, w, n, c) {
     spec.fixed = true;
   }
   if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
-  if (checkable(spec)) bx.nodes.push(spec);
+  const worth = checkable(spec), identity = bx.assets?.of(n);
+  if (identity) {
+    spec.assetIdentity = identity;
+    if (!worth) {
+      spec.assetOnly = true;
+      delete spec.width;
+      delete spec.height;
+      delete spec.y;
+      delete spec.opacity;
+      delete spec.sizing;
+    }
+  }
+  if (worth || identity) bx.nodes.push(spec);
   else {
     const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
     if (g11.length) gaps.push({
@@ -5469,6 +5650,7 @@ var LIMITS = [
   "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows \u2014 above the first and below the last (CSS 2.1 \xA717.6.1): a container-height delta of twice the spacing is the table model, not a layout bug.",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing.",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` \u2014 compare the asset file instead.",
+  "Asset identity is by content: a rendered file that matches the node's exported asset is verified and one that matches ANOTHER exported asset is a delta. Anything else is listed under `unverifiable`, never passed and never failed: a re-encoded image, a rewritten (optimised) SVG, a <use> sprite, a CSS background and a native build cannot be matched. An SVG's colour is not part of its identity.",
   'Numbers are read as px: a number or a px string ("20px"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).',
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
   "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A fixed- or fill-width text is compared at its ink width within 3px \u2014 an empirical bound (field runs: \u22120.6\u2026+2.4px); heavy italics or overhanging glyphs may exceed it.",
@@ -5930,6 +6112,9 @@ function compareCtx(expectation, measured, opts) {
     census,
     tally,
     fieldsChecked,
+    assetsVerified: 0,
+    assetsWrong: 0,
+    assetsUnplaced: 0,
     nodesMeasured,
     nodesMatchedByComponentPath,
     fieldsReportedNull,
@@ -5994,6 +6179,11 @@ function matchSpec(cx, spec) {
       const parent = (spec.ancestorIds || [])[0] ?? frameId;
       why += ` \u2014 foldable (no paint \u2014 anchor it foldedInto its parent${parent ? ` ${parent}` : ""} if the build merged it there)`;
     }
+    if (spec.assetOnly) {
+      cx.assetsUnplaced++;
+      cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: ASSET_IDENTITY, expected: spec.assetIdentity?.files[0] ?? null, why: `${why} \u2014 no element carries this exported asset's id, so which file draws it is unknown` });
+      return null;
+    }
     notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why });
     return null;
   }
@@ -6034,9 +6224,10 @@ function readNode(cx, spec, m, matchedBy) {
   const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
   const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) \u2014 measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
   if (state && measuredIn === "rest" && zeroAtRest) {
-    for (const { s } of statedShapes(spec, spec.type === "TEXT")) {
+    for (const { s, want } of statedShapes(spec, spec.type === "TEXT")) {
       tally(s.census, false);
-      gap(spec, s.label, `renders 0\xD70 at rest: ${stateWhy}`);
+      if (s.spec === "assetIdentity") cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: s.label, expected: want, why: `renders 0\xD70 at rest: ${stateWhy}` });
+      else gap(spec, s.label, `renders 0\xD70 at rest: ${stateWhy}`);
     }
     placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0\xD70 at rest: ${stateWhy}` });
     return null;
@@ -6293,7 +6484,38 @@ var COMPARE = {
     if (!renderedText(String(want), n.spec.textCase, String(v), void 0, nbspTrim).same) cx.push(n.spec, "placeholder text", "high", { want, got: v, delta: null });
   },
   /** the copy, as rendered (text case / text-transform), and a non-breaking space in it */
-  copy: ({ cx, n }) => compareCopy(cx, n)
+  copy: ({ cx, n }) => compareCopy(cx, n),
+  /** which exported file the node draws, by content: only evidence of ANOTHER exported file is a delta */
+  asset: ({ cx, n, s }, want, { v }) => {
+    const { spec } = n;
+    if (!spec.assetIdentity) return;
+    const { files, ids } = spec.assetIdentity;
+    const got = isJsonObject(v) ? v : {};
+    const unverified = (why) => {
+      cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: s.label, expected: want, why });
+    };
+    if (n.state && n.measuredIn === "rest") {
+      unverified(n.stateWhy);
+      return;
+    }
+    const src = typeof got.src === "string" ? ` (${got.src})` : "";
+    if (typeof got.id !== "string") {
+      unverified(typeof got.why === "string" ? `${got.why}${src}` : "the measured value names no identity");
+      return;
+    }
+    const other = cx.expectation.assetIds?.[got.id];
+    if (!ids.includes(got.id) && other === void 0) {
+      unverified(`the rendered content${src} matches no exported file \u2014 re-encoded, optimised or from elsewhere: check it by eye`);
+      return;
+    }
+    cx.fieldsChecked++;
+    if (ids.includes(got.id) || other === void 0) {
+      cx.assetsVerified++;
+      return;
+    }
+    cx.assetsWrong++;
+    cx.push(spec, s.label, "high", { want: files[0] ?? null, got: other, delta: null }, { ...src ? { note: `rendered from${src}` } : {}, ...matchedByOf(n) });
+  }
 };
 function compareCopy(cx, n) {
   const { deltas, push, builtTexts } = cx;
@@ -7017,7 +7239,7 @@ function verdictOf(cx, g) {
     staticOnly,
     noRender
   } = g;
-  const nodesExpected = specs.length - folded.length;
+  const nodesExpected = specs.length - folded.length - cx.assetsUnplaced;
   const reasons = [];
   reasons.push(...integrity);
   const integrityFailed = integrity.length > 0;
@@ -7038,6 +7260,10 @@ function verdictOf(cx, g) {
   if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe${fieldsReportedNull ? ` (${fieldsReportedNull} reported null \u2014 the probe could not read them)` : ""}`);
   const verdict = reasons.length === 0 ? accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass" : integrityFailed ? "incomplete" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
   return { nodesExpected, reasons, lowConfidence, verdict };
+}
+function assetCoverage(cx) {
+  const unverified = cx.unverifiable.filter((u) => u.field === ASSET_IDENTITY).length;
+  return cx.assetsVerified + cx.assetsWrong + unverified ? { assetIdentity: { verified: cx.assetsVerified, wrong: cx.assetsWrong, unverified } } : {};
 }
 function coverageOf(cx, g) {
   const { expectation, notMeasured, fieldsNotMeasured, unverifiable, fieldsChecked, nodesMeasured, nodesMatchedByComponentPath, matchedByCensus, folded } = cx;
@@ -7068,6 +7294,7 @@ function coverageOf(cx, g) {
     fieldsNeverMeasured,
     valuesNotComparable: (expectation.notComparable || []).length,
     valuesUnverifiable: unverifiable.length,
+    ...assetCoverage(cx),
     ...ifDefined("hiddenLayersSkipped", expectation.counts && expectation.counts.hidden || void 0),
     instanceSets: bySet.size,
     instanceSetsWithEvidence: bySet.size - untaggedInstanceSets.length,
@@ -7538,6 +7765,7 @@ function coverageMarkdown(r) {
   if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
   L.push(`| design values excluded by method (listed below) | ${c.valuesNotComparable} |`);
   L.push(`| values the method cannot read unaided | ${c.valuesUnverifiable} |`);
+  if (c.assetIdentity) L.push(`| exported assets: verified / wrong / unverified | ${c.assetIdentity.verified} / ${c.assetIdentity.wrong} / ${c.assetIdentity.unverified} |`);
   if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) \xB7 ${c.hiddenLayersSkipped.specsSkipped} spec(s) \xB7 ${c.hiddenLayersSkipped.instancesSkipped} instance(s) \xB7 ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence \u2014 coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);
   L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected}${c.interactionsUndesigned ? ` \xB7 ${c.interactionsUndesigned} undesigned (destination never exported)` : ""}${c.interactionsDescoped ? ` \xB7 ${c.interactionsDescoped} descoped by the owner` : ""}${c.interactionsByProbe ? ` \xB7 ${c.interactionsByProbe} driven by the shipped probe (dialog contract)` : ""} |`);
@@ -9095,8 +9323,24 @@ function expectMain(files, flags, USAGE) {
     }
   };
   const colorProfile = readDesignSystemStamp(exportRoot).stamp?.colorProfile ?? null;
-  const expOpts = { ...ix.indexed || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
+  const manifests = files.map((f) => readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc));
+  const assetRows = manifests.flatMap((m) => m?.files ?? []);
+  const assetsDir = (() => {
+    try {
+      return fs21.readdirSync(path22.join(exportRoot, "assets")).map((f) => `assets/${f}`);
+    } catch {
+      return [];
+    }
+  })();
+  const expOpts = {
+    ...ix.indexed || layers.length ? { index: { layers }, readSibling } : {},
+    ...planForExpect ? { plan: planForExpect } : {},
+    readReference,
+    colorProfile,
+    ...assetRows.length ? { assets: { rows: assetRows, others: assetsDir, read: readReference } } : {}
+  };
   const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
+  if (exp.nodes.some((n) => n.asset) && manifests.includes(null)) console.error("note  no <Screen>.assets.json beside a screen export \u2014 the identity of its assets is not checked; re-pull the screen with its assets");
   const pi = exp.planInteractions;
   if (pi) {
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}\u2026)`);

@@ -137,4 +137,43 @@ function hookHashOf(hook: { planHash?: unknown } | null | undefined, plan: objec
   return h === legacyPlanHash(plan) ? "legacy" : null;
 }
 
-export { stripPullTimes, exportContentSha256, fileHashes, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash, hookHashOf };
+// Asset identity: "is this rendered image the asset the design placed here?" answered by content, whatever the file is
+// called in the build. A raster is its bytes. An SVG is its DRAWING: each shape's geometry, stroke width and transform in
+// document order, a group's transform, and any embedded <image>'s data — so an inline <svg> and the exported file agree
+// although the build recoloured it, sized it or lost the defs Figma wraps it in. Colour is not identity (the `fill`
+// property checks it). Numbers are kept exact: svgGeometry's text goes to svg-normalize's sameSvg for Figma's re-export
+// tolerance (verify-expect.ts accepts a file's sameSvg twins), and a hash cannot express a tolerance.
+const SVG_GEOMETRY: Readonly<Record<string, readonly string[]>> = {
+  path: ["d"], rect: ["x", "y", "width", "height", "rx", "ry"], circle: ["cx", "cy", "r"], ellipse: ["cx", "cy", "rx", "ry"],
+  line: ["x1", "y1", "x2", "y2"], polygon: ["points"], polyline: ["points"],
+};
+const attrOf = (tag: string, name: string): string | null => new RegExp(`(?<![\\w:-])${name}\\s*=\\s*(["'])(.*?)\\1`, "s").exec(tag)?.[2] ?? null;
+/** An SVG's drawing as text; null when nothing here can be identified (a <use> sprite, an SVG that draws nothing). */
+function svgGeometry(svg: string): string | null {
+  const drawn = svg.replace(/<(defs|clipPath|mask|symbol|pattern)\b[\s\S]*?<\/\1\s*>/gi, "");
+  if (/<use\b/i.test(drawn)) return null;
+  const tokens: string[] = [];
+  for (const [tag = "", name = ""] of drawn.matchAll(/<(g|path|rect|circle|ellipse|line|polygon|polyline)\b[^>]*>/gi)) {
+    const kind = name.toLowerCase();
+    if (kind === "g" && attrOf(tag, "transform") === null) continue;
+    tokens.push(`${kind} ${[...(SVG_GEOMETRY[kind] ?? []), "stroke-width", "transform"].map((a) => (attrOf(tag, a) ?? "").replace(/\s+/g, " ").trim()).join("|")}`);
+  }
+  // (an embedded photo's <image> sits in <defs>: two photo shells have one rect each and differ only here)
+  for (const [tag = ""] of svg.matchAll(/<image\b[^>]*>/gi)) tokens.push(`image ${attrOf(tag, "href") ?? attrOf(tag, "xlink:href") ?? ""}`);
+  return tokens.some((t) => !t.startsWith("g ")) ? tokens.join("\n") : null;
+}
+const identityOfDrawing = (geometry: string | null): string | null => (geometry === null ? null : `s:${sha256Hex(geometry).slice(0, 16)}`);
+const svgIdentity = (svg: string): string | null => identityOfDrawing(svgGeometry(svg));
+/** The file's drawing when it is an SVG with one, else null. */
+function assetGeometry(content: Uint8Array): string | null {
+  const head = Buffer.from(content.subarray(0, 4096)).toString("utf8").trimStart();
+  return head.startsWith("<") && /<svg[\s>]/i.test(head) ? svgGeometry(Buffer.from(content).toString("utf8")) : null;
+}
+/** A file's identity (see above): an SVG's by its drawing, anything else's by its bytes. */
+function assetIdentity(content: Uint8Array): string | null {
+  const head = Buffer.from(content.subarray(0, 4096)).toString("utf8").trimStart();
+  if (head.startsWith("<") && /<svg[\s>]/i.test(head)) return identityOfDrawing(assetGeometry(content));
+  return content.length ? `b:${sha256Hex(content).slice(0, 16)}` : null;
+}
+
+export { assetGeometry, assetIdentity, svgIdentity, stripPullTimes, exportContentSha256, fileHashes, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash, hookHashOf };

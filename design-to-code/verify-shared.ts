@@ -183,11 +183,11 @@ export type Rule = (typeof RULES)[number];
  *  1-to-4 expansion), or as a string. */
 export type Parse = "norm" | "px" | "corners" | "sides" | "string";
 /** How a shape is compared — one comparer each in verify-compare.ts (COMPARE). */
-export type CompareKind = "field" | "textBox" | "corners" | "sides" | "padding" | "placeholder" | "copy";
+export type CompareKind = "field" | "textBox" | "corners" | "sides" | "padding" | "placeholder" | "copy" | "asset";
 /** The spec values a shape can state. */
 export type SpecKey = "fontFamily" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing" | "color" | "backgroundColor" | "fill" | "placeholderColor"
   | "borderColor" | "borderWidth" | "borderWidths" | "borderRadius" | "radiusCorners" | "gap" | "width" | "height" | "x" | "y" | "opacity" | "boxWidth" | "padding"
-  | "placeholderText" | "text";
+  | "placeholderText" | "text" | "assetIdentity";
 
 /** The styles keys a shape reads its value from. */
 export type MeasuredKey = Exclude<SpecKey, "radiusCorners" | "boxWidth"> | "borderWidths";
@@ -242,6 +242,7 @@ export interface Property {
 }
 
 const BOX_RULES = ["leaf", "inline"] as const;
+export const ASSET_IDENTITY = "asset identity";
 const CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"] as const;
 /** a property compared one value against one value of the same name */
 const field = (key: Extract<SpecKey, MeasuredKey>, label: string, tol: number | null, extra: Partial<PropertyShape> = {}): PropertyShape =>
@@ -290,6 +291,10 @@ export const PROPERTIES: readonly Property[] = [
     doc: "el.placeholder", absentWhy: "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')", paints: true }] },
   { key: "text", applies: [], shapes: [{ spec: "text", label: "text", measured: "text", census: "text", parse: "string", compare: "copy", tol: null, absent: "unlisted",
     nullWhy: "the probe reported text: null — an element with child elements still has text; report its textContent", paints: true }] },
+  // the exported file this node draws: never a CSS property, so a probe that cannot say leaves it unverified, not unmeasured
+  { key: "assetIdentity", optional: true, applies: [], shapes: [{ spec: "assetIdentity", label: ASSET_IDENTITY, measured: "assetIdentity", census: "assetIdentity", parse: "string", compare: "asset", tol: null,
+    doc: "{from, src?, id?, why?} — what draws the node and its content identity (content-hash.ts assetIdentity)",
+    absentWhy: "the probe did not report which file this node draws (a native or hand-written measurement) — compare the asset by eye" }] },
 ];
 
 /** The order a node's properties are walked — and so the order its findings, and coverage's never-measured fields, are
@@ -297,7 +302,7 @@ export const PROPERTIES: readonly Property[] = [
  *  per-corner radius, the per-side border, padding, the placeholder and the copy. Each spec value once. */
 export const CHECK_ORDER: readonly SpecKey[] = ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill",
   "placeholderColor", "borderColor", "borderWidth", "borderRadius", "gap", "width", "height", "x", "y", "opacity", "boxWidth", "radiusCorners", "borderWidths",
-  "padding", "placeholderText", "text"];
+  "padding", "placeholderText", "text", "assetIdentity"];
 
 const SHAPES: ReadonlyArray<{ p: Property; s: PropertyShape }> = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
 /** A shape's field labels: its own, or one per part. */
@@ -321,7 +326,7 @@ export const FIELDS: Field[] = SHAPES.filter(({ s }) => s.compare === "field" &&
 // in the order every expectation's measuredKeys line has listed them. Exported: the shipped probe (verify-probe.ts)
 // measures exactly these, and measuredKeysDoc()'s styles line is generated from it. (A test checks every key a property
 // reads is here.) (`display` — an id on an inline element measures its text's box, not a frame's)
-export const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+export const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display", "assetIdentity"];
 const STYLE_KEY_SHAPE: Record<string, string> = {
   ...Object.fromEntries(SHAPES.flatMap(({ s }) => (s.doc ? [[s.measured, s.doc]] : []))),
   textBox: "{x,w} of a Range over the text", tag: "tagName, lower-case", display: "getComputedStyle(el).display",

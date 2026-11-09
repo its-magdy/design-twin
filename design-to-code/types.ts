@@ -715,6 +715,10 @@ export interface VerifySpec {
   nominalOverflow?: { w?: { nominal: number; content: number }; h?: { nominal: number; content: number } };
   /** an exported asset (an asset file or vector geometry): an <img>/<svg> leaf carrying its id is the node, so its box is measured */
   asset?: true;
+  /** the files this exported asset may be built from (its own, and an image fill's source) and their identities (content-hash.ts) */
+  assetIdentity?: { files: string[]; ids: string[] };
+  /** the row exists only for its asset identity: no matching element leaves it unverified, not "not measured" */
+  assetOnly?: true;
   /** padding sides that cannot be compared (a fixed axis that is overfull or centres its content) */
   paddingSkip?: Array<"top" | "right" | "bottom" | "left">;
   /** how each axis is sized in auto layout (absent = fixed) — a growing hug axis alone is no size suspect */
@@ -771,6 +775,8 @@ export interface VerifyExpectation {
   planPlaceholders?: PlanPlaceholdersInput;
   /** the reference PNG's geometry over the first frame (absent: an older expectation, or no reference) */
   referenceImage?: VerifyReferenceImage | VerifyReferenceUnusable;
+  /** every exported file by identity: a build that draws one of these on the wrong node shows the wrong asset (absent: no asset manifest) */
+  assetIds?: Record<string, string>;
 }
 /** expectation.planInteractions: which plan, the hash of its interactions[] (plan-binding.ts),
  *  how many rows were merged and the ones dropped with why. */
@@ -784,6 +790,10 @@ export interface PlanPlaceholdersInput { plan: string; sha256: string; nodeIds: 
  *  --compare lists it as not measured, never as checked. */
 /** who paints an element whose own background-color is transparent. */
 export interface PaintedBy { backgroundColor: string; via: "ancestor" | "child"; tag: string; depth: number; dt?: string }
+/** `id` when the source could be identified, else `why` it could not. */
+export type MeasuredAsset = { from: "img" | "svg" | "css" | "none"; src?: string; id?: string; why?: string;
+  /** an inline <svg>'s markup, on its way from the page to the probe only (never written to the measured file) */
+  markup?: string };
 export interface MeasuredStyles {
   fontFamily?: string | null;
   fontSize?: number | null;
@@ -793,6 +803,8 @@ export interface MeasuredStyles {
   color?: string | null;
   backgroundColor?: string | null;
   fill?: string | null;
+  /** what draws an exported asset's node, and the content identity of it when it can be read */
+  assetIdentity?: MeasuredAsset | null;
   borderColor?: string | null;
   borderWidth?: number | null;
   /** [top, right, bottom, left]: the four computed border widths, or the sides a ring draws */
@@ -1172,7 +1184,7 @@ export interface VerifyReport {
   coverage?: {
     nodesExpected: number; nodesMeasured: number; nodesNotMeasured?: number; nodesMatchedByComponentPath?: number; fieldsChecked: number;
     fieldsNotMeasured?: number; fieldsNeverMeasured?: Array<{ field: string; expectedOn: number; measuredOn: number; probeSent?: string[] }>;
-    valuesNotComparable?: number; valuesUnverifiable?: number; hiddenLayersSkipped?: { layers: number; nodes: number; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number };
+    valuesNotComparable?: number; valuesUnverifiable?: number; assetIdentity?: { verified: number; wrong: number; unverified: number }; hiddenLayersSkipped?: { layers: number; nodes: number; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number };
     instanceSets?: number; instanceSetsWithEvidence?: number; instanceSetsViaSharedPath?: number; componentsBuilt?: number;
     interactionsExpected?: number; interactionsPassed?: number; interactionsFailed?: number; interactionsNotProbed?: number;
     interactionsUndesigned?: number; interactionsDescoped?: number; deltasAccepted?: number; nodesFolded?: number;

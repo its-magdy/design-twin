@@ -22,7 +22,10 @@
 // The frame root is its own rule: [data-dt-node=<frame id>], else the outermost element of the
 // frame's size that paints (a transparent <body> is not the frame), else the viewport.
 import { parseCssColor } from "./color.ts";
+import { assetIdentity, svgIdentity } from "./content-hash.ts";
+import { getOrInit } from "./map-util.ts";
 import type { Candidate, CollectOutput, MeasureResult, Rect, SizedCandidate } from "./probe-page.ts";
+import { isJsonObject } from "./types.ts";
 import type { MeasuredNode, MeasuredStyles, PaintedBy, ProbeFrame, VerifySpec } from "./types.ts";
 
 export type MatchedBy = "tag" | "tag-shared-path" | "tag-alias" | "text" | "text-ordinal" | "position" | "frame";
@@ -342,6 +345,34 @@ export function positionBoxes(specs: VerifySpec[], pool: Pick<MatchPool, "frames
  * One measured.json node: EVERY key in `keys` present in styles; a null always has its reason in
  * `unmeasured` (a probe that silently leaves a key out is how `fill` went unmeasured for a whole run).
  */
+/** The page's raw `assetIdentity` values, on every node and drawn state, replaced by what the measured file records: the
+ *  source and its content identity, or why there is none. Each URL is read once; `read` throws when it cannot be. */
+export async function identifyAssets(nodes: Iterable<MeasuredNode>, read: (url: string) => Promise<Uint8Array>): Promise<void> {
+  const files = new Map<string, Promise<{ id: string } | { why: string }>>();
+  const fileOf = (src: string): Promise<{ id: string } | { why: string }> => getOrInit(files, src, async () => {
+    if (src === "") return { why: "the <img> has no source" };
+    let bytes: Uint8Array;
+    try {
+      const data = /^data:[^,]*?(;base64)?,(.*)$/s.exec(src);
+      if (data) bytes = data[1] ? Buffer.from(data[2] ?? "", "base64") : Buffer.from(decodeURIComponent(data[2] ?? ""), "utf8");
+      else if (/^https?:/i.test(src)) bytes = await read(src);
+      else return { why: `its source cannot be read back (${src.split(":")[0]}: URL)` };
+    } catch (e) { return { why: `its source could not be read: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}` }; }
+    const id = assetIdentity(bytes);
+    return id !== null ? { id } : { why: "its file holds nothing to identify" };
+  });
+  const NO_DRAWING = "its markup has no shape to identify (a <use> sprite, or it draws nothing)";
+  const settle = async (styles: MeasuredStyles | undefined): Promise<void> => {
+    const raw = styles?.assetIdentity;
+    if (!styles || !raw) return;
+    if (raw.from === "svg") { const id = svgIdentity(String(raw.markup ?? "")); styles.assetIdentity = { from: "svg", ...(id !== null ? { id } : { why: NO_DRAWING }) }; return; }
+    if (raw.from !== "img") return;
+    const src = String(raw.src ?? "");
+    styles.assetIdentity = { from: "img", src: src.startsWith("data:") ? `${src.split(",")[0]},…` : src, ...(await fileOf(src)) };
+  };
+  await Promise.all([...nodes].flatMap((n) => [settle(n.styles), ...Object.values(n.states ?? {}).map((st) => { const bag = "styles" in st ? st.styles : st; return settle(isJsonObject(bag) ? bag : undefined); })]));
+}
+
 export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, keys: readonly string[]): MeasuredNode {
   const styles: MeasuredStyles = {};
   const unmeasured: Record<string, string> = {};

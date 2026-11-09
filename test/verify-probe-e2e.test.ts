@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
 import type { AddressInfo } from "node:net";
@@ -870,6 +871,84 @@ check(`a download → exit 4, 'could not load … started a file download, not a
     } finally { await browser.close(); }
   } catch (e) { outcome = `failed: ${String(e instanceof Error ? e.message : e).split("\n")[0] ?? ""}`; }
   check(`collectCandidates on a ~6,000-element page: every candidate's path is its element's own ancestor-walk path (${outcome})`, ok);
+}
+
+// ---- asset identity, in a real render: the export's own files, served renamed, inlined, swapped and rewritten
+console.log("asset identity (real render):");
+{
+  const crc = (b: Buffer): Buffer => { const out = Buffer.alloc(4); out.writeUInt32BE(Bun.hash.crc32(b) >>> 0); return out; };
+  const chunk = (type: string, data: Buffer): Buffer => { const body = Buffer.concat([Buffer.from(type, "latin1"), data]), len = Buffer.alloc(4); len.writeUInt32BE(data.length); return Buffer.concat([len, body, crc(body)]); };
+  const png = (r: number, g: number, b: number): Buffer => Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0])), chunk("IDAT", zlib.deflateSync(Buffer.from([0, r, g, b]))), chunk("IEND", Buffer.alloc(0))]);
+  const svg = (d: string): string => `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g clip-path="url(#c)"><path d="${d}" fill="#112233"/></g><defs><clipPath id="c"><rect width="24" height="24" fill="white"/></clipPath></defs></svg>`;
+  const ICON = "M4.123 12L12.5 4.25L20 12", OTHER = "M4 4L20 20M20 4L4 20";
+  const files: Record<string, string | Buffer> = { "arrow.svg": svg(ICON), "chevron.svg": svg(OTHER), "photo.png": png(10, 20, 30), "img_h1.png": png(40, 50, 60), "other-photo.png": png(70, 80, 90) };
+  const proj = path.join(tmp, "asset-project"), exportDir = path.join(proj, "design", "export"), pageDir = path.join(exportDir, "pages", "Home");
+  fs.mkdirSync(path.join(exportDir, "assets"), { recursive: true });
+  fs.mkdirSync(pageDir, { recursive: true });
+  for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(exportDir, "assets", name), body);
+  const screen = path.join(pageDir, "Panel__70_1.json");
+  fs.writeFileSync(screen, JSON.stringify({ exportedAt: "2026-11-09T00:00:00Z", screen: "Panel", page: "Home", pageId: "9:0", nodeId: "70:1", sourceFile: "Asset Test", nodes: [{ type: "FRAME", name: "Panel", id: "70:1", box: { w: 400, h: 200, x: 0, y: 0 }, children: [
+    { type: "VECTOR", name: "Icon", id: "70:2", box: { w: 24, h: 24 }, asset: "assets/arrow.svg" },
+    { type: "RECTANGLE", name: "Photo", id: "70:3", box: { w: 40, h: 40 }, asset: "assets/photo.png", fills: [{ type: "image", hash: "h1" }] },
+  ] }] }));
+  fs.writeFileSync(screen.replace(/\.json$/, ".assets.json"), JSON.stringify({ files: [{ file: "assets/arrow.svg", node: "70:2" }, { file: "assets/photo.png", node: "70:3" }, { file: "assets/img_h1.png", node: "img:h1" }, { file: "assets/other-photo.png", node: "70:9" }] }));
+  const icon = '<img data-dt-node="70:2" src="/static/ICONFILE" style="display:block;width:24px;height:24px">';
+  const photo = (src: string): string => `<img data-dt-node="70:3" src="${src}" style="display:block;width:40px;height:40px">`;
+  const inlineIcon = `<svg data-dt-node="70:2" class="x" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display:block"><path d="${ICON}"/></svg>`;
+  const body: Record<string, string> = {
+    renamed: icon.replace("ICONFILE", "arrow-B4dH4sH.svg") + photo("/static/img_h1-Zz9.png"),
+    inlined: inlineIcon + photo(`data:image/png;base64,${png(10, 20, 30).toString("base64")}`),
+    swapped: icon.replace("ICONFILE", "chevron-Qq1.svg") + photo("/static/other-Pp2.png"),
+    rewritten: icon.replace("ICONFILE", "svgo-Rr3.svg") + '<div data-dt-node="70:3" style="width:40px;height:40px;background:url(/static/img_h1-Zz9.png)"></div>',
+  };
+  const served: Record<string, string | Buffer> = { "arrow-B4dH4sH.svg": files["arrow.svg"] ?? "", "chevron-Qq1.svg": files["chevron.svg"] ?? "", "img_h1-Zz9.png": files["img_h1.png"] ?? "", "other-Pp2.png": files["other-photo.png"] ?? "", "svgo-Rr3.svg": svg("M4 12l8-8 8 8") };
+  const assetServer = http.createServer((req, res) => {
+    const u = new URL(req.url || "/", "http://x");
+    const file = u.pathname.startsWith("/static/") ? served[u.pathname.slice(8)] : undefined;
+    if (file !== undefined) { res.writeHead(200, { "content-type": u.pathname.endsWith(".svg") ? "image/svg+xml" : "image/png" }); res.end(file); return; }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html><body style="margin:0"><div data-dt-node="70:1" style="width:400px;height:200px;display:flex;gap:8px;align-items:flex-start">${body[u.searchParams.get("v") ?? ""] ?? ""}</div></body></html>`);
+  });
+  await new Promise<void>((resolve) => { assetServer.listen(0, "127.0.0.1", resolve); });
+  const port = (assetServer.address() as AddressInfo).port;
+  const verifyDir = path.join(proj, "design", "verify");
+  fs.mkdirSync(verifyDir, { recursive: true });
+  const ex = runSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--expect", screen, "--out", verifyDir], { cwd: proj });
+  const expectedFile = path.join(verifyDir, "Panel__70_1.expected.json");
+  const written = readJsonOrNull(expectedFile, isJsonObject);
+  check("--expect records each exported asset's identities and every exported file, the one only in assets/ too", written !== null && Array.isArray(written.nodes) && written.nodes.filter((n) => isJsonObject(n) && isJsonObject(n.assetIdentity)).length === 2
+    && isJsonObject(written.assetIds) && Object.values(written.assetIds).includes("assets/chevron.svg"));
+  if (ex.status !== 0) console.log(ex.stderr);
+  const judge = async (v: string): Promise<Record<string, unknown>> => {
+    const dir = path.join(verifyDir, v);
+    fs.mkdirSync(dir, { recursive: true });
+    const exp2 = path.join(dir, "Panel__70_1.expected.json");
+    fs.copyFileSync(expectedFile, exp2);
+    const run = await probe(["--expected", exp2, "--url", `http://127.0.0.1:${port}/?v=${v}`, "--out", dir + path.sep, "--project", ROOT, "--ready", "none"]);
+    if (run.status !== 0) console.log(run.stderr);
+    const cmp = runSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--compare", exp2, path.join(dir, "Panel__70_1.measured.json"), "--out", dir], { cwd: proj });
+    const rep = readJsonOrNull(path.join(dir, "Panel__70_1.report.json"), isJsonObject);
+    if (rep === null) console.log(cmp.stderr);
+    return rep ?? {};
+  };
+  const assetOf = (r: Record<string, unknown>): unknown => (isJsonObject(r.coverage) ? r.coverage.assetIdentity : undefined);
+  const wrong = (r: Record<string, unknown>): unknown[] => (Array.isArray(r.deltas) ? r.deltas.filter((d) => isJsonObject(d) && d.field === "asset identity") : []);
+  const unverified = (r: Record<string, unknown>): unknown[] => (Array.isArray(r.unverifiable) ? r.unverifiable.filter((d) => isJsonObject(d) && d.field === "asset identity") : []);
+  const eq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+  const reports = Object.fromEntries(await Promise.all(["renamed", "inlined", "swapped", "rewritten"].map(async (v) => [v, await judge(v)] as const)));
+  const { renamed = {}, inlined = {}, swapped = {}, rewritten = {} } = reports;
+  for (const [v, r] of Object.entries(reports)) console.log(`  ${v}: verdict ${String(r.verdict)} · ${JSON.stringify(assetOf(r))}`);
+  check("a bundler-renamed copy of the exported icon and an image fill's source: both verified, nothing against them", eq(assetOf(renamed), { verified: 2, wrong: 0, unverified: 0 }) && wrong(renamed).length === 0);
+  check("an inline, recoloured <svg> without Figma's defs and a data: URL: both verified", eq(assetOf(inlined), { verified: 2, wrong: 0, unverified: 0 }) && wrong(inlined).length === 0);
+  check("the export's other files drawn instead (one icon from another screen's assets/): two HIGH deltas naming both files, verdict fail",
+    eq(assetOf(swapped), { verified: 0, wrong: 2, unverified: 0 }) && swapped.verdict === "fail"
+    && wrong(swapped).some((d) => isJsonObject(d) && d.severity === "high" && d.expected === "assets/arrow.svg" && d.actual === "assets/chevron.svg"));
+  check("an SVGO-rewritten icon and a CSS background: unverified with reasons, no delta, verdict not fail", eq(assetOf(rewritten), { verified: 0, wrong: 0, unverified: 2 }) && wrong(rewritten).length === 0
+    && rewritten.verdict !== "fail" && unverified(rewritten).some((u) => isJsonObject(u) && /CSS background/.test(String(u.why))) && unverified(rewritten).some((u) => isJsonObject(u) && /matches no exported file/.test(String(u.why))));
+  const measuredText = fs.readFileSync(path.join(verifyDir, "inlined", "Panel__70_1.measured.json"), "utf8");
+  check("the measured file records the identity, never the inline markup or a data: payload", !measuredText.includes('"markup"') && !measuredText.includes("base64,iVBOR"));
+  assetServer.closeAllConnections(); assetServer.close();
 }
 
 finish();

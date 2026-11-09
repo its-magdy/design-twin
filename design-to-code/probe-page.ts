@@ -230,6 +230,8 @@ export interface MeasureItem {
   sharesWith: string | null;
   /** the spec states a backgroundColor — a transparent element then says who paints it (styles.paintedBy) */
   backgroundSpec?: boolean;
+  /** the spec is an exported asset: report what draws it (styles.assetIdentity) */
+  assetSpec?: boolean;
 }
 export interface MeasureInput {
   /** the frame root's rect, PAGE coordinates — x/y/textBox are reported relative to it */
@@ -503,6 +505,19 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       return { v: null, why: shapes.length ? "no SVG shape has a fill" : "no SVG shape, no background: nothing paints this node", source: "css" };
     };
 
+    // what draws an exported asset's node: the raw source, which the probe turns into an identity outside the page
+    const assetOf = (): PValue => {
+      const of = (e: PageElement): PValue => (e.tagName.toLowerCase() === "svg" ? { from: "svg", markup: e.outerHTML ?? "" } : { from: "img", src: e.currentSrc || e.src || "" });
+      if (tag === "img" || tag === "svg") return of(el);
+      const inner = Array.from(el.querySelectorAll("img, svg")).filter((e) => !e.parentElement?.closest("svg"));
+      const only = inner[0];
+      if (only && inner.length === 1) return of(only);
+      if (inner.length > 1) return { from: "none", why: `${inner.length} images inside this node's element — tag the one that draws it` };
+      const paint = [cs.getPropertyValue("background-image"), cs.getPropertyValue("mask-image"), cs.getPropertyValue("-webkit-mask-image")].find((v) => /url\(/.test(v));
+      if (paint) return { from: "css", why: "drawn by a CSS background or mask, not an <img> or inline <svg>" };
+      return { from: "none", why: `no <img> or inline <svg> draws this <${tag}>` };
+    };
+
     for (const k of input.keys) {
       switch (k) {
         case "fontFamily": put(k, typoCs.getPropertyValue("font-family") || null, "no computed font-family"); break;
@@ -598,6 +613,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
         }
         case "tag": put(k, tag, ""); break;
         case "textBox": put(k, textBox, textBoxWhy); break;
+        case "assetIdentity": put(k, item.assetSpec ? assetOf() : null, "not an exported asset"); break;
         default: put(k, null, `verify-probe does not know how to read '${k}'`);
       }
     }

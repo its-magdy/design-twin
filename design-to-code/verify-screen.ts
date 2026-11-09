@@ -39,7 +39,7 @@ import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile } from "./catalog-input.ts";
-import { isPlan, isVerifyReport } from "./doc-guards.ts";
+import { isPlan, isScreenAssetsDoc, isVerifyReport } from "./doc-guards.ts";
 import { acceptInto, selectForAccept } from "./owner-decisions.ts";
 import { choosePlan } from "./plan-binding.ts";
 import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusMain, waitMain } from "./verify-run.ts";
@@ -55,7 +55,7 @@ import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { idlessNote, nodeArtefacts, plansFound } from "./node-artefacts.ts";
 import { gatherCompareRun } from "./compare-run.ts";
-import { pagesRootOfScreen, readDesignSystemStamp, readExportIndex, resolveInside, rootIndexFile } from "../bridge/src/export-reader.ts";
+import { pagesRootOfScreen, readDesignSystemStamp, readExportIndex, resolveInside, rootIndexFile, screenSiblingFile } from "../bridge/src/export-reader.ts";
 import { TEXT_BOX_HEIGHT, fmt, scaleText } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
 import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
@@ -311,8 +311,14 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
     try { return fs.readFileSync(file); } catch { return null; }
   };
   const colorProfile = readDesignSystemStamp(exportRoot).stamp?.colorProfile ?? null;
-  const expOpts: ExpectOptions = { ...(ix.indexed || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}), readReference, colorProfile };
+  // the screens' asset manifests: what asset identity is checked against (none: the check is left out, and said so)
+  const manifests = files.map((f) => readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc));
+  const assetRows = manifests.flatMap((m) => m?.files ?? []);
+  const assetsDir = (() => { try { return fs.readdirSync(path.join(exportRoot, "assets")).map((f) => `assets/${f}`); } catch { return []; } })();
+  const expOpts: ExpectOptions = { ...(ix.indexed || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}), readReference, colorProfile,
+    ...(assetRows.length ? { assets: { rows: assetRows, others: assetsDir, read: readReference } } : {}) };
   const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
+  if (exp.nodes.some((n) => n.asset) && manifests.includes(null)) console.error("note  no <Screen>.assets.json beside a screen export — the identity of its assets is not checked; re-pull the screen with its assets");
   const pi = exp.planInteractions;
   if (pi) {
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}…)`);
