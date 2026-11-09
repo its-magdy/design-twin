@@ -1150,6 +1150,7 @@ const ROUTES = {
   init: async (args) => { (await import("./init.ts")).main(args); },
   doctor: async (args) => { await (await import("./doctor.ts")).main(args); },
   seed: async (args) => { (await import("./seed-components.ts")).main(args); },
+  outline: async (args) => { (await import("./outline-cli.ts")).main(args); },
   plugin: async (args) => { (await import("./plugin-install.ts")).main(args); },
 } satisfies Record<RoutedVerb, (args: string[]) => Promise<void>>;
 const routed = (word: string | undefined): word is RoutedVerb => word !== undefined && Object.hasOwn(ROUTES, word);

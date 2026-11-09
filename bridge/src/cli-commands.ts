@@ -260,6 +260,12 @@ export interface VerbDef {
 
 // `dtwin seed` answers its own --help (it is routed before verbHelp runs), and so does
 // `bun bridge/src/seed-components.ts --help` — both print this one string.
+export const OUTLINE_HELP =
+  "dtwin outline <screen.json> [--budget N]\n\n" +
+  "  Print one line per node of a screen export (pages/<Page>/<Screen>__<id>.json), with repeated styles hoisted.\n" +
+  "  --budget N   at most N characters: falls back to layout only, then a list of sections, and says which it printed\n\n" +
+  "  Reads the file only: no bridge, no token, no plugin. The JSON file stays the source of truth.";
+
 export const SEED_HELP =
   "dtwin seed [codeRoot] [outDir] [--dry-run]\n\n" +
   "  Pre-populate <outDir>/components.json from the Code Connect files already in your codebase —\n" +
@@ -423,6 +429,7 @@ export const VERB_ROWS = [
   { word: "doctor", to: "routed", usage: "  dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help" },
   { word: "init", to: "routed", usage: "  dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help" },
   { word: "seed", to: "routed", usage: "  dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help", help: SEED_HELP },
+  { word: "outline", to: "routed", usage: "  dtwin outline <screen.json> [--budget N]  # one line per node of a screen already on disk. See outline --help", help: OUTLINE_HELP },
   { word: "plugin", to: "routed", usage: "  dtwin plugin [install|update|status|path|uninstall]  # the Figma plugin's per-user copy, to import once. See plugin --help" },
   { word: "mcp", to: "routed", usage: "  dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help", help: MCP_HELP },
   { word: "help", to: "--help", usage: "  dtwin help                               = --help" },
