@@ -21,6 +21,11 @@ list of merged PRs.
 ### Added
 
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
+- `verify-screen --compare` catches the wrong image or icon. The web probe records what draws each exported asset (the
+  `<img>` source, the inline `<svg>`) and its content hash, and the compare checks that against the export's assets: the
+  expected file passes (renamed by a bundler or inlined too), another exported file is a high delta naming both, and
+  what cannot be matched (a re-encoded image, an optimised SVG, a CSS background, a native build) is reported as
+  unverified, never passed or failed.
 
 ### Fixed
 

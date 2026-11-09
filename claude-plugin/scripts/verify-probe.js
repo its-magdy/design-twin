@@ -401,6 +401,17 @@ function measureElements(input) {
       if (mask && mask !== "none") return { v: null, why: "a mask-drawn icon with a transparent background", source: "background" };
       return { v: null, why: shapes.length ? "no SVG shape has a fill" : "no SVG shape, no background: nothing paints this node", source: "css" };
     };
+    const assetOf = () => {
+      const of = (e) => e.tagName.toLowerCase() === "svg" ? { from: "svg", markup: e.outerHTML ?? "" } : { from: "img", src: e.currentSrc || e.src || "" };
+      if (tag === "img" || tag === "svg") return of(el);
+      const inner = Array.from(el.querySelectorAll("img, svg")).filter((e) => !e.parentElement?.closest("svg"));
+      const only = inner[0];
+      if (only && inner.length === 1) return of(only);
+      if (inner.length > 1) return { from: "none", why: `${inner.length} images inside this node's element \u2014 tag the one that draws it` };
+      const paint = [cs.getPropertyValue("background-image"), cs.getPropertyValue("mask-image"), cs.getPropertyValue("-webkit-mask-image")].find((v) => /url\(/.test(v));
+      if (paint) return { from: "css", why: "drawn by a CSS background or mask, not an <img> or inline <svg>" };
+      return { from: "none", why: `no <img> or inline <svg> draws this <${tag}>` };
+    };
     for (const k of input.keys) {
       switch (k) {
         case "fontFamily":
@@ -545,6 +556,9 @@ function measureElements(input) {
           break;
         case "textBox":
           put(k, textBox, textBoxWhy);
+          break;
+        case "assetIdentity":
+          put(k, item.assetSpec ? assetOf() : null, "not an exported asset");
           break;
         default:
           put(k, null, `verify-probe does not know how to read '${k}'`);
@@ -1291,6 +1305,69 @@ function parseCssColor(v) {
   return null;
 }
 
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+// design-to-code/content-hash.ts
+var SVG_GEOMETRY = {
+  path: ["d"],
+  rect: ["x", "y", "width", "height", "rx", "ry"],
+  circle: ["cx", "cy", "r"],
+  ellipse: ["cx", "cy", "rx", "ry"],
+  line: ["x1", "y1", "x2", "y2"],
+  polygon: ["points"],
+  polyline: ["points"]
+};
+var attrOf = (tag, name) => new RegExp(`(?<![\\w:-])${name}\\s*=\\s*(["'])(.*?)\\1`, "s").exec(tag)?.[2] ?? null;
+function svgGeometry(svg) {
+  const drawn = svg.replace(/<(defs|clipPath|mask|symbol|pattern)\b[\s\S]*?<\/\1\s*>/gi, "");
+  if (/<use\b/i.test(drawn)) return null;
+  const tokens = [];
+  for (const [tag = "", name = ""] of drawn.matchAll(/<(g|path|rect|circle|ellipse|line|polygon|polyline)\b[^>]*>/gi)) {
+    const kind = name.toLowerCase();
+    if (kind === "g" && attrOf(tag, "transform") === null) continue;
+    tokens.push(`${kind} ${[...SVG_GEOMETRY[kind] ?? [], "stroke-width", "transform"].map((a) => (attrOf(tag, a) ?? "").replace(/\s+/g, " ").trim()).join("|")}`);
+  }
+  for (const [tag = ""] of svg.matchAll(/<image\b[^>]*>/gi)) tokens.push(`image ${attrOf(tag, "href") ?? attrOf(tag, "xlink:href") ?? ""}`);
+  return tokens.some((t) => !t.startsWith("g ")) ? tokens.join("\n") : null;
+}
+var identityOfDrawing = (geometry) => geometry === null ? null : `s:${sha256Hex(geometry).slice(0, 16)}`;
+var svgIdentity = (svg) => identityOfDrawing(svgGeometry(svg));
+function assetGeometry(content) {
+  const head = Buffer.from(content.subarray(0, 4096)).toString("utf8").trimStart();
+  return head.startsWith("<") && /<svg[\s>]/i.test(head) ? svgGeometry(Buffer.from(content).toString("utf8")) : null;
+}
+function assetIdentity(content) {
+  const head = Buffer.from(content.subarray(0, 4096)).toString("utf8").trimStart();
+  if (head.startsWith("<") && /<svg[\s>]/i.test(head)) return identityOfDrawing(assetGeometry(content));
+  return content.length ? `b:${sha256Hex(content).slice(0, 16)}` : null;
+}
+
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
 // design-to-code/probe-match.ts
 var isMatch = (m) => "matchedBy" in m;
 var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
@@ -1504,6 +1581,40 @@ function positionBoxes(specs, pool) {
   }
   return out;
 }
+async function identifyAssets(nodes, read2) {
+  const files = /* @__PURE__ */ new Map();
+  const fileOf = (src) => getOrInit(files, src, async () => {
+    if (src === "") return { why: "the <img> has no source" };
+    let bytes;
+    try {
+      const data = /^data:[^,]*?(;base64)?,(.*)$/s.exec(src);
+      if (data) bytes = data[1] ? Buffer.from(data[2] ?? "", "base64") : Buffer.from(decodeURIComponent(data[2] ?? ""), "utf8");
+      else if (/^https?:/i.test(src)) bytes = await read2(src);
+      else return { why: `its source cannot be read back (${src.split(":")[0]}: URL)` };
+    } catch (e) {
+      return { why: `its source could not be read: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}` };
+    }
+    const id = assetIdentity(bytes);
+    return id !== null ? { id } : { why: "its file holds nothing to identify" };
+  });
+  const NO_DRAWING = "its markup has no shape to identify (a <use> sprite, or it draws nothing)";
+  const settle2 = async (styles) => {
+    const raw = styles?.assetIdentity;
+    if (!styles || !raw) return;
+    if (raw.from === "svg") {
+      const id = svgIdentity(String(raw.markup ?? ""));
+      styles.assetIdentity = { from: "svg", ...id !== null ? { id } : { why: NO_DRAWING } };
+      return;
+    }
+    if (raw.from !== "img") return;
+    const src = String(raw.src ?? "");
+    styles.assetIdentity = { from: "img", src: src.startsWith("data:") ? `${src.split(",")[0]},\u2026` : src, ...await fileOf(src) };
+  };
+  await Promise.all([...nodes].flatMap((n) => [settle2(n.styles), ...Object.values(n.states ?? {}).map((st) => {
+    const bag = "styles" in st ? st.styles : st;
+    return settle2(isJsonObject(bag) ? bag : void 0);
+  })]));
+}
 function shapeNode(spec, match, raw, keys) {
   const styles = {};
   const unmeasured = {};
@@ -1616,6 +1727,7 @@ function normFamily(v) {
 var PAD_SIDES = ["top", "right", "bottom", "left"];
 var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
 var BOX_RULES = ["leaf", "inline"];
+var ASSET_IDENTITY = "asset identity";
 var CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
 var field = (key, label, tol, extra = {}) => ({ spec: key, label, measured: key, census: key, parse: tol !== null && !extra.parse ? "px" : "norm", compare: "field", tol, ...extra });
 var PROPERTIES = [
@@ -1720,6 +1832,18 @@ var PROPERTIES = [
     absent: "unlisted",
     nullWhy: "the probe reported text: null \u2014 an element with child elements still has text; report its textContent",
     paints: true
+  }] },
+  // the exported file this node draws: never a CSS property, so a probe that cannot say leaves it unverified, not unmeasured
+  { key: "assetIdentity", optional: true, applies: [], shapes: [{
+    spec: "assetIdentity",
+    label: ASSET_IDENTITY,
+    measured: "assetIdentity",
+    census: "assetIdentity",
+    parse: "string",
+    compare: "asset",
+    tol: null,
+    doc: "{from, src?, id?, why?} \u2014 what draws the node and its content identity (content-hash.ts assetIdentity)",
+    absentWhy: "the probe did not report which file this node draws (a native or hand-written measurement) \u2014 compare the asset by eye"
   }] }
 ];
 var SHAPES = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
@@ -1735,7 +1859,7 @@ var FIELDS = SHAPES.filter(({ s }) => s.compare === "field" && !s.when).flatMap(
   ...p.box ? { box: true } : {},
   ...p.optional ? { optional: true } : {}
 }] : []);
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display", "assetIdentity"];
 var STYLE_KEY_SHAPE = {
   ...Object.fromEntries(SHAPES.flatMap(({ s }) => s.doc ? [[s.measured, s.doc]] : [])),
   textBox: "{x,w} of a Range over the text",
@@ -1743,25 +1867,6 @@ var STYLE_KEY_SHAPE = {
   display: "getComputedStyle(el).display"
 };
 var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
-
-// design-to-code/types.ts
-var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
-function isJsonObject(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
-
-// bridge/src/json-util.ts
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
-}
-function canonical(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -7643,6 +7748,7 @@ var docToken = async (page) => {
   const v = await page.evaluate("window.__dtProbeDoc || ''");
   return String(v);
 };
+var ASSET_READ_MS = 5e3;
 async function pass(page, log, o) {
   const exp = o.expectation;
   const hiddenIds = new Set(exp.hidden && exp.hidden.ids || []);
@@ -7684,7 +7790,8 @@ async function pass(page, log, o) {
       isPaint: isPaintSpec(spec),
       isPlaceholder: spec.placeholder === true,
       sharesWith: m.sharesWith ?? null,
-      ...typeof spec.backgroundColor === "string" ? { backgroundSpec: true } : {}
+      ...typeof spec.backgroundColor === "string" ? { backgroundSpec: true } : {},
+      ...spec.assetIdentity ? { assetSpec: true } : {}
     });
     const frameOf = (spec) => frames.get(spec.frameId ?? frameIn[0]?.nodeId ?? "");
     const frameRectOf = (spec) => {
@@ -7765,6 +7872,11 @@ async function pass(page, log, o) {
       }
     }
     if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf2(page);
+    await identifyAssets(nodes.values(), async (url) => {
+      const res = await page.context().request.get(url, { timeout: ASSET_READ_MS });
+      if (!res.ok()) throw new Error(`HTTP ${res.status()}`);
+      return res.body();
+    });
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
     const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
     const pageOverflow = { ...overflow, compatMode };

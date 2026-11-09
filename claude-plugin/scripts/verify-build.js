@@ -3002,6 +3002,7 @@ function normFamily(v) {
 }
 var PAD_SIDES = ["top", "right", "bottom", "left"];
 var BOX_RULES = ["leaf", "inline"];
+var ASSET_IDENTITY = "asset identity";
 var CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
 var field = (key, label, tol, extra = {}) => ({ spec: key, label, measured: key, census: key, parse: tol !== null && !extra.parse ? "px" : "norm", compare: "field", tol, ...extra });
 var PROPERTIES = [
@@ -3106,6 +3107,18 @@ var PROPERTIES = [
     absent: "unlisted",
     nullWhy: "the probe reported text: null \u2014 an element with child elements still has text; report its textContent",
     paints: true
+  }] },
+  // the exported file this node draws: never a CSS property, so a probe that cannot say leaves it unverified, not unmeasured
+  { key: "assetIdentity", optional: true, applies: [], shapes: [{
+    spec: "assetIdentity",
+    label: ASSET_IDENTITY,
+    measured: "assetIdentity",
+    census: "assetIdentity",
+    parse: "string",
+    compare: "asset",
+    tol: null,
+    doc: "{from, src?, id?, why?} \u2014 what draws the node and its content identity (content-hash.ts assetIdentity)",
+    absentWhy: "the probe did not report which file this node draws (a native or hand-written measurement) \u2014 compare the asset by eye"
   }] }
 ];
 var SHAPES = PROPERTIES.flatMap((p) => p.shapes.map((s) => ({ p, s })));
@@ -3121,7 +3134,7 @@ var FIELDS = SHAPES.filter(({ s }) => s.compare === "field" && !s.when).flatMap(
   ...p.box ? { box: true } : {},
   ...p.optional ? { optional: true } : {}
 }] : []);
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display", "assetIdentity"];
 var STYLE_KEY_SHAPE = {
   ...Object.fromEntries(SHAPES.flatMap(({ s }) => s.doc ? [[s.measured, s.doc]] : [])),
   textBox: "{x,w} of a Range over the text",

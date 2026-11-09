@@ -761,7 +761,7 @@ console.log("the registries derived from the property table:");
 {
   safe("STYLE_KEYS is the list every expectation's measuredKeys has named, in that order", () => JSON.stringify(STYLE_KEYS) === JSON.stringify([
     "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill", "placeholderColor", "borderColor", "borderWidth", "borderRadius", "gap",
-    "width", "height", "x", "y", "opacity", "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"]));
+    "width", "height", "x", "y", "opacity", "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display", "assetIdentity"]));
   safe("every key a property reads or counts is one the probe is told to send", () => PROPERTIES.every((p) => p.shapes.every((s) => STYLE_KEYS.includes(s.measured) && STYLE_KEYS.includes(s.census)
     && (s.read === undefined || STYLE_KEYS.includes(s.read)))));
   safe("CHECK_ORDER names every spec value a shape states, once", () => {

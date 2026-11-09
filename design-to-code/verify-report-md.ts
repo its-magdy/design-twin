@@ -171,6 +171,7 @@ function coverageMarkdown(r: VerifyReportV2): string[] {
     `${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
   L.push(`| design values excluded by method (listed below) | ${c.valuesNotComparable} |`);
   L.push(`| values the method cannot read unaided | ${c.valuesUnverifiable} |`);
+  if (c.assetIdentity) L.push(`| exported assets: verified / wrong / unverified | ${c.assetIdentity.verified} / ${c.assetIdentity.wrong} / ${c.assetIdentity.unverified} |`);
   if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) · ${c.hiddenLayersSkipped.specsSkipped} spec(s) · ` +
     `${c.hiddenLayersSkipped.instancesSkipped} instance(s) · ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence — coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);

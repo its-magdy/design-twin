@@ -29,7 +29,7 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import {
-  CHECK_ORDER, EXPECTATION_SCHEMA, PAD_SIDES, PROPERTIES, REPORT_SCHEMA, RULES, STYLE_KEYS, TEXT_BOX_HEIGHT, TOLERANCE, cssPx, fourSides, normColor, num, pctText, r2,
+  ASSET_IDENTITY, CHECK_ORDER, EXPECTATION_SCHEMA, PAD_SIDES, PROPERTIES, REPORT_SCHEMA, RULES, STYLE_KEYS, TEXT_BOX_HEIGHT, TOLERANCE, cssPx, fourSides, normColor, num, pctText, r2,
 } from "./verify-shared.ts";
 import type { CompareKind, Expectation, Property, PropertyShape, Rule } from "./verify-shared.ts";
 
@@ -296,6 +296,8 @@ const LIMITS = [
     "spacing is the table model, not a layout bug.",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) — read `rotate` too before calling a rotation missing.",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` — compare the asset file instead.",
+  "Asset identity is by content: a rendered file that matches the node's exported asset is verified and one that matches ANOTHER exported asset is a delta. Anything else is listed under `unverifiable`, never passed and never failed: " +
+    "a re-encoded image, a rewritten (optimised) SVG, a <use> sprite, a CSS background and a native build cannot be matched. An SVG's colour is not part of its identity.",
   "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; " +
     "so is a value CSS cannot produce (a negative gap, padding or size).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
@@ -534,7 +536,7 @@ interface CompareCtx extends MeasuredIndex {
   frameOf: (spec: VerifySpec) => Partial<VerifyRootFrame>;
   deltas: VerifyDelta[]; notMeasured: VerifyReportV2["notMeasured"]; fieldsNotMeasured: VerifyReportV2["fieldsNotMeasured"];
   unverifiable: VerifyReportV2["unverifiable"]; census: Map<string, { expected: number; present: number }>; tally: (key: string, present: boolean) => void;
-  fieldsChecked: number; nodesMeasured: number; nodesMatchedByComponentPath: number; fieldsReportedNull: number;
+  fieldsChecked: number; assetsVerified: number; assetsWrong: number; assetsUnplaced: number; nodesMeasured: number; nodesMatchedByComponentPath: number; fieldsReportedNull: number;
   matchedByCensus: Record<string, number>; typographyOn: Map<string, string>; matchKind: Map<string, string>; matchCapOf: Map<string, DeltaSeverity>;
   absentGaps: Set<string>; placementGaps: Map<string, { absent: boolean; why: string }>; undrawnStates: Array<{ spec: VerifySpec; state: string }>;
   paintedVia: Array<{ nodeId: string; how: string }>; lineBoxWhyOf: Map<string, string>;
@@ -774,7 +776,7 @@ function compareCtx(expectation: Expectation, measured: VerifyMeasured, opts: Co
   const unused: VerifyReportV2["waivers"]["unused"] = [];
   return {
     expectation, measured, opts, hiddenSet, legacy, specs, frameOf, byId, duplicateNodeIds, unknownKeys, keysSeen, expectedIds, viaSharedPath, probeWhy, deltas, notMeasured, fieldsNotMeasured, unverifiable, census,
-      tally, fieldsChecked, nodesMeasured, nodesMatchedByComponentPath, fieldsReportedNull, matchedByCensus, typographyOn, matchKind, matchCapOf, absentGaps, placementGaps, undrawnStates, paintedVia, lineBoxWhyOf, gap,
+      tally, fieldsChecked, assetsVerified: 0, assetsWrong: 0, assetsUnplaced: 0, nodesMeasured, nodesMatchedByComponentPath, fieldsReportedNull, matchedByCensus, typographyOn, matchKind, matchCapOf, absentGaps, placementGaps, undrawnStates, paintedVia, lineBoxWhyOf, gap,
       push, plan, folded, probeFrames, multiFrame, frameMeasured, builtTexts, inputNotes, reopened, unused,
   };
 }
@@ -821,6 +823,11 @@ function matchSpec(cx: CompareCtx, spec: VerifySpec): { m: MeasuredNode; matched
       const parent = (spec.ancestorIds || [])[0] ?? frameId;
       why += ` — foldable (no paint — anchor it foldedInto its parent${parent ? ` ${parent}` : ""} if the build merged it there)`;
     }
+    if (spec.assetOnly) {
+      cx.assetsUnplaced++;
+      cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: ASSET_IDENTITY, expected: spec.assetIdentity?.files[0] ?? null, why: `${why} — no element carries this exported asset's id, so which file draws it is unknown` });
+      return null;
+    }
     notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why });
     return null;
   }
@@ -857,7 +864,11 @@ function readNode(cx: CompareCtx, spec: VerifySpec, m: MeasuredNode, matchedBy: 
   // Hover-only content measured at rest is absent by design, not missing (e.g. the
   // edit button that exists only on the hovered row, "36 → 0").
   if (state && measuredIn === "rest" && zeroAtRest) {
-    for (const { s } of statedShapes(spec, spec.type === "TEXT")) { tally(s.census, false); gap(spec, s.label, `renders 0×0 at rest: ${stateWhy}`); }
+    for (const { s, want } of statedShapes(spec, spec.type === "TEXT")) {
+      tally(s.census, false);
+      if (s.spec === "assetIdentity") cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: s.label, expected: want, why: `renders 0×0 at rest: ${stateWhy}` });
+      else gap(spec, s.label, `renders 0×0 at rest: ${stateWhy}`);
+    }
     placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0×0 at rest: ${stateWhy}` });
     return null;
   }
@@ -1144,6 +1155,23 @@ const COMPARE: Readonly<Record<CompareKind, (a: At, want: JsonValue, v: Admitted
   },
   /** the copy, as rendered (text case / text-transform), and a non-breaking space in it */
   copy: ({ cx, n }) => compareCopy(cx, n),
+  /** which exported file the node draws, by content: only evidence of ANOTHER exported file is a delta */
+  asset: ({ cx, n, s }, want, { v }) => {
+    const { spec } = n;
+    if (!spec.assetIdentity) return;
+    const { files, ids } = spec.assetIdentity;
+    const got = isJsonObject(v) ? v : {};
+    const unverified = (why: string): void => { cx.unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: s.label, expected: want, why }); };
+    if (n.state && n.measuredIn === "rest") { unverified(n.stateWhy); return; }
+    const src = typeof got.src === "string" ? ` (${got.src})` : "";
+    if (typeof got.id !== "string") { unverified(typeof got.why === "string" ? `${got.why}${src}` : "the measured value names no identity"); return; }
+    const other = cx.expectation.assetIds?.[got.id];
+    if (!ids.includes(got.id) && other === undefined) { unverified(`the rendered content${src} matches no exported file — re-encoded, optimised or from elsewhere: check it by eye`); return; }
+    cx.fieldsChecked++;
+    if (ids.includes(got.id) || other === undefined) { cx.assetsVerified++; return; }
+    cx.assetsWrong++;
+    cx.push(spec, s.label, "high", { want: files[0] ?? null, got: other, delta: null }, { ...(src ? { note: `rendered from${src}` } : {}), ...matchedByOf(n) });
+  },
 };
 /** the copy compare: the RENDERED strings, their whitespace, case and space kinds, and a non-breaking space in the design's */
 function compareCopy(cx: CompareCtx, n: NodeCtx): void {
@@ -1930,7 +1958,7 @@ function verdictOf(
   } = g;
   // The verdict is COMPUTED. Coverage first — how much was looked at decides what the rest is worth.
   // (a spec a plan anchor folded into a measured ancestor is out of the denominator)
-  const nodesExpected = specs.length - folded.length;
+  const nodesExpected = specs.length - folded.length - cx.assetsUnplaced;
   const reasons: string[] = [];
   // the run's integrity (computed above, before the interactions — probe rows bind to it), ranked FIRST.
   reasons.push(...integrity);
@@ -1961,6 +1989,11 @@ function verdictOf(
   return { nodesExpected, reasons, lowConfidence, verdict };
 }
 /** report.coverage */
+/** how the screen's exported assets fared, when any was checked */
+function assetCoverage(cx: CompareCtx): Pick<VerifyCoverageV2, "assetIdentity"> | Record<string, never> {
+  const unverified = cx.unverifiable.filter((u) => u.field === ASSET_IDENTITY).length;
+  return cx.assetsVerified + cx.assetsWrong + unverified ? { assetIdentity: { verified: cx.assetsVerified, wrong: cx.assetsWrong, unverified } } : {};
+}
 function coverageOf(
   cx: CompareCtx,
   g: Pick<Graded,
@@ -1984,6 +2017,7 @@ function coverageOf(
     fieldsNeverMeasured,
     valuesNotComparable: (expectation.notComparable || []).length,
     valuesUnverifiable: unverifiable.length,
+    ...assetCoverage(cx),
     ...ifDefined("hiddenLayersSkipped", (expectation.counts && expectation.counts.hidden) || undefined),
     instanceSets: bySet.size,
     instanceSetsWithEvidence: bySet.size - untaggedInstanceSets.length,
