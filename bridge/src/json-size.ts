@@ -1,4 +1,11 @@
-// A bounded measure of `JSON.stringify(value, null, 2).length`: answers "does the pretty-printed text fit in
+// How an export is spelled as text, and a bounded measure of that text. Pretty-printing cost about 3.2x the bytes and
+// 1.5x the tokens of the same JSON, and put a 324-node screen on 11,770 lines, so a default Read saw about 17% of it.
+//
+// exportJsonText is the text on disk: compact JSON with a line break before each row of a top-level array and each
+// `children` element, so one node sits on one line. One unbroken line would be smaller by 0.3%, but it cannot be paged
+// with a line offset and one grep hit would print the whole file.
+//
+// The rest is a bounded measure of `JSON.stringify(value).length`: answers "does the compact text fit in
 // `limit` UTF-16 code units?" without building the text, and stops walking the moment the running total passes
 // the limit. The inline-vs-spill decision for an MCP export reply needs only that answer, and a real export is
 // tens of megabytes — serialising it just to learn it is over a ~48 KB cap costs seconds of CPU and a
@@ -8,8 +15,7 @@
 // https://tc39.es/ecma262/#sec-serializejsonproperty): numbers print as Number::toString (non-finite → null),
 // strings escape `"`, `\`, control characters (< 0x20) and lone surrogates (a well-formed surrogate pair is
 // left as is), a property whose value is undefined / a function / a symbol is skipped (null inside an array),
-// an empty object or array prints as `{}` / `[]`, and with a 2-space indent each member sits on its own line
-// with `": "` after a key.
+// an empty object or array prints as `{}` / `[]`, and members are separated by `,` with `:` after a key and no whitespace.
 //
 // Anything whose size JSON.stringify decides through code this walker does not mirror (a toJSON method, a
 // bigint, a boxed primitive, a class instance, a very deep or cyclic value) is reported as "unsupported" so the
@@ -48,8 +54,8 @@ function quotedLength(s: string): number {
 // they have no JSON text at all; walk() reports them as unsupported there.)
 const isOmitted = (v: unknown): boolean => v === undefined || typeof v === "function" || typeof v === "symbol";
 
-/** Whether `JSON.stringify(value, null, 2)` is at most `limit` characters long — and its exact length when it is. */
-export function prettyJsonSize(value: unknown, limit: number): JsonSize {
+/** Whether `JSON.stringify(value)` is at most `limit` characters long — and its exact length when it is. */
+export function compactJsonSize(value: unknown, limit: number): JsonSize {
   let total = 0;
   let unsupported = false;
   // Adds to the running total; false once the limit is passed or the value is unsupported, which unwinds the walk.
@@ -65,8 +71,7 @@ export function prettyJsonSize(value: unknown, limit: number): JsonSize {
     if (Array.isArray(v)) {
       if (Object.getPrototypeOf(v) !== Array.prototype) { unsupported = true; return false; }
       if (v.length === 0) return add(2);
-      const pad = 1 + (depth + 1) * 2; // "\n" + the member indent
-      if (!add(2 + (v.length - 1) + v.length * pad + 1 + depth * 2)) return false; // [ ] , between members, the lines
+      if (!add(2 + (v.length - 1))) return false; // [ ] and the commas between items
       for (let i = 0; i < v.length; i++) {
         const item: unknown = v[i];
         if (isOmitted(item)) { if (!add(4)) return false; } else if (!walk(item, depth + 1)) return false;
@@ -78,17 +83,15 @@ export function prettyJsonSize(value: unknown, limit: number): JsonSize {
     const rec = v as Record<string, unknown>;
     if (typeof rec["toJSON"] === "function") { unsupported = true; return false; }
     let members = 0;
-    const pad = 1 + (depth + 1) * 2;
     if (!add(2)) return false; // { }
     for (const key of Object.keys(rec)) {
       const member = rec[key];
       if (isOmitted(member)) continue;
-      // "\n" + indent, the quoted key, ": ", and a "," before every member but the first
-      if (!add(pad + quotedLength(key) + 2 + (members ? 1 : 0))) return false;
+      // the quoted key, ":", and a "," before every member but the first
+      if (!add(quotedLength(key) + 1 + (members ? 1 : 0))) return false;
       members++;
       if (!walk(member, depth + 1)) return false;
     }
-    if (members) return add(1 + depth * 2); // the closing "\n" + indent
     return true;
   };
 
@@ -97,12 +100,42 @@ export function prettyJsonSize(value: unknown, limit: number): JsonSize {
   return done ? { kind: "fits", length: total } : { kind: "over" };
 }
 
-/** `JSON.stringify(value, null, 2)` when its text is at most `limit` characters, else null — the same answer as
+/** `JSON.stringify(value)` when its text is at most `limit` characters, else null — the same answer as
  *  stringifying first and comparing `.length`, without serialising a value that is over the limit. */
-export function prettyJsonWithin(value: unknown, limit: number): string | null {
-  const size = prettyJsonSize(value, limit);
+export function compactJsonWithin(value: unknown, limit: number): string | null {
+  const size = compactJsonSize(value, limit);
   if (size.kind === "over") return null;
-  const text = JSON.stringify(value, null, 2);
+  const text = JSON.stringify(value);
   // Unsupported shapes were not measured: the text is the measure.
   return size.kind === "fits" || text.length <= limit ? text : null;
 }
+
+const isRow = (v: unknown): boolean => typeof v === "object" && v !== null;
+
+function spell(v: unknown, key: string | null, depth: number): string | undefined {
+  if (!isRow(v)) return JSON.stringify(v);
+  if (Array.isArray(v)) {
+    const items = Array.from(v, (x: unknown) => { const t = spell(x, null, depth + 1); return t === undefined ? "null" : t; });
+    return (depth <= 1 || key === "children") && v.some(isRow) ? "[\n" + items.join(",\n") + "\n]" : "[" + items.join(",") + "]";
+  }
+  const proto: unknown = Object.getPrototypeOf(v);
+  const rec = v as Record<string, unknown>;
+  if ((proto !== Object.prototype && proto !== null) || typeof rec["toJSON"] === "function") return JSON.stringify(v);
+  const members: string[] = [];
+  for (const k of Object.keys(rec)) {
+    const text = spell(rec[k], k, depth + 1);
+    if (text !== undefined) members.push(JSON.stringify(k) + ":" + text);
+  }
+  return "{" + members.join(",") + "}";
+}
+
+/** The text of an export file: JSON.stringify(doc) with a line break before each row of a top-level array and each
+ *  `children` element. String values escape their own newlines, so removing every line break gives the compact text. */
+export function exportJsonText(doc: unknown): string {
+  const text = spell(doc, null, 0);
+  return text === undefined ? "null" : text;
+}
+
+/** Characters per token of compact export JSON, measured with cl100k on two real screens (2.82 and 2.90; pretty-printed
+ *  JSON was 6.03). An estimate: the inline limit keeps headroom on top of it. */
+export const COMPACT_CHARS_PER_TOKEN = 2.8;

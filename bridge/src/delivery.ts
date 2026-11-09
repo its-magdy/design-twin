@@ -14,6 +14,7 @@
 // Pure: no filesystem, no clock. What was on disk comes in as the change report; figma-mcp.ts does the writing.
 import path from "node:path";
 import type { ChangeReport } from "./write-out.ts";
+import { COMPACT_CHARS_PER_TOKEN } from "./json-size.ts";
 
 export type Delivery =
   | { kind: "inline"; text: string }
@@ -28,7 +29,7 @@ export function decideDelivery(writeToDisk: boolean | undefined, measure: (limit
   if (writeToDisk === true) return { kind: "write", implicit: false };
   const text = measure(limit);
   if (text !== null) return { kind: "inline", text };
-  const why = `this export is past the ${limit.toLocaleString("en-US")} characters (~${Math.round(limit / 4000)}k tokens) the client accepts inline (Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)`;
+  const why = `this export is past the ${limit.toLocaleString("en-US")} characters (~${Math.round(limit / COMPACT_CHARS_PER_TOKEN / 1000)}k tokens) the client accepts inline (Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)`;
   if (writeToDisk === false) return { kind: "refuse", message: `${why}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).` };
   return { kind: "write", implicit: true, why };
 }

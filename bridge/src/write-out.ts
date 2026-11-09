@@ -30,6 +30,7 @@ import { exportRoot } from "./export-reader.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { errMsg, errCode } from "./errmsg.ts";
 import { pngSize } from "./png.ts";
+import { COMPACT_CHARS_PER_TOKEN, exportJsonText } from "./json-size.ts";
 import { QUICK_KEYS, SCHEMA_DOC_NAME, SCHEMA_MARKER } from "./quick-keys.ts";
 import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
 import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
@@ -138,7 +139,7 @@ function assertInsideCwd(outDir?: string | null, what = "outDir"): string {
 // differs (keepPrevCopy's rule: one level, stamps ignored) and the .prev path is pushed onto `keep`.
 function writeJson(dir: string, name: string, obj: unknown, quiet?: boolean, log?: Log, keep?: string[]): void {
   const file = path.join(dir, name);
-  const text = JSON.stringify(obj, null, 2);
+  const text = exportJsonText(obj);
   if (keep) { const prev = keepPrevCopy(file, text); if (prev) keep.push(prev); }
   writeFileAtomic(file, text);
   if (!quiet && log) log("wrote " + file);
@@ -1241,15 +1242,15 @@ function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, lo
 }
 
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
-// tool output at MAX_MCP_OUTPUT_TOKENS (default 25,000); ~4 characters per token, and 20% headroom
-// because that ratio is an estimate and indented JSON tokenizes worse than prose. Capped at 48,000:
+// tool output at MAX_MCP_OUTPUT_TOKENS (default 25,000); COMPACT_CHARS_PER_TOKEN, and 20% headroom
+// because that ratio is an estimate (compact JSON is token-dense: nearly half the characters per token of indented JSON). Capped at 48,000:
 // Claude Code also saves any text result longer than 50,000 characters to a file instead of showing it,
 // whatever MAX_MCP_OUTPUT_TOKENS says — so past that the inline result is not inline anyway, and our own
 // spill (files + a compact index) is the better answer. MAX_MCP_OUTPUT_TOKENS can still LOWER the limit.
 const INLINE_CHAR_CAP = 48000;
 function inlineLimitChars(env: NodeJS.ProcessEnv = process.env): number {
   const tokens = Number(env.MAX_MCP_OUTPUT_TOKENS);
-  return Math.min(Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8), INLINE_CHAR_CAP);
+  return Math.min(Math.floor((tokens > 0 ? tokens : 25000) * COMPACT_CHARS_PER_TOKEN * 0.8), INLINE_CHAR_CAP);
 }
 
 export { inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny, screenReuseKeys, resetScreenReuseKeys };

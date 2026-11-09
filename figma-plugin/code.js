@@ -355,6 +355,32 @@
   }
   var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
+  // ../bridge/src/json-size.ts
+  var isRow = (v) => typeof v === "object" && v !== null;
+  function spell(v, key, depth) {
+    if (!isRow(v)) return JSON.stringify(v);
+    if (Array.isArray(v)) {
+      const items = Array.from(v, (x) => {
+        const t = spell(x, null, depth + 1);
+        return t === void 0 ? "null" : t;
+      });
+      return (depth <= 1 || key === "children") && v.some(isRow) ? "[\n" + items.join(",\n") + "\n]" : "[" + items.join(",") + "]";
+    }
+    const proto = Object.getPrototypeOf(v);
+    const rec = v;
+    if (proto !== Object.prototype && proto !== null || typeof rec["toJSON"] === "function") return JSON.stringify(v);
+    const members = [];
+    for (const k of Object.keys(rec)) {
+      const text = spell(rec[k], k, depth + 1);
+      if (text !== void 0) members.push(JSON.stringify(k) + ":" + text);
+    }
+    return "{" + members.join(",") + "}";
+  }
+  function exportJsonText(doc) {
+    const text = spell(doc, null, 0);
+    return text === void 0 ? "null" : text;
+  }
+
   // ../bridge/src/read-opts.ts
   var WALK = ["node", "selection", "pages"];
   var READ_OPTS = [
@@ -4297,8 +4323,8 @@
   }
   var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [
-      { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
-      { name: "variables.json", content: JSON.stringify(r.variables, null, 2) }
+      { name: `${r.screenName}.json`, content: exportJsonText(r.screen), copyable: true },
+      { name: "variables.json", content: exportJsonText(r.variables) }
     ],
     summary: `${r.screenName} \u2014 ${r.assets.length} asset(s)`,
     warnings: r.screen.manifest && r.screen.manifest.warnings
@@ -4308,11 +4334,11 @@
     const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
     const ds = buildDesignSystemLayout(r.designSystem, SEP);
     const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
-    const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
+    const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: exportJsonText(f.data) }));
     return {
       files: [
-        { name: "design-system.json", content: JSON.stringify(ds.manifest, null, 2) },
-        { name: rootIndex, content: JSON.stringify(meta, null, 2) }
+        { name: "design-system.json", content: exportJsonText(ds.manifest) },
+        { name: rootIndex, content: exportJsonText(meta) }
       ],
       layerFiles: batch,
       summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,

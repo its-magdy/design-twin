@@ -103,7 +103,7 @@ async function connectionInfo(connId: string | null): Promise<{ connection: Conn
 
 // ---- result helpers ----
 function textResult(obj: unknown): { content: [{ type: "text"; text: string }] } {
-  return { content: [{ type: "text" as const, text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] };
+  return { content: [{ type: "text" as const, text: typeof obj === "string" ? obj : JSON.stringify(obj) }] };
 }
 // Takes the thrown value, not a pre-stringified message: the coercion lives once in server-core
 // (`errMsg`) for the whole Bun side.
@@ -146,7 +146,7 @@ function stripAssets(r: ExportReply): object {
 // and exits (server-core.ts). Before this, an MCP-only session had no way to get assets at all.
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
 import { decideDelivery, describeWrite } from "./delivery.ts";
-import { prettyJsonWithin } from "./json-size.ts";
+import { compactJsonWithin } from "./json-size.ts";
 import { screenOutline } from "./outline.ts";
 import type { OutlineLevel, OutlineSource } from "./outline.ts";
 import { findMapFile } from "./project-layout.ts";
@@ -241,7 +241,7 @@ function exportResult(tool: string, a: WriteArgs, run: ReadRun<ReadCmd>, opts?: 
   const r: Stamped<ExportReply> = run.reply;
   // The clock rides along inline too (top level); `write` is 0 — nothing was written. The text only when it fits: a
   // real export is tens of megabytes, so the size is measured without serialising it.
-  const d = decideDelivery(a.writeToDisk, (limit) => prettyJsonWithin({ ...stripAssets(r), durationMs: run.durationMs() }, limit), inlineLimitChars());
+  const d = decideDelivery(a.writeToDisk, (limit) => compactJsonWithin({ ...stripAssets(r), durationMs: run.durationMs() }, limit), inlineLimitChars());
   if (d.kind === "refuse") throw new Error(d.message);
   if (d.kind === "inline") return textResult(d.text);
   // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
@@ -273,7 +273,7 @@ function screenAnswer(tool: string, a: WriteArgs & { format?: "outline" | "json"
   const durationMs = run.durationMs().total;
   const onward = `format:"json" returns the raw node JSON inline when it fits; writeToDisk:true writes the full JSON export, the source of truth, with its assets.`;
   const more = (level: OutlineLevel) => (level === "sections" ? `call ${tool === "figma_export_url" ? "this tool" : "figma_export_url"} with a section's id for its outline; ` : "") + onward;
-  const fits = prettyJsonWithin({ ...stripAssets(r), durationMs: run.durationMs() }, limit) !== null;
+  const fits = compactJsonWithin({ ...stripAssets(r), durationMs: run.durationMs() }, limit) !== null;
   if (fits || a.writeToDisk === false) {
     const outline = screenOutline(source, { limit, more, durationMs });
     return outline ? textResult(outline.text) : exportResult(tool, a, run);

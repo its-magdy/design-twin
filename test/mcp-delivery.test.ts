@@ -42,7 +42,7 @@ const D = await import("../bridge/src/delivery.ts").catch((e: unknown) => {
 // ---------------------------------------------------------------- delivery.ts: decideDelivery
 console.log("\ndecideDelivery — inline, spill or refuse:");
 const LIMIT = 48000;
-const WHY = "this export is past the 48,000 characters (~12k tokens) the client accepts inline (Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)";
+const WHY = "this export is past the 48,000 characters (~17k tokens) the client accepts inline (Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)";
 const BASE = "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.";
 const SPILLED = `Written to disk WITHOUT being asked: ${WHY}, so returning it inline would have been cut off mid-JSON. `;
 {
@@ -64,8 +64,8 @@ const SPILLED = `Written to disk WITHOUT being asked: ${WHY}, so returning it in
   check("writeToDisk:false, too big → refused, naming the size and both ways out",
     json(refuse) === json({ kind: "refuse", message: `${WHY}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).` }));
   const small = D.decideDelivery(undefined, () => null, 1600);
-  check("a lowered limit is named as such (1,600 characters, ~0k tokens — as the server has always rounded it)",
-    small.kind === "write" && small.implicit && small.why.startsWith("this export is past the 1,600 characters (~0k tokens)"));
+  check("a lowered limit is named as such (1,600 characters, ~1k tokens at compact JSON's density)",
+    small.kind === "write" && small.implicit && small.why.startsWith("this export is past the 1,600 characters (~1k tokens)"));
 }
 
 // ---------------------------------------------------------------- delivery.ts: describeWrite
@@ -375,7 +375,7 @@ console.log("\nthe export tools, end to end — outDir:");
     check("MAX_MCP_OUTPUT_TOKENS lowers the limit: a small reply still fits", isInline(await call("figma_export_url", { url: "1:2", outDir: "small", format: "json" })));
     size = 12;
     const lowered = await call("figma_export_url", { url: "1:2", outDir: "small" });
-    check("…a slightly larger one spills, and the note names the lowered limit", noteOf(lowered).startsWith("Written to disk WITHOUT being asked: this export is past the 1,600 characters (~0k tokens)"));
+    check("…a slightly larger one spills, and the note names the lowered limit", noteOf(lowered).startsWith("Written to disk WITHOUT being asked: this export is past the 1,120 characters (~0k tokens)"));
   } finally {
     delete process.env.MAX_MCP_OUTPUT_TOKENS;
   }

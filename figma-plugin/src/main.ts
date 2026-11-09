@@ -15,6 +15,7 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // esbuild inlines here — see bridge/src/pages-layout.ts.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
+import { exportJsonText } from "../../bridge/src/json-size.ts";
 import { cancelBridgeRequest, cancelBridgeRuns, serializeRun } from "./state";
 import { assetRetention, type Asset } from "./run";
 import { requestCancel } from "./progress";
@@ -80,8 +81,8 @@ async function runExport<T extends { assets: Asset[] }>(
 const runSelection = (): Promise<void> =>
   runExport<ScreenResult>("current selection", () => collectSelection(), (r) => ({
     files: [
-      { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
-      { name: "variables.json", content: JSON.stringify(r.variables, null, 2) },
+      { name: `${r.screenName}.json`, content: exportJsonText(r.screen), copyable: true },
+      { name: "variables.json", content: exportJsonText(r.variables) },
     ],
     summary: `${r.screenName} — ${r.assets.length} asset(s)`,
     warnings: r.screen.manifest && r.screen.manifest.warnings,
@@ -104,11 +105,11 @@ const runFull = (): Promise<void> =>
     // gets its own button.
     const ds = buildDesignSystemLayout(r.designSystem, SEP);
     const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
-    const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
+    const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: exportJsonText(f.data) }));
     return {
       files: [
-        { name: "design-system.json", content: JSON.stringify(ds.manifest, null, 2) },
-        { name: rootIndex, content: JSON.stringify(meta, null, 2) },
+        { name: "design-system.json", content: exportJsonText(ds.manifest) },
+        { name: rootIndex, content: exportJsonText(meta) },
       ],
       layerFiles: batch,
       summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,

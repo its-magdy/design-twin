@@ -2760,8 +2760,8 @@ void (async () => {
     wo.writeJson(dir, "pages/home/doc.json", { old: true }, true);
     wo.writeJson(dir, "pages/home/doc.json", doc, false, (m) => logged.push(m));
     const target = path.join(dir, "pages", "home", "doc.json");
-    ok("[atomic] the written bytes are byte-identical to JSON.stringify(obj, null, 2), replacing the old file",
-      fs.readFileSync(target).equals(Buffer.from(JSON.stringify(doc, null, 2))));
+    ok("[atomic] the written bytes are byte-identical to the compact JSON, replacing the old file",
+      fs.readFileSync(target).equals(Buffer.from(JSON.stringify(doc))));
     ok("[atomic] no .tmp-* file is left behind", fs.readdirSync(path.dirname(target)).join() === "doc.json");
     ok("[atomic] the log line is unchanged (the final path, not the temp one)", logged.join() === "wrote " + target);
     let threw = false;

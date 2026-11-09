@@ -20,6 +20,9 @@ For what the fields on a node mean once you've opened it, see `ir-fields.md`.
 decisions and evidence that a re-pull must never destroy. (A project created before that split has
 its export directly in `design/` — every path below works either way, just drop the `export/`.)
 
+Export JSON is compact, one node per line (each row of a top-level array likewise): `grep` for `"key":value` with no
+space after the colon, and a hit prints that node's line (keys written after `children` share the line that closes them). An export pulled by an older version is indented until re-pulled.
+
 - **The screen JSON** — `design/export/pages/index.json` (the root — it carries a row per
   screen: `name`, `title`, `texts[]`, `page`, `pageId`, `id`, size and every sibling file's path) →
   the layer's `file`. Screen files are `pages/<Page>/<Screen>__<node-id>.json`; the node id is in the
