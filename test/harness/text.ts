@@ -28,7 +28,7 @@ export const cases: Case[] = [{
     ok("[RUN-FIELDS] REGULAR fontStyle / uniform paragraph spacing / empty overrides on segments: runs byte-identical to before",
       JSON.stringify(txt.runs) === '[{"text":"Hello ","font":{"size":24,"family":"Inter","weight":"Regular","lineHeight":{"value":120,"unit":"percent"},"letterSpacing":{"value":0.5,"unit":"px"},"color":"#000000"}},' +
         '{"text":"World","font":{"size":24,"family":"Inter","weight":"Bold","variationSettings":{"wght":600},"weightValue":700,"lineHeight":{"value":120,"unit":"percent"},"letterSpacing":{"value":0.5,"unit":"px"},' +
-        '"decoration":"underline","decorationThickness":{"value":2,"unit":"px"},"decorationOffset":{"value":1,"unit":"px"},"decorationSkipInk":false,"openType":["SMCP"],"color":"#1a4de6"},' +
+        '"decoration":"underline","decorationThickness":{"value":2,"unit":"px"},"decorationOffset":{"value":1,"unit":"px"},"decorationSkipInk":false,"openType":["SMCP"],"openTypeOff":["LIGA"],"color":"#1a4de6"},' +
         '"href":"https://x.com","indent":1,"textStyle":"Heading/H1","fillStyle":"Brand/Primary","tokens":{"fills":"color/primary"}}]' &&
       JSON.stringify(txt.font) === '{"size":24,"family":"Inter","weight":"Regular","lineHeight":{"value":120,"unit":"percent"},"letterSpacing":{"value":0.5,"unit":"px"},"color":"#000000","align":"left","paragraphSpacing":8,"valign":"center"}' &&
       !("textStyleOverrides" in txt));
@@ -57,6 +57,7 @@ export const cases: Case[] = [{
     ok("per-run textStyle resolved", txt.runs?.[1]?.textStyle === "Heading/H1");
     ok("per-run fillStyle resolved", txt.runs?.[1]?.fillStyle === "Brand/Primary");
     ok("per-run openType features (enabled only)", Array.isArray(txt.runs?.[1]?.font.openType) && txt.runs?.[1]?.font.openType?.indexOf("SMCP") !== -1 && txt.runs?.[1]?.font.openType?.indexOf("LIGA") === -1);
+    ok("per-run openType feature turned off is kept as off", txt.runs?.[1]?.font.openTypeOff?.join() === "LIGA");
     ok("per-run list indentation level", txt.runs?.[1]?.indent === 1);
   },
 }, {

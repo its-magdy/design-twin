@@ -3,6 +3,7 @@
 // --expect end to end. Directly serialized nodes (`serialize(node, 0, false)`) carry no
 // getCSSAsync/plugin data/shared data/motion, so their output does not depend on which read options a collector left on.
 import { ok } from "../assert.ts";
+import type { FakeNode } from "../fake-figma.ts";
 import { must } from "../fixtures.ts";
 import type { IrNode } from "../../bridge/src/doc-types.ts";
 import { buildExpectation } from "../../design-to-code/verify-expect.ts";
@@ -58,6 +59,50 @@ export const cases: Case[] = [{
     ok("COLUMNS grid keeps its sectionSize as `size` (not just GRID's cell size)", abs.layoutGrids?.[0]?.size === 60);
     ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
     ok("devStatus captured", abs.devStatus === "ready_for_dev");
+  },
+}, {
+  name: "each layout grid keeps its own variable bindings, and an unbound grid gets no tokens",
+  async run() {
+    const { api } = world();
+    const abs = await api.serialize({ ...absNode(), layoutGrids: [
+      { pattern: "COLUMNS", sectionSize: 60, gutterSize: 20, count: 12, offset: 16, alignment: "STRETCH", boundVariables: { sectionSize: { type: "VARIABLE_ALIAS", id: "v_primary" } } },
+      { pattern: "ROWS", sectionSize: 8, gutterSize: 4, count: 3, offset: 0, alignment: "MIN" },
+    ] }, 0, false);
+    ok("the bound field names its variable, on that grid", abs.layoutGrids?.[0]?.tokens?.sectionSize === "color/primary");
+    ok("the unbound grid carries none", abs.layoutGrids?.[1] !== undefined && !("tokens" in abs.layoutGrids[1]));
+  },
+}, {
+  name: "annotation category labels: resolved once per run, and a failure keeps the raw id",
+  async run() {
+    const annotated = (id: string): FakeNode => ({ id, type: "FRAME", name: "Annotated", visible: true, width: 20, height: 20,
+      annotations: [{ label: "A", categoryId: "cat_a11y" }, { label: "B", categoryId: "cat_gone" }], children: [] });
+    const node = annotated("an:1");
+    node.children = [annotated("an:2"), annotated("an:3")];
+    node.getDevResourcesAsync = async () => [];
+    let calls = 0;
+    let label = "Accessibility";
+    let fails = false;
+    const w = world({ nodes: { "an:1": node } }, { annotations: { getAnnotationCategoriesAsync: async () => {
+      calls++;
+      if (fails) throw new Error("no categories");
+      return [{ id: "cat_a11y", label }];
+    } } });
+    const pull = () => w.api.serializeRun(() => w.api.collectNode("an:1", { css: false }), { source: "bridge", label: "annotation categories" });
+    const first = await pull();
+    const root = first.screen.nodes[0];
+    ok("the id resolves to its label", root?.annotations?.[0]?.category === "Accessibility" && root?.annotations?.[0]?.categoryId === "cat_a11y");
+    ok("children resolve too", root?.children?.[1]?.annotations?.[0]?.category === "Accessibility");
+    ok("an id the file doesn't list keeps categoryId, no label, no warning",
+      root?.annotations?.[1]?.categoryId === "cat_gone" && !("category" in (root?.annotations?.[1] ?? {})) && first.screen.manifest.warnings.length === 0);
+    ok(`one category read for the whole run (got ${calls})`, calls === 1);
+    label = "A11y";
+    const second = await pull();
+    ok("a new run reads the renamed label", calls === 2 && second.screen.nodes[0]?.annotations?.[0]?.category === "A11y");
+    fails = true;
+    const third = await pull();
+    ok("a failed read keeps the raw id and warns once",
+      third.screen.nodes[0]?.annotations?.[0]?.categoryId === "cat_a11y" && !("category" in (third.screen.nodes[0]?.annotations?.[0] ?? {})) &&
+      third.screen.manifest.warnings.filter((m) => /annotation categories unavailable/.test(m)).length === 1);
   },
 }, {
   name: "READ additions (HIGH tier + MED) on the overlay node: box, render box, mask, smoothing, ratio, detached, overlay, dev notes",

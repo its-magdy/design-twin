@@ -2,7 +2,7 @@
 // design-system catalog (variables + styles + component/variant catalog + hygiene).
 import type {
   IrNode, CatalogComponent, CatalogVariant, ComponentPropDef,
-  DesignSystemDoc, StyleMeta, LayoutGridSpec, PaintStyle as IrPaintStyle, TextStyle as IrTextStyle,
+  DesignSystemDoc, StyleMeta, PaintStyle as IrPaintStyle, TextStyle as IrTextStyle,
   EffectStyle as IrEffectStyle, GridStyle as IrGridStyle, AnimationStyle as IrAnimationStyle,
 } from "../../bridge/src/doc-types.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
@@ -14,7 +14,7 @@ import { simplifyFills } from "./paint";
 import { simplifyEffects } from "./effects";
 import { nodeVisuals } from "./node-visuals";
 import { serialize } from "./serialize";
-import { simplifyGrid } from "./layout";
+import { simplifyGrids } from "./layout";
 import { lineH, letterS } from "./text";
 import { dumpVariables, resolveBoundMap } from "./variables";
 import { collectLibraryComponents } from "./libraries";
@@ -379,12 +379,11 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }): Promise<
     paint: paintStyles,
     text: textStyles,
     effect: effectStyles,
-    // Layout-grid styles (column/row grids) — the responsive grid tokens. The grid VALUES are sync;
-    // the shared catalog meta (key/publish) is not, so the map is fanned out like its three siblings.
+    // Layout-grid styles (column/row grids) — the responsive grid tokens, fanned out like their three siblings.
     grid: await Promise.all(
       grid.map(async (s): Promise<IrGridStyle> => ({
         name: s.name,
-        ...ifDefined("grids", Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g): g is LayoutGridSpec => !!g) : undefined),
+        ...ifDefined("grids", Array.isArray(s.layoutGrids) ? await simplifyGrids(s.layoutGrids) : undefined),
         ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
         ...ifDefined("description", s.description || undefined),
         ...(await styleMeta(s)),

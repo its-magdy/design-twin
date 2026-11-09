@@ -141,6 +141,9 @@ export class Run {
           this.warn("collection metadata unavailable for '" + id + "' — collection/mode names unavailable; raw mode IDs retained where supported");
         }
       }).obj;
+  /** Annotation category id -> label, read once per run: one call returns the file's whole list, so the in-flight
+   *  promise is what's kept, as with imageSizes. */
+  private annotationCategories: Promise<Map<string, string>> | undefined;
   /** Who asked this run to stop, if anyone: the designer's Cancel button, or the bridge giving up on the request
    *  (progress.ts requestAbandon). One field rather than two flags so the run fails with exactly one, truthful
    *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it
@@ -169,6 +172,23 @@ export class Run {
     const r = readOptDefaults();
     for (const k of Object.keys(r) as ReadOptName[]) r[k] = !!(opts && opts[k]);
     this.readOpts = r;
+  }
+
+  /** The label of an annotation category, or undefined when the file has no such id. */
+  async annotationCategory(id: string): Promise<string | undefined> {
+    if (!this.annotationCategories) this.annotationCategories = this.readAnnotationCategories();
+    return (await this.annotationCategories).get(id);
+  }
+
+  private async readAnnotationCategories(): Promise<Map<string, string>> {
+    // An older host may lack the API: same raw-id fallback as `collection`, and nothing to diagnose.
+    if (!figma.annotations || typeof figma.annotations.getAnnotationCategoriesAsync !== "function") return new Map();
+    try {
+      return new Map((await figma.annotations.getAnnotationCategoriesAsync()).map((c) => [c.id, c.label]));
+    } catch (e) {
+      this.warn("annotation categories unavailable — category labels omitted; raw categoryId retained");
+      return new Map();
+    }
   }
 
   /** See Delivery.sourceBytes. */

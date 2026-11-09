@@ -2,6 +2,7 @@
 import type { LayoutSpec, LayoutGridSpec, GridTrack, FlexAlign } from "../../bridge/src/doc-types.ts";
 import { round, lower } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
+import { resolveBoundMap } from "./variables";
 
 // Build flex intent from any auto-layout-shaped source (a real frame OR node.inferredAutoLayout —
 // both carry the same fields via AutoLayoutMixin, so a small structural interface covers either).
@@ -75,7 +76,7 @@ function flexIntent(src: FlexLike): LayoutSpec {
 }
 
 // A Figma LayoutGrid (column/row grid or uniform grid) -> a compact descriptor.
-export function simplifyGrid(g: LayoutGrid): LayoutGridSpec | undefined {
+async function simplifyGrid(g: LayoutGrid): Promise<LayoutGridSpec | undefined> {
   if (!g) return undefined;
   const o: LayoutGridSpec = { ...ifDefined("pattern", g.pattern ? lower(g.pattern) : undefined) };
   // sectionSize is the cell size of a uniform GRID and the column/row width of ROWS/COLUMNS (there it is
@@ -88,7 +89,14 @@ export function simplifyGrid(g: LayoutGrid): LayoutGridSpec | undefined {
     if (g.alignment) o.alignment = lower(g.alignment);
   }
   if (g.visible === false) o.visible = false;
+  const tokens = await resolveBoundMap(g.boundVariables);
+  if (tokens) o.tokens = tokens;
   return o;
+}
+
+// A frame's or grid style's layout grids, in order.
+export async function simplifyGrids(grids: readonly LayoutGrid[]): Promise<LayoutGridSpec[]> {
+  return (await Promise.all(grids.map(simplifyGrid))).filter((g): g is LayoutGridSpec => !!g);
 }
 
 // A GridTrackSize ({ type:'FLEX'|'FIXED'|'HUG', value?:number }) -> compact track descriptor.

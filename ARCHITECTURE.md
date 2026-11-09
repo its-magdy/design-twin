@@ -312,7 +312,7 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
   `variantVisuals`, all registered in `bridge/src/read-opts.ts`. The Tokens Studio document-level
   `values`/`themes` blob (compressed and chunked) is not decoded.
 - **Handoff and file facts:** dev resources (`getDevResourcesAsync`, batched once per root), annotations
-  (with `categoryId`), export settings, `documentColorProfile`, per-page `layersDoc.pageSettings`
+  (with `categoryId` and its `category` label, read once per run), export settings, `documentColorProfile`, per-page `layersDoc.pageSettings`
   (backgrounds), and index entries carry `nodes`/`bytes` so a consumer knows a layer file's size before
   opening it.
 - **Diagnostics:** every export doc carries a `manifest` (`nodes`/`skipped`/`truncated`/`assetsFailed`/

@@ -40,6 +40,7 @@ export const cases: Case[] = [{
     ok("paint style carries color value", paintStyle0Paint0 !== undefined && flatPaint(paintStyle0Paint0).color === "#1a4de6");
     const gridStyle0Grid0 = ds.styles.grid[0]?.grids?.[0];
     ok("grid style exported", gridStyle0Grid0 !== undefined && gridStyle0Grid0.count === 12);
+    ok("a grid style's grid keeps its own variable binding", gridStyle0Grid0?.tokens?.gutterSize === "color/primary");
     ok("custom animation style catalogued: name, entries (same form as an applied style), description, key, id",
       JSON.stringify(ds.styles.animation[0]) === '{"name":"Brand Entrance","entries":[' + CAS1_ENTRIES + '],"description":"Hero entrance sequence","key":"caskey1","id":"cas1"}');
     ok("custom animation style whose animationEntries read throws: catalogued without entries (no partial list), empty description dropped",

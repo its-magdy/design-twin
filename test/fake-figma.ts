@@ -90,6 +90,7 @@ export interface FakeFigma {
     getVariableByIdAsync(id: string): Promise<FakeVariable | null>;
     getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
   };
+  annotations?: { getAnnotationCategoriesAsync(): Promise<Array<{ id: string; label: string }>> };
   editorType?: string;
   teamLibrary?: FakeTeamLibrary;
   skipInvisibleInstanceChildren?: boolean;
