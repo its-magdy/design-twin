@@ -147,6 +147,8 @@ function stripAssets(r: ExportReply): object {
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
 import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
+import { screenOutline } from "./outline.ts";
+import type { OutlineLevel, OutlineSource } from "./outline.ts";
 import { findMapFile } from "./project-layout.ts";
 import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
@@ -258,6 +260,33 @@ function exportResult(tool: string, a: WriteArgs, run: ReadRun<ReadCmd>, opts?: 
   const shot = "reference" in r ? { ...ifDefined("w", r.w), ...ifDefined("h", r.h), ...ifDefined("scale", r.scale) } : {};
   return textResult({ ...shot, ...written, durationMs: run.durationMs(), note: said.note });
 }
+
+// A screen read's default answer: its outline (outline.ts), never bigger than the client's limit. `format:"json"` and
+// writeToDisk:true take the JSON path above unchanged. The JSON keeps deciding what is written: a screen too big
+// to return as JSON still spills to disk on its own (a read of it took minutes, and the files are the source of truth),
+// and its outline then comes beside that index. writeToDisk:false never writes, so it gets the outline alone.
+function screenAnswer(tool: string, a: WriteArgs & { format?: "outline" | "json" | undefined }, run: ReadRun<ReadCmd>) {
+  const r: Stamped<ExportReply> = run.reply;
+  if (a.format === "json" || a.writeToDisk === true || !("screen" in r)) return exportResult(tool, a, run);
+  const limit = inlineLimitChars();
+  const source: OutlineSource = { screen: r.screen, screenName: r.screenName, sourceFile: r.sourceFile, variableCount: r.variables?.variables?.length, assetCount: r.assets?.length };
+  const durationMs = run.durationMs().total;
+  const onward = `format:"json" returns the raw node JSON inline when it fits; writeToDisk:true writes the full JSON export, the source of truth, with its assets.`;
+  const more = (level: OutlineLevel) => (level === "sections" ? `call ${tool === "figma_export_url" ? "this tool" : "figma_export_url"} with a section's id for its outline; ` : "") + onward;
+  const fits = prettyJsonWithin({ ...stripAssets(r), durationMs: run.durationMs() }, limit) !== null;
+  if (fits || a.writeToDisk === false) {
+    const outline = screenOutline(source, { limit, more, durationMs });
+    return outline ? textResult(outline.text) : exportResult(tool, a, run);
+  }
+  const written = exportResult(tool, a, run);
+  const index = written.content[0].text;
+  const outline = screenOutline(source, { limit: limit - index.length - 1, more, durationMs });
+  return outline ? { content: [written.content[0], { type: "text" as const, text: outline.text }] } : written;
+}
+
+const formatShape = {
+  format: z.enum(["outline", "json"]).optional().describe("How a screen comes back inline. Default \"outline\": one line per node with repeated styles hoisted, falling back to layout only, then a list of sections, when it is too big (the first line names the level; the text says how to get more). \"json\": the raw node JSON, as it is written to disk. A screen too big to return as JSON is still written to disk on its own."),
+};
 
 // Shared by every export tool, so the pair cannot end up declared on some and not others — the exact
 // failure mode the readOptsShape comment below records for skipAssets (Zod strips undeclared keys, so
@@ -609,13 +638,13 @@ registerTool(
 registerTool(
   "figma_export_selection",
   {
-    description: "Export the current selection as compacted node JSON + variables + assets.",
-    inputSchema: { ...clientShape, ...readOptsShapeFor("selection"), ...writeShape },
+    description: "Export the current selection. Inline it answers with an outline (one line per node, repeated styles hoisted; layout only or a section list when too big, and the first line says which). format:\"json\" returns the raw node JSON; writeToDisk:true writes the full JSON export, variables and assets.",
+    inputSchema: { ...clientShape, ...readOptsShapeFor("selection"), ...formatShape, ...writeShape },
     annotations: READ_ONLY,
   },
   guarded(async (a, extra) => {
     preflightOut(a);
-    return exportResult("figma_export_selection", a, await pull(extra, planned(planRead({ kind: "selection" }, a)), a && a.client));
+    return screenAnswer("figma_export_selection", a, await pull(extra, planned(planRead({ kind: "selection" }, a)), a && a.client));
   })
 );
 
@@ -624,13 +653,16 @@ registerTool(
   {
     description:
       "Given a Figma design URL (containing ?node-id=...) or a bare node id, select that node in the " +
-      "open file and export it as compacted node JSON + variables + an asset manifest. This is the " +
+      "open file and read it. Inline it answers with an outline: one line per node, repeated styles hoisted; " +
+      "layout only or a list of sections when too big, and the first line says which. format:\"json\" returns the raw " +
+      "node JSON; writeToDisk:true writes the full JSON export, variables and assets. This is the " +
       "'paste a link and ask about it' path. Requires the file the link points to be OPEN in the Figma " +
       "desktop app with the plugin running (the bridge reads the live file — it cannot fetch a link cold).",
     inputSchema: {
       ...clientShape,
       url: z.string().describe("A figma.com design/file URL with ?node-id=..., or a bare node id like '123:456' / '123-456'."),
       ...readOptsShapeFor("node"),
+      ...formatShape,
       ...writeShape,
     },
     annotations: READ_ONLY,
@@ -639,7 +671,7 @@ registerTool(
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
     preflightOut(a);
-    return exportResult("figma_export_url", a, await pull(extra, planned(planRead({ kind: "node", nodeId }, a)), a && a.client));
+    return screenAnswer("figma_export_url", a, await pull(extra, planned(planRead({ kind: "node", nodeId }, a)), a && a.client));
   })
 );
 

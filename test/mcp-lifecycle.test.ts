@@ -343,7 +343,7 @@ void (async () => {
       const s = startServer({ env: { FIGMA_EXPORT_DIR: outside } });
       if (await up(s) && await initialize(s)) {
         const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
-        const r = await s.call("figma_export_url", { url: "9:1", outDir: "" });
+        const r = await s.call("figma_export_url", { url: "9:1", outDir: "", format: "json" });
         ok(`outDir "" + FIGMA_EXPORT_DIR outside the cwd → the inline result, plugin asked once (got ${r ? (r.isError ? "an error: " + r.text.slice(0, 160) : "an inline result") : "no answer"})`,
           !!r && !r.isError && rec(r.json.screen).screen === "Sample" && cmdFrames(pl, "exportNode").length === 1 && !fs.existsSync(outside));
         pl.close();
@@ -371,7 +371,7 @@ void (async () => {
         ok("…the same for figma_screenshot / figma_export_full / figma_export_design_system / figma_export_selection (no frame sent)",
           [escShot, escFull, escDs, escSel].every((r) => !!r && r.isError && /outDir must stay inside/.test(r.text)) &&
           pl.fake.commands().filter((c) => c.cmd !== "ping").length === n0);
-        const inline = await s.call("figma_export_url", { url: "9:1", writeToDisk: false, outDir: "../escape" });
+        const inline = await s.call("figma_export_url", { url: "9:1", writeToDisk: false, outDir: "../escape", format: "json" });
         ok("writeToDisk:false + a bad outDir → the inline result (nothing is written, so nothing is refused)",
           !!inline && !inline.isError && rec(inline.json.screen).screen === "Sample" && asks() === n0 + 1);
 
