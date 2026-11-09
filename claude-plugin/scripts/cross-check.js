@@ -569,7 +569,7 @@ var isComposed = (v) => {
 };
 var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x) {
-  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection) && optArrayOf(x.extensions, anyObject);
 }
 function isVariableCollection(x) {
   return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);
@@ -1618,6 +1618,28 @@ function isDisabledLayer(layer) {
 }
 
 // design-to-code/variable-resolve.ts
+function extensionOverrides(v) {
+  const out = [];
+  for (const extension of v.extensions || []) {
+    for (const mode of extension.overrides || []) {
+      const value = (extension.values || {})[mode];
+      if (value !== void 0) out.push({ extension, mode, value });
+    }
+  }
+  return out;
+}
+function extensionValue(v, req) {
+  for (const e of v.extensions || []) {
+    const want = req.byCollection?.[e.collection];
+    if (want === void 0) continue;
+    const values = e.values || {};
+    const lower = want.toLowerCase();
+    const mode = values[want] !== void 0 ? want : Object.keys(values).find((m) => m.toLowerCase() === lower);
+    const raw = mode === void 0 ? void 0 : values[mode];
+    if (mode !== void 0 && raw !== void 0) return { mode, raw };
+  }
+  return void 0;
+}
 var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 var definedModes = (v) => {
   const vals = v.values || {};
@@ -1685,9 +1707,10 @@ function variableResolver(input) {
   function walk2(v, req, seen) {
     const none = (mode2) => ({ value: void 0, variable: null, mode: mode2, via: [] });
     if (!v || seen.has(v)) return none();
-    const mode = modeOf(v, req);
+    const ext = extensionValue(v, req);
+    const mode = ext ? ext.mode : modeOf(v, req);
     if (mode === void 0) return none();
-    const raw = (v.values || {})[mode];
+    const raw = ext ? ext.raw : (v.values || {})[mode];
     const next = new Set(seen).add(v);
     if (isAlias(raw)) {
       const r = walk2(target(raw.aliasOf, v), req, next);
@@ -1718,7 +1741,7 @@ function variableResolver(input) {
       if (done.has(x)) return;
       vars.push(x);
       path8.add(x);
-      for (const val of Object.values(x.values || {})) {
+      for (const val of [...Object.values(x.values || {}), ...extensionOverrides(x).map((o) => o.value)]) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
           const t = target(n, x);

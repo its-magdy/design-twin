@@ -25,6 +25,11 @@ list of merged PRs.
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map
   can't translate, such as a variant option with no code mapping, is left out and listed in `codeUsageWarnings` and on
   stderr instead of being guessed.
+- Extended variable collections export their inherited and override values, and their parent, root and parent modes.
+  Generated tokens write a brand's overrides as a layer of their own (CSS under `[data-theme-<collection>="<mode>"]`,
+  DTCG and the resolver as override data), and native output gets one full token type per brand.
+- The design-system style catalog includes the values of library styles a pull used, as `remote:true` rows. Nothing is
+  imported into the Figma file.
 
 ### Fixed
 

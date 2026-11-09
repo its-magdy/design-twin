@@ -27,12 +27,16 @@
 // collection's mode. `fallback` lets a caller stop early: "default" never takes step 4, "none" stops after 2
 // (cross-check's contrast says nothing rather than judge a mode the variable does not have).
 //
+// An EXTENDED collection (Variable.extensions) wins over the mode rule: when the request names a mode for a
+// collection that extends this variable, the variable reads that extension's value, inherited or overridden. Each
+// alias hop asks again, so a brand's semantic token reaches the brand's own primitive.
+//
 // The cycle rule. A chain that comes back to a variable it already passed through is a cycle and resolves to
 // nothing; there is no depth cap (a finite catalog with a seen set always ends).
 //
 // A composed colour (doc-types ComposedColor: a colour plus a separate 0–100 opacity, either half an alias) folds
 // into ONE colour: each half resolved by the same rules, the opacity applied by color.ts composeAlpha.
-import type { Variable, VariableCollection, VariableValue } from "./types.ts";
+import type { Variable, VariableCollection, VariableExtension, VariableValue } from "./types.ts";
 import { isAlias, isComposed, NUMERIC_TEXT } from "./doc-guards.ts";
 import { parseHex, formatHex, composeAlpha, type Rgba } from "./color.ts";
 
@@ -79,6 +83,35 @@ export interface VariableResolver {
   number(v: Variable | null | undefined, req?: ModeRequest): number | null;
   /** what `v` reaches through aliases across all its modes (CSS custom properties chain in every mode at once) */
   closure(v: Variable): AliasClosure;
+}
+
+/** Every value an extended collection overrides on `v` (never its inherited ones), in order. */
+function extensionOverrides(v: Variable): Array<{ extension: VariableExtension; mode: string; value: VariableValue }> {
+  const out: Array<{ extension: VariableExtension; mode: string; value: VariableValue }> = [];
+  for (const extension of v.extensions || []) {
+    for (const mode of extension.overrides || []) {
+      const value = (extension.values || {})[mode];
+      if (value !== undefined) out.push({ extension, mode, value });
+    }
+  }
+  return out;
+}
+/** `v` as an extended collection holds it: a row of that collection, for what is planned per collection. */
+function extensionRow(v: Variable, e: VariableExtension): Variable {
+  return { name: v.name, type: v.type, tier: v.tier, collection: e.collection, values: e.values, ...(e.collectionKey ? { collectionKey: e.collectionKey } : {}), ...(v.key ? { key: v.key } : {}) };
+}
+// The extension the request names a mode for, and that mode's value (exact, else differing only in case).
+function extensionValue(v: Variable, req: ModeRequest): { mode: string; raw: VariableValue } | undefined {
+  for (const e of v.extensions || []) {
+    const want = req.byCollection?.[e.collection];
+    if (want === undefined) continue;
+    const values = e.values || {};
+    const lower = want.toLowerCase();
+    const mode = values[want] !== undefined ? want : Object.keys(values).find((m) => m.toLowerCase() === lower);
+    const raw = mode === undefined ? undefined : values[mode];
+    if (mode !== undefined && raw !== undefined) return { mode, raw };
+  }
+  return undefined;
 }
 
 const cmpStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -171,9 +204,10 @@ function variableResolver(input: VariableSource | null | undefined | ReadonlyArr
   function walk(v: Variable | null | undefined, req: ModeRequest, seen: ReadonlySet<Variable>): Walked {
     const none = (mode?: string): Walked => ({ value: undefined, variable: null, mode, via: [] });
     if (!v || seen.has(v)) return none();
-    const mode = modeOf(v, req);
+    const ext = extensionValue(v, req);
+    const mode = ext ? ext.mode : modeOf(v, req);
     if (mode === undefined) return none();
-    const raw = (v.values || {})[mode];
+    const raw = ext ? ext.raw : (v.values || {})[mode];
     const next = new Set(seen).add(v);
     if (isAlias(raw)) {
       const r = walk(target(raw.aliasOf, v), req, next);
@@ -207,7 +241,7 @@ function variableResolver(input: VariableSource | null | undefined | ReadonlyArr
       if (done.has(x)) return;
       vars.push(x);
       path.add(x);
-      for (const val of Object.values(x.values || {})) {
+      for (const val of [...Object.values(x.values || {}), ...extensionOverrides(x).map((o) => o.value)]) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
           const t = target(n, x);
@@ -232,4 +266,4 @@ function variableResolver(input: VariableSource | null | undefined | ReadonlyArr
   };
 }
 
-export { variableResolver, defaultModeName, baseValue, readColour };
+export { variableResolver, defaultModeName, baseValue, readColour, extensionOverrides, extensionRow };
