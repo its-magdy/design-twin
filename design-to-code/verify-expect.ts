@@ -7,7 +7,8 @@ import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { walkWithHidden } from "./visible-tree.ts";
 import type { WalkContext } from "./visible-tree.ts";
-import { exportContentSha256 } from "./content-hash.ts";
+import { sameSvg } from "../bridge/src/svg-normalize.ts";
+import { assetGeometry, assetIdentity, exportContentSha256 } from "./content-hash.ts";
 import { planAtExpect } from "./plan-binding.ts";
 import type { ExpectNodes, PlanAtExpect } from "./plan-binding.ts";
 import { pngInfo } from "../bridge/src/png.ts";
@@ -576,7 +577,10 @@ export interface ExpectOptions { index?: { layers: IndexRow[] } | null;
    *  disk. Absent = no expectation.referenceImage is written (an in-memory caller with no export on disk). */
   readReference?: ((pointer: string) => Uint8Array | null) | null;
   /** design/export/design-system.json's `colorProfile` stamp (bridge doc-types DesignSystemStamp), when read */
-  colorProfile?: string | null }
+  colorProfile?: string | null;
+  /** the screens' asset manifests (<Screen>.assets.json `files[]`), the other files of the export's assets/, and a reader
+   *  of a file by its pointer. Absent = no asset identity is expected (an in-memory caller, or no manifest). */
+  assets?: { rows: ReadonlyArray<{ file: string; node?: string }>; others: readonly string[]; read: (pointer: string) => Uint8Array | null } | null }
 
 // the OUTERMOST instances (no INSTANCE ancestor) of a screen's visible tree, by main component key, each indexed
 // by the visible NAME PATH from the instance root ("" = the root itself) → node id. A path that repeats inside the
@@ -680,8 +684,39 @@ export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | nul
   markUndesigned(bx);
   if (bx.index && bx.readSibling) addAliases(bx, specById);
   addOverlays(bx);
+  const assetIds = bx.assets?.known();
   const referenceImage = firstReferenceImage(bx, opts);
-  return expectationOf(bx, docs, plan, referenceImage);
+  return { ...expectationOf(bx, docs, plan, referenceImage), ...ifDefined("assetIds", assetIds) };
+}
+
+/** The export's assets as the expectation sees them: an asset node's accepted identities — its file, and an image fill's
+ *  source file, from the manifest and read off the files themselves — and every exported file by identity, so --compare
+ *  can tell a swapped asset from an unknown one. null without a manifest. */
+function assetIdentities(opts: ExpectOptions | null | undefined): ExpectBuild["assets"] {
+  const assets = opts?.assets;
+  if (!assets) return null;
+  const memo = new Map<string, { id: string | null; drawing: string | null }>();
+  const read = (pointer: string): { id: string | null; drawing: string | null } => getOrInit(memo, pointer, () => { const b = assets.read(pointer); return b ? { id: assetIdentity(b), drawing: assetGeometry(b) } : { id: null, drawing: null }; });
+  const idOf = (pointer: string): string | null => read(pointer).id;
+  const listed = new Set(assets.rows.map((r) => r.file));
+  const sourceOf = new Map(assets.rows.flatMap((r) => (r.node?.startsWith("img:") ? [[r.node.slice(4), r.file] as const] : [])));
+  return {
+    of: (n) => {
+      if (typeof n.asset !== "string" || !listed.has(n.asset)) return undefined;
+      const sources = (Array.isArray(n.fills) ? n.fills : []).flatMap((f) => { const file = f.type === "image" && f.hash ? sourceOf.get(f.hash) : undefined; return file ? [file] : []; });
+      const files = [...new Set([n.asset, ...sources])].filter((f) => idOf(f) !== null);
+      if (!files.length) return undefined;
+      // the same drawing, re-exported with Figma's noise, is the same asset: bridge dedup keeps such twins as separate files
+      const drawings = files.flatMap((f) => { const d = read(f).drawing; return d === null ? [] : [d]; });
+      const twins = [...listed, ...assets.others].filter((p) => { const d = read(p).drawing; return d !== null && drawings.some((w) => sameSvg(w, d)); });
+      return { files, ids: [...new Set([...files, ...twins].map((f) => idOf(f) ?? ""))] };
+    },
+    known: () => {
+      const known: Record<string, string> = {};
+      for (const pointer of [...listed, ...assets.others]) { const id = idOf(pointer); if (id !== null && known[id] === undefined) known[id] = pointer; }
+      return known;
+    },
+  };
 }
 
 /** the hidden layers the walk skipped: their roots, every id under them, and what they would have added */
@@ -690,6 +725,7 @@ interface HiddenTally { roots: Array<{ nodeId: string; name: string; path?: stri
  *  the walk read. Every collection is filled in place; screen, exportedAt and reference are the only fields set after
  *  expectBuildCtx() (the first input that states one wins). */
 interface ExpectBuild {
+  assets: { of: (n: IrNode) => VerifySpec["assetIdentity"]; known: () => Record<string, string> } | null;
   nodes: VerifySpec[]; instances: VerifyInstance[]; interactions: VerifyInteraction[]; notComparable: NotComparable[]; hidden: HiddenTally;
   frames: Array<Partial<VerifyFrame>>; seen: Set<string>;
   screen: string | undefined; exportedAt: string | undefined; reference: string | null;
@@ -724,7 +760,7 @@ function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
     nodes: [], instances: [], interactions: [], notComparable: [], hidden: { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 },
     frames: [], seen: new Set<string>(), screen: undefined, exportedAt: undefined, reference: null,
     idsByFile: new Map(), rootsByFile: new Map(), interactionFile: new Map(), roots: [], referenceOf: new Map(), rootNodesByFile: new Map(), visibleById: new Map(),
-    index: opts && opts.index, readSibling, sibling,
+    index: opts && opts.index, readSibling, sibling, assets: assetIdentities(opts),
     plan: planAtExpect(opts && opts.plan),
   };
 }
@@ -815,7 +851,14 @@ function visibleNode(bx: ExpectBuild, w: RootWalk, n: IrNode, c: WalkContext): v
   const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
   if (par && (fixedNodes.has(par) || (nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed))) { fixedNodes.add(n); spec.fixed = true; }
   if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
-  if (checkable(spec)) bx.nodes.push(spec);
+  // an image layer states no colour, so its file alone earns it a row — a row with nothing else, unmatched, is not "not measured"
+  const worth = checkable(spec), identity = bx.assets?.of(n);
+  if (identity) {
+    spec.assetIdentity = identity;
+    // (it had no row before: its identity is all this row grades)
+    if (!worth) { spec.assetOnly = true; delete spec.width; delete spec.height; delete spec.y; delete spec.opacity; delete spec.sizing; }
+  }
+  if (worth || identity) bx.nodes.push(spec);
   else {
     // an exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
     // node's only checkable value — it is not a spec; say so rather than let it vanish

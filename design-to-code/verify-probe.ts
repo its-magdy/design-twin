@@ -59,7 +59,7 @@ import type { Browser, BrowserType, Page, Request, Response, Selectors } from "p
 import { collectCandidates, focusablePath, focusableWithin, focusInfo, freeHoverPoint, measureElements, rawHoverPoint } from "./probe-page.ts";
 import { PAGE_RUNTIME, byPath, registerPathEngine } from "./page-runtime.ts";
 import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
-import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
+import { buildPool, census, chooseMatch, claimOnce, identifyAssets, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
 import { STYLE_KEYS } from "./verify-shared.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
@@ -812,6 +812,8 @@ export function foreignTags(tagged: Candidate[], expectedIds: ReadonlySet<string
 
 const docToken = async (page: Page): Promise<string> => { const v: unknown = await page.evaluate("window.__dtProbeDoc || ''"); return String(v); };
 
+/** How long one rendered image's bytes may take to read back for its identity — past it the asset is unverified. */
+const ASSET_READ_MS = 5000;
 async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResult> {
   const exp = o.expectation;
   const hiddenIds = new Set((exp.hidden && exp.hidden.ids) || []);
@@ -852,7 +854,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     matches.forEach((x, i) => { const c = claimed[i]; if (c) x.m = c; });
     const item = (spec: VerifySpec, m: Match): MeasureItem =>
       ({ nodeId: spec.nodeId, path: m.path, isText: spec.type === "TEXT", isPaint: isPaintSpec(spec), isPlaceholder: spec.placeholder === true, sharesWith: m.sharesWith ?? null,
-      ...(typeof spec.backgroundColor === "string" ? { backgroundSpec: true } : {}) });
+      ...(typeof spec.backgroundColor === "string" ? { backgroundSpec: true } : {}), ...(spec.assetIdentity ? { assetSpec: true } : {}) });
     const frameOf = (spec: VerifySpec): ResolvedFrame | null | undefined => frames.get(spec.frameId ?? frameIn[0]?.nodeId ?? "");
     const frameRectOf = (spec: VerifySpec): Rect => { const f = frameOf(spec); return f ? f.rect : { x: 0, y: 0, w: o.viewport.w, h: o.viewport.h }; };
     const measureIn = (spec: VerifySpec, items: MeasureItem[]): MeasureInput => ({ frameRect: frameRectOf(spec), framePath: frameOf(spec)?.path ?? null, keys: STYLE_KEYS, items });
@@ -925,6 +927,11 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
       }
     }
     if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf2(page);
+    await identifyAssets(nodes.values(), async (url) => {
+      const res = await page.context().request.get(url, { timeout: ASSET_READ_MS });
+      if (!res.ok()) throw new Error(`HTTP ${res.status()}`);
+      return res.body();
+    });
 
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
     // the page's sideways overflow at this viewport — before the token check, so a reload re-runs it too

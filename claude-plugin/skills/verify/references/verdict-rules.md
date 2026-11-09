@@ -146,6 +146,21 @@ are compared. Its paint, stroke, radius and padding are drawn inside the asset f
 FRAME/INSTANCE id on a leaf (an asset on an `<input>`, a plain frame on an `<img>`, …) is still read as a tagging mistake (a `...rest` spread): tag the
 container.
 
+**Asset identity: is it the right file?** Each exported asset the screen's `.assets.json` lists, built as an `<img>` or
+inline `<svg>`, is compared by content, whatever the file is called in the build: a raster by its bytes, an SVG by its
+drawing (shape geometry, stroke width, transforms and any embedded image — not its colour, size or defs; `fill` checks colour). `coverage.assetIdentity`
+counts `verified`, `wrong` and `unverified`.
+
+- The expected file, an image fill's source file, or a re-export of the same drawing (Figma's noise): verified.
+- Another file of this export (its `assets/`, other screens' too): a high `asset identity` delta naming both files.
+- Anything else is `unverifiable`, never passed and never failed, with its reason: a re-encoded or optimised image, an SVG
+  rewritten by an optimiser, a `<use>` sprite, a CSS background or mask, an image whose bytes cannot be read back, a native
+  or hand-written measurement. A placeholder image from elsewhere lands here too — read these rows.
+
+An image layer with no other value to compare gets a row for its identity alone (no size is graded); with no matching
+element, or drawn in a hover/focus state measured at rest, it is unverifiable rather than not measured. Re-run `--expect` after a pull to pick the manifest up; without one nothing is
+checked, and `--expect` says so.
+
 ## Opacity, table rows, strokes
 
 **Opacity is stated on every node that paints or carries copy** (1 when the design leaves it at 100%), so a built

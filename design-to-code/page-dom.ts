@@ -56,6 +56,10 @@ export interface PageElement extends PageNode {
   placeholder?: string;
   /** an <input>/<textarea>/<select>'s current value (HTMLInputElement.value — not its child text) */
   value?: string;
+  /** an <img>'s rendered source; an element's own markup */
+  currentSrc?: string;
+  src?: string;
+  outerHTML?: string;
   /** an <input>'s type (lower case; "text" when absent or unknown) */
   type?: string;
   /** a <select>'s multiple / size: either makes it a list box showing every option */
