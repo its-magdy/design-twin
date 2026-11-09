@@ -57,7 +57,10 @@ still being filled in mid-session. Sections to decide (show large-screen plans t
   control (per the profile), or `verdict:"new"`. Rows of one repeated component get the same
   answer. A new component for something that exists in the codebase is a bug; check by structure,
   not name — glob the project's actual component files/exports rather than relying on memory. A cross-check
-  name match is a lead, not a mapping: such a row is `verdict:"new"` with `matchedByName`.
+  name match is a lead, not a mapping: such a row is `verdict:"new"` with `matchedByName`. A row the map covers
+  already has `codeUsage` (`module`, `export`, translated code `props`, `slots`): use those values as they are. A
+  `status` other than `active` is a translation nobody confirmed, and `codeUsageWarnings` names what it left out
+  (an option with no mapping, an unmapped prop): fix those in the map and re-run, do not guess the value.
 - **Token map** → `tokens[]` (every bound variable, already listed with its `figmaName` and `key`;
   add a row, `figmaName: null`, for a raw unbound value you write as a literal; *Names come from
   Figma* says why the name carries the weight). Prefer `codeSyntax.{WEB,ANDROID,iOS}` (the designer's

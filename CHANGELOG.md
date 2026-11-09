@@ -21,6 +21,10 @@ list of merged PRs.
 ### Added
 
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
+- `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
+  matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map
+  can't translate, such as a variant option with no code mapping, is left out and listed in `codeUsageWarnings` and on
+  stderr instead of being guessed.
 - `verify-screen --compare` catches the wrong image or icon. The web probe records what draws each exported asset (the
   `<img>` source, the inline `<svg>`) and its content hash, and the compare checks that against the export's assets: the
   expected file passes (renamed by a bundler or inlined too), another exported file is a high delta naming both, and

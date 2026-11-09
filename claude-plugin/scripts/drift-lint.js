@@ -1175,8 +1175,19 @@ function unionCatalog(sources) {
 }
 var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
+// design-to-code/map-props.ts
+var propBase = (k) => String(k).split("#")[0] ?? "";
+function propsByBase(raw) {
+  const props = nullProto(), collisions = [];
+  for (const [orig, value] of Object.entries(raw || {})) {
+    const base = propBase(orig), prev = props[base];
+    if (prev !== void 0 && prev.orig !== orig) collisions.push({ base, first: prev.orig, second: orig });
+    props[base] = { orig, value };
+  }
+  return { props, collisions, ambiguous: new Set(collisions.map((c) => c.base)) };
+}
+
 // design-to-code/drift-lint.ts
-var stripSuffix = (k) => String(k).split("#")[0] ?? "";
 var DEFAULT_MAX_AGE_MS = STALE_MS;
 function checkFreshness(catalog, push, warnings, opts = {}) {
   const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
@@ -1209,18 +1220,10 @@ function checkExtraFreshness(x, push, warnings, opts) {
   if (problem) push(warnings, "unknown-freshness", `${x.file} has ${problem === "missing" ? "no `exportedAt` timestamp" : `an unparseable \`exportedAt\` ('${exportedAt}')`} \u2014 map entries resolved in it may be stale.`, { ...ifDefined("exportedAt", exportedAt) });
   else if (typeof ageMs === "number" && ageMs > maxAgeMs) push(warnings, "stale-snapshot", `${x.file} was exported ${(ageMs / 36e5).toFixed(1)}h ago (max-age ${(maxAgeMs / 36e5).toFixed(1)}h) \u2014 map entries resolved in it are checked against that snapshot.`, { ...ifDefined("exportedAt", exportedAt), ageMs, maxAgeMs });
 }
-function indexPropsByBase(rawProps, valKey, subject, push, warnings, mapKey) {
-  const ambiguous = /* @__PURE__ */ new Set(), out = nullProto();
-  for (const k of Object.keys(rawProps || {})) {
-    const b = stripSuffix(k);
-    const prev = out[b];
-    if (prev !== void 0 && prev.orig !== k) {
-      push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${prev.orig}', '${k}') \u2014 comparison skipped`, { mapKey, prop: b });
-      ambiguous.add(b);
-    }
-    out[b] = { orig: k, [valKey]: (rawProps || {})[k] };
-  }
-  return { props: out, ambiguous };
+function indexPropsByBase(rawProps, subject, push, warnings, mapKey) {
+  const idx = propsByBase(rawProps);
+  for (const c of idx.collisions) push(warnings, "ambiguous-prop", `${subject} has two props with base name '${c.base}' ('${c.first}', '${c.second}') \u2014 comparison skipped`, { mapKey, prop: c.base });
+  return idx;
 }
 function driftLint(map, catalog, opts) {
   const errors = [], warnings = [];
@@ -1276,27 +1279,27 @@ function driftLint(map, catalog, opts) {
     if (f.name && comp.name && f.name !== comp.name) {
       push(warnings, "stale-name", `map entry '${mapKey}' remembers name '${f.name}' but component is now '${comp.name}' (rename \u2014 refresh advisory metadata)`, { mapKey, from: f.name, to: comp.name });
     }
-    const { props: catProps, ambiguous: catAmbiguous } = indexPropsByBase(comp.props, "def", `component '${comp.name}'`, push, warnings, mapKey);
-    const { props: mapProps, ambiguous: mapAmbiguous } = indexPropsByBase(e.props, "prop", `map entry '${mapKey}'`, push, warnings, mapKey);
+    const { props: catProps, ambiguous: catAmbiguous } = indexPropsByBase(comp.props, `component '${comp.name}'`, push, warnings, mapKey);
+    const { props: mapProps, ambiguous: mapAmbiguous } = indexPropsByBase(e.props, `map entry '${mapKey}'`, push, warnings, mapKey);
     for (const [pn, mp] of Object.entries(mapProps)) if (!(pn in catProps)) push(errors, "stale-prop", `'${mapKey}'.props.${mp.orig} does not exist on the Figma component`, { mapKey, prop: pn });
-    for (const [pn, cp] of Object.entries(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${cp.orig}' (${cp.def.type}) is not mapped`, { mapKey, prop: pn });
+    for (const [pn, cp] of Object.entries(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${cp.orig}' (${cp.value.type}) is not mapped`, { mapKey, prop: pn });
     for (const [pn, mp] of Object.entries(mapProps)) {
       const cp = catProps[pn];
       if (!cp || catAmbiguous.has(pn) || mapAmbiguous.has(pn)) continue;
-      const prop = mp.prop;
-      const kind = prop.kind, expected = TYPE_TO_KIND[cp.def.type];
+      const prop = mp.value, def = cp.value;
+      const kind = prop.kind, expected = TYPE_TO_KIND[def.type];
       if (expected && kind && kind !== expected) {
-        push(errors, "kind-mismatch", `'${mapKey}'.props.${mp.orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn });
+        push(errors, "kind-mismatch", `'${mapKey}'.props.${mp.orig}: map kind '${kind}' but Figma type is ${def.type} (expected '${expected}')`, { mapKey, prop: pn });
         continue;
       }
       if (prop.kind === "enum") {
         const values = prop.values || {};
-        if (!Array.isArray(cp.def.options)) {
+        if (!Array.isArray(def.options)) {
           push(warnings, "no-variant-options", `'${mapKey}'.props.${mp.orig}: component exposes no variant options \u2014 enum values can't be verified`, { mapKey, prop: pn });
           continue;
         }
-        for (const opt of Object.keys(values)) if (!cp.def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mp.orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
-        for (const opt of cp.def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mp.orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
+        for (const opt of Object.keys(values)) if (!def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mp.orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
+        for (const opt of def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mp.orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
       }
     }
   }

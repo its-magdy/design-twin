@@ -16,7 +16,9 @@
 //                 (component-match.ts) when a duplicated file re-keyed everything. Component identity
 //                 comes from here, never from a hand-placed attribute. A name that component-match calls
 //                 ambiguous (nameVerdict — the rule cross-check uses too) gets
-//                 `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from.
+//                 `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from. A mapped
+//                 instance also gets `codeUsage` (code-usage.ts: module, export, translated code props, slots) and
+//                 `codeUsageWarnings` for what the map could not translate; both are refreshed on every merge.
 //   anchors{}     a node whose own mapModule is empty is covered by its nearest mapped ancestor, so a
 //                 12-row `.map()` or a reused shell needs one entry, not twelve.
 //   anchorsSuggested[]  where to put those entries: the screen frame itself first ("screen"; when it is an
@@ -53,7 +55,7 @@ import { isCodeConnectMap } from "./map-validate-core.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type {
-  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonValue, MapStatus, MatchRow, ModeMap, Plan,
+  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonValue, MapEntry, MapStatus, MatchRow, ModeMap, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable,
   MatchInstance, VariableType,
 } from "./types.ts";
@@ -67,13 +69,15 @@ import { runCli } from "./proc.ts";
 import { findMapFile } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 import { designSystemFiles } from "./design-system-dir.ts";
+import { codeUsageOf } from "./code-usage.ts";
 
 const USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
   "",
   "  Emits the build-screen plan skeleton for one screen, derived from the export:",
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
-  "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
+  "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping;",
+  "                  a mapped one gets codeUsage: module, export, code props, slots, and codeUsageWarnings)",
   "    anchors{}     every VISIBLE node id, mapModule empty — fill it on sections and instances",
   "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) — never built, never anchored",
@@ -255,12 +259,12 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
 // ---------------------------------------------------------------- components
 
 /** One codeconnect.local.json entry as loadMap() flattens it, keyed by figma.key and by map key. */
-export interface MapKeyEntry { name: string; module: string | null; export: string | null; status: MapStatus | null }
+export interface MapKeyEntry { name: string; module: string | null; export: string | null; status: MapStatus | null; entry: MapEntry }
 
 function mapKeysOf(map: CodeConnectMap): Map<string, MapKeyEntry> {
   const keys = new Map<string, MapKeyEntry>();
   for (const [name, e] of Object.entries(map.components)) {
-    const entry: MapKeyEntry = { name: e.figma.name, module: e.code.module, export: e.code.export, status: e.status || null };
+    const entry: MapKeyEntry = { name: e.figma.name, module: e.code.module, export: e.code.export, status: e.status || null, entry: e };
     if (e.figma.key) keys.set(e.figma.key, entry);
     if (!keys.has(name)) keys.set(name, entry);
   }
@@ -307,6 +311,8 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
       match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
     } else if (r && verdict === "ambiguous") match = { by: "ambiguous", candidates: r.candidates || [] };
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
+    // the map entry read for this instance (code-usage.ts): its module — a variantOverride's when one holds — fills mapModule
+    const translated = mapped ? codeUsageOf(mapped.entry, i) : null;
     const row: PlanComponentRow = {
       nodeId: i.nodeId,
       name: i.name,
@@ -317,7 +323,8 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
       props: i.props,
       catalog: match,
       mapped: mapped ? { module: mapped.module, export: mapped.export, status: mapped.status } : null,
-      mapModule: mapped && mapped.module && !/^TODO/.test(mapped.module) ? mapped.module : "",
+      ...(translated ? { codeUsage: translated.usage, ...(translated.warnings.length ? { codeUsageWarnings: translated.warnings } : {}) } : {}),
+      mapModule: translated?.usage?.module ?? "",
       verdict: null,
     };
     if (i.insideInstance) row.insideInstance = i.insideInstance;
@@ -563,6 +570,7 @@ function newPlanProblem(out: string, nodeId: string | undefined, layerName: stri
 
 // One line for a file that is there but cannot be used; `what` names it the way the messages always have.
 const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
+const MAX_USAGE_WARNINGS = 20; // stderr only: every warning stays on its row
 
 export function main(argv: string[]): number {
   const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, "seed-from": { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
@@ -651,6 +659,11 @@ export function main(argv: string[]): number {
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);
+  const translated = fresh.components.filter((row) => row.codeUsage).length;
+  const usageWarnings = [...new Set(fresh.components.flatMap((row) => (row.codeUsageWarnings || []).map((w) => `[${w.code}] ${w.message}`)))];
+  if (fresh.components.some((row) => row.codeUsage !== undefined)) console.error(`plan-skeleton: ${translated} instance(s) translated through the component map (codeUsage), ${usageWarnings.length} distinct warning(s)`);
+  for (const w of usageWarnings.slice(0, MAX_USAGE_WARNINGS)) console.error(`plan-skeleton: warn  ${w}`);
+  if (usageWarnings.length > MAX_USAGE_WARNINGS) console.error(`plan-skeleton: warn  … and ${usageWarnings.length - MAX_USAGE_WARNINGS} more (components[].codeUsageWarnings)`);
   return 0;
 }
 

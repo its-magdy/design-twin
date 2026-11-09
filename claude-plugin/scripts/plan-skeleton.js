@@ -2250,13 +2250,125 @@ function designSystemFiles(dir) {
   };
 }
 
+// design-to-code/map-props.ts
+var propBase = (k) => String(k).split("#")[0] ?? "";
+function propsByBase(raw) {
+  const props = nullProto(), collisions = [];
+  for (const [orig, value] of Object.entries(raw || {})) {
+    const base = propBase(orig), prev = props[base];
+    if (prev !== void 0 && prev.orig !== orig) collisions.push({ base, first: prev.orig, second: orig });
+    props[base] = { orig, value };
+  }
+  return { props, collisions, ambiguous: new Set(collisions.map((c) => c.base)) };
+}
+
+// design-to-code/code-usage.ts
+var isPlaceholderModule = (module) => !module || /^TODO/.test(module);
+function resolveTarget(entry, instance, warn) {
+  const values = instance.props;
+  const holds = (entry.variantOverrides || []).filter((o) => {
+    const when = Object.entries(propsByBase(o.when).props);
+    return when.length > 0 && when.every(([base, w]) => !instance.ambiguous.has(base) && values[base] !== void 0 && String(values[base].value) === w.value);
+  });
+  const distinct = new Map(holds.map((o) => [`${o.code.module}\0${o.code.export}`, o.code]));
+  if (distinct.size > 1) {
+    warn({ code: "ambiguous-variant-override", message: `${distinct.size} variantOverrides hold for this instance with different code targets (${[...distinct.values()].map((c) => `${c.module}#${c.export}`).join(", ")}): choose one in the map` });
+    return null;
+  }
+  const [override] = distinct.values();
+  const target = override ?? entry.code;
+  if (isPlaceholderModule(target.module)) {
+    warn({ code: "no-code-target", message: `'${entry.figma.name}' has no import path yet (module '${target.module}'): fill it in the map` });
+    return null;
+  }
+  return { module: target.module, export: target.export, ...ifDefined("targets", override ? void 0 : entry.code.targets) };
+}
+function codeUsageOf(entry, instance) {
+  const warnings = [];
+  const warn = (w) => {
+    warnings.push(w);
+  };
+  const name = entry.figma.name;
+  const mapIdx = propsByBase(entry.props);
+  const instIdx = propsByBase({ ...instance.variant || {}, ...instance.props || {} });
+  for (const c of [...mapIdx.collisions, ...instIdx.collisions]) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not translated` });
+  const target = resolveTarget(entry, instIdx, warn);
+  const assigned = /* @__PURE__ */ new Map(), assignedSlots = /* @__PURE__ */ new Map();
+  const assign = (to, key, figma, value) => {
+    to.set(key, [...to.get(key) ?? [], { figma, value }]);
+  };
+  const mismatch = (p, kind, value) => warn({ code: "prop-value-mismatch", prop: p, message: `'${name}'.${p} is mapped as ${kind} but this instance's value is ${JSON.stringify(value)}: not translated` });
+  for (const [base, inst] of Object.entries(instIdx.props)) {
+    if (mapIdx.ambiguous.has(base) || instIdx.ambiguous.has(base)) continue;
+    const mapped = mapIdx.props[base];
+    if (!mapped) {
+      warn({ code: "uncovered-prop", prop: base, message: `'${name}': Figma prop '${base}' is not mapped: its value ${JSON.stringify(inst.value)} is not translated` });
+      continue;
+    }
+    const p = mapped.value, value = inst.value;
+    let out;
+    if (p.kind === "enum") {
+      if (typeof value !== "string") {
+        mismatch(base, "an enum", value);
+        continue;
+      }
+      const table = p.values || {};
+      if (!Object.hasOwn(table, value)) {
+        warn({ code: "unmapped-variant-value", prop: base, message: `'${name}'.${base}: option '${value}' has no code mapping: add it to the map's values` });
+        continue;
+      }
+      const code = table[value];
+      if (code === null || code === void 0 || p.omitDefault && p.default === value) continue;
+      out = code;
+    } else if (p.kind === "boolean") {
+      if (typeof value !== "boolean") {
+        mismatch(base, "a boolean", value);
+        continue;
+      }
+      if (p.omitDefault && p.default === value) continue;
+      out = value;
+    } else if (p.kind === "string") {
+      if (typeof value !== "string") {
+        mismatch(base, "a string", value);
+        continue;
+      }
+      out = value;
+    } else {
+      if (typeof value !== "string") {
+        mismatch(base, "an instance swap", value);
+        continue;
+      }
+      const slot = p.slot ?? p.codeProp;
+      if (slot) assign(assignedSlots, slot, base, value);
+      else warn({ code: "no-slot-name", prop: base, message: `'${name}'.${base} is an instance prop with neither slot nor codeProp: not translated` });
+      continue;
+    }
+    assign(assigned, p.codeProp, base, out);
+  }
+  const settle = (from, what) => {
+    const out = nullProto();
+    for (const [key, list] of from) {
+      const first = list[0];
+      if (first && list.every((x) => x.value === first.value)) {
+        out[key] = first.value;
+        continue;
+      }
+      warn({ code: "conflicting-code-prop", prop: key, message: `'${name}': ${list.map((x) => `${x.figma}=${JSON.stringify(x.value)}`).join(", ")} all map to ${what} '${key}' with different values: not translated` });
+    }
+    return out;
+  };
+  const props = settle(assigned, "code prop"), slots = settle(assignedSlots, "slot");
+  return { usage: target ? { ...target, status: entry.status ?? null, props, slots } : null, warnings };
+}
+
 // design-to-code/plan-skeleton.ts
 var USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
   "",
   "  Emits the build-screen plan skeleton for one screen, derived from the export:",
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
-  "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
+  "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping;",
+  "                  a mapped one gets codeUsage: module, export, code props, slots, and codeUsageWarnings)",
   "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
   "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
@@ -2411,7 +2523,7 @@ function buildTokens(doc, vars, ds, resolvedModes) {
 function mapKeysOf(map) {
   const keys = /* @__PURE__ */ new Map();
   for (const [name, e] of Object.entries(map.components)) {
-    const entry = { name: e.figma.name, module: e.code.module, export: e.code.export, status: e.status || null };
+    const entry = { name: e.figma.name, module: e.code.module, export: e.code.export, status: e.status || null, entry: e };
     if (e.figma.key) keys.set(e.figma.key, entry);
     if (!keys.has(name)) keys.set(name, entry);
   }
@@ -2448,6 +2560,7 @@ function buildComponents(doc, catalog, library, mapKeys) {
       match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
     } else if (r && verdict === "ambiguous") match = { by: "ambiguous", candidates: r.candidates || [] };
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
+    const translated = mapped ? codeUsageOf(mapped.entry, i) : null;
     const row = {
       nodeId: i.nodeId,
       name: i.name,
@@ -2458,7 +2571,8 @@ function buildComponents(doc, catalog, library, mapKeys) {
       props: i.props,
       catalog: match,
       mapped: mapped ? { module: mapped.module, export: mapped.export, status: mapped.status } : null,
-      mapModule: mapped && mapped.module && !/^TODO/.test(mapped.module) ? mapped.module : "",
+      ...translated ? { codeUsage: translated.usage, ...translated.warnings.length ? { codeUsageWarnings: translated.warnings } : {} } : {},
+      mapModule: translated?.usage?.module ?? "",
       verdict: null
     };
     if (i.insideInstance) row.insideInstance = i.insideInstance;
@@ -2664,6 +2778,7 @@ var cannotRead = (what, file, error) => {
   console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`);
   return 1;
 };
+var MAX_USAGE_WARNINGS = 20;
 function main(argv) {
   const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, "seed-from": { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
@@ -2758,6 +2873,11 @@ function main(argv) {
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);
+  const translated = fresh.components.filter((row) => row.codeUsage).length;
+  const usageWarnings = [...new Set(fresh.components.flatMap((row) => (row.codeUsageWarnings || []).map((w) => `[${w.code}] ${w.message}`)))];
+  if (fresh.components.some((row) => row.codeUsage !== void 0)) console.error(`plan-skeleton: ${translated} instance(s) translated through the component map (codeUsage), ${usageWarnings.length} distinct warning(s)`);
+  for (const w of usageWarnings.slice(0, MAX_USAGE_WARNINGS)) console.error(`plan-skeleton: warn  ${w}`);
+  if (usageWarnings.length > MAX_USAGE_WARNINGS) console.error(`plan-skeleton: warn  \u2026 and ${usageWarnings.length - MAX_USAGE_WARNINGS} more (components[].codeUsageWarnings)`);
   return 0;
 }
 if (import.meta.main) runCli(main, { name: "plan-skeleton" });

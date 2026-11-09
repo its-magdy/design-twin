@@ -49,7 +49,8 @@ A file named for a script in `claude-plugin/scripts/` is that script's CLI entry
 | `code-scanner.ts` | What the Stop hook reads out of a build's source: the text that is code (comments and prose strings blanked), colour literals and Tailwind arbitrary values, whether a literal sits on a token's own definition line (`literalUses`), what a file imports, and the project graph over every plan's files (import edges, the files that can render a screen, the project's stylesheets). No plan policy — verify-build decides what blocks and what warns. |
 | `resolve-screen.ts` (+ `resolve-screen-core.ts`) | The one node-id → exact layer name → indexed `title` → plan `screenName`/`route` resolver every skill uses to turn a human's screen name into one exact file, instead of guessing a filename. |
 | `verify-probe.ts` | The shipped web probe: renders the built screen with the **project's own** Playwright (never bundled or installed), measures every expectation row the same way every run, drives the listed overlay interactions, runs the behaviour/accessibility checks and an informational visual diff against the Figma reference, and writes `<Layer>__<id>.measured.json` for `verify-screen.ts --compare`. `--check` reports whether a renderer is available. Its parts live in `probe-*.ts` and `visual-diff.ts`. |
-| `plan-skeleton.ts` | Generates a new plan's (`design/plan/<Layer>__<id>.json`) skeleton from the export — bound tokens, visible component instances, anchors, suggested anchors, hidden subtrees — so the model fills in only the decisions. `--out` on an existing plan merges (model-filled fields kept); `--seed-from` fills empty rows from a sibling plan. The one "which nodes are actually on screen" rule it and `verify-build.ts` read is `visible-tree.ts`'s `visibility`. |
+| `code-usage.ts` (+ `map-props.ts`) | One instance's props translated through its map entry into `{module, export, status, props, slots}`, platform-neutral, for the plan skeleton's `codeUsage`. Applies value tables, `omitDefault` and a `variantOverrides` target whose whole `when` holds. What it cannot translate (an option with no mapping, an unmapped prop, a value of the wrong type, two Figma props with different values for one code prop, overrides that tie) is left out and warned about, never guessed. `map-props.ts` is the base-name prop index it shares with `drift-lint.ts`. |
+| `plan-skeleton.ts` | Generates a new plan's (`design/plan/<Layer>__<id>.json`) skeleton from the export — bound tokens, visible component instances (a mapped one with its `codeUsage`), anchors, suggested anchors, hidden subtrees — so the model fills in only the decisions. `--out` on an existing plan merges (model-filled fields kept); `--seed-from` fills empty rows from a sibling plan. The one "which nodes are actually on screen" rule it and `verify-build.ts` read is `visible-tree.ts`'s `visibility`. |
 | `get-component.ts` | Prints ONE catalog entry in full — its variants with their real node trees, from the detail file its `variantsFile` pointer names — resolved by `key`, then id, then name (the same handle drift-lint and map-bootstrap print). |
 
 ## How to use it (the workflow)
@@ -95,6 +96,8 @@ executed" design). Full shape is enforced by `map-validate-core.ts` (and documen
   "note": "Icon slot mapped by hand"                    // optional free text for people; must be a string, no tool reads it
 }
 ```
+An enum or boolean `default` is the **Figma** value (what `map-bootstrap` writes), so `omitDefault` compares it with the
+instance's Figma value. A `values` entry of `null` means the option has no code prop.
 
 ## Relationship to `dtwin seed` and `design/components.json`
 There are two component maps with different jobs. `design/codeconnect.local.json` (this directory's

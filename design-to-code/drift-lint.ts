@@ -31,10 +31,9 @@ import type {
 } from "./types.ts";
 import { loadCatalogSet, unionCatalog, catalogSetLine, type CatalogSource } from "./design-system-dir.ts";
 import { runCli } from "./proc.ts";
-import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
-
-const stripSuffix = (k: string): string => String(k).split("#")[0] ?? ""; // "Size#12:3" -> "Size"; ?? "": split() always returns at least one piece, so it never applies
+import { propsByBase, type PropsByBase } from "./map-props.ts";
 
 /** A catalog read beside the named one (components.library.json, libraries/<dir>/components.json, a --catalog). */
 export interface ExtraCatalog { file: string; catalog: ComponentsCatalog }
@@ -94,23 +93,10 @@ function checkExtraFreshness(x: ExtraCatalog, push: Push, warnings: DriftFinding
 
 // Index a props object by base name (Figma's "#id" suffix stripped), warning on — and recording —
 // any two distinct keys that collapse to the same base so callers skip order-dependent errors on it.
-interface IndexedProps<T> { props: Record<string, T>; ambiguous: Set<string> }
-function indexPropsByBase(rawProps: Record<string, ComponentPropDef> | undefined, valKey: "def", subject: string, push: Push, warnings: DriftFinding[], mapKey: string): IndexedProps<{ orig: string; def: ComponentPropDef }>;
-function indexPropsByBase(rawProps: Record<string, PropMap> | undefined, valKey: "prop", subject: string, push: Push, warnings: DriftFinding[], mapKey: string): IndexedProps<{ orig: string; prop: PropMap }>;
-function indexPropsByBase(rawProps: Record<string, unknown> | undefined, valKey: string, subject: string, push: Push, warnings: DriftFinding[], mapKey: string): IndexedProps<{ orig: string; [k: string]: unknown }> {
-  // null-prototype map: a prop whose base name is literally "__proto__"/"constructor" is indexed and
-  // compared like any other, instead of silently mutating a prototype and being skipped from drift checks.
-  const ambiguous = new Set<string>(), out: Record<string, { orig: string; [k: string]: unknown }> = nullProto();
-  for (const k of Object.keys(rawProps || {})) {
-    const b = stripSuffix(k);
-    const prev = out[b]; // null-prototype and never set to undefined: defined exactly when `b in out`
-    if (prev !== undefined && prev.orig !== k) {
-      push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${prev.orig}', '${k}') — comparison skipped`, { mapKey, prop: b });
-      ambiguous.add(b);
-    }
-    out[b] = { orig: k, [valKey]: (rawProps || {})[k] };
-  }
-  return { props: out, ambiguous };
+function indexPropsByBase<T>(rawProps: Record<string, T> | undefined, subject: string, push: Push, warnings: DriftFinding[], mapKey: string): PropsByBase<T> {
+  const idx = propsByBase(rawProps);
+  for (const c of idx.collisions) push(warnings, "ambiguous-prop", `${subject} has two props with base name '${c.base}' ('${c.first}', '${c.second}') — comparison skipped`, { mapKey, prop: c.base });
+  return idx;
 }
 
 function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCatalog | null | undefined, opts?: DriftLintOptions): DriftLintResult {
@@ -182,22 +168,22 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
     // Prop comparison — strip Figma's #id suffix on both sides so the two conventions line up. If two
     // distinct keys collapse to the same base name, surface it (never silently shadow one away) and
     // record the base so we DON'T emit an order-dependent kind/enum error on an ambiguous prop.
-    const { props: catProps, ambiguous: catAmbiguous } = indexPropsByBase(comp.props, "def", `component '${comp.name}'`, push, warnings, mapKey);
-    const { props: mapProps, ambiguous: mapAmbiguous } = indexPropsByBase(e.props, "prop", `map entry '${mapKey}'`, push, warnings, mapKey);
+    const { props: catProps, ambiguous: catAmbiguous } = indexPropsByBase<ComponentPropDef>(comp.props, `component '${comp.name}'`, push, warnings, mapKey);
+    const { props: mapProps, ambiguous: mapAmbiguous } = indexPropsByBase<PropMap>(e.props, `map entry '${mapKey}'`, push, warnings, mapKey);
 
     for (const [pn, mp] of Object.entries(mapProps)) if (!(pn in catProps)) push(errors, "stale-prop", `'${mapKey}'.props.${mp.orig} does not exist on the Figma component`, { mapKey, prop: pn });
-    for (const [pn, cp] of Object.entries(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${cp.orig}' (${cp.def.type}) is not mapped`, { mapKey, prop: pn });
+    for (const [pn, cp] of Object.entries(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${cp.orig}' (${cp.value.type}) is not mapped`, { mapKey, prop: pn });
 
     for (const [pn, mp] of Object.entries(mapProps)) {
       const cp = catProps[pn]; if (!cp || catAmbiguous.has(pn) || mapAmbiguous.has(pn)) continue; // ambiguous base (either side) -> already warned, don't emit order-dependent errors
-      const prop = mp.prop;
-      const kind = prop.kind, expected = TYPE_TO_KIND[cp.def.type];
-      if (expected && kind && kind !== expected) { push(errors, "kind-mismatch", `'${mapKey}'.props.${mp.orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn }); continue; }
+      const prop = mp.value, def = cp.value;
+      const kind = prop.kind, expected = TYPE_TO_KIND[def.type];
+      if (expected && kind && kind !== expected) { push(errors, "kind-mismatch", `'${mapKey}'.props.${mp.orig}: map kind '${kind}' but Figma type is ${def.type} (expected '${expected}')`, { mapKey, prop: pn }); continue; }
       if (prop.kind === "enum") {
         const values = prop.values || {};
-        if (!Array.isArray(cp.def.options)) { push(warnings, "no-variant-options", `'${mapKey}'.props.${mp.orig}: component exposes no variant options — enum values can't be verified`, { mapKey, prop: pn }); continue; }
-        for (const opt of Object.keys(values)) if (!cp.def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mp.orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
-        for (const opt of cp.def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mp.orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
+        if (!Array.isArray(def.options)) { push(warnings, "no-variant-options", `'${mapKey}'.props.${mp.orig}: component exposes no variant options — enum values can't be verified`, { mapKey, prop: pn }); continue; }
+        for (const opt of Object.keys(values)) if (!def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mp.orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
+        for (const opt of def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mp.orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
       }
     }
   }
