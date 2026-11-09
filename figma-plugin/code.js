@@ -479,11 +479,14 @@
       /** Variable collections, read to turn a node's pinned variable-mode ids into human names (theming). A file has a
        *  handful reused across every node, so the whole object is cached per run (its .modes list too) — the same
        *  memo, through `.obj`. */
-      this.collection = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null), (id) => {
+      this.collections = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null), (id) => {
         if (figma.variables && typeof figma.variables.getVariableCollectionByIdAsync === "function") {
           this.warn("collection metadata unavailable for '" + id + "' \u2014 collection/mode names unavailable; raw mode IDs retained where supported");
         }
-      }).obj;
+      });
+      this.collection = this.collections.obj;
+      /** Every collection id this run looked up — how dumpVariables finds a library EXTENDED collection a frame pins. */
+      this.collectionIds = () => this.collections.ids();
       /** Who asked this run to stop, if anyone: the designer's Cancel button, or the bridge giving up on the request
        *  (progress.ts requestAbandon). One field rather than two flags so the run fails with exactly one, truthful
        *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it
@@ -1062,6 +1065,27 @@
     const o = v;
     return o;
   }
+  function isExtended(c) {
+    return c.isExtension === true;
+  }
+  async function parentCollection(id) {
+    return id ? run().collection(id) : null;
+  }
+  async function extensionLineage(e) {
+    const [parent, root] = await Promise.all([parentCollection(e.parentVariableCollectionId), parentCollection(e.rootVariableCollectionId)]);
+    const parentModes = {};
+    for (const m of e.modes) {
+      const pm = parent ? parent.modes.find((x) => x.modeId === m.parentModeId) : void 0;
+      parentModes[m.name] = pm ? pm.name : m.parentModeId;
+    }
+    return {
+      parent: parent ? parent.name : e.parentVariableCollectionId,
+      ...ifDefined("parentKey", parent && parent.key || void 0),
+      root: root ? root.name : e.rootVariableCollectionId,
+      ...ifDefined("rootKey", root && root.key || void 0),
+      parentModes
+    };
+  }
   async function dumpVariables(opts) {
     const asLibrary = !!(opts && opts.asLibrary);
     const pendingPublish = [];
@@ -1088,9 +1112,33 @@
       for (const value of Object.values(v.valuesByMode || {})) out.push(...aliasIds(value));
       return out;
     };
+    const localById = new Map(localVars.map((v) => [v.id, v]));
+    for (const c of await Promise.all(run().collectionIds().map((cid) => run().collection(cid)))) {
+      if (c && isExtended(c) && !collById.has(c.id)) collById.set(c.id, c);
+    }
+    const extended = [...collById.values()].filter(isExtended);
+    const extensionsOf = /* @__PURE__ */ new Map();
+    const extensionAliases = [];
+    await Promise.all(extended.map(async (coll) => {
+      let unreadable = 0;
+      await Promise.all(coll.variableIds.map(async (id) => {
+        try {
+          const v = localById.get(id) || await run().varName.obj(id);
+          if (!v || v.variableCollectionId === coll.id) return;
+          const values = await v.valuesByModeForCollectionAsync(coll);
+          const list = extensionsOf.get(id);
+          if (list) list.push({ coll, values });
+          else extensionsOf.set(id, [{ coll, values }]);
+          for (const raw of Object.values(values)) extensionAliases.push(...aliasIds(raw));
+        } catch (e) {
+          unreadable++;
+        }
+      }));
+      if (unreadable) hygiene.push("extended collection '" + coll.name + "': values unreadable for " + unreadable + " variable(s) \u2014 their inherited/override values are missing");
+    }));
     const remoteVars = [];
     const seen = new Set(localIds);
-    let frontier = [...new Set(run().varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
+    let frontier = [...new Set(run().varName.ids().concat(...localVars.map(aliasTargets), [...extensionsOf.keys()], extensionAliases))].filter((id) => !seen.has(id));
     while (frontier.length) {
       for (const id of frontier) seen.add(id);
       const fetched = (await Promise.all(frontier.map((id) => run().varName.obj(id)))).filter(Boolean);
@@ -1111,15 +1159,31 @@
         remoteVars.length + " variable(s) referenced by this file come from a published LIBRARY, not this file \u2014 included below with remote:true (getLocalVariablesAsync cannot enumerate them)"
       );
     }
+    const reportBrokenAliases = (v, ids) => {
+      for (const id of ids) if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + id + " could not be resolved");
+    };
+    const extensionRecord = async (v, { coll, values: raws }) => {
+      const e = coll;
+      const nameOf = (modeId) => {
+        const m = e.modes.find((x) => x.modeId === modeId);
+        return m ? m.name : modeId;
+      };
+      const entries = await Promise.all(Object.entries(raws).map(async ([modeId, raw]) => ({ modeId, raw, value: await resolveModeValue(raw, v.resolvedType) })));
+      const overridden = e.variableOverrides && e.variableOverrides[v.id] || {};
+      const values = {};
+      for (const { modeId, raw, value } of entries) {
+        reportBrokenAliases(v, aliasIds(raw));
+        values[nameOf(modeId)] = value;
+      }
+      return { collection: coll.name, ...ifDefined("collectionKey", coll.key || void 0), values, overrides: Object.keys(overridden).filter((m) => m in raws).map(nameOf) };
+    };
     for (const v of localVars.concat(remoteVars)) {
       const values = {};
       let hasAlias = false;
       const modes = await Promise.all(Object.entries(v.valuesByMode).map(async ([modeId, raw]) => ({ modeId, raw, value: await resolveModeValue(raw, v.resolvedType) })));
       for (const { modeId, raw, value } of modes) {
         if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
-        for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
-          if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + id + " could not be resolved");
-        }
+        reportBrokenAliases(v, isVariableAlias(raw) ? [raw.id] : aliasIds(raw));
         values[modeName[modeId] || modeId] = value;
       }
       const coll = collOf(v.variableCollectionId);
@@ -1141,6 +1205,8 @@
       if (v.remote) rec.remote = true;
       if (v.hiddenFromPublishing) rec.hiddenFromPublishing = true;
       if (v.key) rec.key = v.key;
+      const views = extensionsOf.get(v.id);
+      if (views) rec.extensions = await Promise.all(views.map((x) => extensionRecord(v, x)));
       if (asLibrary) pendingPublish.push({ rec, obj: v });
       variables.push(rec);
       if (v.scopes && v.scopes.indexOf("ALL_SCOPES") !== -1) hygiene.push("ALL_SCOPES on '" + v.name + "' (pollutes every picker)");
@@ -1164,6 +1230,7 @@
         if (s) collPublish[c.id] = s;
       }
     }
+    const lineage = new Map(await Promise.all(extended.map(async (c) => [c.id, await extensionLineage(c)])));
     return {
       // Local collections plus any LIBRARY collection a referenced remote variable belongs to — the
       // token emitters need each collection's default mode to pick the `:root` value.
@@ -1173,10 +1240,11 @@
         // Which mode is the base/`:root` default (vs. the override theme) — codegen otherwise guesses.
         ...ifDefined("default", modeName[c.defaultModeId] || void 0),
         theming: c.modes.length > 1,
-        // Extended collection (its modes inherit from a root collection via parentModeId) — codegen
-        // should treat it as an override layer, not a standalone theme. Flag it; deep parent-mode
-        // resolution (mode.parentModeId -> root mode) is deferred.
+        // Extended collection (its modes inherit from a parent collection via parentModeId) — codegen
+        // should treat it as an override layer, not a standalone theme. Its values are on each inherited
+        // variable's `extensions`.
         ...ifDefined("extended", c.isExtension === true ? true : void 0),
+        ...lineage.get(c.id),
         ...ifDefined("hiddenFromPublishing", c.hiddenFromPublishing === true ? true : void 0),
         ...ifDefined("key", c.key || void 0),
         // durable cross-file collection identity
@@ -3198,61 +3266,75 @@
       }
       return m;
     };
+    const localStyleIds = new Set([...paint, ...text, ...effect, ...grid, ...animation].map((s) => s.id));
+    const usedLibraryStyles = asLibrary ? [] : (await Promise.all(run().styleName.ids().filter((id) => !localStyleIds.has(id)).map((id) => run().styleName.obj(id)))).filter((s) => !!s && s.remote === true);
+    const libraryOf = (type) => usedLibraryStyles.filter((s) => s.type === type);
+    if (usedLibraryStyles.length) {
+      hygiene.push(
+        usedLibraryStyles.length + " style(s) used by this file come from a published LIBRARY, not this file \u2014 included with remote:true (getLocal*StylesAsync cannot enumerate them; only the styles this pull reached are here, and nothing was imported)"
+      );
+    }
+    const catalogRows = async (list, toIr) => {
+      const rows = await Promise.all(list.map(async (s) => {
+        try {
+          return await toIr(s);
+        } catch (e) {
+          if (!s.remote) throw e;
+          run().warn("library style '" + s.name + "': values unreadable (" + errMsg(e) + ") \u2014 omitted from the style catalog");
+          return null;
+        }
+      }));
+      return rows.filter((r) => r !== null);
+    };
     const [paintStyles, textStyles, effectStyles] = await Promise.all([
       // Paint styles carry their ACTUAL colors, not just a name.
       // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
       // variable silently lost that link — the binding is what makes it a token rather than a hex.
-      Promise.all(paint.map(async (s) => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) }))),
-      Promise.all(
-        text.map(async (s) => ({
-          name: s.name,
-          size: s.fontSize,
-          font: s.fontName && s.fontName.family,
-          weight: s.fontName && s.fontName.style,
-          ...ifDefined("lineHeight", lineH(s.lineHeight)),
-          ...ifDefined("letterSpacing", letterS(s.letterSpacing)),
-          ...ifDefined("case", s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : void 0),
-          ...ifDefined("decoration", s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : void 0),
-          ...ifDefined("paragraphSpacing", s.paragraphSpacing || void 0),
-          ...ifDefined("paragraphIndent", s.paragraphIndent || void 0),
-          ...ifDefined("leadingTrim", s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0),
-          ...ifDefined("listSpacing", s.listSpacing || void 0),
-          // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
-          // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
-          // one, minus the mixed guard: a TextStyle is uniform by definition.
-          ...ifDefined("textWrap", s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0),
-          ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
-          ...ifDefined("description", s.description || void 0),
-          ...await styleMeta(s)
-        }))
-      ),
-      Promise.all(effect.map(async (s) => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) })))
+      catalogRows([...paint, ...libraryOf("PAINT")], async (s) => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) })),
+      catalogRows([...text, ...libraryOf("TEXT")], async (s) => ({
+        name: s.name,
+        size: s.fontSize,
+        font: s.fontName && s.fontName.family,
+        weight: s.fontName && s.fontName.style,
+        ...ifDefined("lineHeight", lineH(s.lineHeight)),
+        ...ifDefined("letterSpacing", letterS(s.letterSpacing)),
+        ...ifDefined("case", s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : void 0),
+        ...ifDefined("decoration", s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : void 0),
+        ...ifDefined("paragraphSpacing", s.paragraphSpacing || void 0),
+        ...ifDefined("paragraphIndent", s.paragraphIndent || void 0),
+        ...ifDefined("leadingTrim", s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0),
+        ...ifDefined("listSpacing", s.listSpacing || void 0),
+        // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
+        // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
+        // one, minus the mixed guard: a TextStyle is uniform by definition.
+        ...ifDefined("textWrap", s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0),
+        ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+        ...ifDefined("description", s.description || void 0),
+        ...await styleMeta(s)
+      })),
+      catalogRows([...effect, ...libraryOf("EFFECT")], async (s) => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) }))
     ]);
     const styles = {
       paint: paintStyles,
       text: textStyles,
       effect: effectStyles,
       // Layout-grid styles (column/row grids) — the responsive grid tokens, fanned out like their three siblings.
-      grid: await Promise.all(
-        grid.map(async (s) => ({
-          name: s.name,
-          ...ifDefined("grids", Array.isArray(s.layoutGrids) ? await simplifyGrids(s.layoutGrids) : void 0),
-          ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
-          ...ifDefined("description", s.description || void 0),
-          ...await styleMeta(s)
-        }))
-      ),
+      grid: await catalogRows([...grid, ...libraryOf("GRID")], async (s) => ({
+        name: s.name,
+        ...ifDefined("grids", Array.isArray(s.layoutGrids) ? await simplifyGrids(s.layoutGrids) : void 0),
+        ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+        ...ifDefined("description", s.description || void 0),
+        ...await styleMeta(s)
+      })),
       // Custom animation styles: the Figma animations each one contains (CustomAnimationStyle.
       // animationEntries), in the same compact form a node's applied animation style takes (motion.ts).
       // Their props can bind EASING variables, so they resolve before dumpVariables too.
-      animation: await Promise.all(
-        animation.map(async (s) => ({
-          name: s.name,
-          ...ifDefined("entries", await customAnimationEntries(s)),
-          ...ifDefined("description", s.description || void 0),
-          ...await styleMeta(s)
-        }))
-      )
+      animation: await catalogRows([...animation, ...libraryOf("CUSTOM_ANIMATION")], async (s) => ({
+        name: s.name,
+        ...ifDefined("entries", await customAnimationEntries(s)),
+        ...ifDefined("description", s.description || void 0),
+        ...await styleMeta(s)
+      }))
     };
     const vars = await dumpVariables(opts);
     let source;
@@ -3767,9 +3849,9 @@
     r.useReads(opts);
     const designSystem = await buildDesignSystem();
     checkCancelled();
-    if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
+    if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true) || Object.values(designSystem.styles).some((list) => list.some((s) => s.remote === true))) {
       designSystem.hygiene = [
-        'design-system pull of a file that consumes libraries: library (remote) variables are only the ones this file references \u2014 this is not the library\'s catalog; open the library file and run `dtwin pull --as-library "<name>"` for it.',
+        'design-system pull of a file that consumes libraries: library (remote) variables and styles are only the ones this pull reached \u2014 this is not the library\'s catalog; open the library file and run `dtwin pull --as-library "<name>"` for it.',
         ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
       ];
     }

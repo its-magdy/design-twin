@@ -44,7 +44,7 @@ import { normHex, clampOpacityPct } from "./color.ts";
 // tokens.ts uses (tokens-core.ts, variable-class.ts, variable-resolve.ts).
 import { segs, commentText } from "./tokens-core.ts";
 import { classifyVariable, isSentinel, type UnitOpts, type VariableClass } from "./variable-class.ts";
-import { variableResolver, type VariableResolver } from "./variable-resolve.ts";
+import { variableResolver, type ModeRequest, type VariableResolver } from "./variable-resolve.ts";
 import { nullProto } from "../bridge/src/json-util.ts";
 import { disambiguated, keyTag, nativeIdentifier } from "./token-naming.ts";
 
@@ -100,8 +100,8 @@ const hasComposedKey = (x: unknown): boolean => !!x && typeof x === "object" && 
 const isNativeScalar =(x: unknown): x is string | number | boolean => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
 // v's literal in mode m (variable-resolve.ts: aliases followed, a composed colour folded into one hex); undefined when
 // it does not resolve, or resolves to a motion OBJECT (EASING/TIMING), which has no native literal.
-function literal(vars: VariableResolver, v: Variable, mode: string): string | number | boolean | undefined {
-  const r = vars.resolve(v, { mode }).value;
+function literal(vars: VariableResolver, v: Variable, req: ModeRequest): string | number | boolean | undefined {
+  const r = vars.resolve(v, req).value;
   return isNativeScalar(r) ? r : undefined;
 }
 // → [{ name, type, modes:[{name,id}], default, fields:[{id, kind, source, values:{modeName: concrete}}] }]
@@ -112,7 +112,9 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
   const typeNames = new Set<string>();
   const out: NativeCollection[] = [];
   for (const c of collections) {
-    const mine = vars.filter((v) => v.collection === c.name);
+    // An extended collection becomes a type of its own, holding every token it inherits: a native constant cannot
+    // fall back to the parent at run time.
+    const mine = vars.filter((v) => v.collection === c.name || (v.extensions || []).some((e) => e.collection === c.name));
     const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
     const [firstModeName, ...otherModeNames] = modeNames;
     if (!mine.length || firstModeName === undefined) continue;
@@ -134,10 +136,11 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       const values: Record<string, Concrete> = nullProto();
       let ok = true;
       for (const m of modeNames) {
-        const r = literal(resolver, v, m);
+        const req: ModeRequest = { mode: m, byCollection: { [c.name]: m } };
+        const r = literal(resolver, v, req);
         if (r === undefined || (kind === "color" && !normHex(r))) { ok = false; break; }
         if (pct) {
-          const n = resolver.number(v, { mode: m }); // a number, or a string-number FLOAT; null when neither
+          const n = resolver.number(v, req); // a number, or a string-number FLOAT; null when neither
           if (n === null) { ok = false; break; }
           const clamped = clampOpacityPct(n);
           if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0–100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);

@@ -185,7 +185,9 @@ export function mergeVariablesDoc(prevRaw: unknown, next: VariablesDoc | null | 
     if (sameValue(before, v)) {
       // Same token, same resolution — keep the richer record rather than the newer one, so a slice
       // that happened to read fewer scopes cannot strip fields an earlier slice captured.
-      variables[at] = Object.assign({}, v, before);
+      // `extensions` is the exception: a read that has them is the current one, and a read without them
+      // (a later screen that never pinned that library brand) must not wipe them.
+      variables[at] = Object.assign({}, v, before, v.extensions ? { extensions: v.extensions } : {});
       stats.kept++;
       continue;
     }

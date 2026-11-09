@@ -778,9 +778,10 @@ async function collectDesignSystemTree(opts?: CollectOpts): Promise<DesignSystem
   checkCancelled();
   // Only on a file that really consumes library variables: on the file that DEFINES its tokens (no remote
   // variable) the line would call its own complete catalog partial.
-  if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
+  if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)
+    || Object.values(designSystem.styles).some((list) => list.some((s) => s.remote === true))) {
     designSystem.hygiene = [
-      "design-system pull of a file that consumes libraries: library (remote) variables are only the ones this file references — this is not the library's catalog; open the library file and run `dtwin pull --as-library \"<name>\"` for it.",
+      "design-system pull of a file that consumes libraries: library (remote) variables and styles are only the ones this pull reached — this is not the library's catalog; open the library file and run `dtwin pull --as-library \"<name>\"` for it.",
       ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
     ];
   }

@@ -9,6 +9,14 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Added
+
+- Extended variable collections export their inherited and override values, and their parent, root and parent modes.
+  Generated tokens write a brand's overrides as a layer of their own (CSS under `[data-theme-<collection>="<mode>"]`,
+  DTCG and the resolver as override data), and native output gets one full token type per brand.
+- The design-system style catalog includes the values of library styles a pull used, as `remote:true` rows. Nothing is
+  imported into the Figma file.
+
 ### Fixed
 
 - A GitHub Release's notes keep a nested list item on its own line. Before, a CHANGELOG entry's sub-list was run

@@ -44,8 +44,13 @@ export interface FakeVariable {
   description?: string; hiddenFromPublishing?: boolean; key?: string;
   /** raw Plugin API values: RGBA, number, or a VARIABLE_ALIAS — code.js decodes them */
   valuesByMode: Record<string, unknown>;
+  valuesByModeForCollectionAsync?: (collection: FakeCollection) => Promise<Record<string, unknown>>;
 }
-export interface FakeCollection { id: string; name: string; modes: Array<{ modeId: string; name: string }>; defaultModeId: string; key?: unknown }
+export interface FakeCollection {
+  id: string; name: string; modes: Array<{ modeId: string; name: string; parentModeId?: string }>; defaultModeId: string; key?: unknown;
+  isExtension?: boolean; parentVariableCollectionId?: string; rootVariableCollectionId?: string; variableIds?: string[];
+  variableOverrides?: Record<string, Record<string, unknown>>;
+}
 interface FakeImage { getSizeAsync(): Promise<{ width: number; height: number }>; getBytesAsync(): Promise<Uint8Array> }
 /** What the plugin posts to its UI (progress.ts): run-begin / progress / run-end frames. */
 export interface PostedMessage {
@@ -79,6 +84,7 @@ export interface FakeFigma {
   getImageByHash(hash: string): FakeImage | null;
   getNodeByIdAsync(id: string): Promise<FakeNode | null>;
   getStyleByIdAsync(id: string): Promise<FakeNode | null>;
+  importStyleByKeyAsync?(key: string): Promise<FakeNode>;
   getLocalPaintStylesAsync(): Promise<FakeNode[]>;
   getLocalTextStylesAsync(): Promise<FakeNode[]>;
   getLocalEffectStylesAsync(): Promise<FakeNode[]>;
@@ -89,6 +95,7 @@ export interface FakeFigma {
     getLocalVariableCollectionsAsync(): Promise<FakeCollection[]>;
     getVariableByIdAsync(id: string): Promise<FakeVariable | null>;
     getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
+    importVariableByKeyAsync?(key: string): Promise<FakeVariable>;
   };
   annotations?: { getAnnotationCategoriesAsync(): Promise<Array<{ id: string; label: string }>> };
   editorType?: string;
