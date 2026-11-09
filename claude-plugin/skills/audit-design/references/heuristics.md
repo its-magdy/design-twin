@@ -79,7 +79,7 @@ hover = hover/hovered. Focus and loading are still worth asking about even when 
 
 ## Doing it by hand
 If the script genuinely errors out, do these on the screen JSON (grep is enough for most):
-1. **Blockers:** read `manifest`; grep `"missingFont": true`, `"geometry"`.
+1. **Blockers:** read `manifest`; grep `"missingFont":true`, `"geometry"` (export JSON has no spaces after colons, and each hit is one node's line).
 2. **Chrome:** top-level children named Status Bar / 9:41 / Home Indicator.
 3. **Touch targets:** nodes with `"reactions"` or control-like `component` names → compare `box.w/h` to
    the platform minimum.

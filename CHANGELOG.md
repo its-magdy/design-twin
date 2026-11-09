@@ -17,6 +17,10 @@ list of merged PRs.
   back and how to get more. Bindings and truncation notes stay on the outline or are counted in a "Not shown" line.
   Pass `format: "json"` for the old inline JSON; `writeToDisk: true` is unchanged, and a screen too big to return as
   JSON is still written to disk on its own, now with its outline beside the index.
+- Export JSON is compact: about 3.2× fewer bytes and a third fewer tokens than before, with one node per line, so a
+  300-node screen fits in one Read. MCP results are compact too. The first pull after upgrading rewrites every export
+  file, so a committed `design/export/` shows one large diff. The inline limit now counts compact JSON's token density:
+  the default stays 48,000 characters, and a lowered `MAX_MCP_OUTPUT_TOKENS` allows fewer characters per token.
 
 ### Added
 

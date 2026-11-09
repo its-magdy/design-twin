@@ -1,32 +1,33 @@
 // The bounded size check behind the MCP inline-vs-spill decision (bridge/src/json-size.ts): it must answer exactly
-// what `JSON.stringify(value, null, 2).length <= limit` answers, return byte-identical text when it fits, and stop
+// what `JSON.stringify(value).length <= limit` answers, return byte-identical text when it fits, and stop
 // walking once the limit is passed. No port, no bridge: pure functions.
 // Run with:  bun test/json-size.test.ts
 import { ok, report } from "./assert.ts";
-import { prettyJsonSize, prettyJsonWithin } from "../bridge/src/json-size.ts";
+import { compactJsonSize, compactJsonWithin, exportJsonText } from "../bridge/src/json-size.ts";
 
 // The reference formula: serialise, then compare the length.
 const oldDecision = (v: unknown, limit: number): string | null => {
-  const text = JSON.stringify(v, null, 2);
+  const text = JSON.stringify(v);
   return text.length <= limit ? text : null;
 };
-const same = (v: unknown, limit: number): boolean => prettyJsonWithin(v, limit) === oldDecision(v, limit);
+const same = (v: unknown, limit: number): boolean => compactJsonWithin(v, limit) === oldDecision(v, limit);
 // All limits around the true length: exactly at, -1, +1, plus the extremes.
 const aroundCap = (v: unknown): boolean => {
-  const len = JSON.stringify(v, null, 2).length;
+  const len = JSON.stringify(v).length;
   return [0, 1, len - 2, len - 1, len, len + 1, len + 2, len * 2 + 10].every((l) => l < 0 || same(v, l));
 };
 
 // ---- the threshold, on a realistic export shape
 const node = (i: number) => ({ id: `1:${i}`, name: `Row ${i}`, type: "TEXT", box: { x: 0, y: i * 40, w: 390, h: 40 }, characters: `Row label ${i}`, visible: true, opacity: 0.5, children: [] as unknown[] });
 const exp = { screen: "Home", nodes: Array.from({ length: 300 }, (_, i) => node(i)), assets: [], durationMs: { total: 12, request: 10, write: 0 } };
-const expLen = JSON.stringify(exp, null, 2).length;
+const expLen = JSON.stringify(exp).length;
 ok("fixture: an export of a few tens of KB", expLen > 20000 && expLen < 200000);
-ok("exactly at the cap: fits, and the text is the stringified text", prettyJsonWithin(exp, expLen) === JSON.stringify(exp, null, 2));
-ok("one under the cap: over", prettyJsonWithin(exp, expLen - 1) === null);
-ok("one over the cap: fits", prettyJsonWithin(exp, expLen + 1) === JSON.stringify(exp, null, 2));
-ok("prettyJsonSize reports the exact length when it fits", JSON.stringify(prettyJsonSize(exp, expLen)) === JSON.stringify({ kind: "fits", length: expLen }));
-ok("prettyJsonSize reports over at cap-1", prettyJsonSize(exp, expLen - 1).kind === "over");
+ok("the measured text has no indentation", compactJsonWithin(exp, expLen) === JSON.stringify(exp) && !compactJsonWithin(exp, expLen)?.includes("\n"));
+ok("exactly at the cap: fits, and the text is the stringified text", compactJsonWithin(exp, expLen) === JSON.stringify(exp));
+ok("one under the cap: over", compactJsonWithin(exp, expLen - 1) === null);
+ok("one over the cap: fits", compactJsonWithin(exp, expLen + 1) === JSON.stringify(exp));
+ok("compactJsonSize reports the exact length when it fits", JSON.stringify(compactJsonSize(exp, expLen)) === JSON.stringify({ kind: "fits", length: expLen }));
+ok("compactJsonSize reports over at cap-1", compactJsonSize(exp, expLen - 1).kind === "over");
 ok("around the cap, the export gives the old answer", aroundCap(exp));
 const DEFAULT_CAP = 48000;
 ok("at the real inline cap, a payload on either side agrees with the old formula", [10, 400, 700].every((n) => same({ nodes: Array.from({ length: n }, (_, i) => node(i)) }, DEFAULT_CAP)));
@@ -61,11 +62,11 @@ const exotic: Array<[string, unknown]> = [
   ["a typed array", { b: new Uint8Array([1, 2, 3]) }],
 ];
 for (const [name, v] of exotic) {
-  ok(`${name}: reported unsupported and decided like the old formula`, prettyJsonSize(v, 1e9).kind === "unsupported" && aroundCap(v));
+  ok(`${name}: reported unsupported and decided like the old formula`, compactJsonSize(v, 1e9).kind === "unsupported" && aroundCap(v));
 }
-ok("a too-deep value is measured by stringify, not by recursion", prettyJsonSize(Array.from({ length: 500 }).reduce<unknown>((acc) => [acc], 1), 1e9).kind === "unsupported");
-ok("a bigint throws", (() => { try { prettyJsonWithin({ n: 1n }, 100); return false; } catch { return true; } })());
-ok("a cycle throws", (() => { const c: Record<string, unknown> = {}; c["self"] = c; try { prettyJsonWithin(c, 1e9); return false; } catch { return true; } })());
+ok("a too-deep value is measured by stringify, not by recursion", compactJsonSize(Array.from({ length: 500 }).reduce<unknown>((acc) => [acc], 1), 1e9).kind === "unsupported");
+ok("a bigint throws", (() => { try { compactJsonWithin({ n: 1n }, 100); return false; } catch { return true; } })());
+ok("a cycle throws", (() => { const c: Record<string, unknown> = {}; c["self"] = c; try { compactJsonWithin(c, 1e9); return false; } catch { return true; } })());
 
 // ---- a seeded fuzz: random JSON-like values, every limit around the length
 let seed = 20240607;
@@ -97,8 +98,19 @@ let visited = 0;
 // Many members, each a getter that counts its reads (an array's fixed overhead is added up front, so it would trip the cap before any read).
 const counted: Record<string, string> = {};
 for (let i = 0; i < 100000; i++) Object.defineProperty(counted, "k" + i, { enumerable: true, get: () => { visited++; return "some text to fill the row"; } });
-ok("an over-the-cap value is not walked to the end", prettyJsonSize(counted, 1000).kind === "over" && visited > 0 && visited < 100);
+ok("an over-the-cap value is not walked to the end", compactJsonSize(counted, 1000).kind === "over" && visited > 0 && visited < 100);
 visited = 0;
-ok("an over-the-cap value is not serialised either", prettyJsonWithin(counted, 1000) === null && visited < 100);
+ok("an over-the-cap value is not serialised either", compactJsonWithin(counted, 1000) === null && visited < 100);
+
+// ---- the text on disk: one node per line, otherwise the compact text
+const tree = { screen: "Home", manifest: { warnings: ["a\nb"], nodes: 3 }, nodes: [{ id: "1", fills: [{ type: "solid" }], children: [{ id: "2", children: [{ id: "3" }] }, { id: "4" }] }], layers: [{ tree: { id: "5", children: [{ id: "6" }] } }], empty: [], skipped: undefined };
+const lines = exportJsonText(tree).split("\n");
+ok("a node starts each line; its fills stay on it", lines.filter((l) => /^\{"id":/.test(l)).length === 5 && lines.some((l) => l.includes('"fills":[{"type":"solid"}]')));
+ok("a child under a layer's tree is on its own line", lines.some((l) => l.startsWith('{"id":"6"')));
+ok("a newline in a string stays escaped", lines.some((l) => l.includes('a\\nb')));
+ok("removing the line breaks gives the compact text", exportJsonText(tree).replaceAll("\n", "") === JSON.stringify(tree));
+const textFuzz = Array.from({ length: 3000 }, () => ({ root: rndVal(0), children: [rndVal(1), { children: [rndVal(1)] }] }));
+ok("fuzz: the text is the compact JSON plus line breaks, for 3000 random values", textFuzz.every((v) => exportJsonText(v).replaceAll("\n", "") === JSON.stringify(v)));
+for (const [name, v] of [...shapes, ...exotic]) ok(`${name}: the text is the compact JSON plus line breaks`, exportJsonText(v).replaceAll("\n", "") === JSON.stringify(v));
 
 report();

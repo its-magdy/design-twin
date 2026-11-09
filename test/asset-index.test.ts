@@ -11,6 +11,7 @@ import { ok, report } from "./assert.ts";
 import { screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
+import { exportJsonText } from "../bridge/src/json-size.ts";
 import * as owners from "../bridge/src/asset-owners.ts";
 import { fileKeyCache } from "../bridge/src/asset-compare.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
@@ -517,8 +518,14 @@ console.log("\nkeepPrev keeps <screen>.json.prev when the existing file differs:
   const changed = one({ keepPrev: true }, "Changed");
   t("[unit] a differing re-write keeps the old bytes as <screen>.json.prev and wrote.prev names it",
     () => changed.prev === file + ".prev" && fs.readFileSync(file + ".prev", "utf8").includes("Hello") && fs.readFileSync(file, "utf8").includes("Changed"));
-  t("[unit] …the .prev is the replaced file byte for byte and the target is the new export as 2-space JSON (one serialisation feeds both the comparison and the write)",
-    () => fs.readFileSync(file + ".prev").equals(oldBytes) && ((txt) => txt === JSON.stringify(JSON.parse(txt) as unknown, null, 2))(fs.readFileSync(file, "utf8")));
+  t("[unit] …the .prev is the replaced file byte for byte and the target is the new export as export text (one serialisation feeds both the comparison and the write)",
+    () => fs.readFileSync(file + ".prev").equals(oldBytes) && ((txt) => txt === exportJsonText(JSON.parse(txt) as unknown))(fs.readFileSync(file, "utf8")));
+  // An export pulled before this format is indented: the same design re-spilled must not count as a change.
+  fs.rmSync(file + ".prev", { force: true });
+  fs.writeFileSync(file, JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8")) as unknown, null, 2));
+  const reformatted = one({ keepPrev: true }, "Changed");
+  t("[unit] an indented file from an older pull, same design, keeps no .prev", () => reformatted.prev === undefined && !fs.existsSync(file + ".prev"));
+  t("[unit] …and the file is rewritten in the new form", () => { const txt = fs.readFileSync(file, "utf8"); return txt === exportJsonText(JSON.parse(txt) as unknown); });
   t("[unit] …and logs it", () => changed.log.some((l) => /kept the previous .*Prev__9_1\.json as Prev__9_1\.json\.prev/.test(l)));
   fs.rmSync(file + ".prev", { force: true });
   const plain = one(undefined, "Again");
@@ -563,7 +570,7 @@ console.log("\na pull that grows variables.json says a generated theme is now be
 console.log("\nO-1 — the inline limit stays under Claude Code's 50,000-char persist threshold:");
 t("default (no MAX_MCP_OUTPUT_TOKENS) is capped at 48000", () => writeOut.inlineLimitChars({}) === 48000);
 t("a larger MAX_MCP_OUTPUT_TOKENS does not raise it past 48000", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "100000" }) === 48000);
-t("a smaller MAX_MCP_OUTPUT_TOKENS still lowers it (5000 tokens → 16000 chars)", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "5000" }) === 16000);
+t("a smaller MAX_MCP_OUTPUT_TOKENS still lowers it, at compact JSON's density (5000 tokens → 11200 chars)", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "5000" }) === 11200);
 
 console.log("\nthe content index is built only when a consumer needs it, and duplicates are grouped per bucket:");
 {

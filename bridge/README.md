@@ -1000,7 +1000,8 @@ outline <screen.json> [--budget N]` prints the same view for a file already on d
 Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through
 the same `write-out.ts` the CLI uses — same layout, by construction — and returns a **compact index**
 (counts + file paths) instead of the node payloads. The agent then Reads/Greps those files at whatever
-granularity it needs.
+granularity it needs. Written JSON is compact with one node per line, so a line offset pages a screen and a
+grep hit is one node's line.
 
 Use it for anything past a quick look. Two things make it not optional:
 - **Asset bytes are never returned inline** (they'd dump megabytes of base64 into context), so
@@ -1008,7 +1009,7 @@ Use it for anything past a quick look. Two things make it not optional:
 - **Inline MCP results are capped** (25k tokens by default, `MAX_MCP_OUTPUT_TOKENS`, and never above
   48,000 characters — under Claude Code's own 50,000-character persist threshold). The server
   measures the result before returning it: one that would not fit is **written to disk on its own**
-  and the index's `note` says so (a real design-system export is ~590 KB ≈ 147k tokens). Passing
+  and the index's `note` says so (a real design-system export is several times the limit). Passing
   `writeToDisk: false` opts out of that — an oversized result is then an error naming the size,
   never a payload cut off mid-JSON (a screen's outline still comes back, unless you asked for `format: "json"`).
 
