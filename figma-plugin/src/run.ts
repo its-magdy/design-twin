@@ -131,7 +131,7 @@ export class Run {
   /** Variable collections, read to turn a node's pinned variable-mode ids into human names (theming). A file has a
    *  handful reused across every node, so the whole object is cached per run (its .modes list too) — the same
    *  memo, through `.obj`. */
-  readonly collection = memoName<VariableCollection>((id) =>
+  private readonly collections = memoName<VariableCollection>((id) =>
     figma.variables && figma.variables.getVariableCollectionByIdAsync
       ? figma.variables.getVariableCollectionByIdAsync(id)
       : Promise.resolve(null), (id) => {
@@ -140,7 +140,10 @@ export class Run {
         if (figma.variables && typeof figma.variables.getVariableCollectionByIdAsync === "function") {
           this.warn("collection metadata unavailable for '" + id + "' — collection/mode names unavailable; raw mode IDs retained where supported");
         }
-      }).obj;
+      });
+  readonly collection = this.collections.obj;
+  /** Every collection id this run looked up — how dumpVariables finds a library EXTENDED collection a frame pins. */
+  readonly collectionIds = (): string[] => this.collections.ids();
   /** Annotation category id -> label, read once per run: one call returns the file's whole list, so the in-flight
    *  promise is what's kept, as with imageSizes. */
   private annotationCategories: Promise<Map<string, string>> | undefined;

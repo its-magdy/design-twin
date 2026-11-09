@@ -3,6 +3,7 @@
 import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue } from "../design-to-code/tokens.ts";
 import { cssVarName } from "../design-to-code/token-naming.ts";
 import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
+import { variableResolver } from "../design-to-code/variable-resolve.ts";
 import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate-core.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";
 import { bootstrap } from "../design-to-code/map-bootstrap.ts";
@@ -2082,5 +2083,49 @@ await (async () => {
       all(["zero"]).status === 3 && all(["crash"]).status === 0 && all(["fail"]).status === 1);
   } finally { delete (globalThis as { dtLeak?: boolean }).dtLeak; fs.rmSync(dir, { recursive: true, force: true }); }
 })();
+
+// ---- extended collections (brands): the override layer each emitter writes
+{
+  const brandDs = tokens({ collections: [
+    { name: "Base", key: "KB", modes: ["Light", "Dark"], default: "Light", theming: true },
+    { name: "Brand", key: "KX", modes: ["Sunny", "Night"], default: "Sunny", theming: true, extended: true, parent: "Base", root: "Base", parentModes: { Sunny: "Light", Night: "Dark" } },
+    { name: "Prim", modes: ["Value"], default: "Value", theming: false },
+  ], variables: [
+    { name: "surface", type: "COLOR", collection: "Base", collectionKey: "KB", tier: "semantic", key: "ksurface", values: { Light: "#ffffff", Dark: "#000000" },
+      extensions: [{ collection: "Brand", collectionKey: "KX", values: { Sunny: { aliasOf: "brand/red" }, Night: "#000000" }, overrides: ["Sunny"] }] },
+    { name: "gap", type: "FLOAT", collection: "Base", collectionKey: "KB", tier: "primitive", scopes: ["GAP"], key: "kgap", values: { Light: 8, Dark: 8 },
+      extensions: [{ collection: "Brand", collectionKey: "KX", values: { Sunny: 12, Night: 8 }, overrides: ["Sunny"] }] },
+    { name: "brand/red", type: "COLOR", collection: "Prim", tier: "primitive", key: "kred", values: { Value: "#ff0000" } },
+  ] });
+  const brandCss = toCSS(brandDs);
+  check("[extended] CSS: overrides in a block scoped to the collection, alias as var(), length with its unit",
+    /\[data-theme-brand="Sunny"\] \{\n  --surface: var\(--brand-red\);\n  --gap: 12px;\n\}/.test(brandCss));
+  check("[extended] CSS: an inherited value writes no line, and a mode with no override no block", !/data-theme-brand="Night"/.test(brandCss));
+  check("[extended] CSS: the parent keeps its plain selector", /\[data-theme="Dark"\]/.test(brandCss));
+  check("[extended] CSS: the override layer comes after every base block", brandCss.indexOf('data-theme-brand="Sunny"') > brandCss.indexOf('[data-theme="Dark"]'));
+  const brandTw = toTailwind(brandDs).text;
+  check("[extended] theme.css: the same selector, Tailwind's names", /\[data-theme-brand="Sunny"\] \{[^}]*--color-figma-surface: var\(--color-figma-brand-red\);/.test(brandTw));
+  const surfaceLeaf = JSON.stringify(toDTCG(brandDs).surface);
+  check("[extended] DTCG: $value stays the base; the override is under extensionOverrides",
+    surfaceLeaf.includes('"hex":"#ffffff"') && surfaceLeaf.includes('"extensionOverrides":{"Brand":{"modes":{"Sunny":"{brand.red}"}}}'));
+  const rz2 = toResolver(brandDs);
+  const brandMod = rz2.resolver.modifiers?.Brand;
+  check("[extended] resolver: a modifier that is off by default, with only the overriding mode's file",
+    brandMod?.default === "none" && JSON.stringify(brandMod.contexts.none) === "[]" && JSON.stringify(brandMod.contexts.Night) === "[]" && (brandMod.contexts.Sunny?.length ?? 0) === 1);
+  const brandFile = brandMod?.contexts.Sunny?.[0]?.$ref;
+  check("[extended] resolver: the mode's file holds the overrides only", !!brandFile && JSON.stringify(Object.keys(rz2.files[brandFile] ?? {}).sort()) === '["gap","surface"]');
+  const brandNative = toNative(brandDs, "swiftui");
+  check("[extended] native: one full type per extended collection, aliases followed in that collection's mode",
+    /static let sunny = BrandTokens\(\s*surface: Color\(\.sRGB, red: 1, green: 0, blue: 0, opacity: 1\),\s*gap: 12/.test(brandNative.text) &&
+    /static let night = BrandTokens\(\s*surface: Color\(\.sRGB, red: 0, green: 0, blue: 0, opacity: 1\),\s*gap: 8/.test(brandNative.text));
+  const resolverRead = variableResolver(brandDs);
+  const surfaceVar = must(brandDs.variables?.[0], "surface");
+  check("[extended] resolver: a request naming the brand reads the override, through its alias", resolverRead.resolve(surfaceVar, { byCollection: { Brand: "Sunny" } }).value === "#ff0000");
+  check("[extended] resolver: an inherited mode reads the extension's value", resolverRead.resolve(surfaceVar, { byCollection: { Brand: "night" } }).value === "#000000");
+  check("[extended] resolver: without the brand, the base value", resolverRead.resolve(surfaceVar, { mode: "Light" }).value === "#ffffff");
+  const lintBrand = lintTokens(tokens({ variables: [{ name: "a", type: "COLOR", tier: "primitive", values: { v: "#000000" }, extensions: [{ collection: "B", values: { x: { aliasOf: "ghost" } }, overrides: ["x"] }] }] }));
+  check("[extended] lint: a dangling override alias is reported", lintBrand.some((w) => /'a' \(mode x\) references undefined token 'ghost'/.test(w)));
+  check("[extended] lint: says which attribute the overrides need", lintTokens(brandDs).some((w) => /extended collection 'Brand' overrides 2 value\(s\) under \[data-theme-brand="<mode>"\]/.test(w)));
+}
 
 report();

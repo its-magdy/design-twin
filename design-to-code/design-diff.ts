@@ -47,6 +47,8 @@ import type {
   Variable, VariableCollection,
 } from "./types.ts";
 import { bag, isJsonObject } from "./types.ts";
+import type { VariableValue } from "./types.ts";
+import { extensionOverrides } from "./variable-resolve.ts";
 import { isLayerFile, isScreenExport, manifestOf, screenRoots } from "./export-shape.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { walkWithHidden } from "./visible-tree.ts";
@@ -262,8 +264,11 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
     const pk = pairs.get(k); // every paired B id maps to an A id
     const a = pk !== undefined ? A.get(pk) : null;
     if (!a) continue;
-    const modes = [...new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
-    if (modes.length) changed.push({ name: label(b), ...ifDefined("collection", b.collection), ...ifDefined("key", b.key), modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
+    // An extended collection's overrides diff like modes of their own: "<collection> / <mode>".
+    const valuesOf = (v: Variable): Record<string, VariableValue> => ({ ...v.values, ...Object.fromEntries(extensionOverrides(v).map((o) => [`${o.extension.collection} / ${o.mode}`, o.value])) });
+    const av = valuesOf(a), bv = valuesOf(b);
+    const modes = [...new Set([...Object.keys(av), ...Object.keys(bv)])].filter((m) => !same(av[m], bv[m]));
+    if (modes.length) changed.push({ name: label(b), ...ifDefined("collection", b.collection), ...ifDefined("key", b.key), modes: modes.map((m) => ({ mode: m, before: brief(av[m]), after: brief(bv[m]) })) });
   }
   // A new or renamed MODE changes every themed token at once, yet no single variable says so.
   // Collections too are keyed by key where there is one: the same export holds TWO collections called

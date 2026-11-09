@@ -37,6 +37,11 @@
 // as a clamped percentage (`40%`) and keep their verbatim number in DTCG with
 // $extensions["figma.com"].unit: "percent" (same two places).
 //
+// An EXTENDED collection's overrides (Variable.extensions) are a layer over the base tokens. tokens.css/theme.css write
+// them after every base block under `[data-theme-<collection>="<mode>"]`; a value it merely inherits is not written, so
+// it keeps following the parent's own blocks. DTCG carries them in $extensions["figma.com"].extensionOverrides, the
+// resolver in a modifier whose default context is off. tokens-native.ts writes the collection as a full type of its own.
+//
 // Defensive by construction: a collision or missing value is skipped + reported, never silently
 // producing an illegal DTCG node or `--x: undefined;`. See docs/design-to-code-spec.md.
 import fs from "node:fs";
@@ -50,7 +55,7 @@ import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
 import { segs, commentText } from "./tokens-core.ts";
 import { classifyVariable, isLengthClass, isSentinel, unitDecision, type UnitOpts, type VariableClass } from "./variable-class.ts";
-import { variableResolver, defaultModeName, baseValue, type VariableResolver } from "./variable-resolve.ts";
+import { variableResolver, defaultModeName, baseValue, extensionOverrides, extensionRow, type VariableResolver } from "./variable-resolve.ts";
 import { toNative, platformOf } from "./tokens-native.ts";
 import { cssVarName, disambiguated, keyTag, tailwindVarName, type TwKind } from "./token-naming.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
@@ -99,6 +104,8 @@ export interface DtcgFigmaExtension {
   unit?: "percent";
   codeSyntax?: Variable["codeSyntax"];
   originalType?: "boolean";
+  /** per extended collection: the modes it overrides (a composed colour's opacity half beside them, as modeOpacity) */
+  extensionOverrides?: Record<string, { modes: Record<string, DtcgLeafValue>; modeOpacity?: Record<string, DtcgOpacity> }>;
 }
 export interface DtcgLeaf { $type: DtcgType; $value: DtcgLeafValue; $description?: string; $extensions?: { "figma.com": DtcgFigmaExtension } }
 export interface DtcgGroup { [key: string]: DtcgGroup | DtcgLeaf }
@@ -157,7 +164,7 @@ const suffixSlug = (s: string | null | undefined): string => String(s || "").toL
 // Equivalent = every mode either variable declares resolves to the same value (a mode one side lacks
 // falls back to that side's own default, which is exactly what every emitter below does with it).
 function equivalentVars(a: Variable, b: Variable, collections: VariableCollection[] | undefined): boolean {
-  if (a.type !== b.type) return false;
+  if (a.type !== b.type || JSON.stringify(a.extensions) !== JSON.stringify(b.extensions)) return false;
   const ba = JSON.stringify(baseValue(a, collections)), bb = JSON.stringify(baseValue(b, collections));
   if (ba !== bb) return false;
   const at = (v: Variable, base: string, m: string): string => { const x = (v.values || {})[m]; return x === undefined ? base : JSON.stringify(x); };
@@ -547,6 +554,15 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     // The key is the variable's identity (the name is not unique — see planIds), so it travels with
     // the token: a consumer can always get back from an emitted name to the one Figma variable.
     if (typeof v.key === "string" && v.key) ext.key = v.key;
+    for (const { extension, mode, value } of extensionOverrides(v)) {
+      const dv2 = dtcgValue(webNumber(v, value), colorProfile, dimension, aliasRef);
+      if (dv2 === null) continue;
+      const overrides = (ext.extensionOverrides ??= nullProto());
+      const layer = (overrides[extension.collection] ??= { modes: nullProto() });
+      layer.modes[mode] = dv2;
+      const o = dtcgOpacity(value, aliasRef);
+      if (o !== undefined) (layer.modeOpacity ??= nullProto())[mode] = o;
+    }
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded — emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
     // A `number` token says nothing about its scale; Figma's opacities are 0–100, not DTCG/CSS's 0–1.
@@ -662,11 +678,13 @@ interface ModeScopePlan {
 // Which collection a variable belongs to. Variables carry only the collection NAME, and real exports have
 // two collections of one name (a single-mode "Spacing" and a Desktop/Tablet/Mobile "Spacing"): among
 // same-named collections, the one declaring every mode the variable has values for.
-// Limit: two same-named collections with the SAME mode list cannot be told apart (no collection key on a
-// variable) — their variables all land in the first one.
+// Limit: two same-named collections with the SAME mode list and no collection key on the variable cannot be
+// told apart — their variables all land in the first one.
 function collectionOf(v: Variable, collections: readonly VariableCollection[]): VariableCollection | undefined {
   const named = collections.filter((c) => c.name === v.collection);
   if (named.length <= 1) return named[0];
+  const byKey = v.collectionKey ? named.find((c) => c.key === v.collectionKey) : undefined;
+  if (byKey) return byKey;
   const modes = Object.keys(v.values || {});
   return named.find((c) => modes.every((m) => (c.modes || []).includes(m))) ?? named[0];
 }
@@ -694,10 +712,19 @@ function planModeScopes(designSystem: TokensDoc | null | undefined): ModeScopePl
     const def = defaultModeName(v, collections);
     return Object.keys(v.values || {}).filter((m) => m !== def);
   };
+  // An extended collection always has its own attribute, and never counts as sharing a mode name: it inherits its
+  // parent's mode names, so counting it would flip the parent's plain [data-theme="Dark"] for every file with a brand.
+  const isExtended = (g: string): boolean => collOfGroup.get(g)?.extended === true;
+  const overrideCount = new Map<string, number>();
   for (const v of vars) {
     if (!segs(v.name).length || !emitted(v)) continue;
+    for (const { extension } of extensionOverrides(v)) {
+      const g = groupOf(extensionRow(v, extension));
+      overrideCount.set(g, (overrideCount.get(g) ?? 0) + 1);
+    }
     if (baseValue(v, collections) === undefined) continue;
     const g = groupOf(v);
+    if (isExtended(g)) continue;
     for (const m of declared(g, v)) {
       const list = getOrInit(groupsPerMode, m, () => []);
       if (!list.includes(g)) list.push(g);
@@ -706,6 +733,7 @@ function planModeScopes(designSystem: TokensDoc | null | undefined): ModeScopePl
   // One attribute per collection that is ever qualified, the same for all its modes.
   const qualified = new Set<string>();
   for (const list of groupsPerMode.values()) if (list.length > 1) for (const g of list) qualified.add(g);
+  for (const g of collOfGroup.keys()) if (isExtended(g)) qualified.add(g);
   const nameOf = (g: string): string | undefined => collOfGroup.get(g)?.name;
   const slugOf = (g: string): string => suffixSlug(nameOf(g) ?? "no collection") || "collection";
   const slugCount = new Map<string, number>();
@@ -726,9 +754,12 @@ function planModeScopes(designSystem: TokensDoc | null | undefined): ModeScopePl
     const label = (g: string): string => nameOf(g) ?? "(no collection)";
     warnings.push(`mode '${m}' exists in ${list.length} collections (${list.map(label).join(", ")}); their blocks are scoped per collection instead of [data-theme="${m}"]: set ${list.map((g) => `${attrOf.get(g) ?? "data-theme"}="${m}"`).join(" / ")} on the element that picks each collection's mode`);
   }
+  for (const [g, n] of overrideCount) {
+    warnings.push(`extended collection '${nameOf(g) ?? "(no collection)"}' overrides ${n} value(s) under [${attrOf.get(g) ?? "data-theme"}="<mode>"]: set that attribute on the element that picks the collection; inherited values keep following the parent collection's own blocks`);
+  }
   const scope = (g: string, m: string): ModeScope => {
     const list = groupsPerMode.get(m) || [];
-    return { collection: nameOf(g), attribute: list.length > 1 ? attrOf.get(g) ?? "data-theme" : "data-theme" };
+    return { collection: nameOf(g), attribute: list.length > 1 || isExtended(g) ? attrOf.get(g) ?? "data-theme" : "data-theme" };
   };
   return { groupOf, scope, warnings };
 }
@@ -770,7 +801,10 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   // A Map keyed by (collection, mode), never a plain object: mode names are free-form designer strings
   // reaching us through JSON.parse, and a mode literally named "__proto__" once resolved to
   // Object.prototype on a plain object and crashed the CLI half-way through writing its outputs.
-  const perMode = modeBlocks(planModeScopes(designSystem));
+  const scopes = planModeScopes(designSystem);
+  const perMode = modeBlocks(scopes);
+  // A second block list so every override lands AFTER every base block: same specificity, so order decides.
+  const overrides = modeBlocks(scopes);
   for (const v of vars) {
     if (!segs(v.name).length) continue; // skip empty names (would emit invalid `--:`)
     if (!emitted(v)) continue; // EASING/TIMING: no CSS value (toDTCG reports the skip)
@@ -793,9 +827,10 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
       if (JSON.stringify(values[m]) === baseStr) continue; // dedup vs the EMITTED base (handles undefined-default)
       perMode.set(v, m, varName, `  ${varName}: ${val(values[m])};`);
     }
+    for (const { extension, mode, value } of extensionOverrides(v)) overrides.set(extensionRow(v, extension), mode, varName, `  ${varName}: ${val(value)};`);
   }
   const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  return out + perMode.render(opts && opts.selector);
+  return out + perMode.render(opts && opts.selector) + overrides.render(opts && opts.selector);
 }
 
 // --- Tailwind v4 theme ------------------------------------------------------------------------
@@ -859,6 +894,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   const theme = new Map<string, string>();
   const scopes = planModeScopes(designSystem);
   const perMode = modeBlocks(scopes); // the same (collection, mode) selectors as tokens.css
+  const overrides = modeBlocks(scopes); // after every base block, as tokens.css
   warnings.push(...scopes.warnings);
   // a STRING that is not a font family ("Semi Bold", a label) is not a usable value in @theme and
   // earns no utility, so it is left out — unless a font-family token aliases it (then the var() must resolve).
@@ -892,6 +928,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
       if (JSON.stringify(values[m]) === baseStr) continue;
       perMode.set(v, m, name, `  ${name}: ${val(values[m])};`);
     }
+    for (const { extension, mode, value } of extensionOverrides(v)) overrides.set(extensionRow(v, extension), mode, name, `  ${name}: ${val(value)};`);
   }
   if (leftOut.length) {
     warnings.push(`theme.css leaves out ${leftOut.length} STRING token(s) that are not font families (${leftOut.slice(0, 4).map((n) => `'${n}'`).join(", ")}${leftOut.length > 4 ? `, … +${leftOut.length - 4} more` : ""}) — ` +
@@ -902,7 +939,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
     "   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-…),\n" +
     "   so Tailwind's own scale (rounded-xl, p-4, …) keeps its framework meaning. */\n";
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  out += perMode.render();
+  out += perMode.render() + overrides.render();
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 
@@ -927,6 +964,8 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
 //                           "later in the array overrides" gives us. The default mode therefore
 //                           differs in nothing and gets the empty array, no file.
 //   single-mode collection -> set only, no modifier (a 1-context modifier is a set; tools SHOULD error).
+//   extended collection   -> a modifier whose contexts are its modes (each file holds ONLY that mode's overrides)
+//                           plus a default, empty context: the layer is off unless chosen, as in tokens.css.
 //   resolutionOrder       -> every set, then every modifier. Sets are unconditional foundations;
 //                           modifiers must be able to override them.
 // Nothing here resolves aliases: "Aliases MUST NOT be resolved until this step" (after ordering), so
@@ -1062,6 +1101,31 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
     modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
   }
 
+  for (const c of collections) {
+    if (!c || c.extended !== true) continue;
+    const label = String(c.name);
+    let off = "none";
+    for (let n = 2; (c.modes || []).includes(off); n++) off = "none-" + n;
+    const contexts: Record<string, ResolverRef[]> = nullProto();
+    contexts[off] = [];
+    let overridden = 0;
+    for (const m of c.modes || []) {
+      const tree = buildTree(ds, warn, opts, (v) => {
+        const hit = extensionOverrides(v).find((o) => o.extension.collection === c.name && o.mode === m);
+        return hit ? hit.value : SKIP;
+      }, false, plan);
+      if (!Object.keys(tree).length) { contexts[m] = []; continue; }
+      const file = reserveFile(`${fileSlug(label, "tokens")}.${fileSlug(m, "mode")}`, ".json", `extended collection '${label}' mode '${m}'`);
+      files[file] = tree;
+      contexts[m] = [{ $ref: file }];
+      overridden += 1;
+    }
+    if (!overridden) continue;
+    const modName = reserveKey(label, "modifier");
+    modifiers[modName] = { description: `${label} overrides (extended collection)`, contexts, default: off, $extensions: { "figma.com": { collection: label, defaultMode: off } } };
+    modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
+  }
+
   // Modifiers last: they exist to override the unconditional sets, and "tokens later in the array
   // override any tokens that came before them".
   for (const r of modifierRefs) resolutionOrder.push(r);
@@ -1103,7 +1167,10 @@ function cssFilesOf(opts: EmitOpts | undefined): string[] {
   return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
 }
 function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | undefined, warnings: string[]): string[] {
-  const vars = (designSystem && designSystem.variables) || [];
+  const base = (designSystem && designSystem.variables) || [];
+  // Each extended collection's overrides are checked like values of their own (only what the emitters write).
+  const vars = base.concat(base.flatMap((v) => (v.extensions || []).map((e) => ({ ...extensionRow(v, e),
+    ...ifDefined("scopes", v.scopes), values: Object.fromEntries(extensionOverrides(v).filter((o) => o.extension === e).map((o) => [o.mode, o.value])) }))));
   const files = cssFilesOf(opts);
   const inCss = files.join("/") || "the CSS";
   // Several collections with a block for one mode name: scoped per collection (planModeScopes).

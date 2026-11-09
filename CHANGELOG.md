@@ -26,6 +26,11 @@ list of merged PRs.
   expected file passes (renamed by a bundler or inlined too), another exported file is a high delta naming both, and
   what cannot be matched (a re-encoded image, an optimised SVG, a CSS background, a native build) is reported as
   unverified, never passed or failed.
+- Extended variable collections export their inherited and override values, and their parent, root and parent modes.
+  Generated tokens write a brand's overrides as a layer of their own (CSS under `[data-theme-<collection>="<mode>"]`,
+  DTCG and the resolver as override data), and native output gets one full token type per brand.
+- The design-system style catalog includes the values of library styles a pull used, as `remote:true` rows. Nothing is
+  imported into the Figma file.
 
 ### Fixed
 

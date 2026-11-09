@@ -2,7 +2,7 @@
 // human/agent-readable token names — the key win over the REST export.
 import type {
   TokenMap, StyleRefs, ModeMap, Variable as IrVariable, VariableCollection as IrVariableCollection, VariableValue as IrVariableValue,
-  VariableAlias as IrVariableAlias, VariableComposedColor as IrVariableComposedColor,
+  VariableAlias as IrVariableAlias, VariableComposedColor as IrVariableComposedColor, VariableExtension as IrVariableExtension,
 } from "../../bridge/src/doc-types.ts";
 import { anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { run } from "./run";
@@ -220,6 +220,34 @@ function verbatimValue(v: RGB | RGBA | MotionEasing): IrVariableValue {
   return o as IrVariableValue;
 }
 
+// An extended collection (typings: ExtendedVariableCollection omits addMode, so it is not a subtype of
+// VariableCollection; the intersection is what lets one object be read as both).
+function isExtended(c: VariableCollection): c is VariableCollection & ExtendedVariableCollection {
+  return c.isExtension === true;
+}
+// The name a collection id reads as, its key, and its modes (null when the collection is unreadable).
+async function parentCollection(id: string): Promise<VariableCollection | null> {
+  return id ? run().collection(id) : null;
+}
+// parent/root/parentModes of an extended collection, by name: the parent may be a library collection no variable
+// in this run reaches, so it is looked up here rather than read from the dump's index. An unreadable parent keeps its
+// raw ids, as resolveModeMap does.
+async function extensionLineage(e: ExtendedVariableCollection): Promise<Pick<IrVariableCollection, "parent" | "parentKey" | "root" | "rootKey" | "parentModes">> {
+  const [parent, root] = await Promise.all([parentCollection(e.parentVariableCollectionId), parentCollection(e.rootVariableCollectionId)]);
+  const parentModes: Record<string, string> = {};
+  for (const m of e.modes) {
+    const pm = parent ? parent.modes.find((x) => x.modeId === m.parentModeId) : undefined;
+    parentModes[m.name] = pm ? pm.name : m.parentModeId;
+  }
+  return {
+    parent: parent ? parent.name : e.parentVariableCollectionId,
+    ...ifDefined("parentKey", (parent && parent.key) || undefined),
+    root: root ? root.name : e.rootVariableCollectionId,
+    ...ifDefined("rootKey", (root && root.key) || undefined),
+    parentModes,
+  };
+}
+
 export interface VariablesDump {
   collections: IrVariableCollection[];
   variables: IrVariable[];
@@ -282,11 +310,39 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     for (const value of Object.values(v.valuesByMode || {})) out.push(...aliasIds(value));
     return out;
   };
+  // EXTENDED collections: `valuesByMode` is keyed by the ROOT collection's modes, so a brand's values live only behind
+  // valuesByModeForCollectionAsync. The extensions are the local ones plus any library one a frame pins (a node's mode
+  // pin is what looked it up). Every variable an extension holds is read: each inherited one needs its row for the
+  // override layer to have a base, so they join the fixed point below.
+  const localById = new Map(localVars.map((v) => [v.id, v]));
+  for (const c of await Promise.all(run().collectionIds().map((cid) => run().collection(cid)))) {
+    if (c && isExtended(c) && !collById.has(c.id)) collById.set(c.id, c);
+  }
+  const extended = [...collById.values()].filter(isExtended);
+  const extensionsOf = new Map<string, { coll: VariableCollection & ExtendedVariableCollection; values: { [modeId: string]: VariableValue } }[]>();
+  const extensionAliases: string[] = [];
+  await Promise.all(extended.map(async (coll) => {
+    let unreadable = 0;
+    await Promise.all(coll.variableIds.map(async (id) => {
+      try {
+        const v = localById.get(id) || (await run().varName.obj(id));
+        if (!v || v.variableCollectionId === coll.id) return; // the collection's own variable: its row carries its values
+        const values = await v.valuesByModeForCollectionAsync(coll);
+        const list = extensionsOf.get(id);
+        if (list) list.push({ coll, values }); else extensionsOf.set(id, [{ coll, values }]);
+        for (const raw of Object.values(values)) extensionAliases.push(...aliasIds(raw));
+      } catch (e) {
+        unreadable++;
+      }
+    }));
+    if (unreadable) hygiene.push("extended collection '" + coll.name + "': values unreadable for " + unreadable + " variable(s) — their inherited/override values are missing");
+  }));
+
   const remoteVars: Variable[] = [];
   const seen = new Set<string>(localIds);
   // Seed with node-referenced ids AND the alias targets of local variables — a local semantic token
   // pointing at a library primitive is the common case and is not otherwise in ids().
-  let frontier = [...new Set(run().varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
+  let frontier = [...new Set(run().varName.ids().concat(...localVars.map(aliasTargets), [...extensionsOf.keys()], extensionAliases))].filter((id) => !seen.has(id));
   while (frontier.length) {
     for (const id of frontier) seen.add(id);
     const fetched = ((await Promise.all(frontier.map((id) => run().varName.obj(id)))))
@@ -317,6 +373,24 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     );
   }
 
+  // Was `!localIds.has(raw.id)`, which fired on every LEGITIMATE library alias once remote
+  // variables started being resolved above — so a library-consuming file's hygiene list filled
+  // with non-issues. Only report an alias whose target we genuinely could not resolve.
+  const reportBrokenAliases = (v: Variable, ids: string[]): void => {
+    for (const id of ids) if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' — target " + id + " could not be resolved");
+  };
+  // One extended collection's view of `v`: the collection's own mode ids (never the dump-wide modeName, whose first
+  // claimant could be another collection) and which of them it overrides.
+  const extensionRecord = async (v: Variable, { coll, values: raws }: { coll: VariableCollection & ExtendedVariableCollection; values: { [modeId: string]: VariableValue } }): Promise<IrVariableExtension> => {
+    const e: ExtendedVariableCollection = coll;
+    const nameOf = (modeId: string): string => { const m = e.modes.find((x) => x.modeId === modeId); return m ? m.name : modeId; };
+    const entries = await Promise.all(Object.entries(raws).map(async ([modeId, raw]) => ({ modeId, raw, value: await resolveModeValue(raw, v.resolvedType) })));
+    const overridden = (e.variableOverrides && e.variableOverrides[v.id]) || {};
+    const values: IrVariableExtension["values"] = {};
+    for (const { modeId, raw, value } of entries) { reportBrokenAliases(v, aliasIds(raw)); values[nameOf(modeId)] = value; }
+    return { collection: coll.name, ...ifDefined("collectionKey", coll.key || undefined), values, overrides: Object.keys(overridden).filter((m) => m in raws).map(nameOf) };
+  };
+
   for (const v of localVars.concat(remoteVars)) {
     const values: IrVariable["values"] = {};
     let hasAlias = false;
@@ -330,12 +404,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       // for the tier and for the "raw value in a multi-mode collection" hygiene check below.
       if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
       // Top-level alias: its id (even an empty one); composed colour: each nested alias id.
-      for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
-        // Was `!localIds.has(raw.id)`, which fired on every LEGITIMATE library alias once remote
-        // variables started being resolved above — so a library-consuming file's hygiene list filled
-        // with non-issues. Only report an alias whose target we genuinely could not resolve.
-        if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' — target " + id + " could not be resolved");
-      }
+      reportBrokenAliases(v, isVariableAlias(raw) ? [raw.id] : aliasIds(raw));
       values[modeName[modeId] || modeId] = value;
     }
     const coll = collOf(v.variableCollectionId);
@@ -364,6 +433,8 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     // Durable cross-file identity (importVariableByKeyAsync) — rename-proof anchor for the design-to-code/ map +
     // drift-lint. Mirrors the component `key` precedent; present on local and published variables.
     if (v.key) rec.key = v.key;
+    const views = extensionsOf.get(v.id);
+    if (views) rec.extensions = await Promise.all(views.map((x) => extensionRecord(v, x)));
     if (asLibrary) pendingPublish.push({ rec, obj: v });
     variables.push(rec);
 
@@ -386,6 +457,8 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     for (const [i, c] of allCollections.entries()) { const s = st[i]; if (s) collPublish[c.id] = s; }
   }
 
+  const lineage = new Map(await Promise.all(extended.map(async (c): Promise<[string, Awaited<ReturnType<typeof extensionLineage>>]> => [c.id, await extensionLineage(c)])));
+
   return {
     // Local collections plus any LIBRARY collection a referenced remote variable belongs to — the
     // token emitters need each collection's default mode to pick the `:root` value.
@@ -395,10 +468,11 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       // Which mode is the base/`:root` default (vs. the override theme) — codegen otherwise guesses.
       ...ifDefined("default", modeName[c.defaultModeId] || undefined),
       theming: c.modes.length > 1,
-      // Extended collection (its modes inherit from a root collection via parentModeId) — codegen
-      // should treat it as an override layer, not a standalone theme. Flag it; deep parent-mode
-      // resolution (mode.parentModeId -> root mode) is deferred.
+      // Extended collection (its modes inherit from a parent collection via parentModeId) — codegen
+      // should treat it as an override layer, not a standalone theme. Its values are on each inherited
+      // variable's `extensions`.
       ...ifDefined<"extended", true>("extended", c.isExtension === true ? true : undefined),
+      ...lineage.get(c.id),
       ...ifDefined<"hiddenFromPublishing", true>("hiddenFromPublishing", c.hiddenFromPublishing === true ? true : undefined),
       ...ifDefined("key", c.key || undefined), // durable cross-file collection identity
       ...ifDefined("publish", collPublish[c.id] || undefined), // library mode only

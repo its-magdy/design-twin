@@ -277,7 +277,7 @@ var isComposed = (v) => {
 };
 var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x) {
-  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection) && optArrayOf(x.extensions, anyObject);
 }
 function isVariableCollection(x) {
   return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);
@@ -754,6 +754,31 @@ function isSentinel(v, raw) {
 }
 
 // design-to-code/variable-resolve.ts
+function extensionOverrides(v) {
+  const out = [];
+  for (const extension of v.extensions || []) {
+    for (const mode of extension.overrides || []) {
+      const value = (extension.values || {})[mode];
+      if (value !== void 0) out.push({ extension, mode, value });
+    }
+  }
+  return out;
+}
+function extensionRow(v, e) {
+  return { name: v.name, type: v.type, tier: v.tier, collection: e.collection, values: e.values, ...e.collectionKey ? { collectionKey: e.collectionKey } : {}, ...v.key ? { key: v.key } : {} };
+}
+function extensionValue(v, req) {
+  for (const e of v.extensions || []) {
+    const want = req.byCollection?.[e.collection];
+    if (want === void 0) continue;
+    const values = e.values || {};
+    const lower = want.toLowerCase();
+    const mode = values[want] !== void 0 ? want : Object.keys(values).find((m) => m.toLowerCase() === lower);
+    const raw = mode === void 0 ? void 0 : values[mode];
+    if (mode !== void 0 && raw !== void 0) return { mode, raw };
+  }
+  return void 0;
+}
 var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 var definedModes = (v) => {
   const vals = v.values || {};
@@ -829,9 +854,10 @@ function variableResolver(input) {
   function walk(v, req, seen) {
     const none = (mode2) => ({ value: void 0, variable: null, mode: mode2, via: [] });
     if (!v || seen.has(v)) return none();
-    const mode = modeOf(v, req);
+    const ext = extensionValue(v, req);
+    const mode = ext ? ext.mode : modeOf(v, req);
     if (mode === void 0) return none();
-    const raw = (v.values || {})[mode];
+    const raw = ext ? ext.raw : (v.values || {})[mode];
     const next = new Set(seen).add(v);
     if (isAlias(raw)) {
       const r = walk(target(raw.aliasOf, v), req, next);
@@ -862,7 +888,7 @@ function variableResolver(input) {
       if (done.has(x)) return;
       vars.push(x);
       path5.add(x);
-      for (const val of Object.values(x.values || {})) {
+      for (const val of [...Object.values(x.values || {}), ...extensionOverrides(x).map((o) => o.value)]) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
           const t = target(n, x);
@@ -1000,8 +1026,8 @@ var NATIVE_KIND = {
 };
 var hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
 var isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
-function literal(vars, v, mode) {
-  const r = vars.resolve(v, { mode }).value;
+function literal(vars, v, req) {
+  const r = vars.resolve(v, req).value;
   return isNativeScalar(r) ? r : void 0;
 }
 function model(designSystem, warnings, opts) {
@@ -1011,7 +1037,7 @@ function model(designSystem, warnings, opts) {
   const typeNames = /* @__PURE__ */ new Set();
   const out = [];
   for (const c of collections) {
-    const mine = vars.filter((v) => v.collection === c.name);
+    const mine = vars.filter((v) => v.collection === c.name || (v.extensions || []).some((e) => e.collection === c.name));
     const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
     const [firstModeName, ...otherModeNames] = modeNames;
     if (!mine.length || firstModeName === void 0) continue;
@@ -1033,13 +1059,14 @@ function model(designSystem, warnings, opts) {
       const values = nullProto();
       let ok = true;
       for (const m of modeNames) {
-        const r = literal(resolver, v, m);
+        const req = { mode: m, byCollection: { [c.name]: m } };
+        const r = literal(resolver, v, req);
         if (r === void 0 || kind === "color" && !normHex(r)) {
           ok = false;
           break;
         }
         if (pct) {
-          const n = resolver.number(v, { mode: m });
+          const n = resolver.number(v, req);
           if (n === null) {
             ok = false;
             break;
@@ -1353,7 +1380,7 @@ function identityOf(v) {
 var shortKey = (v) => v ? keyTag(v.key) : null;
 var suffixSlug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 function equivalentVars(a, b, collections) {
-  if (a.type !== b.type) return false;
+  if (a.type !== b.type || JSON.stringify(a.extensions) !== JSON.stringify(b.extensions)) return false;
   const ba = JSON.stringify(baseValue(a, collections)), bb = JSON.stringify(baseValue(b, collections));
   if (ba !== bb) return false;
   const at = (v, base, m) => {
@@ -1656,6 +1683,15 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       ext.modeOpacity = byMode;
     }
     if (typeof v.key === "string" && v.key) ext.key = v.key;
+    for (const { extension, mode, value: value2 } of extensionOverrides(v)) {
+      const dv2 = dtcgValue(webNumber(v, value2), colorProfile, dimension, aliasRef);
+      if (dv2 === null) continue;
+      const overrides = ext.extensionOverrides ??= nullProto();
+      const layer = overrides[extension.collection] ??= { modes: nullProto() };
+      layer.modes[mode] = dv2;
+      const o = dtcgOpacity(value2, aliasRef);
+      if (o !== void 0) (layer.modeOpacity ??= nullProto())[mode] = o;
+    }
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded \u2014 emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
     if (cls === "percent") ext.unit = "percent";
@@ -1722,6 +1758,8 @@ function cssPlan(designSystem) {
 function collectionOf(v, collections) {
   const named = collections.filter((c) => c.name === v.collection);
   if (named.length <= 1) return named[0];
+  const byKey = v.collectionKey ? named.find((c) => c.key === v.collectionKey) : void 0;
+  if (byKey) return byKey;
   const modes = Object.keys(v.values || {});
   return named.find((c) => modes.every((m) => (c.modes || []).includes(m))) ?? named[0];
 }
@@ -1746,10 +1784,17 @@ function planModeScopes(designSystem) {
     const def = defaultModeName(v, collections);
     return Object.keys(v.values || {}).filter((m) => m !== def);
   };
+  const isExtended = (g) => collOfGroup.get(g)?.extended === true;
+  const overrideCount = /* @__PURE__ */ new Map();
   for (const v of vars) {
     if (!segs(v.name).length || !emitted(v)) continue;
+    for (const { extension } of extensionOverrides(v)) {
+      const g2 = groupOf(extensionRow(v, extension));
+      overrideCount.set(g2, (overrideCount.get(g2) ?? 0) + 1);
+    }
     if (baseValue(v, collections) === void 0) continue;
     const g = groupOf(v);
+    if (isExtended(g)) continue;
     for (const m of declared(g, v)) {
       const list = getOrInit(groupsPerMode, m, () => []);
       if (!list.includes(g)) list.push(g);
@@ -1757,6 +1802,7 @@ function planModeScopes(designSystem) {
   }
   const qualified = /* @__PURE__ */ new Set();
   for (const list of groupsPerMode.values()) if (list.length > 1) for (const g of list) qualified.add(g);
+  for (const g of collOfGroup.keys()) if (isExtended(g)) qualified.add(g);
   const nameOf = (g) => collOfGroup.get(g)?.name;
   const slugOf = (g) => suffixSlug(nameOf(g) ?? "no collection") || "collection";
   const slugCount = /* @__PURE__ */ new Map();
@@ -1777,9 +1823,12 @@ function planModeScopes(designSystem) {
     const label = (g) => nameOf(g) ?? "(no collection)";
     warnings.push(`mode '${m}' exists in ${list.length} collections (${list.map(label).join(", ")}); their blocks are scoped per collection instead of [data-theme="${m}"]: set ${list.map((g) => `${attrOf.get(g) ?? "data-theme"}="${m}"`).join(" / ")} on the element that picks each collection's mode`);
   }
+  for (const [g, n] of overrideCount) {
+    warnings.push(`extended collection '${nameOf(g) ?? "(no collection)"}' overrides ${n} value(s) under [${attrOf.get(g) ?? "data-theme"}="<mode>"]: set that attribute on the element that picks the collection; inherited values keep following the parent collection's own blocks`);
+  }
   const scope = (g, m) => {
     const list = groupsPerMode.get(m) || [];
-    return { collection: nameOf(g), attribute: list.length > 1 ? attrOf.get(g) ?? "data-theme" : "data-theme" };
+    return { collection: nameOf(g), attribute: list.length > 1 || isExtended(g) ? attrOf.get(g) ?? "data-theme" : "data-theme" };
   };
   return { groupOf, scope, warnings };
 }
@@ -1813,7 +1862,9 @@ function toCSS(designSystem, opts, notes) {
   };
   const pctRef = (referrer) => (name) => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = /* @__PURE__ */ new Map();
-  const perMode = modeBlocks(planModeScopes(designSystem));
+  const scopes = planModeScopes(designSystem);
+  const perMode = modeBlocks(scopes);
+  const overrides = modeBlocks(scopes);
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!emitted(v)) continue;
@@ -1834,9 +1885,10 @@ function toCSS(designSystem, opts, notes) {
       if (JSON.stringify(values[m]) === baseStr) continue;
       perMode.set(v, m, varName, `  ${varName}: ${val(values[m])};`);
     }
+    for (const { extension, mode, value } of extensionOverrides(v)) overrides.set(extensionRow(v, extension), mode, varName, `  ${varName}: ${val(value)};`);
   }
   const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  return out + perMode.render(opts && opts.selector);
+  return out + perMode.render(opts && opts.selector) + overrides.render(opts && opts.selector);
 }
 var twName = (v, opts) => tailwindVarName(v.name, twKind(v, opts));
 var TW_KIND = { color: "color", length: "dimension", radius: "radius", fontSize: "fontSize", fontFamily: "fontFamily" };
@@ -1866,6 +1918,7 @@ function toTailwind(designSystem, opts, notes) {
   const theme = /* @__PURE__ */ new Map();
   const scopes = planModeScopes(designSystem);
   const perMode = modeBlocks(scopes);
+  const overrides = modeBlocks(scopes);
   warnings.push(...scopes.warnings);
   const aliasedByFont = /* @__PURE__ */ new Set();
   for (const v of vars) if (classifyVariable(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
@@ -1900,13 +1953,14 @@ function toTailwind(designSystem, opts, notes) {
       if (JSON.stringify(values[m]) === baseStr) continue;
       perMode.set(v, m, name, `  ${name}: ${val(values[m])};`);
     }
+    for (const { extension, mode, value } of extensionOverrides(v)) overrides.set(extensionRow(v, extension), mode, name, `  ${name}: ${val(value)};`);
   }
   if (leftOut.length) {
     warnings.push(`theme.css leaves out ${leftOut.length} STRING token(s) that are not font families (${leftOut.slice(0, 4).map((n) => `'${n}'`).join(", ")}${leftOut.length > 4 ? `, \u2026 +${leftOut.length - 4} more` : ""}) \u2014 a value like 'Semi Bold' is not usable in @theme and generates no utility. They are kept in tokens.dtcg.json and tokens.css (written with --also-generic); scope a font-family STRING to FONT_FAMILY in Figma to get a --font-figma-* utility`);
   }
   let out = '@import "tailwindcss";\n/* GENERATED by Design Twin (tokens.js --web tailwind) \u2014 do not edit by hand; re-run after a token pull.\n   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-\u2026),\n   so Tailwind\'s own scale (rounded-xl, p-4, \u2026) keeps its framework meaning. */\n';
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  out += perMode.render();
+  out += perMode.render() + overrides.render();
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 var RESOLVER_VERSION = "2025.10";
@@ -2005,6 +2059,33 @@ function toResolver(designSystem, warnings, opts) {
     modifiers[modName] = { description: `${label} mode`, contexts, default: def, $extensions: { "figma.com": { collection: collName || null, defaultMode: def } } };
     modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
   }
+  for (const c of collections) {
+    if (!c || c.extended !== true) continue;
+    const label = String(c.name);
+    let off = "none";
+    for (let n = 2; (c.modes || []).includes(off); n++) off = "none-" + n;
+    const contexts = nullProto();
+    contexts[off] = [];
+    let overridden = 0;
+    for (const m of c.modes || []) {
+      const tree = buildTree(ds, warn, opts, (v) => {
+        const hit = extensionOverrides(v).find((o) => o.extension.collection === c.name && o.mode === m);
+        return hit ? hit.value : SKIP;
+      }, false, plan);
+      if (!Object.keys(tree).length) {
+        contexts[m] = [];
+        continue;
+      }
+      const file = reserveFile(`${fileSlug(label, "tokens")}.${fileSlug(m, "mode")}`, ".json", `extended collection '${label}' mode '${m}'`);
+      files[file] = tree;
+      contexts[m] = [{ $ref: file }];
+      overridden += 1;
+    }
+    if (!overridden) continue;
+    const modName = reserveKey(label, "modifier");
+    modifiers[modName] = { description: `${label} overrides (extended collection)`, contexts, default: off, $extensions: { "figma.com": { collection: label, defaultMode: off } } };
+    modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
+  }
   for (const r of modifierRefs) resolutionOrder.push(r);
   const resolver = {
     $schema: RESOLVER_SCHEMA,
@@ -2034,7 +2115,12 @@ function cssFilesOf(opts) {
   return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
 }
 function lintNames(designSystem, opts, warnings) {
-  const vars = designSystem && designSystem.variables || [];
+  const base = designSystem && designSystem.variables || [];
+  const vars = base.concat(base.flatMap((v) => (v.extensions || []).map((e) => ({
+    ...extensionRow(v, e),
+    ...ifDefined("scopes", v.scopes),
+    values: Object.fromEntries(extensionOverrides(v).filter((o) => o.extension === e).map((o) => [o.mode, o.value]))
+  }))));
   const files = cssFilesOf(opts);
   const inCss = files.join("/") || "the CSS";
   warnings.push(...planModeScopes(designSystem).warnings);
