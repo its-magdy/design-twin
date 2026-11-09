@@ -9,6 +9,13 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Added
+
+- `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
+  matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map
+  can't translate, such as a variant option with no code mapping, is left out and listed in `codeUsageWarnings` and on
+  stderr instead of being guessed.
+
 ### Fixed
 
 - A GitHub Release's notes keep a nested list item on its own line. Before, a CHANGELOG entry's sub-list was run

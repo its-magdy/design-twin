@@ -139,6 +139,35 @@ check("each row carries key/setKey/name/variant/props and an empty mapModule/ver
   const pFirst = must(p.components[0], "p.components[0]");
   check("--map: an instance whose key is mapped in codeconnect.local.json gets that module pre-filled",
     pFirst.mapped?.module === "app/src/layout/Sidebar.tsx" && pFirst.mapModule === "app/src/layout/Sidebar.tsx");
+  check("an unmapped row has no codeUsage at all", p.components.filter((c) => !c.mapped).every((c) => !("codeUsage" in c)));
+
+  // The instance's real prop, through a value table that maps it, then one that does not.
+  const firstProp = "Property 1", firstValue = must(first.props?.[firstProp], "first.props['Property 1']");
+  const withTable = (values: Record<string, string>, module = "app/src/layout/Sidebar.tsx") => JSON.stringify({ version: 1, components: { [must(first.key, "first.key")]: { figma: { key: first.key, name: "Component 1" }, code: { module, export: "Sidebar" }, status: "active", props: { [firstProp]: { kind: "enum", codeProp: "mode", values } } } } });
+  fs.writeFileSync(map, withTable({ [String(firstValue)]: "dark" }));
+  const ok = must(planOf(run([screen(JR), vars(JR), DS, "--map", map]).stdout).components[0], "components[0]");
+  check("--map: the instance's enum value is translated into codeUsage",
+    ok.codeUsage?.module === "app/src/layout/Sidebar.tsx" && ok.codeUsage.export === "Sidebar" && ok.codeUsage.props.mode === "dark" && ok.codeUsageWarnings === undefined);
+  fs.writeFileSync(map, withTable({ Other: "other" }));
+  const unmappedRun = run([screen(JR), vars(JR), DS, "--map", map]);
+  const un = must(planOf(unmappedRun.stdout).components[0], "components[0]");
+  check("--map: an enum value with no mapping is left out, on the row and on stderr",
+    un.codeUsage?.props.mode === undefined && un.codeUsageWarnings?.[0]?.code === "unmapped-variant-value" && /warn {2}\[unmapped-variant-value\]/.test(unmappedRun.stderr) && /1 instance\(s\) translated/.test(unmappedRun.stderr));
+  fs.writeFileSync(map, withTable({ [String(firstValue)]: "dark" }, "TODO: import path"));
+  const todo = must(planOf(run([screen(JR), vars(JR), DS, "--map", map]).stdout).components[0], "components[0]");
+  check("--map: a TODO module fills neither codeUsage nor mapModule", todo.codeUsage === null && todo.mapModule === "" && todo.codeUsageWarnings?.[0]?.code === "no-code-target");
+
+  // A re-run refreshes the translation and keeps what a person filled.
+  const out = path.join(dir, JR + ".json");
+  fs.writeFileSync(map, withTable({ [String(firstValue)]: "dark" }));
+  run([screen(JR), vars(JR), DS, "--map", map, "--out", out]);
+  const filled = read(out, isSkeletonPlan);
+  must(filled.components[0], "components[0]").verdict = "reused";
+  fs.writeFileSync(out, JSON.stringify(filled, null, 2));
+  fs.writeFileSync(map, withTable({ [String(firstValue)]: "night" }));
+  run([screen(JR), vars(JR), DS, "--map", map, "--out", out]);
+  const merged = must(read(out, isSkeletonPlan).components[0], "components[0]");
+  check("--out merge: codeUsage follows the map, a filled verdict stays", merged.codeUsage?.props.mode === "night" && merged.verdict === "reused");
 }
 
 console.log("determinism, merge, and the second screen:");

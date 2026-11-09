@@ -437,6 +437,22 @@ export interface PlanTokenRow {
 export type PlanComponentMatch =
   | { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
   | { by: "ambiguous"; candidates: MatchCandidate[] };
+export type CodeUsageValue = string | number | boolean;
+export type CodeUsageWarningCode = "unmapped-variant-value" | "uncovered-prop" | "ambiguous-prop" | "prop-value-mismatch" | "conflicting-code-prop" | "no-slot-name" | "no-code-target" | "ambiguous-variant-override";
+export interface CodeUsageWarning { code: CodeUsageWarningCode; message: string; prop?: string }
+/** An instance as its code component is used (code-usage.ts). Skeleton-owned: refreshed on every merge. */
+export interface CodeUsage {
+  module: string;
+  export: string;
+  /** the map entry's status: only "active" is a translation someone confirmed */
+  status: MapStatus | null;
+  /** code prop -> value, omitDefault applied */
+  props: Record<string, CodeUsageValue>;
+  /** slot -> the swapped-in component's node id, as the export gives it */
+  slots: Record<string, string>;
+  /** the entry's per-platform targets, when present */
+  targets?: Record<string, Partial<MapCodeTarget>>;
+}
 export interface PlanComponentRow {
   nodeId?: string;
   name: string;
@@ -447,6 +463,9 @@ export interface PlanComponentRow {
   props?: ComponentPropValues;
   catalog?: PlanComponentMatch | null;
   mapped?: { module: string | null; export: string | null; status: MapStatus | null } | null;
+  /** present on a mapped row: the translated usage, or null when no code target could be named (see codeUsageWarnings) */
+  codeUsage?: CodeUsage | null;
+  codeUsageWarnings?: CodeUsageWarning[];
   /** a person's answer: the module that renders it (`null`/absent: not decided, or new) */
   mapModule?: string | null;
   verdict?: PlanComponentVerdict | null;
