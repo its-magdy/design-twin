@@ -802,10 +802,28 @@ export interface VariableCollection {
   default?: string;
   theming: boolean;
   extended?: true;
+  /** extended only: the collection it extends (its name; the raw id when unreadable) and that collection's key */
+  parent?: string;
+  parentKey?: string;
+  /** extended only: the collection at the top of the extension chain */
+  root?: string;
+  rootKey?: string;
+  /** extended only: this collection's mode name -> the parent mode it inherits from */
+  parentModes?: Record<string, string>;
   hiddenFromPublishing?: true;
   key?: string;
   /** library mode only: current | changed | unpublished */
   publish?: string;
+}
+/** One extended collection's view of a variable it inherits (Variable.valuesByModeForCollectionAsync). */
+export interface VariableExtension {
+  /** the extended collection's name */
+  collection: string;
+  collectionKey?: string;
+  /** every mode's value in that collection, inherited or overridden; keyed by the extended collection's MODE NAME */
+  values: Record<string, VariableValue>;
+  /** the modes in `values` the extended collection overrides; the others are inherited */
+  overrides: string[];
 }
 export interface Variable {
   name: string;
@@ -825,6 +843,8 @@ export interface Variable {
   /** durable cross-file identity — a variable IS its key; names are not unique */
   key?: string;
   publish?: string;
+  /** this variable as each extended collection that inherits it sees it */
+  extensions?: VariableExtension[];
 }
 /** One contributing pull recorded in a merged variables.json (variables-merge.ts sliceEntry). */
 export interface SliceEntry {

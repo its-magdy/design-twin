@@ -37,7 +37,105 @@ const libNodeOf = (): FakeNode => ({ type: "FRAME", name: "LibCard", visible: tr
   fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 0.4, b: 0 }, opacity: 1 }],
   boundVariables: { fills: [{ type: "VARIABLE_ALIAS", id: "v_lib" }] } });
 
+// ---- an extended collection ("Brand") over a two-mode root ("Base"), written as the Plugin API reports it
+const inherited = (byExtMode: Record<string, unknown>) => async () => byExtMode;
+const BASE = (): FakeCollection => ({ id: "c_base", name: "Base", key: "K_BASE", modes: [{ modeId: "b_l", name: "Light" }, { modeId: "b_d", name: "Dark" }], defaultModeId: "b_l" });
+const BRAND = (over: Partial<FakeCollection> = {}): FakeCollection => ({ id: "c_brand", name: "Brand", key: "K_BRAND", isExtension: true,
+  parentVariableCollectionId: "c_base", rootVariableCollectionId: "c_base", defaultModeId: "x_l",
+  modes: [{ modeId: "x_l", name: "Sunny", parentModeId: "b_l" }, { modeId: "x_d", name: "Night", parentModeId: "b_d" }],
+  variableIds: ["v_surface", "v_ink"], variableOverrides: { v_surface: { x_l: { type: "VARIABLE_ALIAS", id: "v_brandprim" } } }, ...over });
+const baseVar = (id: string, name: string, l: unknown, d: unknown, ext: Record<string, unknown>): FakeVariable => ({ id, name, resolvedType: "COLOR", variableCollectionId: "c_base",
+  scopes: ["FRAME_FILL"], codeSyntax: {}, remote: false, valuesByMode: { b_l: l, b_d: d }, valuesByModeForCollectionAsync: inherited(ext) });
+const RED = { r: 1, g: 0, b: 0, a: 1 }, BLACK = { r: 0, g: 0, b: 0, a: 1 }, WHITE = { r: 1, g: 1, b: 1, a: 1 };
+const brandVars = (): Record<string, FakeVariable> => ({
+  v_surface: baseVar("v_surface", "surface", WHITE, BLACK, { x_l: { type: "VARIABLE_ALIAS", id: "v_brandprim" }, x_d: BLACK }),
+  v_ink: baseVar("v_ink", "ink", BLACK, WHITE, { x_l: BLACK, x_d: WHITE }),
+});
+const BRAND_PRIM = (): FakeVariable => ({ id: "v_brandprim", name: "brand/red", resolvedType: "COLOR", variableCollectionId: "c_brandprim", scopes: [], codeSyntax: {}, remote: true, valuesByMode: { p_v: RED } });
+const PRIM_COLL = (): FakeCollection => ({ id: "c_brandprim", name: "Prim", modes: [{ modeId: "p_v", name: "Value" }], defaultModeId: "p_v" });
+
+const libraryPaint = (over: FakeNode = {}): FakeNode => ({ type: "PAINT", id: "S:lib_paint", key: "stylekey_lib", name: "Library/Accent", description: "from the library", remote: true, documentationLinks: [],
+  paints: [{ type: "SOLID", visible: true, color: { r: 1, g: 0, b: 0 }, opacity: 1 }], boundVariables: { color: { type: "VARIABLE_ALIAS", id: "v_lib" } }, ...over });
+const libraryText = (): FakeNode => ({ type: "TEXT", id: "S:lib_text", key: "stylekey_text", name: "Library/Body", remote: true, documentationLinks: [],
+  fontSize: 15, fontName: { family: "Inter", style: "Medium" }, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE" });
+const styledNode = (): FakeNode => ({ type: "FRAME", name: "Styled", visible: true, id: "9:9", width: 10, height: 10, fillStyleId: "S:lib_paint", children: [] });
+const importSpies = () => {
+  const calls: string[] = [];
+  return { calls, overrides: {
+    importStyleByKeyAsync: async (k: string): Promise<FakeNode> => { calls.push("style:" + k); throw new Error("must not import"); },
+    variables: { importVariableByKeyAsync: async (k: string): Promise<FakeVariable> => { calls.push("variable:" + k); throw new Error("must not import"); } },
+  } };
+};
+
 export const cases: Case[] = [{
+  name: "extended collection: inherited and override values, lineage, alias targets",
+  async run() {
+    const { api } = world({ variables: brandVars(), collections: { c_base: BASE(), c_brand: BRAND() },
+      remote: { variables: { v_brandprim: BRAND_PRIM() }, collections: { c_brandprim: PRIM_COLL() } } });
+    const { designSystem: ds } = await api.collectDesignSystemOnly();
+    const row = (n: string) => ds.variables.find((v) => v.name === n);
+    const brand = ds.collections.find((c) => c.name === "Brand");
+    ok("[extended] lineage: parent, root, keys and each mode's parent mode by name",
+      !!brand && brand.extended === true && brand.parent === "Base" && brand.parentKey === "K_BASE" && brand.root === "Base" && brand.rootKey === "K_BASE" &&
+      JSON.stringify(brand.parentModes) === '{"Sunny":"Light","Night":"Dark"}');
+    const surface = row("surface"), ext = surface?.extensions?.[0];
+    ok("[extended] the row's own values stay the root collection's", surface?.values.Light === "#ffffff" && surface?.values.Dark === "#000000");
+    ok("[extended] every mode, named by the extended collection, aliases resolved",
+      !!ext && ext.collection === "Brand" && ext.collectionKey === "K_BRAND" && JSON.stringify(ext.values) === '{"Sunny":{"aliasOf":"brand/red"},"Night":"#000000"}');
+    ok("[extended] only the overridden mode is marked", JSON.stringify(ext?.overrides) === '["Sunny"]');
+    ok("[extended] a variable with no override still lists its inherited values", JSON.stringify(row("ink")?.extensions?.[0]) === '{"collection":"Brand","collectionKey":"K_BRAND","values":{"Sunny":"#000000","Night":"#ffffff"},"overrides":[]}');
+    ok("[extended] a library primitive reached only through an override is pulled in", row("brand/red")?.remote === true && row("brand/red")?.values.Value === "#ff0000");
+    ok("[extended] no false broken-alias line for the override", !ds.hygiene.some((h) => /broken alias/.test(h)));
+  },
+}, {
+  name: "extended collection: a library extension a frame pins, a dangling override, an unreadable variable",
+  async run() {
+    const pinned: FakeNode = { type: "FRAME", name: "Branded", visible: true, id: "9:7", width: 10, height: 10, explicitVariableModes: { c_brand: "x_d" }, children: [] };
+    const vars = brandVars();
+    const surface = must(vars.v_surface, "v_surface"), ink = must(vars.v_ink, "v_ink");
+    surface.remote = ink.remote = true;
+    surface.valuesByModeForCollectionAsync = inherited({ x_l: { type: "VARIABLE_ALIAS", id: "v_deleted" }, x_d: BLACK });
+    ink.valuesByModeForCollectionAsync = async () => { throw new Error("no"); };
+    const { api } = world({ selection: [pinned], remote: { variables: { v_surface: surface, v_ink: ink }, collections: { c_base: BASE(), c_brand: BRAND() } } });
+    const sel = await api.collectSelection({ css: false });
+    ok("[extended] a library extension reached only by a mode pin is exported", sel.variables.collections.some((c) => c.name === "Brand" && c.extended === true));
+    ok("[extended] its inherited variable comes with it", sel.variables.variables.some((v) => v.name === "surface" && v.extensions?.length === 1));
+    ok("[extended] a dangling override alias is reported", sel.variables.hygiene.some((h) => /broken alias in 'surface'.*v_deleted/.test(h)));
+    ok("[extended] an unreadable variable is reported and does not fail the pull", sel.variables.hygiene.some((h) => /extended collection 'Brand': values unreadable for 1 variable/.test(h)));
+  },
+}, {
+  name: "library styles a run used: values in the catalog, no import",
+  async run() {
+    const spies = importSpies();
+    const local: FakeNode = { type: "PAINT", id: "S:local", key: "k_local", name: "Local/Fill", remote: false, documentationLinks: [], paints: [] };
+    const page: FakeNode = { type: "PAGE", name: "P", id: "0:1", children: [styledNode(), { type: "TEXT", name: "T", visible: true, id: "9:8", width: 1, height: 1, characters: "x", textStyleId: "S:lib_text", fontName: { family: "Inter", style: "Medium" }, fontSize: 15 }, { type: "FRAME", name: "L", visible: true, id: "9:6", width: 1, height: 1, fillStyleId: "S:local", children: [] }, { type: "FRAME", name: "G", visible: true, id: "9:5", width: 1, height: 1, fillStyleId: "S:gone", children: [] }], selection: [] };
+    const { api } = world({ pages: [page], currentPage: page as never, remote: library(LIB_VAR()), localStyles: { paint: [local] },
+      styles: { "S:lib_paint": libraryPaint(), "S:lib_text": libraryText(), "S:local": local } }, spies.overrides);
+    const { designSystem: ds } = await api.collectFull({ css: false, skipAssets: true });
+    const paint = ds.styles.paint.find((s) => s.name === "Library/Accent"), text = ds.styles.text.find((s) => s.name === "Library/Body");
+    ok("[library style] paint values, remote flag, key and description", !!paint && paint.remote === true && paint.key === "stylekey_lib" && paint.description === "from the library" && paint.paints?.length === 1);
+    ok("[library style] text values", !!text && text.remote === true && text.size === 15 && text.font === "Inter" && text.weight === "Medium");
+    ok("[library style] a local style is listed once", ds.styles.paint.filter((s) => s.name === "Local/Fill").length === 1);
+    ok("[library style] a variable the style binds comes with it", paint?.tokens?.color === "brand/accent" && ds.variables.some((v) => v.name === "brand/accent" && v.remote === true));
+    ok("[library style] reported in hygiene", ds.hygiene.some((h) => /2 style\(s\) used by this file come from a published LIBRARY/.test(h)));
+    ok("[library style] nothing was imported into the file", spies.calls.length === 0);
+  },
+}, {
+  name: "library styles: an unreadable one is warned, and a library pull adds none",
+  async run() {
+    const broken = libraryPaint();
+    Object.defineProperty(broken, "paints", { get() { throw new Error("no paints"); } });
+    const page: FakeNode = { type: "PAGE", name: "P", id: "0:1", children: [styledNode()], selection: [] };
+    const { api } = world({ pages: [page], currentPage: page as never, styles: { "S:lib_paint": broken } });
+    const full = await api.collectFull({ css: false, skipAssets: true });
+    ok("[library style] a read that throws leaves that style out and the pull alive", !full.designSystem.styles.paint.some((s) => s.name === "Library/Accent"));
+    ok("[library style] and says so", full.layersDoc.manifest.warnings.some((w) => /library style 'Library\/Accent': values unreadable/.test(w)));
+    const unused = world({ styles: { "S:lib_paint": libraryPaint() }, selection: [styledNode()] });
+    await unused.api.collectSelection({ css: false });
+    const lib = await unused.api.collectLibraryFile({ asLibrary: "L" });
+    ok("[library style] a library pull lists only its own styles", !lib.designSystem.styles.paint.some((s) => s.remote === true));
+  },
+}, {
   name: "LIBRARY (remote) variables",
   async run() {
     // ---- LIBRARY (remote) variables ----

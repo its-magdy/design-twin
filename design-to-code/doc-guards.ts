@@ -46,7 +46,7 @@ export const isComposed = (v: unknown): v is VariableComposedColor => {
 /** A number written as text ("40", "-5", "12.5") — a string-number FLOAT value. */
 export const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x: unknown): x is Variable {
-  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection) && optArrayOf(x.extensions, anyObject);
 }
 function isVariableCollection(x: unknown): x is VariableCollection {
   return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);

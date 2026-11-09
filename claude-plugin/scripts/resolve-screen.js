@@ -267,7 +267,7 @@ var optObj = (x) => x === void 0 || isJsonObject(x);
 var optStr = (x) => x === void 0 || typeof x === "string";
 var anyObject = (x) => isJsonObject(x);
 function isVariable(x) {
-  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection) && optArrayOf(x.extensions, anyObject);
 }
 function isVariableCollection(x) {
   return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);

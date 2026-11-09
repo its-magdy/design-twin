@@ -344,13 +344,43 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }): Promise<
     return m;
   };
 
+  // LIBRARY styles this run USED. getLocal*StylesAsync lists only this file's styles, while a node's *StyleId resolves
+  // a library style by id, and that lookup (run.ts styleName) holds the whole style — so its values are already here,
+  // with no importStyleByKeyAsync (which materializes the style into the document). The same treatment library
+  // variables get in dumpVariables. Library mode skips it: a remote style there belongs to another library's export,
+  // and its publish status would read "unpublished".
+  const localStyleIds = new Set<string>([...paint, ...text, ...effect, ...grid, ...animation].map((s) => s.id));
+  const usedLibraryStyles = asLibrary ? [] : (await Promise.all(run().styleName.ids().filter((id) => !localStyleIds.has(id)).map((id) => run().styleName.obj(id))))
+    .filter((s): s is BaseStyle => !!s && s.remote === true);
+  const libraryOf = <T extends BaseStyle["type"]>(type: T): Extract<BaseStyle, { type: T }>[] =>
+    usedLibraryStyles.filter((s): s is Extract<BaseStyle, { type: T }> => s.type === type);
+  if (usedLibraryStyles.length) {
+    hygiene.push(
+      usedLibraryStyles.length + " style(s) used by this file come from a published LIBRARY, not this file — included with remote:true " +
+        "(getLocal*StylesAsync cannot enumerate them; only the styles this pull reached are here, and nothing was imported)"
+    );
+  }
+  // A library style is an ADDITION to the catalog, so a read that fails on one is warned and that style left out. A
+  // local style's failure stays what it always was: fatal to the pull.
+  const catalogRows = async <S extends BaseStyle, O>(list: S[], toIr: (s: S) => Promise<O>): Promise<O[]> => {
+    const rows = await Promise.all(list.map(async (s): Promise<O | null> => {
+      try {
+        return await toIr(s);
+      } catch (e) {
+        if (!s.remote) throw e;
+        run().warn("library style '" + s.name + "': values unreadable (" + errMsg(e) + ") — omitted from the style catalog");
+        return null;
+      }
+    }));
+    return rows.filter((r): r is Awaited<O> & O => r !== null);
+  };
+
   const [paintStyles, textStyles, effectStyles] = await Promise.all([
     // Paint styles carry their ACTUAL colors, not just a name.
     // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
     // variable silently lost that link — the binding is what makes it a token rather than a hex.
-    Promise.all(paint.map(async (s): Promise<IrPaintStyle> => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || undefined), ...(await styleMeta(s)) }))),
-    Promise.all(
-      text.map(async (s): Promise<IrTextStyle> => ({
+    catalogRows([...paint, ...libraryOf("PAINT")], async (s): Promise<IrPaintStyle> => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || undefined), ...(await styleMeta(s)) })),
+    catalogRows([...text, ...libraryOf("TEXT")], async (s): Promise<IrTextStyle> => ({
           name: s.name,
           size: s.fontSize,
           font: s.fontName && s.fontName.family,
@@ -371,35 +401,30 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }): Promise<
         ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
         ...ifDefined("description", s.description || undefined),
         ...(await styleMeta(s)),
-      }))
-    ),
-    Promise.all(effect.map(async (s): Promise<IrEffectStyle> => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || undefined), ...(await styleMeta(s)) }))),
+    })),
+    catalogRows([...effect, ...libraryOf("EFFECT")], async (s): Promise<IrEffectStyle> => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || undefined), ...(await styleMeta(s)) })),
   ]);
   const styles = {
     paint: paintStyles,
     text: textStyles,
     effect: effectStyles,
     // Layout-grid styles (column/row grids) — the responsive grid tokens, fanned out like their three siblings.
-    grid: await Promise.all(
-      grid.map(async (s): Promise<IrGridStyle> => ({
-        name: s.name,
-        ...ifDefined("grids", Array.isArray(s.layoutGrids) ? await simplifyGrids(s.layoutGrids) : undefined),
-        ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
-        ...ifDefined("description", s.description || undefined),
-        ...(await styleMeta(s)),
-      }))
-    ),
+    grid: await catalogRows([...grid, ...libraryOf("GRID")], async (s): Promise<IrGridStyle> => ({
+      name: s.name,
+      ...ifDefined("grids", Array.isArray(s.layoutGrids) ? await simplifyGrids(s.layoutGrids) : undefined),
+      ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+      ...ifDefined("description", s.description || undefined),
+      ...(await styleMeta(s)),
+    })),
     // Custom animation styles: the Figma animations each one contains (CustomAnimationStyle.
     // animationEntries), in the same compact form a node's applied animation style takes (motion.ts).
     // Their props can bind EASING variables, so they resolve before dumpVariables too.
-    animation: await Promise.all(
-      animation.map(async (s): Promise<IrAnimationStyle> => ({
-        name: s.name,
-        ...ifDefined("entries", await customAnimationEntries(s)),
-        ...ifDefined("description", s.description || undefined),
-        ...(await styleMeta(s)),
-      }))
-    ),
+    animation: await catalogRows([...animation, ...libraryOf("CUSTOM_ANIMATION")], async (s): Promise<IrAnimationStyle> => ({
+      name: s.name,
+      ...ifDefined("entries", await customAnimationEntries(s)),
+      ...ifDefined("description", s.description || undefined),
+      ...(await styleMeta(s)),
+    })),
   };
 
   // LAST: the referenced-variable record is only complete once nodes, component props and styles have
