@@ -2241,10 +2241,11 @@ function propsByBase(raw) {
 
 // design-to-code/code-usage.ts
 var isPlaceholderModule = (module) => !module || /^TODO/.test(module);
-function resolveTarget(entry, values, warn) {
+function resolveTarget(entry, instance, warn) {
+  const values = instance.props;
   const holds = (entry.variantOverrides || []).filter((o) => {
     const when = Object.entries(propsByBase(o.when).props);
-    return when.length > 0 && when.every(([base, w]) => values[base] !== void 0 && String(values[base].value) === w.value);
+    return when.length > 0 && when.every(([base, w]) => !instance.ambiguous.has(base) && values[base] !== void 0 && String(values[base].value) === w.value);
   });
   const distinct = new Map(holds.map((o) => [`${o.code.module}\0${o.code.export}`, o.code]));
   if (distinct.size > 1) {
@@ -2268,9 +2269,11 @@ function codeUsageOf(entry, instance) {
   const mapIdx = propsByBase(entry.props);
   const instIdx = propsByBase({ ...instance.variant || {}, ...instance.props || {} });
   for (const c of [...mapIdx.collisions, ...instIdx.collisions]) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not translated` });
-  const target = resolveTarget(entry, instIdx.props, warn);
-  const assigned = /* @__PURE__ */ new Map();
-  const slots = nullProto();
+  const target = resolveTarget(entry, instIdx, warn);
+  const assigned = /* @__PURE__ */ new Map(), assignedSlots = /* @__PURE__ */ new Map();
+  const assign = (to, key, figma, value) => {
+    to.set(key, [...to.get(key) ?? [], { figma, value }]);
+  };
   const mismatch = (p, kind, value) => warn({ code: "prop-value-mismatch", prop: p, message: `'${name}'.${p} is mapped as ${kind} but this instance's value is ${JSON.stringify(value)}: not translated` });
   for (const [base, inst] of Object.entries(instIdx.props)) {
     if (mapIdx.ambiguous.has(base) || instIdx.ambiguous.has(base)) continue;
@@ -2313,23 +2316,25 @@ function codeUsageOf(entry, instance) {
         continue;
       }
       const slot = p.slot ?? p.codeProp;
-      if (slot) slots[slot] = value;
+      if (slot) assign(assignedSlots, slot, base, value);
       else warn({ code: "no-slot-name", prop: base, message: `'${name}'.${base} is an instance prop with neither slot nor codeProp: not translated` });
       continue;
     }
-    const list = assigned.get(p.codeProp) ?? [];
-    list.push({ figma: base, value: out });
-    assigned.set(p.codeProp, list);
+    assign(assigned, p.codeProp, base, out);
   }
-  const props = nullProto();
-  for (const [codeProp, list] of assigned) {
-    const first = list[0];
-    if (first && list.every((x) => x.value === first.value)) {
-      props[codeProp] = first.value;
-      continue;
+  const settle = (from, what) => {
+    const out = nullProto();
+    for (const [key, list] of from) {
+      const first = list[0];
+      if (first && list.every((x) => x.value === first.value)) {
+        out[key] = first.value;
+        continue;
+      }
+      warn({ code: "conflicting-code-prop", prop: key, message: `'${name}': ${list.map((x) => `${x.figma}=${JSON.stringify(x.value)}`).join(", ")} all map to ${what} '${key}' with different values: not translated` });
     }
-    warn({ code: "conflicting-code-prop", prop: codeProp, message: `'${name}': ${list.map((x) => `${x.figma}=${JSON.stringify(x.value)}`).join(", ")} all map to code prop '${codeProp}' with different values: not translated` });
-  }
+    return out;
+  };
+  const props = settle(assigned, "code prop"), slots = settle(assignedSlots, "slot");
   return { usage: target ? { ...target, status: entry.status ?? null, props, slots } : null, warnings };
 }
 

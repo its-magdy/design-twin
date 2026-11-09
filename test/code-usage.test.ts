@@ -57,6 +57,15 @@ check("a value of the wrong type is warned about", codes(codeUsageOf(entry({ pro
   const r = codeUsageOf(entry({ props: { "S#1:1": { kind: "string", codeProp: "a" }, "S#2:2": { kind: "string", codeProp: "b" } } }), { props: { S: "x" } });
   check("two map keys with one base name are not translated", Object.keys(r.usage?.props ?? { x: 1 }).length === 0 && codes(r).join() === "ambiguous-prop");
 }
+{
+  const p: MapEntry["props"] = { A: { kind: "instance", slot: "icon" }, B: { kind: "instance", slot: "icon" } };
+  const r = codeUsageOf(entry({ props: p }), { props: { A: "1:1", B: "2:2" } });
+  check("two swaps with different components for one slot: neither is picked", r.usage?.slots.icon === undefined && codes(r).join() === "conflicting-code-prop");
+  check("the same component through both is not a conflict", codeUsageOf(entry({ props: p }), { props: { A: "1:1", B: "1:1" } }).usage?.slots.icon === "1:1");
+  const over: MapEntry["variantOverrides"] = [{ when: { S: "x" }, code: { module: "o", export: "O" } }];
+  const amb = codeUsageOf(entry({ variantOverrides: over }), { props: { "S#1:1": "y", "S#2:2": "x" } });
+  check("an override does not hold on an instance prop that is ambiguous", amb.usage?.module === "@/ui/Button" && codes(amb).join() === "ambiguous-prop");
+}
 check("an instance prop with no slot and no codeProp is warned about", codes(codeUsageOf(entry({ props: { I: { kind: "instance" } } }), { props: { I: "1:1" } })).join() === "no-slot-name");
 
 console.log("the code target:");

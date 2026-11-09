@@ -4,7 +4,7 @@
 // so a builder never reads a value the map did not give. drift-lint checks the map against the catalog (shape); this
 // reads the map for one instance (use), with the same warning codes where the two say the same thing.
 import type { CodeUsage, CodeUsageValue, CodeUsageWarning, ComponentPropValues, MapEntry, PropMap } from "./types.ts";
-import { propsByBase } from "./map-props.ts";
+import { propsByBase, type PropsByBase } from "./map-props.ts";
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 
 /** Stubs from map-bootstrap carry "TODO: import path": no code target yet. */
@@ -15,10 +15,11 @@ export interface CodeUsageResult { usage: CodeUsage | null; warnings: CodeUsageW
 
 // The module and export this instance renders: a variantOverride whose whole `when` holds, else the entry's own.
 // Overrides that hold and name different targets are a tie this module does not break.
-function resolveTarget(entry: MapEntry, values: Record<string, { value: CodeUsageValue }>, warn: (w: CodeUsageWarning) => void): Pick<CodeUsage, "module" | "export" | "targets"> | null {
+function resolveTarget(entry: MapEntry, instance: PropsByBase<CodeUsageValue>, warn: (w: CodeUsageWarning) => void): Pick<CodeUsage, "module" | "export" | "targets"> | null {
+  const values = instance.props;
   const holds = (entry.variantOverrides || []).filter((o) => {
     const when = Object.entries(propsByBase(o.when).props);
-    return when.length > 0 && when.every(([base, w]) => values[base] !== undefined && String(values[base].value) === w.value);
+    return when.length > 0 && when.every(([base, w]) => !instance.ambiguous.has(base) && values[base] !== undefined && String(values[base].value) === w.value);
   });
   const distinct = new Map(holds.map((o) => [`${o.code.module}\0${o.code.export}`, o.code]));
   if (distinct.size > 1) {
@@ -43,9 +44,10 @@ function codeUsageOf(entry: MapEntry, instance: InstanceProps): CodeUsageResult 
   const instIdx = propsByBase<CodeUsageValue>({ ...(instance.variant || {}), ...(instance.props || {}) });
   for (const c of [...mapIdx.collisions, ...instIdx.collisions]) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not translated` });
 
-  const target = resolveTarget(entry, instIdx.props, warn);
-  const assigned = new Map<string, Array<{ figma: string; value: CodeUsageValue }>>();
-  const slots: Record<string, string> = nullProto();
+  const target = resolveTarget(entry, instIdx, warn);
+  type Assigned = Map<string, Array<{ figma: string; value: CodeUsageValue }>>;
+  const assigned: Assigned = new Map(), assignedSlots: Assigned = new Map();
+  const assign = (to: Assigned, key: string, figma: string, value: CodeUsageValue): void => { to.set(key, [...(to.get(key) ?? []), { figma, value }]); };
   const mismatch = (p: string, kind: string, value: CodeUsageValue): void =>
     warn({ code: "prop-value-mismatch", prop: p, message: `'${name}'.${p} is mapped as ${kind} but this instance's value is ${JSON.stringify(value)}: not translated` });
 
@@ -72,21 +74,24 @@ function codeUsageOf(entry: MapEntry, instance: InstanceProps): CodeUsageResult 
     } else {
       if (typeof value !== "string") { mismatch(base, "an instance swap", value); continue; }
       const slot = p.slot ?? p.codeProp;
-      if (slot) slots[slot] = value;
+      if (slot) assign(assignedSlots, slot, base, value);
       else warn({ code: "no-slot-name", prop: base, message: `'${name}'.${base} is an instance prop with neither slot nor codeProp: not translated` });
       continue;
     }
-    const list = assigned.get(p.codeProp) ?? [];
-    list.push({ figma: base, value: out });
-    assigned.set(p.codeProp, list);
+    assign(assigned, p.codeProp, base, out);
   }
 
-  const props: Record<string, CodeUsageValue> = nullProto();
-  for (const [codeProp, list] of assigned) {
-    const first = list[0];
-    if (first && list.every((x) => x.value === first.value)) { props[codeProp] = first.value; continue; }
-    warn({ code: "conflicting-code-prop", prop: codeProp, message: `'${name}': ${list.map((x) => `${x.figma}=${JSON.stringify(x.value)}`).join(", ")} all map to code prop '${codeProp}' with different values: not translated` });
-  }
+  // One code prop or slot fed by several Figma props: kept only when they agree.
+  const settle = <V extends CodeUsageValue>(from: Assigned, what: string): Record<string, V> => {
+    const out: Record<string, V> = nullProto();
+    for (const [key, list] of from) {
+      const first = list[0];
+      if (first && list.every((x) => x.value === first.value)) { out[key] = first.value as V; continue; }
+      warn({ code: "conflicting-code-prop", prop: key, message: `'${name}': ${list.map((x) => `${x.figma}=${JSON.stringify(x.value)}`).join(", ")} all map to ${what} '${key}' with different values: not translated` });
+    }
+    return out;
+  };
+  const props = settle<CodeUsageValue>(assigned, "code prop"), slots = settle<string>(assignedSlots, "slot");
   return { usage: target ? { ...target, status: entry.status ?? null, props, slots } : null, warnings };
 }
 
