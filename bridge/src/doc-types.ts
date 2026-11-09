@@ -90,6 +90,8 @@ export interface LayoutGridSpec {
   offset?: number;
   alignment?: "min" | "max" | "center" | "stretch";
   visible?: false;
+  /** This grid's variable bindings, keyed by Figma field: `sectionSize` (= `size`), `count`, `offset`, `gutterSize` (= `gutter`). */
+  tokens?: TokenMap;
 }
 
 // ---- paints (paint.ts simplifyFills). Discriminated on `type`.
@@ -254,7 +256,10 @@ export interface FontSpec {
   decorationThickness?: LengthSpec;
   decorationOffset?: LengthSpec;
   decorationSkipInk?: false;
+  /** OpenType feature tags turned on (`"tnum" 1` in CSS font-feature-settings). */
   openType?: string[];
+  /** OpenType feature tags the designer turned off (`"liga" 0`). Absent = none; a tag in neither list is at the font's default. */
+  openTypeOff?: string[];
   /** first visible SOLID fill of the text, as hex */
   color?: string;
   // node-level only (not on runs[].font)
@@ -366,7 +371,8 @@ export interface MainComponentRef {
 /** INSTANCE.componentProperties → `{ propName: value }` (Figma's "#id" suffix stripped). */
 export type ComponentPropValues = Record<string, string | boolean>;
 
-export interface Annotation { label?: string; markdown?: string; categoryId?: string; props?: string[] }
+/** `category`: the label of `categoryId` ("Accessibility"…), absent when the file no longer resolves that id. */
+export interface Annotation { label?: string; markdown?: string; categoryId?: string; category?: string; props?: string[] }
 export interface ExportSetting { format: string; suffix?: string; constraint?: { type: string; value: number } }
 export interface Overlay { position?: string; closeOnClickOutside?: true; background?: string }
 export interface InstanceOverride { id: string; fields: string[] }

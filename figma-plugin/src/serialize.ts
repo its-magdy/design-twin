@@ -2,12 +2,12 @@
 // modules. Reads are defensive (`"x" in node` guards) because it runs over the whole SceneNode
 // union; per-property values are typed inside the helpers it calls.
 import type {
-  IrNode, Box, SizeLimits, LayoutGridSpec, TableCell, ComponentPropValues, TokenMap,
+  IrNode, Box, SizeLimits, TableCell, ComponentPropValues, TokenMap,
   Annotation as IrAnnotation, ExportSetting as IrExportSetting, Overlay as IrOverlay,
 } from "../../bridge/src/doc-types.ts";
 import { round, lower, propName, rgbaToHex, nonEmpty, putNonEmpty, xy, numProp, isList } from "./util";
 import { run } from "./run";
-import { layout, GRID_SELF, simplifyGrid } from "./layout";
+import { layout, GRID_SELF, simplifyGrids } from "./layout";
 import { simplifyFills } from "./paint";
 import { nodePaints, nodeCorners, nodeOpacity, nodeBlendMode } from "./node-visuals";
 import { serializeText } from "./text";
@@ -199,19 +199,23 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
 
   // Per-frame layout grids (responsive column/row grids).
   if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
-    out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter((g): g is LayoutGridSpec => !!g);
+    out.layoutGrids = await simplifyGrids(node.layoutGrids);
   }
 
   // Dev Mode handoff — FREE via the Plugin API and NOT surfaced by the paid REST/get_design_context.
   if ("annotations" in node && isList(node.annotations) && node.annotations.length) {
-    out.annotations = node.annotations.map((a) => {
+    out.annotations = await Promise.all(node.annotations.map(async (a) => {
       const o: IrAnnotation = {};
       if (a.label) o.label = a.label;
       if (a.labelMarkdown) o.markdown = a.labelMarkdown;
-      if (a.categoryId) o.categoryId = a.categoryId; // groups annotations by Dev-Mode category
+      if (a.categoryId) {
+        o.categoryId = a.categoryId; // groups annotations by Dev-Mode category
+        const category = await r.annotationCategory(a.categoryId);
+        if (category) o.category = category;
+      }
       if (isList(a.properties) && a.properties.length) o.props = a.properties.map((p: AnnotationProperty) => p.type);
       return o;
-    });
+    }));
   }
   if ("devStatus" in node && node.devStatus && node.devStatus.type) {
     out.devStatus = lower(node.devStatus.type); // ready_for_dev | completed

@@ -79,8 +79,9 @@ Read these before writing ANY script against an export JSON (field names guessed
 
 ## Handoff: annotations, status, visibility
 
-- **`annotations[]`** (`label`/`markdown`/`categoryId`/`props`) — the designer's written requirements
-  on that node. Treat them as constraints (hint priority 2), not decoration.
+- **`annotations[]`** (`label`/`markdown`/`categoryId`/`category`/`props`) — the designer's written requirements
+  on that node. Treat them as constraints (hint priority 2), not decoration. `category` is the Dev Mode
+  category's label ("Accessibility", "Interaction"…); absent when `categoryId` no longer resolves.
 - **`devStatus`** (`ready_for_dev`/`completed`) + **`devStatusNote`** — whether the node is final.
 - **`hidden:true`** — the layer exists but is off by default: usually a conditional state (error
   message, tooltip, empty state). Implement it as conditional UI, don't render it and don't drop it.
@@ -129,7 +130,8 @@ Read these before writing ANY script against an export JSON (field names guessed
   **`font.decoration`** (`underline`/`strikethrough`) + `decorationStyle`, `decorationColor`, `decorationThickness` /
   `decorationOffset` (`{value, unit}`, like `letterSpacing`) and `decorationSkipInk:false` (the line crosses
   descenders instead of skipping them). **`font.openType[]`** —
-  enabled features (`TNUM` tabular numbers, `SMCP`, `LIGA`…).
+  enabled features (`TNUM` tabular numbers, `SMCP`, `LIGA`…); **`font.openTypeOff[]`** — features the
+  designer turned off. Together they are CSS `font-feature-settings`, lower-cased: `"tnum" 1, "liga" 0`.
 - **`font.paragraphSpacing`**, `paragraphIndent`, `listSpacing` (px); **`font.align`** (map to
   start/end for RTL), **`font.valign`** (only when not top); **`font.leadingTrim:"cap_height"`** →
   trims space above caps / below baseline; **`font.textWrap`** (`balance`/`pretty`);
@@ -192,7 +194,8 @@ Read these before writing ANY script against an export JSON (field names guessed
   an auto-layout frame, where Figma lets only an `absolute:true` child be fixed; place it by its `y`
   (top bar → sticky top, bottom bar → sticky bottom).
 - **`layoutGrids[]`** — column/row guides (`pattern`, `count`, `size`, `gutter`, `offset`,
-  `alignment`): informs margins and breakpoints; not a grid container.
+  `alignment`, and `tokens` per Figma field — `sectionSize`, `count`, `offset`, `gutterSize`): informs
+  margins and breakpoints; not a grid container.
 
 ## Sizing, boxes and constraints
 

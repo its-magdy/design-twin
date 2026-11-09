@@ -90,11 +90,15 @@ function fontObj(src: TextStyleSource): FontSpec {
     if (src.textDecorationSkipInk === false) f.decorationSkipInk = false; // default true; note when disabled
   }
   // OpenType features (small-caps, tabular figures, ligatures, fractions, stylistic sets)
-  // -> CSS font-feature-settings. Only the enabled features.
+  // -> CSS font-feature-settings. Figma's map holds only non-defaults, so a `false` entry is a feature the
+  // designer turned off (`"liga" 0`) and is as much a decision as a `true` one.
   const feats = src.openTypeFeatures;
   if (feats && feats !== figma.mixed) {
-    const on = (Object.keys(feats) as OpenTypeFeature[]).filter((k) => feats[k]);
+    const tags = Object.keys(feats) as OpenTypeFeature[];
+    const on = tags.filter((k) => feats[k]);
+    const off = tags.filter((k) => !feats[k]);
     if (on.length) f.openType = on;
+    if (off.length) f.openTypeOff = off;
   }
   const color = solidFromFills(src.fills);
   if (color) f.color = color;

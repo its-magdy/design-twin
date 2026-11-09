@@ -15,6 +15,9 @@ list of merged PRs.
   into its parent item as one paragraph (as in 0.1.6's notes, since corrected by hand).
 - The logo reads on every theme: the npm page and the GitHub README now show the wordmark on its own white tile.
   Before, npm's dark mode hid the dark ink, and GitHub's light theme under an OS dark setting showed the white one.
+- The plugin export loses less. An OpenType feature the designer turned off now reaches the IR as `font.openTypeOff`
+  (before, only enabled ones survived); each layout grid carries its own variable bindings as `tokens`, on frames and
+  grid styles; and an annotation carries its Dev Mode category's label as `category` beside `categoryId`.
 
 ## [0.1.6] - 2026-11-02
 

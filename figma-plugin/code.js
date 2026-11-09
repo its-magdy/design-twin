@@ -524,6 +524,20 @@
       for (const k of Object.keys(r)) r[k] = !!(opts && opts[k]);
       this.readOpts = r;
     }
+    /** The label of an annotation category, or undefined when the file has no such id. */
+    async annotationCategory(id) {
+      if (!this.annotationCategories) this.annotationCategories = this.readAnnotationCategories();
+      return (await this.annotationCategories).get(id);
+    }
+    async readAnnotationCategories() {
+      if (!figma.annotations || typeof figma.annotations.getAnnotationCategoriesAsync !== "function") return /* @__PURE__ */ new Map();
+      try {
+        return new Map((await figma.annotations.getAnnotationCategoriesAsync()).map((c) => [c.id, c.label]));
+      } catch (e) {
+        this.warn("annotation categories unavailable \u2014 category labels omitted; raw categoryId retained");
+        return /* @__PURE__ */ new Map();
+      }
+    }
     /** See Delivery.sourceBytes. */
     get sourceBytes() {
       return this.delivery.sourceBytes;
@@ -917,87 +931,6 @@
     }
   }
 
-  // src/layout.ts
-  var ALIGN = {
-    MIN: "flex-start",
-    CENTER: "center",
-    MAX: "flex-end",
-    SPACE_BETWEEN: "space-between",
-    SPACE_EVENLY: "space-evenly",
-    SPACE_AROUND: "space-around",
-    BASELINE: "baseline",
-    // AUTO is never looked up (counterAxisAlignContent skips it via the `!== "AUTO"` check below); the
-    // value exists only to make this Record total over AlignKey.
-    AUTO: "flex-start"
-  };
-  function flexIntent(src) {
-    const l = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
-    const isAutoSpacing = src.primaryAxisAlignItems === "SPACE_BETWEEN" || src.primaryAxisAlignItems === "SPACE_EVENLY" || src.primaryAxisAlignItems === "SPACE_AROUND";
-    if (src.itemSpacing && !isAutoSpacing) l.gap = src.itemSpacing;
-    const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
-    if (pad.some((p) => p)) l.padding = pad;
-    if (src.primaryAxisAlignItems && src.primaryAxisAlignItems !== "MIN") l.justifyContent = ALIGN[src.primaryAxisAlignItems];
-    if (src.counterAxisAlignItems && src.counterAxisAlignItems !== "MIN") l.alignItems = ALIGN[src.counterAxisAlignItems];
-    if (src.layoutWrap === "WRAP") {
-      l.flexWrap = "wrap";
-      if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") {
-        if (l.flexDirection === "column") l.columnGap = src.counterAxisSpacing;
-        else l.rowGap = src.counterAxisSpacing;
-      }
-      if (src.counterAxisAlignContent && src.counterAxisAlignContent !== "AUTO") l.alignContent = ALIGN[src.counterAxisAlignContent];
-    }
-    return l;
-  }
-  function simplifyGrid(g) {
-    if (!g) return void 0;
-    const o = { ...ifDefined("pattern", g.pattern ? lower(g.pattern) : void 0) };
-    if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
-    if (g.pattern !== "GRID") {
-      if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
-      if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
-      if (typeof g.offset === "number") o.offset = round(g.offset);
-      if (g.alignment) o.alignment = lower(g.alignment);
-    }
-    if (g.visible === false) o.visible = false;
-    return o;
-  }
-  function simplifyTrack(t) {
-    const o = { ...ifDefined("type", t.type ? lower(t.type) : void 0) };
-    if (typeof t.value === "number") o.value = round(t.value);
-    return o;
-  }
-  var GRID_SELF = { MIN: "start", CENTER: "center", MAX: "end" };
-  function layout(node) {
-    if (!("children" in node)) return void 0;
-    const n = node;
-    if (!("layoutMode" in node) || n.layoutMode === "NONE") {
-      if ("inferredAutoLayout" in node && n.inferredAutoLayout) {
-        const l2 = flexIntent(n.inferredAutoLayout);
-        l2.inferred = true;
-        return l2;
-      }
-      if (!("width" in node)) return void 0;
-      return { mode: "absolute", width: round(n.width), height: round(n.height) };
-    }
-    if (n.layoutMode === "GRID") {
-      const g = { display: "grid" };
-      const pad = [n.paddingTop, n.paddingRight, n.paddingBottom, n.paddingLeft];
-      if (pad.some((p) => p)) g.padding = pad;
-      if ("gridColumnCount" in node && typeof n.gridColumnCount === "number") g.columns = n.gridColumnCount;
-      if ("gridRowCount" in node && typeof n.gridRowCount === "number") g.rows = n.gridRowCount;
-      if ("gridColumnGap" in node && typeof n.gridColumnGap === "number") g.columnGap = n.gridColumnGap;
-      if ("gridRowGap" in node && typeof n.gridRowGap === "number") g.rowGap = n.gridRowGap;
-      if ("gridColumnSizes" in node && Array.isArray(n.gridColumnSizes) && n.gridColumnSizes.length) g.columnSizes = n.gridColumnSizes.map(simplifyTrack);
-      if ("gridRowSizes" in node && Array.isArray(n.gridRowSizes) && n.gridRowSizes.length) g.rowSizes = n.gridRowSizes.map(simplifyTrack);
-      if ("gridItemsPositioning" in node && n.gridItemsPositioning && n.gridItemsPositioning !== "MANUAL") g.autoFlow = String(n.gridItemsPositioning).toLowerCase();
-      if ("gridAutoTracks" in node && n.gridAutoTracks && n.gridAutoTracks !== "NONE") g.autoTracks = String(n.gridAutoTracks).toLowerCase();
-      return g;
-    }
-    const l = flexIntent(n);
-    if ("itemReverseZIndex" in node && n.itemReverseZIndex) l.reverseZ = true;
-    return l;
-  }
-
   // src/variables.ts
   function isVariableAlias(v) {
     return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
@@ -1253,6 +1186,92 @@
       variables,
       hygiene
     };
+  }
+
+  // src/layout.ts
+  var ALIGN = {
+    MIN: "flex-start",
+    CENTER: "center",
+    MAX: "flex-end",
+    SPACE_BETWEEN: "space-between",
+    SPACE_EVENLY: "space-evenly",
+    SPACE_AROUND: "space-around",
+    BASELINE: "baseline",
+    // AUTO is never looked up (counterAxisAlignContent skips it via the `!== "AUTO"` check below); the
+    // value exists only to make this Record total over AlignKey.
+    AUTO: "flex-start"
+  };
+  function flexIntent(src) {
+    const l = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
+    const isAutoSpacing = src.primaryAxisAlignItems === "SPACE_BETWEEN" || src.primaryAxisAlignItems === "SPACE_EVENLY" || src.primaryAxisAlignItems === "SPACE_AROUND";
+    if (src.itemSpacing && !isAutoSpacing) l.gap = src.itemSpacing;
+    const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
+    if (pad.some((p) => p)) l.padding = pad;
+    if (src.primaryAxisAlignItems && src.primaryAxisAlignItems !== "MIN") l.justifyContent = ALIGN[src.primaryAxisAlignItems];
+    if (src.counterAxisAlignItems && src.counterAxisAlignItems !== "MIN") l.alignItems = ALIGN[src.counterAxisAlignItems];
+    if (src.layoutWrap === "WRAP") {
+      l.flexWrap = "wrap";
+      if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") {
+        if (l.flexDirection === "column") l.columnGap = src.counterAxisSpacing;
+        else l.rowGap = src.counterAxisSpacing;
+      }
+      if (src.counterAxisAlignContent && src.counterAxisAlignContent !== "AUTO") l.alignContent = ALIGN[src.counterAxisAlignContent];
+    }
+    return l;
+  }
+  async function simplifyGrid(g) {
+    if (!g) return void 0;
+    const o = { ...ifDefined("pattern", g.pattern ? lower(g.pattern) : void 0) };
+    if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
+    if (g.pattern !== "GRID") {
+      if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
+      if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
+      if (typeof g.offset === "number") o.offset = round(g.offset);
+      if (g.alignment) o.alignment = lower(g.alignment);
+    }
+    if (g.visible === false) o.visible = false;
+    const tokens = await resolveBoundMap(g.boundVariables);
+    if (tokens) o.tokens = tokens;
+    return o;
+  }
+  async function simplifyGrids(grids) {
+    return (await Promise.all(grids.map(simplifyGrid))).filter((g) => !!g);
+  }
+  function simplifyTrack(t) {
+    const o = { ...ifDefined("type", t.type ? lower(t.type) : void 0) };
+    if (typeof t.value === "number") o.value = round(t.value);
+    return o;
+  }
+  var GRID_SELF = { MIN: "start", CENTER: "center", MAX: "end" };
+  function layout(node) {
+    if (!("children" in node)) return void 0;
+    const n = node;
+    if (!("layoutMode" in node) || n.layoutMode === "NONE") {
+      if ("inferredAutoLayout" in node && n.inferredAutoLayout) {
+        const l2 = flexIntent(n.inferredAutoLayout);
+        l2.inferred = true;
+        return l2;
+      }
+      if (!("width" in node)) return void 0;
+      return { mode: "absolute", width: round(n.width), height: round(n.height) };
+    }
+    if (n.layoutMode === "GRID") {
+      const g = { display: "grid" };
+      const pad = [n.paddingTop, n.paddingRight, n.paddingBottom, n.paddingLeft];
+      if (pad.some((p) => p)) g.padding = pad;
+      if ("gridColumnCount" in node && typeof n.gridColumnCount === "number") g.columns = n.gridColumnCount;
+      if ("gridRowCount" in node && typeof n.gridRowCount === "number") g.rows = n.gridRowCount;
+      if ("gridColumnGap" in node && typeof n.gridColumnGap === "number") g.columnGap = n.gridColumnGap;
+      if ("gridRowGap" in node && typeof n.gridRowGap === "number") g.rowGap = n.gridRowGap;
+      if ("gridColumnSizes" in node && Array.isArray(n.gridColumnSizes) && n.gridColumnSizes.length) g.columnSizes = n.gridColumnSizes.map(simplifyTrack);
+      if ("gridRowSizes" in node && Array.isArray(n.gridRowSizes) && n.gridRowSizes.length) g.rowSizes = n.gridRowSizes.map(simplifyTrack);
+      if ("gridItemsPositioning" in node && n.gridItemsPositioning && n.gridItemsPositioning !== "MANUAL") g.autoFlow = String(n.gridItemsPositioning).toLowerCase();
+      if ("gridAutoTracks" in node && n.gridAutoTracks && n.gridAutoTracks !== "NONE") g.autoTracks = String(n.gridAutoTracks).toLowerCase();
+      return g;
+    }
+    const l = flexIntent(n);
+    if ("itemReverseZIndex" in node && n.itemReverseZIndex) l.reverseZ = true;
+    return l;
   }
 
   // src/assets.ts
@@ -1882,8 +1901,11 @@
     }
     const feats = src.openTypeFeatures;
     if (feats && feats !== figma.mixed) {
-      const on = Object.keys(feats).filter((k) => feats[k]);
+      const tags = Object.keys(feats);
+      const on = tags.filter((k) => feats[k]);
+      const off = tags.filter((k) => !feats[k]);
       if (on.length) f.openType = on;
+      if (off.length) f.openTypeOff = off;
     }
     const color = solidFromFills(src.fills);
     if (color) f.color = color;
@@ -2500,17 +2522,21 @@
       }
     }
     if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
-      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter((g) => !!g);
+      out.layoutGrids = await simplifyGrids(node.layoutGrids);
     }
     if ("annotations" in node && isList(node.annotations) && node.annotations.length) {
-      out.annotations = node.annotations.map((a) => {
+      out.annotations = await Promise.all(node.annotations.map(async (a) => {
         const o = {};
         if (a.label) o.label = a.label;
         if (a.labelMarkdown) o.markdown = a.labelMarkdown;
-        if (a.categoryId) o.categoryId = a.categoryId;
+        if (a.categoryId) {
+          o.categoryId = a.categoryId;
+          const category = await r.annotationCategory(a.categoryId);
+          if (category) o.category = category;
+        }
         if (isList(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
         return o;
-      });
+      }));
     }
     if ("devStatus" in node && node.devStatus && node.devStatus.type) {
       out.devStatus = lower(node.devStatus.type);
@@ -3206,12 +3232,11 @@
       paint: paintStyles,
       text: textStyles,
       effect: effectStyles,
-      // Layout-grid styles (column/row grids) — the responsive grid tokens. The grid VALUES are sync;
-      // the shared catalog meta (key/publish) is not, so the map is fanned out like its three siblings.
+      // Layout-grid styles (column/row grids) — the responsive grid tokens, fanned out like their three siblings.
       grid: await Promise.all(
         grid.map(async (s) => ({
           name: s.name,
-          ...ifDefined("grids", Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g) => !!g) : void 0),
+          ...ifDefined("grids", Array.isArray(s.layoutGrids) ? await simplifyGrids(s.layoutGrids) : void 0),
           ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
           ...ifDefined("description", s.description || void 0),
           ...await styleMeta(s)

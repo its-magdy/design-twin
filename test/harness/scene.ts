@@ -256,7 +256,7 @@ export function fixtures() {
       paint: [{ name: "Brand/Primary", id: "s_brand", key: "paintkey123", paints: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], boundVariables: { paints: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, documentationLinks: [{ uri: "https://docs.example.com/brand" }], description: "", getPublishStatusAsync: async () => "CHANGED" }],
       text: [{ name: "Body/Regular", fontSize: 16, fontName: { family: "Inter", style: "Regular" }, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 8, paragraphIndent: 4, leadingTrim: "CAP_HEIGHT", listSpacing: 6, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, description: "" }],
       effect: [],
-      grid: [{ name: "Grid/12col", layoutGrids: [{ pattern: "COLUMNS", count: 12, gutterSize: 20, sectionSize: 60 }], description: "" }],
+      grid: [{ name: "Grid/12col", layoutGrids: [{ pattern: "COLUMNS", count: 12, gutterSize: 20, sectionSize: 60, boundVariables: { gutterSize: { type: "VARIABLE_ALIAS", id: "v_primary" } } }], description: "" }],
       animation: [customAnimStyle, brokenAnimStyle, emptyAnimStyle],
     },
     variables: VARS,
