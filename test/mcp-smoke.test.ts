@@ -225,13 +225,13 @@ void (async () => {
       return result;
     } } });
     await plugin.opened;
-    const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
+    const small = await client.callTool({ name: "figma_export_selection", arguments: { format: "json" } });
     ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0]?.children?.length === 3);
     kids = 1500; // ~200 KB of indented JSON — far past the 25k-token default
     const big = await client.callTool({ name: "figma_export_selection", arguments: {} });
     const idx = JSON.parse(firstText(big)) as WrittenExport;
     ok("an export past the client's output cap is written to disk on its own, and the result says why", !big.isError && firstText(big).length < 8000 && /WITHOUT being asked/.test(idx.note) && /k tokens/.test(idx.note) && fs.existsSync(path.join(CWD, "design")));
-    const refused = await client.callTool({ name: "figma_export_selection", arguments: { writeToDisk: false } });
+    const refused = await client.callTool({ name: "figma_export_selection", arguments: { writeToDisk: false, format: "json" } });
     ok("…and an explicit writeToDisk:false is an error with the size, never a truncated result", refused.isError === true && /writeToDisk:false was passed/.test(firstText(refused)));
     // the limit is already at the 48,000-char cap, so the hint must not say the variable raises it.
     ok("the size message says MAX_MCP_OUTPUT_TOKENS can only lower the limit (it never raises it past the cap)",
@@ -285,7 +285,7 @@ void (async () => {
       await client2.connect(transport2);
       {
         const seen2: Progress[] = [];
-        const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
+        const via = await client2.callTool({ name: "figma_export_selection", arguments: { format: "json" } }, undefined, { onprogress: (p) => seen2.push(p) });
         const s0b = must(seen2[0], "first daemon-routed progress notification");
         const s1b = must(seen2[1], "second daemon-routed progress notification");
         ok("a DAEMON-ROUTED export (a second session sharing this one's bridge) forwards the plugin's progress as notifications/progress too",
@@ -451,7 +451,7 @@ void (async () => {
       ok("a written export result carries durationMs {total ≥ request ≥ 0, write ≥ 0}",
         typeof wd.total === "number" && typeof wd.request === "number" && typeof wd.write === "number" && wd.total >= wd.request && wd.request >= 0 && wd.write >= 0);
       // + inline.
-      const inline = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }));
+      const inline = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App", format: "json" } }));
       const id2 = dur(inline);
       ok("an INLINE export result carries sourceFile too", rec(inline.screen).screen === "Sample" && inline.sourceFile === "Sample App");
       ok("…and durationMs at its top level", typeof id2.total === "number" && typeof id2.request === "number" && id2.total >= id2.request && id2.request >= 0);
