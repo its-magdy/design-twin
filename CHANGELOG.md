@@ -9,8 +9,18 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Changed
+
+- `figma_export_url` and `figma_export_selection` now answer inline with a screen outline: one line per node, with
+  repeated styles hoisted into tables (about a third of the compact JSON on the real screens in the test fixtures).
+  When it is too big it falls back to layout only, then a list of sections, and the first line says which level came
+  back and how to get more. Bindings and truncation notes stay on the outline or are counted in a "Not shown" line.
+  Pass `format: "json"` for the old inline JSON; `writeToDisk: true` is unchanged, and a screen too big to return as
+  JSON is still written to disk on its own, now with its outline beside the index.
+
 ### Added
 
+- `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map
   can't translate, such as a variant option with no code mapping, is left out and listed in `codeUsageWarnings` and on

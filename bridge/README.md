@@ -218,7 +218,7 @@ README documents the flags, and either spelling is fine everywhere:
 | `dtwin token` · `token show` · `token rotate` · `token forget` | `--token-status` · `--show-token` · `--rotate-token` · `--forget-token` |
 | `dtwin help` | `--help` |
 | `dtwin version` | `--version` · `-v` |
-| `dtwin doctor` · `dtwin init` · `dtwin mcp` · `dtwin seed` · `dtwin plugin` | their own entry points (no flag form) |
+| `dtwin doctor` · `dtwin init` · `dtwin mcp` · `dtwin seed` · `dtwin outline` · `dtwin plugin` | their own entry points (no flag form) |
 
 Every verb has its own page: `dtwin <verb> --help` (e.g. `dtwin whoami --help`, `dtwin serve --help`) prints
 that verb's flags and exits without starting a bridge. `outDir` is **positional** (`dtwin pull my-dir`):
@@ -938,8 +938,8 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_list_children` | `nodeId` (an id or a figma.com URL) | — | one node's direct children |
 | `figma_export_full` | — | `page` (ids or names), `allPages` (not both), walk options | design system + frame trees (inline, or an index with `writeToDisk`) |
 | `figma_export_design_system` | — | `variantVisuals` | variables, styles, components, hygiene |
-| `figma_export_selection` | — | walk options | the selection's node JSON, variables, assets |
-| `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | walk options | that node's node JSON, variables, assets |
+| `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
+| `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
 | `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops; with `dryRun`, a preview and `editsAllowed` |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
@@ -979,6 +979,23 @@ the bridge side can turn it on.
   window, e.g. "Design Twin applied 3 edits to this file."
 - `dtwin whoami` prints the state (`edits: off — …` / `edits: ALLOWED — …`) and `editsAllowed` is in its JSON.
 
+### The screen outline — the default inline answer for one screen
+`figma_export_url` and `figma_export_selection` answer inline with an **outline**: one line per node (type, name, id,
+size, layout, component, text, font, paints, tokens, styles), with values that repeat hoisted into `$X` tables once.
+The first line names the level. Over the inline limit it falls back, in order:
+
+| Level | What is on it |
+|---|---|
+| `full` | every node with its layout, text, fonts, paints, tokens and styles |
+| `layout` | every node's identity, size, layout and component, and the first characters of its text |
+| `sections` | the screen's top-level sections with their ids, to read one at a time |
+
+The JSON stays the source of truth. A field a level leaves out is counted in a `Not shown` line, and the manifest's
+truncation counts and warnings are in the header at every level. `format: "json"` returns the raw node JSON inline
+when it fits. A screen too big for that is still written to disk on its own, and its outline then comes as a second
+text block beside the JSON index. With `writeToDisk: false` nothing is written and you get the outline alone. `dtwin
+outline <screen.json> [--budget N]` prints the same view for a file already on disk.
+
 ### `writeToDisk` — the export path that doesn't go through the context window
 Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through
 the same `write-out.ts` the CLI uses — same layout, by construction — and returns a **compact index**
@@ -993,7 +1010,7 @@ Use it for anything past a quick look. Two things make it not optional:
   measures the result before returning it: one that would not fit is **written to disk on its own**
   and the index's `note` says so (a real design-system export is ~590 KB ≈ 147k tokens). Passing
   `writeToDisk: false` opts out of that — an oversized result is then an error naming the size,
-  never a payload cut off mid-JSON.
+  never a payload cut off mid-JSON (a screen's outline still comes back, unless you asked for `format: "json"`).
 
 Every export result (written or inline) carries `sourceFile` (the Figma file it came from) and
 `durationMs {total, request, write}`. When an implicit spill replaces a file whose content differs (the stamps

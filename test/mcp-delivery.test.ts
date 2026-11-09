@@ -248,13 +248,13 @@ const keysOf = (o: Record<string, unknown> | null): string => (o ? Object.keys(o
 console.log("\nthe export tools, end to end — screens:");
 {
   size = 3; label = "A";
-  const inline = await call("figma_export_url", { url: "1:2" });
+  const inline = await call("figma_export_url", { url: "1:2", format: "json" });
   check("fits, writeToDisk omitted → inline (the stripped reply + durationMs), nothing recorded", isInline(inline) && Array.isArray(rec(inline.json.screen).nodes) && inline.lastWrite === null);
-  check("fits, writeToDisk:false → inline", isInline(await call("figma_export_url", { url: "1:2", writeToDisk: false })));
-  const named = await call("figma_export_url", { url: "1:2", outDir: "named" });
+  check("fits, writeToDisk:false → inline", isInline(await call("figma_export_url", { url: "1:2", writeToDisk: false, format: "json" })));
+  const named = await call("figma_export_url", { url: "1:2", outDir: "named", format: "json" });
   check("fits, a named outDir → still inline, and nothing written there", isInline(named) && !fs.existsSync(path.join(app, "named")));
   size = 2000;
-  const refused = await call("figma_export_url", { url: "1:2", writeToDisk: false });
+  const refused = await call("figma_export_url", { url: "1:2", writeToDisk: false, format: "json" });
   check("too big, writeToDisk:false → an error naming the size", refused.isError && refused.text.startsWith(`${WHY}, and writeToDisk:false was passed.`) && refused.lastWrite === null);
   const first = await call("figma_export_url", { url: "1:2" });
   check("too big, omitted → spilled: the spill line, no replaced text, no wrote.prev",
@@ -272,6 +272,34 @@ console.log("\nthe export tools, end to end — screens:");
   check("an explicit write: the plain note (the .prev on disk unmentioned), lastWrite implicit:false with no prev",
     noteOf(explicit) === BASE && json(explicit.lastWrite && { ...explicit.lastWrite, at: "-" }) === json({ tool: "figma_export_url", at: "-", implicit: false, file: S }));
   check("the written result keeps its shape: outDir, wrote, durationMs, note — and no change report", keysOf(explicit.json) === "outDir,wrote,durationMs,note");
+}
+
+console.log("\nthe export tools, end to end — a screen's default answer is its outline:");
+{
+  size = 3; label = "A";
+  const outlineOf = async (a: Record<string, unknown>): Promise<{ blocks: string[]; isError: boolean }> => {
+    const r = await mc.callTool({ name: "figma_export_url", arguments: { url: "1:2", ...a } });
+    const c: unknown = r.content;
+    return { isError: r.isError === true, blocks: (Array.isArray(c) ? (c as Array<{ text?: unknown }>) : []).map((b) => String(b.text ?? "")) };
+  };
+  const small = await outlineOf({});
+  const line = small.blocks[0] ?? "";
+  check("fits → one text block, the full outline, naming its level, the node, and how to get more",
+    small.blocks.length === 1 && line.startsWith("OUTLINE level=full (of full > layout > sections)") && line.includes("#9:0") && line.includes("More: format:\"json\"") && line.includes("writeToDisk:true"));
+  check("…and nothing is written", !fs.existsSync(path.join(app, "design", "export", "pages", "Home", "Other__1_2.json")));
+  size = 2000; label = "E";
+  const spilled = await outlineOf({});
+  const index = parse(spilled.blocks[0] ?? "");
+  check("too big as JSON → the spill's JSON index stays the first block, its note unchanged", rec(index.wrote).screen !== undefined && noteOf({ isError: false, text: "", json: index }).startsWith(SPILLED));
+  check("…with the outline as a second block, within the limit once the index is counted",
+    spilled.blocks.length === 2 && (spilled.blocks[1] ?? "").startsWith("OUTLINE level=") && (spilled.blocks[0] ?? "").length + (spilled.blocks[1] ?? "").length + 1 <= LIMIT);
+  check("…and 2,000 rows fall all the way to the section list, saying so and how to read one", (spilled.blocks[1] ?? "").startsWith("OUTLINE level=sections") && (spilled.blocks[1] ?? "").includes("call this tool with a section's id"));
+  fs.rmSync(path.join(app, "kept"), { recursive: true, force: true });
+  const unwritten = await outlineOf({ writeToDisk: false, outDir: "kept" });
+  check("writeToDisk:false, too big as JSON → the outline alone, nothing written, no error",
+    !unwritten.isError && unwritten.blocks.length === 1 && (unwritten.blocks[0] ?? "").startsWith("OUTLINE level=") && !fs.existsSync(path.join(app, "kept")));
+  const explicit = await outlineOf({ writeToDisk: true });
+  check("writeToDisk:true keeps its compact index, no outline", explicit.blocks.length === 1 && rec(parse(explicit.blocks[0] ?? "").wrote).screen !== undefined);
 }
 
 console.log("\nthe export tools, end to end — full and design system:");
@@ -324,12 +352,12 @@ console.log("\nthe export tools, end to end — outDir:");
   size = 3;
   const bad = await call("figma_export_url", { url: "1:2", outDir: "../x" });
   check("a named outDir outside the cwd is refused before the read", bad.isError && /outDir must stay inside/.test(bad.text) && !bad.asked);
-  const badInline = await call("figma_export_url", { url: "1:2", outDir: "../x", writeToDisk: false });
+  const badInline = await call("figma_export_url", { url: "1:2", outDir: "../x", writeToDisk: false, format: "json" });
   check("…unless writeToDisk:false (nothing is written, so nothing is checked)", isInline(badInline) && badInline.asked);
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-delivery-outside-"));
   process.env.FIGMA_EXPORT_DIR = outside;
   try {
-    check("FIGMA_EXPORT_DIR outside the cwd, fits → inline", isInline(await call("figma_export_url", { url: "1:2" })));
+    check("FIGMA_EXPORT_DIR outside the cwd, fits → inline", isInline(await call("figma_export_url", { url: "1:2", format: "json" })));
     size = 2000;
     const spill = await call("figma_export_url", { url: "1:2" });
     check("…too big → the read runs, then the spill is refused (the outDir check after it)", spill.isError && /outDir must stay inside/.test(spill.text) && spill.asked && fs.readdirSync(outside).length === 0);
@@ -344,7 +372,7 @@ console.log("\nthe export tools, end to end — outDir:");
   process.env.MAX_MCP_OUTPUT_TOKENS = "500";
   try {
     size = 3;
-    check("MAX_MCP_OUTPUT_TOKENS lowers the limit: a small reply still fits", isInline(await call("figma_export_url", { url: "1:2", outDir: "small" })));
+    check("MAX_MCP_OUTPUT_TOKENS lowers the limit: a small reply still fits", isInline(await call("figma_export_url", { url: "1:2", outDir: "small", format: "json" })));
     size = 12;
     const lowered = await call("figma_export_url", { url: "1:2", outDir: "small" });
     check("…a slightly larger one spills, and the note names the lowered limit", noteOf(lowered).startsWith("Written to disk WITHOUT being asked: this export is past the 1,600 characters (~0k tokens)"));
@@ -368,7 +396,7 @@ for (const [name, args] of [["bun figma-mcp.ts", [MCP]], ["dtwin mcp", [CLI, "mc
     await c.connect(t);
     tools = (await c.listTools()).tools.map((x) => x.name);
     size = 3;
-    const r = await c.callTool({ name: "figma_export_url", arguments: { url: "1:2" } });
+    const r = await c.callTool({ name: "figma_export_url", arguments: { url: "1:2", format: "json" } });
     answered = r.isError !== true && Array.isArray(rec(parse(textOf(r)).screen).nodes);
   } catch (e) {
     console.log("    " + name + ": " + (e instanceof Error ? e.message : String(e)));

@@ -121,7 +121,10 @@ before the writer — the one `writeAny`, for both front-ends — ever sees it. 
 (`bridge/src/delivery.ts`): inline when it fits the client's limit, written when asked, written on its own
 (an implicit spill, keeping `<file>.prev` copies) when it does not fit, refused when `writeToDisk:false`
 forbids that — and the note, worded from the change report `writeAny` returns for a spill (the `.prev`
-files it kept, the layer files it replaced, the earlier `.prev` files still on disk).
+files it kept, the layer files it replaced, the earlier `.prev` files still on disk). A screen's default inline
+answer is its outline (`bridge/src/outline.ts`, one module with one function): one line per node, repeated styles
+hoisted, falling back from full to layout to a section list by the same limit. Its field table covers every IR field,
+so anything a level leaves out is counted in the answer rather than lost. The CLI's `dtwin outline` prints the same view.
 
 This replaced a single-socket rule that terminated the incumbent on every new connection. That rule
 did not merely limit you to one file — it was actively unstable: the displaced plugin's

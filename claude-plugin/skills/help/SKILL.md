@@ -100,7 +100,8 @@ tool's full name is `mcp__designtwin__<tool>`), Claude gets live tools instead o
 the user ticks **Allow edits** in the plugin window — it is off by default; if a write is refused, ask them to
 tick it, then retry). The
 standout move is pasting a Figma link mid-conversation — `figma_export_url` reads that exact node
-live, so "what spacing does this use?" gets answered from the real file, not a stale export.
+live, so "what spacing does this use?" gets answered from the real file, not a stale export. Inline it answers with
+a one-line-per-node outline (`format: "json"` for the raw node JSON; the outline's first line says what level you got).
 
 MCP first calls: `figma_status` (which files; pass a row's connId as `client`) → `figma_list_pages
 {depth:1}` → `figma_list_children {nodeId:<page or section id>}` → (`figma_screenshot {nodeId, scale:0.25,

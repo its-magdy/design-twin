@@ -168,6 +168,10 @@ tools `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_list_pages`) — c
 short one isn't found; under another registration the prefix differs.
 
 **Pass `writeToDisk: true` on any export past a quick look.**
+- Without it, `figma_export_url` / `figma_export_selection` answer with a screen **outline** (one line per node, repeated
+  styles hoisted), good for a quick look. Too big, it falls back to layout only, then a section list; the first line
+  says which level you got and how to get more. `format: "json"` gets the raw node JSON inline when it fits. To build
+  a screen, use the files on disk, not the outline.
 - Inline results are capped (25k tokens by default). An export too large to return is written to disk on its own
   and the result's `note` says so, but asking for it up front is cheaper than discovering it — and asset bytes are
   never returned inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
