@@ -49,7 +49,7 @@ is the calling convention, spelled out under the diagram.
                          MCP front-end: interactive reads + the only WRITE path  — optional
   Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js
           same reads as the CLI (inline, or to disk via writeToDisk:true) · figma_write (code → design,
-          4 safe ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
+          6 typed ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
 ```
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**

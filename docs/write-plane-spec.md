@@ -10,7 +10,7 @@ Where the two disagree once a step below lands, that step updates `ARCHITECTURE.
 
 ## Problem
 
-`figma_write` has four ops (`createFrame`, `createText`, `setFill`, `setText`). Every node is one op
+`figma_write` started with four ops (`createFrame`, `createText`, `setFill`, `setText`; the baseline). Every node is one op
 carrying a `parentId`, so a tree is built by create, read the id back, create the children. A screen costs
 a round trip per level and an op per node, colours are raw hex, and nothing can use a component, a
 variable or a style. The cost grows with the node count in both directions: ops out, ids back.

@@ -167,7 +167,8 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
 function modeChange(o: WriteOp, shows: WriteStrField | typeof INHERITED): { newMode: string | undefined; change: string } {
   const newMode = shows === INHERITED ? INHERITED : o[shows];
   const node = `node ${o.nodeId || "?"}`, coll = `'${o.collection || "?"}'`;
-  const change = newMode === INHERITED
+  // The op decides (clear vs set), never the mode's name: a mode can itself be called "inherited".
+  const change = shows === INHERITED
     ? `${node}: the ${coll} variable mode goes from its current mode to inherited (whatever its parent uses)`
     : `${node}: the ${coll} variable mode goes from its current mode to '${newMode || "?"}'`;
   return { newMode, change: change + " — the reply names the mode it replaced; the names are checked against the file when applied" };

@@ -189,11 +189,11 @@ export const cases: Case[] = [{
 }, {
   name: "variable modes (setVariableMode / clearVariableMode): names resolved up front, never guessed, put back on failure",
   async run() {
-    const { rectTarget } = targetsOf();
+    const { rectTarget, textTarget } = targetsOf();
     const screen = modeNode("f:1", "Screen");
     const card = modeNode("f:2", "Card", { [THEME.id]: "7:0" });
     const doc: FakeNode = { id: "0:0", type: "DOCUMENT", name: "Document" }; // no ExplicitVariableModesMixin
-    const w = await writableOn({ "f:1": screen, "f:2": card, "r:1": rectTarget, "0:0": doc });
+    const w = await writableOn({ "f:1": screen, "f:2": card, "r:1": rectTarget, "t:1": textTarget, "0:0": doc });
     const { api, created } = w;
     const theme = (): string | undefined => screen.explicitVariableModes[THEME.id];
 
@@ -276,6 +276,27 @@ export const cases: Case[] = [{
     const off = await api.applyWrites([{ op: "clearVariableMode", nodeId: "f:2", collection: "Theme" }]);
     ok("[MODES] Allow edits off: refused as edits-off, mode unchanged", off.refused === "edits-off" && off.error === EDITS_OFF_MESSAGE && card.explicitVariableModes[THEME.id] === "7:0");
 
+    // Unticked mid-batch, then a later op fails for its own reason (a font load that rejects after the box was
+    // unticked): the put-back is a write too, so it does not run — the mode change stays and the reply says so.
+    await w.allowEdits(true);
+    let reject: (e: Error) => void = () => {};
+    w.figma.loadFontAsync = () => new Promise<void>((_res, rej) => { reject = rej; });
+    const racing = api.applyWrites([
+      { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      { op: "setText", nodeId: "t:1", text: "late" },
+    ]);
+    await new Promise((r) => setTimeout(r, 0)); // setText is now waiting on its font
+    await w.allowEdits(false);
+    const writesBefore = JSON.stringify(screen.explicitVariableModes);
+    reject(new Error("font failed to load"));
+    const raced = await racing;
+    ok("[MODES] unticked, then a later op fails: no put-back runs after consent is off (the mode change stays)",
+      raced.ok === false && raced.failedAt === 1 && theme() === "7:1" && JSON.stringify(screen.explicitVariableModes) === writesBefore
+      && raced.restored === undefined && raced.applied.length === 1 && raced.applied[0]?.to === "Dark");
+    ok("[MODES] …and the error says the earlier mode change stays applied because Allow edits was turned off",
+      /font failed to load/.test(raced.error ?? "") && /'Allow edits' was turned off before the batch could put back its 1 earlier variable mode change, so they stay applied/.test(raced.error ?? ""));
+    w.figma.loadFontAsync = async () => {};
+
     // The dry run (built offline by figma_write) says plainly what changes.
     const setStep = writeOpPreview({ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }, 0);
     const clearStep = writeOpPreview({ op: "clearVariableMode", nodeId: "f:1", collection: "Theme" }, 1);
@@ -284,6 +305,10 @@ export const cases: Case[] = [{
       && /^node f:1: the 'Theme' variable mode goes from its current mode to 'Dark' — the reply names the mode it replaced/.test(setStep.change ?? ""));
     ok("[MODES] dry-run row for a clear: the new mode is 'inherited'",
       clearStep.effect === "overwrites" && clearStep.newMode === "inherited" && /goes from its current mode to inherited/.test(clearStep.change ?? ""));
+    // A mode can itself be named "inherited": a set to it is still a set, never described as a clear.
+    const namedInherited = writeOpPreview({ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "inherited" }, 0);
+    ok("[MODES] dry-run row for a set to a mode NAMED 'inherited' describes a set, not a clear",
+      /goes from its current mode to 'inherited' — /.test(namedInherited.change ?? "") && !/whatever its parent uses/.test(namedInherited.change ?? ""));
     ok("[MODES] the other ops' rows carry no mode fields", !("change" in writeOpPreview({ op: "setFill", nodeId: "r:1", color: "#fff" }, 0)));
   },
 }, {

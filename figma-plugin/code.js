@@ -4326,14 +4326,16 @@
         applied.push(await applyWrite(op, targets.get(i), changes));
       } catch (e) {
         const revoked = e instanceof EditsRevoked;
-        const { restored, failed } = revoked ? { restored: [], failed: [] } : restoreModes(changes);
+        const off = revoked || !editsAllowedNow();
+        const { restored, failed } = off ? { restored: [], failed: [] } : restoreModes(changes);
         const back = new Set(restored.map((c) => c.applied));
+        const kept = !revoked && off && changes.length ? "; 'Allow edits' was turned off before the batch could put back its " + changes.length + " earlier variable mode change" + (changes.length === 1 ? "" : "s") + ", so they stay applied" : "";
         return {
           ok: false,
           applied: applied.filter((a) => !back.has(a)),
           failedAt: i,
           failedOp: op && op.op,
-          error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : ""),
+          error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
           ...revoked ? { refused: "edits-off" } : {},
           ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
         };

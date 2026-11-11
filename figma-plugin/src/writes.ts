@@ -206,16 +206,22 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
       applied.push(await applyWrite(op, targets.get(i), changes));
     } catch (e) {
       const revoked = e instanceof EditsRevoked;
-      // Put back the mode changes this batch made (newest first). Not when the designer just turned edits off:
-      // after that the plugin changes nothing, not even to undo its own work — the reply says what stayed.
-      const { restored, failed } = revoked ? { restored: [], failed: [] } : restoreModes(changes);
+      // Put back the mode changes this batch made (newest first). Not when the designer has turned edits off —
+      // whether that is what stopped the batch or the op failed for its own reason after the box was unticked (a
+      // font load that rejects late): after that the plugin changes nothing, not even to undo its own work, and
+      // the reply says what stayed.
+      const off = revoked || !editsAllowedNow();
+      const { restored, failed } = off ? { restored: [], failed: [] } : restoreModes(changes);
       const back = new Set(restored.map((c) => c.applied));
+      const kept = !revoked && off && changes.length
+        ? "; 'Allow edits' was turned off before the batch could put back its " + changes.length + " earlier variable mode change" + (changes.length === 1 ? "" : "s") + ", so they stay applied"
+        : "";
       return {
         ok: false,
         applied: applied.filter((a) => !back.has(a)),
         failedAt: i,
         failedOp: op && op.op,
-        error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : ""),
+        error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
         ...(revoked ? { refused: "edits-off" as const } : {}),
         ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
       };
