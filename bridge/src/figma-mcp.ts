@@ -706,7 +706,7 @@ registerTool(
 // What a figma_write batch WOULD do, without doing it. creates = additive; overwrites = replaces a
 // property on a node the user already has (the irreversible half).
 // The op schema is the wire contract (commands.ts WriteOp) spelled in Zod: `op` is constrained to the
-// four ops the plugin implements — rejected at the boundary rather than round-tripped — and the fields
+// ops the plugin implements — rejected at the boundary rather than round-tripped — and the fields
 // each op reads are typed. `.passthrough()` keeps a stray extra field flowing (the plugin ignores it).
 // A fill/color is a hex colour: "red" or "#12" is refused here rather than painted as a wrong colour.
 const hexColor = z.string().regex(HEX_COLOR_RE, `must be ${HEX_COLOR_HINT}`);
@@ -727,6 +727,8 @@ const writeOpShape = z.object({
   fontSize: z.number().optional(),
   nodeId: z.string().optional(),
   color: hexColor.optional(),
+  collection: z.string().optional(),
+  mode: z.string().optional(),
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
@@ -774,17 +776,20 @@ registerTool(
       "Apply a batch of safe write operations to the open Figma file. Each op: " +
       "{op:'createFrame', name?, width?, height?, layoutMode?('HORIZONTAL'|'VERTICAL'), itemSpacing?, padding?[t,r,b,l], fill?(#hex), parentId?} | " +
       "{op:'createText', text, fontSize?, fill?, parentId?} | " +
-      "{op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text}. " +
+      "{op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text} | " +
+      "{op:'setVariableMode', nodeId, collection, mode} (collection: a variable collection's exact name, id or key; mode: a mode's exact name or modeId — e.g. a frame's Theme to Dark) | " +
+      "{op:'clearVariableMode', nodeId, collection} (back to the mode the node inherits). " +
+      "A collection or mode name that matches nothing or several things refuses the whole batch before anything runs, with candidates. " +
       "Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied " +
-      "and their node ids are reported alongside the error so you can continue or clean up. " +
+      "and their node ids are reported alongside the error so you can continue or clean up — except variable-mode changes, which are put back. " +
       "There is no undo from here (only the designer's own Cmd-Z) — so for anything that OVERWRITES " +
-      "(setFill/setText), call once with dryRun:true, show the user the preview, and only then apply. " +
+      "(setFill/setText/setVariableMode/clearVariableMode), call once with dryRun:true, show the user the preview, and only then apply. " +
       "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
       "while it is off a write is refused with that instruction, and a dry run reports editsAllowed:false — " +
       "ask the designer to tick it, then retry.",
     inputSchema: {
       ...clientShape,
-      // Constrain `op` to the four ops the plugin actually implements — reject unknown ops at the
+      // Constrain `op` to the ops the plugin actually implements — reject unknown ops at the
       // boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
       ops: z.array(writeOpShape)
         // Writes are not transactional and cannot be undone from here, so a runaway batch is bounded:
@@ -794,7 +799,7 @@ registerTool(
       dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection; when one is connected it also reports editsAllowed — false means a real write would be refused)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
-    // performs only additive updates" — but setFill/setText OVERWRITE properties on nodes the user
+    // performs only additive updates" — but setFill/setText/setVariableMode OVERWRITE properties on nodes the user
     // already has, and (as the description says) nothing here is transactional or rollback-able.
     // Clients use these hints to decide whether to put a human in the loop, so declaring `false`
     // suppressed the confirmation prompt on the one tool that irreversibly mutates a design file.
@@ -815,8 +820,10 @@ registerTool(
     // exist in the document and the agent needs their ids to continue or undo.
     if (!r.ok) {
       const applied = r.applied;
+      const restored = r.restored ?? [];
       return errorResult(
         `Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}\n` +
+          (restored.length ? `${restored.length} earlier variable-mode change(s) were put back as they were.\n` : "") +
           `${applied.length} earlier op(s) were applied and NOT rolled back:\n` +
           JSON.stringify(applied, null, 2)
       );

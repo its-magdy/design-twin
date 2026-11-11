@@ -67,8 +67,8 @@ export interface ScreenshotArgs extends NodeArgs {
   scale?: number;
 }
 
-/** The four write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
-export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText"] as const;
+/** The write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
+export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode"] as const;
 export type WriteOpName = (typeof WRITE_OP_NAMES)[number];
 /** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
@@ -87,13 +87,17 @@ export interface WriteOp {
   fontSize?: number | undefined;
   nodeId?: string | undefined;
   color?: string | undefined;
+  /** setVariableMode / clearVariableMode: a variable collection's name, or its exact id or key */
+  collection?: string | undefined;
+  /** setVariableMode: a mode's name within `collection`, or its exact modeId */
+  mode?: string | undefined;
 }
 export interface WriteArgs {
   ops: WriteOp[];
 }
 
 /** A WriteOp field that holds a string. */
-type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color";
+type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode";
 /** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
  *  (writeOpError — the gate a `write` command passes in the plugin's handleBridge, via parseCommandRequest, before
  *  writes.ts applyWrites runs; applyWrites repeats it for its direct callers). So a batch the preview calls invalid
@@ -104,15 +108,20 @@ interface WriteOpRow {
   effect: "creates" | "overwrites";
   /** The fields the op cannot run without. */
   required: readonly WriteStrField[];
-  /** The new value the preview shows, by preview key, and the op field it is read from. */
-  shows: { newFill?: WriteStrField; newText?: WriteStrField };
+  /** The new value the preview shows, by preview key, and the op field it is read from. `newMode: INHERITED` is
+   *  the value itself: the op puts the node back on the mode it inherits. */
+  shows: { newFill?: WriteStrField; newText?: WriteStrField; collection?: WriteStrField; newMode?: WriteStrField | typeof INHERITED };
 }
+/** What a node's mode for a collection is when none is set on it explicitly: whatever its parent resolves to. */
+export const INHERITED = "inherited";
 // A Record keyed by the union, like COMMAND_SET: an op added to WRITE_OP_NAMES without a row fails to compile.
 export const WRITE_OPS: { readonly [K in WriteOpName]: WriteOpRow } = {
   createFrame: { effect: "creates", required: [], shows: {} },
   createText: { effect: "creates", required: ["text"], shows: { newText: "text" } },
   setFill: { effect: "overwrites", required: ["nodeId", "color"], shows: { newFill: "color" } },
   setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } },
+  setVariableMode: { effect: "overwrites", required: ["nodeId", "collection", "mode"], shows: { collection: "collection", newMode: "mode" } },
+  clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
 };
 
 /** The fields op `op` requires that `fields` lacks (an undefined field is absent: see WriteOp). */
@@ -129,6 +138,11 @@ export interface WritePreviewStep {
   target: string | null;
   newFill?: string | undefined;
   newText?: string | undefined;
+  /** setVariableMode / clearVariableMode: the collection, the mode it is set to ("inherited" when cleared), and the
+   *  change in one sentence. The current mode is in the file, which the preview does not read: the reply names it. */
+  collection?: string | undefined;
+  newMode?: string | undefined;
+  change?: string;
   /** "missing <fields>" — the plugin refuses the batch up front for the same reason */
   invalid?: string;
 }
@@ -143,8 +157,20 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
     target: creates ? (o.parentId ? `new node under ${o.parentId}` : "new node on the current page") : o.nodeId || null,
     ...(row.shows.newFill ? { newFill: o[row.shows.newFill] } : {}),
     ...(row.shows.newText ? { newText: o[row.shows.newText] } : {}),
+    ...(row.shows.collection ? { collection: o[row.shows.collection] } : {}),
+    ...(row.shows.newMode ? modeChange(o, row.shows.newMode) : {}),
     ...(missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}),
   };
+}
+
+/** A mode op's preview fields: the new mode and the plain sentence of what changes. */
+function modeChange(o: WriteOp, shows: WriteStrField | typeof INHERITED): { newMode: string | undefined; change: string } {
+  const newMode = shows === INHERITED ? INHERITED : o[shows];
+  const node = `node ${o.nodeId || "?"}`, coll = `'${o.collection || "?"}'`;
+  const change = newMode === INHERITED
+    ? `${node}: the ${coll} variable mode goes from its current mode to inherited (whatever its parent uses)`
+    : `${node}: the ${coll} variable mode goes from its current mode to '${newMode || "?"}'`;
+  return { newMode, change: change + " — the reply names the mode it replaced; the names are checked against the file when applied" };
 }
 
 // ---------------------------------------------------------------- replies
@@ -284,9 +310,13 @@ export interface ScreenshotReply {
  *  they carry (`screen` / `reference` / `layersDoc`), which is what writeAny narrows on. */
 export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | ScreenshotReply;
 
-/** One applied write op: the id of the node it created or changed (writes.ts applyWrite). */
+/** One applied write op: the id of the node it created or changed (writes.ts applyWrite). A variable-mode op also
+ *  names the collection and the mode before and after (by name; "inherited" when no mode was set on the node). */
 export interface AppliedWrite {
   id?: string;
+  collection?: string;
+  from?: string;
+  to?: string;
 }
 /** Why a whole batch was refused before any op ran — the one refusal a caller must hand to the PERSON at
  *  the Figma window rather than fix itself. `edits-off`: the designer has not ticked "Allow edits"
@@ -305,6 +335,9 @@ export interface WriteResult {
   failedOp?: string;
   error?: string;
   refused?: WriteRefusal;
+  /** On a failure: the variable-mode changes earlier in the batch that were put back as they were (they are not in
+   *  `applied`). Absent when there were none, and when the batch stopped because edits were turned off. */
+  restored?: AppliedWrite[];
 }
 
 // ---------------------------------------------------------------- the map
@@ -479,9 +512,9 @@ const isPageSel = (v: unknown): boolean => isStr(v) || (Array.isArray(v) && v.ev
 
 const isWriteOpName = (v: unknown): v is WriteOpName => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
 const isPadding = (v: unknown): boolean => Array.isArray(v) && v.length === 4 && v.every(isNum);
-const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color"];
+const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode"];
 const WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
-/** Op `i` of a write batch against WriteOp: `op` names one of the four ops, every other declared field has its
+/** Op `i` of a write batch against WriteOp: `op` names one of the ops, every other declared field has its
  *  type, and the op's row in WRITE_OPS has every field it requires. The wire check (argsShapeError, which the
  *  plugin's handleBridge applies to every `write` before it runs) is this, and writes.ts applyWrites repeats it. */
 export function writeOpError(o: unknown, i: number): string | null {

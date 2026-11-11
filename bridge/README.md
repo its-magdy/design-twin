@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
+`figma_write` (batch of safe ops — createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -954,6 +954,20 @@ the current page):
 | `createText` | `text` | `parentId`, `fontSize`, `fill` (hex; `""` is the same as leaving it out: Figma's default fill stays) |
 | `setFill` | `nodeId`, `color` (hex) | — |
 | `setText` | `nodeId`, `text` | — |
+| `setVariableMode` | `nodeId`, `collection`, `mode` | — |
+| `clearVariableMode` | `nodeId`, `collection` | — |
+
+`setVariableMode` sets a node's explicit mode for one variable collection, so a dark or brand version of a screen is
+the same frame with one op; `clearVariableMode` puts the node back on the mode it inherits from its parent.
+`collection` is a local collection's exact name, or a collection's exact id or key; `mode` is a mode's exact name
+in that collection, or its modeId. Names are case-sensitive and never guessed: before any op of the batch runs, the
+plugin resolves every one, and a name that matches nothing or more than one thing (or a missing node, or a node
+type that cannot carry a mode) refuses the whole batch, listing every problem with up to three candidates. A
+library collection the file does not use yet is refused by name (using it means importing one of its variables,
+which a write cannot do yet); one the file already uses works by its exact id. The reply names the collection and
+the mode before and after (`inherited` when none was set), and the dry run says the same change in words (it does
+not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes made earlier
+in it are put back and listed as `restored`; other ops are not rolled back.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

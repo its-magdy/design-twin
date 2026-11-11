@@ -2,7 +2,7 @@
 import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import type { FakeNode } from "../fake-figma.ts";
+import type { FakeCollection, FakeNode, Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -11,15 +11,55 @@ const targetsOf = () => {
   const textTarget: FakeNode = { id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => [{ family: "Inter", style: "Regular" }] };
   const rectTarget: FakeNode & { fills: Array<{ color: { g: number } }> } = { id: "r:1", type: "RECTANGLE", name: "Box", fills: [] };
   const groupTarget: FakeNode = { id: "g:1", type: "GROUP", name: "Wrap" }; // no `fills`
-  return { textTarget, rectTarget, groupTarget };
+  const screenTarget = modeNode("f:1", "Screen");
+  return { textTarget, rectTarget, groupTarget, screenTarget };
 };
+
+/** A node with ExplicitVariableModesMixin: `explicitVariableModes` keyed by collection id, set and cleared with the
+ *  collection OBJECT. The deprecated id-string form throws, as it does under the manifest's documentAccess
+ *  "dynamic-page"; a modeId the collection does not have throws, as Figma's does. */
+function modeNode(id: string, name: string, start: Record<string, string> = {}): FakeNode & { explicitVariableModes: Record<string, string> } {
+  const n = {
+    id, type: "FRAME", name, explicitVariableModes: { ...start },
+    setExplicitVariableModeForCollection(c: unknown, modeId: string) {
+      if (typeof c !== "object" || c === null) throw new Error("setExplicitVariableModeForCollection: pass the collection object (the id string throws under dynamic-page)");
+      const coll = c as FakeCollection;
+      if (!coll.modes.some((m) => m.modeId === modeId)) throw new Error("invalid mode " + modeId);
+      n.explicitVariableModes = { ...n.explicitVariableModes, [coll.id]: modeId };
+    },
+    clearExplicitVariableModeForCollection(c: unknown) {
+      if (typeof c !== "object" || c === null) throw new Error("clearExplicitVariableModeForCollection: pass the collection object");
+      const { [(c as FakeCollection).id]: _gone, ...rest } = n.explicitVariableModes;
+      n.explicitVariableModes = rest;
+    },
+  };
+  return n;
+}
+
+/** The file's variable collections for the mode cases, on top of the base file's ("Primitives", "Semantic"): a Theme
+ *  with Light/Dark, two collections both named "Spacing", one whose modes share a name, a library collection the
+ *  file already uses (reachable by id only), and one the team library offers but the file does not use. */
+const THEME: FakeCollection = { id: "VariableCollectionId:7:1", key: "theme-key", name: "Theme", modes: [{ modeId: "7:0", name: "Light" }, { modeId: "7:1", name: "Dark" }], defaultModeId: "7:0" };
+const modeScene = (): Scene => ({
+  collections: {
+    [THEME.id]: THEME,
+    "VariableCollectionId:8:1": { id: "VariableCollectionId:8:1", name: "Spacing", modes: [{ modeId: "8:0", name: "Compact" }], defaultModeId: "8:0" },
+    "VariableCollectionId:9:1": { id: "VariableCollectionId:9:1", name: "Spacing", modes: [{ modeId: "9:0", name: "Roomy" }], defaultModeId: "9:0" },
+    "VariableCollectionId:10:1": { id: "VariableCollectionId:10:1", name: "Density", modes: [{ modeId: "10:0", name: "Same" }, { modeId: "10:1", name: "Same" }], defaultModeId: "10:0" },
+  },
+  remote: { collections: { "VariableCollectionId:abc/1:1": { id: "VariableCollectionId:abc/1:1", name: "Shared Theme", modes: [{ modeId: "1:0", name: "Day" }, { modeId: "1:1", name: "Night" }], defaultModeId: "1:0" } } },
+  teamLibrary: {
+    getAvailableLibraryVariableCollectionsAsync: async () => [{ name: "Brand Colors", key: "lib-brand", libraryName: "Core Library" }],
+    getVariablesInLibraryCollectionAsync: async () => [],
+  },
+});
 
 /** A file the plugin can write to: createFrame/createText record what they made in `created`, fonts load, and the
  *  open page accepts children. `editorType`, when given, is the editor the file is open in. "Allow edits" is
  *  still OFF (its default): a case that applies writes ticks it, the way the window does (`writableOn`). */
-function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>) {
+function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>, extra: Scene = modeScene()) {
   const created: FakeNode[] = [];
-  const w = world({ nodes, ...(editorType !== undefined ? { file: { editorType } } : {}), ...(clientStorage ? { clientStorage } : {}) }, {
+  const w = world({ ...extra, nodes, ...(editorType !== undefined ? { file: { editorType } } : {}), ...(clientStorage ? { clientStorage } : {}) }, {
     createFrame: () => { const f = { id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} }; created.push(f); return f; },
     createText: () => { const t = { id: "new:text", type: "TEXT", characters: "", fills: [], fontName: { family: "Inter", style: "Regular" } }; created.push(t); return t; },
     loadFontAsync: async () => {},
@@ -99,7 +139,7 @@ export const cases: Case[] = [{
     ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming the four", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode");
     ok("write: empty/omitted batch is a no-op success", (await api.applyWrites(undefined)).ok === true);
 
     // A dry run refuses a createText with no `text` ("missing text"), so applying it must refuse it too — not
@@ -116,13 +156,15 @@ export const cases: Case[] = [{
     // Every op, complete and then short of each field it sets, through all three readers of commands.ts WRITE_OPS:
     // figma_write's dry-run step (writeOpPreview), the wire check (argsShapeError) and the plugin's applyWrites in the
     // VM. A dry run that refuses what applying accepts (or the reverse) is the drift this table exists to stop.
-    const { textTarget, rectTarget, groupTarget } = targetsOf();
-    const { api, created } = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
+    const { textTarget, rectTarget, groupTarget, screenTarget } = targetsOf();
+    const { api, created } = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "f:1": screenTarget });
     const complete: { [K in WriteOpName]: WriteOp } = {
       createFrame: { op: "createFrame", name: "F", width: 10, height: 10, fill: "#fff" },
       createText: { op: "createText", text: "T", fontSize: 12, fill: "#000" },
       setFill: { op: "setFill", nodeId: "r:1", color: "#00f" },
       setText: { op: "setText", nodeId: "t:1", text: "x" },
+      setVariableMode: { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      clearVariableMode: { op: "clearVariableMode", nodeId: "f:1", collection: "Theme" },
     };
     for (const name of WRITE_OP_NAMES) {
       const full = complete[name];
@@ -143,6 +185,106 @@ export const cases: Case[] = [{
       }
       ok(`[WRITE-OPS] ${name}: some variant is refused exactly when the row requires a field`, refusedSome === WRITE_OPS[name].required.length > 0);
     }
+  },
+}, {
+  name: "variable modes (setVariableMode / clearVariableMode): names resolved up front, never guessed, put back on failure",
+  async run() {
+    const { rectTarget } = targetsOf();
+    const screen = modeNode("f:1", "Screen");
+    const card = modeNode("f:2", "Card", { [THEME.id]: "7:0" });
+    const doc: FakeNode = { id: "0:0", type: "DOCUMENT", name: "Document" }; // no ExplicitVariableModesMixin
+    const w = await writableOn({ "f:1": screen, "f:2": card, "r:1": rectTarget, "0:0": doc });
+    const { api, created } = w;
+    const theme = (): string | undefined => screen.explicitVariableModes[THEME.id];
+
+    // Set by names: the mode lands on the node, and the reply names the mode it replaced.
+    const byName = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }]);
+    ok("[MODES] set by names: the explicit mode is set and the reply says inherited -> Dark",
+      byName.ok === true && theme() === "7:1" && JSON.stringify(byName.applied) === JSON.stringify([{ id: "f:1", collection: "Theme", from: "inherited", to: "Dark" }]));
+    // Exact identifiers: the collection's id or key, the mode's modeId.
+    const byId = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: THEME.id, mode: "7:0" }]);
+    ok("[MODES] set by exact collection id + modeId: Dark -> Light", byId.ok === true && theme() === "7:0" && byId.applied[0]?.from === "Dark" && byId.applied[0]?.to === "Light");
+    const byKey = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "theme-key", mode: "Dark" }]);
+    ok("[MODES] set by the collection's key", byKey.ok === true && theme() === "7:1");
+    // Clear: back to inherited (the collection leaves explicitVariableModes).
+    const cleared = await api.applyWrites([{ op: "clearVariableMode", nodeId: "f:1", collection: "Theme" }]);
+    ok("[MODES] clear: the explicit mode is gone, the reply says Dark -> inherited",
+      cleared.ok === true && !(THEME.id in screen.explicitVariableModes) && cleared.applied[0]?.from === "Dark" && cleared.applied[0]?.to === "inherited");
+    // A library collection the file already uses is a VariableCollection, reachable by its exact id.
+    const remote = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "VariableCollectionId:abc/1:1", mode: "Night" }]);
+    ok("[MODES] a library collection already in the file works by its exact id", remote.ok === true && screen.explicitVariableModes["VariableCollectionId:abc/1:1"] === "1:1");
+
+    // Names that do not resolve refuse the whole batch before anything runs.
+    const refused = async (ops: Array<Record<string, unknown>>, label: string, re: RegExp, failedAt = 0): Promise<void> => {
+      const before = { ...screen.explicitVariableModes }, made = created.length;
+      const r = await api.applyWrites(ops.map((o) => ({ op: "setVariableMode", nodeId: "f:1", ...o })));
+      const err = r.error ?? "";
+      ok(`[MODES] ${label}: refused whole, nothing changed (${err.split("\n")[0]})`,
+        r.ok === false && re.test(err) && r.failedAt === failedAt && r.applied.length === 0 && created.length === made
+        && JSON.stringify(screen.explicitVariableModes) === JSON.stringify(before) && /nothing was changed/i.test(err));
+    };
+    await refused([{ collection: "Them", mode: "Dark" }], "unknown collection, with candidates", /collection 'Them' matches no local variable collection; closest: 'Theme'/);
+    const unknownErr = must((await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "Zzzzzzzz", mode: "x" }])).error, "unknown");
+    ok("[MODES] candidates are at most three", (unknownErr.match(/closest: (.*?)\. Nothing/)?.[1] ?? "").split(", ").length === 3);
+    await refused([{ collection: "Spacing", mode: "Compact" }], "ambiguous collection name, listing each with its id",
+      /collection 'Spacing' matches 2 local collections — pass one's id: 'Spacing' \(VariableCollectionId:8:1\), 'Spacing' \(VariableCollectionId:9:1\)/);
+    await refused([{ collection: "Theme", mode: "Darkk" }], "unknown mode, with candidates", /mode 'Darkk' is not in collection 'Theme'; closest: 'Dark'/);
+    await refused([{ collection: "Density", mode: "Same" }], "ambiguous mode name", /mode 'Same' appears 2 times in collection 'Density' — pass its modeId: 'Same' \(10:0\), 'Same' \(10:1\)/);
+    await refused([{ collection: "theme", mode: "dark" }], "a case-only match is not taken", /collection 'theme' matches no local variable collection; closest: 'Theme'/);
+    await refused([{ collection: "Brand Colors", mode: "Default" }], "a library collection not in the file is refused by name, naming its library",
+      /collection 'Brand Colors' is in the library 'Core Library'.*a write cannot import one yet/);
+    await refused([{ nodeId: "gone:1", collection: "Theme", mode: "Dark" }], "missing node", /no node with id 'gone:1'/);
+    await refused([{ nodeId: "0:0", collection: "Theme", mode: "Dark" }], "a node type without variable modes, named", /node 'Document' is a DOCUMENT, which cannot carry a variable mode/);
+    // Every bad name in the batch, at once; ops before the first bad one are not run either.
+    const many = await api.applyWrites([
+      { op: "createFrame", name: "never" },
+      { op: "setVariableMode", nodeId: "f:1", collection: "Them", mode: "Dark" },
+      { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      { op: "clearVariableMode", nodeId: "gone:2", collection: "Spacing" },
+      { op: "setVariableMode", nodeId: "f:2", collection: "Theme", mode: "Dusk" },
+    ]);
+    const manyErr = must(many.error, "many.error");
+    ok("[MODES] every bad name is listed at once and nothing runs, not even the createFrame before them",
+      many.ok === false && many.failedAt === 1 && many.failedOp === "setVariableMode" && /^4 problems — nothing was changed:/.test(manyErr)
+      && /ops\[1\] \(setVariableMode\): collection 'Them'/.test(manyErr) && /ops\[3\] \(clearVariableMode\): no node with id 'gone:2'/.test(manyErr)
+      && /ops\[3\] \(clearVariableMode\): collection 'Spacing' matches 2/.test(manyErr) && /ops\[4\] \(setVariableMode\): mode 'Dusk'/.test(manyErr)
+      && !/ops\[2\]/.test(manyErr) && created.every((n) => n.name !== "never") && theme() === undefined);
+
+    // All or nothing: a later op failing puts the mode changes back — to an explicit mode and to inherited alike.
+    const madeBefore = created.length;
+    const failing = await api.applyWrites([
+      { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      { op: "createFrame", name: "Kept" },
+      { op: "setVariableMode", nodeId: "f:2", collection: "Theme", mode: "Dark" },
+      { op: "setVariableMode", nodeId: "f:2", collection: "Theme", mode: "Light" },
+      { op: "clearVariableMode", nodeId: "f:2", collection: "Theme" },
+      { op: "setFill", nodeId: "missing:9", color: "#fff" },
+    ]);
+    ok("[MODES] a later op failing: every mode change in the batch is put back (inherited stays inherited, Light stays Light)",
+      failing.ok === false && failing.failedAt === 5 && theme() === undefined && card.explicitVariableModes[THEME.id] === "7:0");
+    ok("[MODES] …the reply lists them as restored, in batch order, and keeps only the createFrame as applied",
+      JSON.stringify(failing.applied) === JSON.stringify([{ id: "new:frame" }]) && created.length === madeBefore + 1
+      && JSON.stringify((failing.restored ?? []).map((r) => [r.id, r.from, r.to])) === JSON.stringify([["f:1", "inherited", "Dark"], ["f:2", "Light", "Dark"], ["f:2", "Dark", "Light"], ["f:2", "Light", "inherited"]]));
+    ok("[MODES] …and the toast says what happened", w.notified.some((t) => /applied 1 edit, then one failed/.test(t)));
+
+    // The same gates as every overwrite: Dev Mode refuses the batch whole, and so does Allow edits off.
+    w.figma.editorType = "dev";
+    const dev = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }]);
+    ok("[MODES] Dev Mode: refused whole, mode unchanged", dev.ok === false && /Dev Mode/.test(dev.error ?? "") && theme() === undefined);
+    w.figma.editorType = "figma";
+    await w.allowEdits(false);
+    const off = await api.applyWrites([{ op: "clearVariableMode", nodeId: "f:2", collection: "Theme" }]);
+    ok("[MODES] Allow edits off: refused as edits-off, mode unchanged", off.refused === "edits-off" && off.error === EDITS_OFF_MESSAGE && card.explicitVariableModes[THEME.id] === "7:0");
+
+    // The dry run (built offline by figma_write) says plainly what changes.
+    const setStep = writeOpPreview({ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }, 0);
+    const clearStep = writeOpPreview({ op: "clearVariableMode", nodeId: "f:1", collection: "Theme" }, 1);
+    ok("[MODES] dry-run row for a set: an overwrite of the node, collection, new mode and the change in words",
+      setStep.effect === "overwrites" && setStep.target === "f:1" && setStep.collection === "Theme" && setStep.newMode === "Dark"
+      && /^node f:1: the 'Theme' variable mode goes from its current mode to 'Dark' — the reply names the mode it replaced/.test(setStep.change ?? ""));
+    ok("[MODES] dry-run row for a clear: the new mode is 'inherited'",
+      clearStep.effect === "overwrites" && clearStep.newMode === "inherited" && /goes from its current mode to inherited/.test(clearStep.change ?? ""));
+    ok("[MODES] the other ops' rows carry no mode fields", !("change" in writeOpPreview({ op: "setFill", nodeId: "r:1", color: "#fff" }, 0)));
   },
 }, {
   name: "parentId (a silent reparent must not slip through)",

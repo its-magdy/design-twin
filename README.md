@@ -136,7 +136,7 @@ to your tokens; build-screen reads both, and drift-lint checks the component map
   running. The plugin is not on Figma Community, by design: you import it once as a development plugin.
 - **Bun is required.** The CLI, the MCP server and the Claude Code plugin's scripts run on Bun 1.4.2 or later. Node
   alone won't run them.
-- **Writes are deliberately small.** `figma_write` creates a frame or text, sets a fill or sets text, and only after
+- **Writes are deliberately small.** `figma_write` creates a frame or text, sets a fill or text, or sets a frame's variable mode, and only after
   you tick **Allow edits** in the plugin window.
 - **Build checks vary by stack.** Web builds are measured node by node in Chromium. Native builds are rendered with
   the stack's own tools and compared as images. The generated Swift, Kotlin and Dart token files are not compiled in CI.
@@ -324,7 +324,8 @@ Registered as `designtwin`, so tools appear as `mcp__designtwin__<tool>`:
 `figma_export_selection`, `figma_export_url`, `figma_export_design_system`, `figma_write`. Two more read the export
 already on disk and need no Figma connection: `design_get_component` and `design_drift_lint`.
 
-`figma_write` applies a small set of safe ops (create a frame or text, set a fill, set text) and runs no arbitrary
+`figma_write` applies a small set of safe ops (create a frame or text, set a fill, set text, set or clear a variable
+mode) and runs no arbitrary
 code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**.
 
 Pass `writeToDisk: true` to the export tools for anything large. It's also the only way to get asset

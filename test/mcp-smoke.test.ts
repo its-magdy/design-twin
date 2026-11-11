@@ -51,7 +51,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string; newMode?: string; change?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -92,6 +92,11 @@ void (async () => {
     ok("dryRun previews without a plugin connected, and applies nothing", !dry.isError && preview.dryRun === true && preview.applied === false);
     ok("…and with no plugin connected it cannot tell whether edits are allowed (editsAllowed:null), without waiting for one", preview.editsAllowed === null && preview.wouldRefuse === undefined);
     ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1]?.target === "1:2" && /missing text/.test(preview.steps[2]?.invalid ?? ""));
+    const dryModes = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "setVariableMode", nodeId: "1:2", collection: "Theme", mode: "Dark" }, { op: "clearVariableMode", nodeId: "1:2", collection: "Theme" }, { op: "setVariableMode", nodeId: "1:2", collection: "Theme" }] } });
+    const modes = JSON.parse(firstText(dryModes)) as WritePreview;
+    ok("dryRun previews variable-mode ops as overwrites saying what changes, and flags one without a mode",
+      !dryModes.isError && modes.overwrites === 3 && modes.invalid === 1 && modes.steps[0]?.newMode === "Dark" && modes.steps[1]?.newMode === "inherited"
+      && /the 'Theme' variable mode goes from its current mode to 'Dark'/.test(modes.steps[0]?.change ?? "") && /missing mode/.test(modes.steps[2]?.invalid ?? ""));
 
     const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
     ok("an op outside the four implemented ones is rejected at the schema boundary", bad.isError === true);

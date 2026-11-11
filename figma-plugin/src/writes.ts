@@ -4,6 +4,7 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
 import { EDITS_OFF_MESSAGE, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
+import { applyMode, modeRefusal, resolveModeOps, restoreModes, type ModeChange, type ModeTarget } from "./variable-modes";
 import type { WritesMsg } from "./messages";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
@@ -59,7 +60,9 @@ function consent(): void {
   if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch — the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
 }
 
-async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
+// `mode` is the op's resolution (variable-modes.ts resolveModeOps, run before the batch) for a variable-mode op, and
+// `changes` collects each mode change applied, so a later failure can put them back.
+async function applyWrite(op: WriteOp, mode: ModeTarget | undefined, changes: ModeChange[]): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
@@ -116,6 +119,15 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
       nd.characters = op.text || "";
       return ifDefined("id", op.nodeId);
     }
+    // Resolved up front with the rest of the batch: here the target is known to exist and the names to match.
+    case "setVariableMode":
+    case "clearVariableMode": {
+      if (!mode) throw new Error(op.op + ": the op was not resolved before the batch ran");
+      consent();
+      const change = applyMode(mode);
+      changes.push(change);
+      return change.applied;
+    }
     default:
       throw new Error("unknown write op: " + op.op);
   }
@@ -123,8 +135,9 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
 
 // Apply a batch, reporting partial progress instead of throwing it away. Ops mutate the document one
 // at a time and Figma gives us no transaction to roll back, so when op N fails the first N-1 are
-// ALREADY committed. Throwing here discarded the ids of everything just created, leaving orphan nodes
-// the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
+// ALREADY committed — except variable-mode changes, which keep the mode they replaced and are put back
+// (they move to `restored`), so a theme switch never half-sticks. Throwing here discarded the ids of
+// everything just created, leaving orphan nodes the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   const r = await gatedWrites(Array.isArray(ops) ? ops : []);
@@ -144,6 +157,7 @@ function announce(r: WriteResult): void {
     : "Design Twin refused an edit request — 'Allow edits' is off.";
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+  else if (!r.ok && r.restored && r.restored.length) text = "Design Twin put back " + r.restored.length + " variable mode change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
   if (text === null) return;
   try { figma.notify(text, r.ok ? undefined : { error: true }); } catch (e) { console.error("[export] figma.notify failed:", e); }
   const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
@@ -180,17 +194,30 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     const bad = writeOpError(op, i);
     if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
   }
+  // Every name a variable-mode op carries is resolved against the file before the first op runs (spec decision 15):
+  // a collection or mode that matches nothing or several things, a missing node, a node that cannot carry a mode —
+  // the batch is refused whole, every problem listed.
+  const { targets, problems } = await resolveModeOps(list);
+  const firstProblem = problems[0];
+  if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: modeRefusal(problems) };
+  const changes: ModeChange[] = [];
   for (const [i, op] of list.entries()) {
     try {
-      applied.push(await applyWrite(op));
+      applied.push(await applyWrite(op, targets.get(i), changes));
     } catch (e) {
+      const revoked = e instanceof EditsRevoked;
+      // Put back the mode changes this batch made (newest first). Not when the designer just turned edits off:
+      // after that the plugin changes nothing, not even to undo its own work — the reply says what stayed.
+      const { restored, failed } = revoked ? { restored: [], failed: [] } : restoreModes(changes);
+      const back = new Set(restored.map((c) => c.applied));
       return {
         ok: false,
-        applied,
+        applied: applied.filter((a) => !back.has(a)),
         failedAt: i,
         failedOp: op && op.op,
-        error: errMsg(e),
-        ...(e instanceof EditsRevoked ? { refused: "edits-off" as const } : {}),
+        error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : ""),
+        ...(revoked ? { refused: "edits-off" as const } : {}),
+        ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
       };
     }
   }

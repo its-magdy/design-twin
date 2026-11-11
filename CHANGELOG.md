@@ -24,6 +24,11 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can set a node's variable mode: `setVariableMode` (`nodeId`, `collection`, `mode`) makes a dark or
+  brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
+  mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several
+  things refuses the whole batch before anything runs, with up to three candidates. If a later op in the batch
+  fails, the mode changes are put back. A library collection the file doesn't use yet is refused by name.
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map

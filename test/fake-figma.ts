@@ -147,8 +147,9 @@ export interface ListChildrenResult {
   /** never emitted (asserted) */
   assets?: undefined;
 }
-/** writes.ts WriteResult (applied rows are `{ id }`) */
-export interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string; refused?: "edits-off" }
+/** writes.ts WriteResult (applied rows are `{ id }`; a variable-mode row adds collection/from/to) */
+interface AppliedRow { id?: string; collection?: string; from?: string; to?: string }
+export interface WriteResult { ok: boolean; applied: AppliedRow[]; failedAt?: number; failedOp?: string; error?: string; refused?: "edits-off"; restored?: AppliedRow[] }
 interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
 export interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }
