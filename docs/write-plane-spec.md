@@ -17,8 +17,23 @@ variable or a style. The cost grows with the node count in both directions: ops 
 ## Scope
 
 In scope first: **compose new screens from the existing design system**, and **patch existing nodes**.
-Later, on the same pieces: code → design sync, and authoring the design system itself (new variables,
-styles, components).
+Then, on the same pieces: **starting from a file with no design system** (create variables, styles and
+components). Later: code → design sync.
+
+### Starting from nothing
+
+A file with no components and no variables is the expensive case: every part is described node by node,
+and every value is raw. The route is never to draw screens from raw shapes. It is to get a small design
+system first, then compose from it by name:
+
+| Starting point | Route |
+|---|---|
+| A ready-made library can be enabled in the file | compose from it by name; nothing else is needed |
+| The project has tokens in code | a script turns them into the variable and style table, landed from disk at almost no token cost |
+| Truly blank | create the variables and styles as one table, create a small kit of components once, then compose |
+
+A set of variables or styles is sent as one compact table, not an op each. A component is a tree spec
+marked as a component, with its properties declared. Both update in place when sent again.
 
 ## Decisions
 
@@ -105,11 +120,12 @@ Each step is its own pull request into the write-plane base branch and is usable
 3. Clone and patch; repetition; images from disk.
 4. Bulk patch by rule, with the dry-run token.
 5. Source edits.
+6. Create variables and styles; seed them from code tokens; create components.
 
 The designing skill and the docs are updated as each step lands. All of it is new TypeScript on the
 current op table, the consent gate and the whole-batch check.
 
 ## Out of scope for now
 
-Code → design sync; creating variables, styles and components; raw SVG input; deleting or moving nodes
+Code → design sync; raw SVG input; deleting or moving nodes
 the agent did not create; verify-after-write against code; a rendered before/after picture.
