@@ -18,7 +18,7 @@ variable or a style. The cost grows with the node count in both directions: ops 
 
 In scope first: **compose new screens from the existing design system**, and **patch existing nodes**.
 Then, on the same pieces: **starting from a file with no design system** (create variables, styles and
-components). Later: code → design sync.
+components), and **from an existing app to Figma** (capture a rendered page as a screen).
 
 ### Starting from nothing
 
@@ -34,6 +34,21 @@ system first, then compose from it by name:
 
 A set of variables or styles is sent as one compact table, not an op each. A component is a tree spec
 marked as a component, with its properties declared. Both update in place when sent again.
+
+### From an existing app to Figma
+
+Someone has a working interface and no Figma file for it: an app an AI design tool generated, a
+prototype, their own product. The route is mechanical, so the model types none of the values:
+
+1. A script opens the running page, reads what was rendered with the probe the verify step already uses,
+   and writes a tree spec to disk. Flex and grid arrive as auto-layout, text as real text.
+2. `figma_write` lands the spec from disk. The result is faithful but plain: raw values, no components.
+3. Values that equal a variable or style in the file are bound to it, and an element the component map
+   names arrives as an instance. The component map is used in the write direction: a code component and
+   its props resolve to the Figma component and its property values.
+
+With tokens seeded from the code first, this is the whole route from an app to a design system plus its
+screens.
 
 ## Decisions
 
@@ -122,12 +137,14 @@ one wave can be built in parallel.
 3. Source edits; clone and patch with repetition; the designing skill and the docs. The review prototype
    runs alongside.
 4. Starting from nothing: create variables and styles; seed them from code tokens; create components.
-5. Bulk patch by rule, with the dry-run token, once the review prototype has answered; images.
+5. From an existing app to Figma: images; capture a rendered page as a screen; bind the capture to the
+   file's variables and components.
+6. Bulk patch by rule, with the dry-run token, once the review prototype has answered.
 
 Starting from nothing comes before bulk patch because its chain of dependencies is the longest. All of it
 is new TypeScript on the current op table, the consent gate and the whole-batch check.
 
 ## Out of scope for now
 
-Code → design sync; raw SVG input; deleting or moving nodes
+Raw SVG input; deleting or moving nodes
 the agent did not create; verify-after-write against code; a rendered before/after picture.
