@@ -112,18 +112,20 @@ marked as a component, with its properties declared. Both update in place when s
 
 ## Build order
 
-Each step is its own pull request into the write-plane base branch and is usable on its own.
+Each piece is its own pull request into the write-plane base branch and is usable on its own. Pieces in
+one wave can be built in parallel.
 
-1. The measurement suite; the tree spec (frames, auto-layout, text, instances, variables, styles,
-   placement, all or nothing); a plain approve/reject card.
-2. Patch by id with the wider property set; stable keys; re-send updates in place; one undo per batch.
-3. Clone and patch; repetition; images from disk.
-4. Bulk patch by rule, with the dry-run token.
-5. Source edits.
-6. Create variables and styles; seed them from code tokens; create components.
+1. The measurement suite and its baseline; the tree spec (frames, auto-layout, text, placement, all or
+   nothing).
+2. Design-system references; patch by id with one undo per batch; a plain approve/reject card; spec from
+   disk with stable keys and re-send updating in place. Checked against live Figma before wave 3.
+3. Source edits; clone and patch with repetition; the designing skill and the docs. The review prototype
+   runs alongside.
+4. Starting from nothing: create variables and styles; seed them from code tokens; create components.
+5. Bulk patch by rule, with the dry-run token, once the review prototype has answered; images.
 
-The designing skill and the docs are updated as each step lands. All of it is new TypeScript on the
-current op table, the consent gate and the whole-batch check.
+Starting from nothing comes before bulk patch because its chain of dependencies is the longest. All of it
+is new TypeScript on the current op table, the consent gate and the whole-batch check.
 
 ## Out of scope for now
 
