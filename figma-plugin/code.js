@@ -4739,13 +4739,14 @@
     (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out));
     return out;
   }
+  var ImportsRevoked = class extends Error {
+  };
   async function resolveRefs(specs, loadFont) {
     const uses = [];
     for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
     const refs2 = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
     const problems = [];
-    const deferred = [];
-    if (!uses.length) return { refs: refs2, problems, imports: async () => [], importCount: 0 };
+    if (!uses.length) return { refs: refs2, problems, imports: async () => ({ problems: [], revoked: false }), importCount: 0 };
     const file = fileLookups();
     const found = /* @__PURE__ */ new Map();
     const lookup = (kind, ref2, run2) => {
@@ -4757,18 +4758,8 @@
       }
       return p;
     };
-    const reported = /* @__PURE__ */ new Map();
-    const bad = (u, message) => {
-      const k = u.index + "\0" + u.kind + "\0" + u.ref + "\0" + message;
-      const seen = reported.get(k);
-      if (seen) {
-        seen.more++;
-        return;
-      }
-      const problem = { index: u.index, op: "createTree", message: u.path + ": " + message };
-      reported.set(k, { problem, more: 0 });
-      problems.push(problem);
-    };
+    const report = reporter(problems);
+    const bad = report.bad;
     const imported = [];
     for (const u of uses) {
       const f = u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref)) : u.kind === "variable" ? await lookup(u.kind, u.ref, () => file.variable(u.ref)) : await lookup(u.kind, u.ref, () => file.textStyle(u.ref));
@@ -4788,35 +4779,57 @@
       const err = await accept(u, f.ok, refs2, loadFont);
       if (err) bad(u, err);
     }
-    for (const { problem, more } of reported.values()) if (more) problem.message += " (and " + more + " more place" + (more === 1 ? "" : "s") + " in this spec)";
-    const once = /* @__PURE__ */ new Map();
-    for (const { use, get } of imported) {
-      deferred.push(async () => {
-        const k = use.kind + "\0" + use.ref;
-        let p = once.get(k);
-        if (!p) {
-          p = get();
-          once.set(k, p);
-        }
-        let item;
-        try {
-          item = await p;
-        } catch (e) {
-          return [{ index: use.index, op: "createTree", message: use.path + ": " + importFailed(use, e) }];
-        }
-        const err = await accept(use, item, refs2, loadFont);
-        return err ? [{ index: use.index, op: "createTree", message: use.path + ": " + err }] : [];
-      });
-    }
+    report.finish();
     const importCount = new Set(imported.map((i) => i.use.kind + "\0" + i.use.ref)).size;
     return {
       refs: refs2,
       problems,
       importCount,
-      async imports() {
-        const out = [];
-        for (const d of deferred) out.push(...await d());
-        return out;
+      async imports(allowed2) {
+        const late = [];
+        const lateReport = reporter(late);
+        const once = /* @__PURE__ */ new Map();
+        for (const { use, get } of imported) {
+          const k = use.kind + "\0" + use.ref;
+          let got = once.get(k);
+          if (!got) {
+            if (!allowed2()) return { problems: [], revoked: true };
+            try {
+              got = { item: await get(allowed2) };
+            } catch (e) {
+              if (e instanceof ImportsRevoked) return { problems: [], revoked: true };
+              got = { error: e };
+            }
+            once.set(k, got);
+          }
+          if ("error" in got) {
+            lateReport.bad(use, importFailed(use, got.error));
+            continue;
+          }
+          const err = await accept(use, got.item, refs2, loadFont);
+          if (err) lateReport.bad(use, err);
+        }
+        lateReport.finish();
+        return { problems: late, revoked: false };
+      }
+    };
+  }
+  function reporter(out) {
+    const reported = /* @__PURE__ */ new Map();
+    return {
+      bad(u, message) {
+        const k = u.index + "\0" + u.kind + "\0" + u.ref + "\0" + message;
+        const seen = reported.get(k);
+        if (seen) {
+          seen.more++;
+          return;
+        }
+        const problem = { index: u.index, op: "createTree", message: u.path + ": " + message };
+        reported.set(k, { problem, more: 0 });
+        out.push(problem);
+      },
+      finish() {
+        for (const { problem, more } of reported.values()) if (more) problem.message += " (and " + more + " more place" + (more === 1 ? "" : "s") + " in this spec)";
       }
     };
   }
@@ -4854,11 +4867,29 @@
     }
     const mapped = mapProps(node.props || {}, defs, (set || c).name);
     if ("errors" in mapped) return mapped.errors.join("; ");
-    if (main.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
+    const shown2 = set ? variantFor(set, main, mapped.ok, defs) : main;
+    if (shown2.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
       if (node[axis] === "hug") return "component '" + (set || c).name + "' has no auto-layout, so its instance cannot `" + axis + ': "hug"`';
     }
     refs2.instances.set(node, { main, props: mapped.ok });
     return null;
+  }
+  function variantFor(set, start, props, defs) {
+    const want = {};
+    const from = start.variantProperties || {};
+    for (const k of Object.keys(defs)) {
+      const d = defs[k];
+      if (!d || d.type !== "VARIANT") continue;
+      const given = props[k];
+      const v = typeof given === "string" ? given : from[k];
+      if (v !== void 0) want[k] = v;
+    }
+    for (const c of set.children) {
+      if (c.type !== "COMPONENT") continue;
+      const vp = c.variantProperties || {};
+      if (Object.keys(want).every((k) => vp[k] === want[k])) return c;
+    }
+    return start;
   }
   function mapProps(given, defs, component) {
     const keys = Object.keys(defs);
@@ -4964,11 +4995,11 @@
         const exact = all.filter((c) => c.key === ref2 || c.id === ref2);
         const first2 = exact[0];
         if (first2 && exact.length === 1) return { ok: first2 };
+        if (isKey(ref2)) return { later: (allowed2) => importComponent(ref2, allowed2) };
         const named = all.filter((c) => !(c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET"));
         const m = matchByName(ref2, named, (c) => c.name);
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return ambiguous("component", ref2, m.matches);
-        if (isKey(ref2)) return { later: () => importComponent(ref2) };
         return none("component", ref2, m.candidates, "in this file (a library component is named by its key)");
       },
       async variable(ref2) {
@@ -4981,26 +5012,33 @@
         if (byId) return { ok: byId };
         if (!variables) variables = figma.variables.getLocalVariablesAsync();
         const locals = await variables;
-        const m = matchByName(ref2, locals, (v) => v.name, (v) => [v.id, v.key]);
+        const exact = locals.filter((v) => v.id === ref2 || v.key === ref2);
+        const first2 = exact[0];
+        if (first2 && exact.length === 1) return { ok: first2 };
+        if (isKey(ref2)) {
+          const listed = (await libraryVariables()).filter((v) => v.key === ref2)[0];
+          if (listed) libraryTypes.set(ref2, listed.resolvedType);
+          return { later: () => figma.variables.importVariableByKeyAsync(ref2) };
+        }
+        const m = matchByName(ref2, locals, (v) => v.name);
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return ambiguous("variable", ref2, m.matches);
-        const lib = (await libraryVariables()).filter((v) => v.name === ref2 || v.key === ref2);
+        const lib = (await libraryVariables()).filter((v) => v.name === ref2);
         const one = lib[0];
         if (one && lib.length === 1) {
           libraryTypes.set(ref2, one.resolvedType);
           return { later: () => figma.variables.importVariableByKeyAsync(one.key) };
         }
         if (lib.length > 1) return { error: "variable '" + ref2 + "' matches " + lib.length + " library variables \u2014 pass one's key: " + lib.slice(0, 3).map((v) => "'" + v.name + "' in '" + v.libraryName + "' (" + v.key + ")").join(", ") };
-        if (isKey(ref2)) return { later: () => figma.variables.importVariableByKeyAsync(ref2) };
         const near = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
         return none("variable", ref2, near, "in this file or an enabled library");
       },
       async textStyle(ref2) {
         if (!styles) styles = figma.getLocalTextStylesAsync();
         const locals = await styles;
-        const m = matchByName(ref2, locals, (st) => st.name, (st) => [st.id, st.key]);
-        if (m.kind === "one") return { ok: m.item };
-        if (m.kind === "many") return ambiguous("text style", ref2, m.matches);
+        const exact = locals.filter((st) => st.id === ref2 || st.key === ref2);
+        const first2 = exact[0];
+        if (first2 && exact.length === 1) return { ok: first2 };
         let byId = null;
         try {
           byId = ref2.indexOf("S:") === 0 ? await figma.getStyleByIdAsync(ref2) : null;
@@ -5009,14 +5047,18 @@
         }
         if (byId) return { ok: byId };
         if (isKey(ref2)) return { later: () => figma.importStyleByKeyAsync(ref2) };
+        const m = matchByName(ref2, locals, (st) => st.name);
+        if (m.kind === "one") return { ok: m.item };
+        if (m.kind === "many") return ambiguous("text style", ref2, m.matches);
         return none("text style", ref2, m.candidates, "in this file (a library style is named by its key)");
       }
     };
   }
-  async function importComponent(key) {
+  async function importComponent(key, allowed2) {
     try {
       return await figma.importComponentByKeyAsync(key);
     } catch (e) {
+      if (!allowed2()) throw new ImportsRevoked("'Allow edits' was turned off");
       try {
         return await figma.importComponentSetByKeyAsync(key);
       } catch {
@@ -5085,7 +5127,7 @@
     const out = [];
     for (const { s, path } of textsOf(spec, "tree", [])) {
       const vs = s.font && s.font.variationSettings;
-      if (!vs || !Object.keys(vs).length) continue;
+      if (!vs || !Object.keys(vs).length || s.styles && s.styles.text !== void 0) continue;
       const { family } = fontOf(s.font);
       let axes;
       try {
@@ -5531,7 +5573,8 @@
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
     if (trees.importCount) {
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const late = await trees.imports();
+      const { problems: late, revoked } = await trees.imports(editsAllowedNow);
+      if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       const firstLate = late[0];
       if (firstLate) {
         return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };

@@ -71,15 +71,19 @@ function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[]
   return out;
 }
 
-/** A name that resolved, or why it did not. `later` = a key the file does not have, to import. */
-type Found<T> = { ok: T } | { error: string } | { later: () => Promise<T> };
+/** A name that resolved, or why it did not. `later` = a key the file does not have, to import; it calls `allowed`
+ *  before each import it runs (a component key may take two: a component, then a component set). */
+type Found<T> = { ok: T } | { error: string } | { later: (allowed: () => boolean) => Promise<T> };
+/** Thrown by an import that found "Allow edits" off: the batch stops there, refused as edits-off. */
+export class ImportsRevoked extends Error {}
 
 /** The resolution of every reference of a batch, and the imports it still needs. */
 export interface RefResolution {
   refs: ResolvedRefs;
   problems: OpProblem[];
-  /** Run the imports, then check what they brought in (property names, variable types, fonts). Every problem, or none. */
-  imports(): Promise<OpProblem[]>;
+  /** Run the imports, then check what they brought in (property names, variable types, fonts). Every problem, or none;
+   *  `revoked` when `allowed` said no before an import (the imports before it stay: an import cannot be put back). */
+  imports(allowed: () => boolean): Promise<{ problems: OpProblem[]; revoked: boolean }>;
   /** How many items the imports will bring in (0: nothing to import). */
   importCount: number;
 }
@@ -93,8 +97,7 @@ export async function resolveRefs(specs: ReadonlyMap<number, TreeNodeSpec>, load
   for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
   const refs: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
   const problems: OpProblem[] = [];
-  const deferred: Array<() => Promise<OpProblem[]>> = [];
-  if (!uses.length) return { refs, problems, imports: async () => [], importCount: 0 };
+  if (!uses.length) return { refs, problems, imports: async () => ({ problems: [], revoked: false }), importCount: 0 };
 
   const file = fileLookups();
   // One lookup per distinct name; one problem per op per name (the first place it is used, and how many more).
@@ -105,17 +108,10 @@ export async function resolveRefs(specs: ReadonlyMap<number, TreeNodeSpec>, load
     if (!p) { p = run(); found.set(k, p); }
     return p as Promise<Found<T>>;
   };
-  const reported = new Map<string, { problem: OpProblem; more: number }>();
-  const bad = (u: Use, message: string): void => {
-    const k = u.index + "\u0000" + u.kind + "\u0000" + u.ref + "\u0000" + message;
-    const seen = reported.get(k);
-    if (seen) { seen.more++; return; }
-    const problem: OpProblem = { index: u.index, op: "createTree", message: u.path + ": " + message };
-    reported.set(k, { problem, more: 0 });
-    problems.push(problem);
-  };
+  const report = reporter(problems);
+  const bad = report.bad;
 
-  const imported: Array<{ use: Use; get: () => Promise<unknown> }> = [];
+  const imported: Array<{ use: Use; get: (allowed: () => boolean) => Promise<unknown> }> = [];
   for (const u of uses) {
     const f: Found<unknown> = u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref))
       : u.kind === "variable" ? await lookup(u.kind, u.ref, () => file.variable(u.ref))
@@ -131,31 +127,52 @@ export async function resolveRefs(specs: ReadonlyMap<number, TreeNodeSpec>, load
     const err = await accept(u, f.ok, refs, loadFont);
     if (err) bad(u, err);
   }
-  for (const { problem, more } of reported.values()) if (more) problem.message += " (and " + more + " more place" + (more === 1 ? "" : "s") + " in this spec)";
+  report.finish();
 
-  // Each distinct item imports once, however many places name it.
-  const once = new Map<string, Promise<unknown>>();
-  for (const { use, get } of imported) {
-    deferred.push(async () => {
-      const k = use.kind + "\u0000" + use.ref;
-      let p = once.get(k);
-      if (!p) { p = get(); once.set(k, p); }
-      let item: unknown;
-      try { item = await p; } catch (e) {
-        return [{ index: use.index, op: "createTree", message: use.path + ": " + importFailed(use, e) }];
-      }
-      const err = await accept(use, item, refs, loadFont);
-      return err ? [{ index: use.index, op: "createTree", message: use.path + ": " + err }] : [];
-    });
-  }
   const importCount = new Set(imported.map((i) => i.use.kind + "\u0000" + i.use.ref)).size;
   return {
     refs, problems, importCount,
-    async imports() {
-      const out: OpProblem[] = [];
-      // One at a time: an import is a network round trip Figma serialises anyway, and the order stays the spec's.
-      for (const d of deferred) out.push(...(await d()));
-      return out;
+    async imports(allowed) {
+      const late: OpProblem[] = [];
+      const lateReport = reporter(late);
+      // Each distinct item imports once, however many places name it; one at a time (an import is a network round
+      // trip Figma serialises anyway), in spec order, with consent checked before each.
+      const once = new Map<string, { item: unknown } | { error: unknown }>();
+      for (const { use, get } of imported) {
+        const k = use.kind + "\u0000" + use.ref;
+        let got = once.get(k);
+        if (!got) {
+          if (!allowed()) return { problems: [], revoked: true };
+          try { got = { item: await get(allowed) }; } catch (e) {
+            if (e instanceof ImportsRevoked) return { problems: [], revoked: true };
+            got = { error: e };
+          }
+          once.set(k, got);
+        }
+        if ("error" in got) { lateReport.bad(use, importFailed(use, got.error)); continue; }
+        const err = await accept(use, got.item, refs, loadFont);
+        if (err) lateReport.bad(use, err);
+      }
+      lateReport.finish();
+      return { problems: late, revoked: false };
+    },
+  };
+}
+
+/** Problems for `out`, one per op per name and message (the first place it is used, then "and N more places"). */
+function reporter(out: OpProblem[]): { bad: (u: Use, message: string) => void; finish: () => void } {
+  const reported = new Map<string, { problem: OpProblem; more: number }>();
+  return {
+    bad(u, message) {
+      const k = u.index + "\u0000" + u.kind + "\u0000" + u.ref + "\u0000" + message;
+      const seen = reported.get(k);
+      if (seen) { seen.more++; return; }
+      const problem: OpProblem = { index: u.index, op: "createTree", message: u.path + ": " + message };
+      reported.set(k, { problem, more: 0 });
+      out.push(problem);
+    },
+    finish() {
+      for (const { problem, more } of reported.values()) if (more) problem.message += " (and " + more + " more place" + (more === 1 ? "" : "s") + " in this spec)";
     },
   };
 }
@@ -194,12 +211,34 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   try { defs = (set || c).componentPropertyDefinitions; } catch { defs = {}; }
   const mapped = mapProps(node.props || {}, defs, (set || c).name);
   if ("errors" in mapped) return mapped.errors.join("; ");
-  // An instance hugs only when its component has auto-layout (checkTree cannot know; Figma would refuse mid-build).
-  if (main.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"] as const) {
+  // An instance hugs only when the variant it ends up as has auto-layout (checkTree cannot know; Figma would refuse
+  // mid-build): the variant the given variant values pick, the default's values for the rest.
+  const shown = set ? variantFor(set, main, mapped.ok, defs) : main;
+  if (shown.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"] as const) {
     if (node[axis] === "hug") return "component '" + (set || c).name + "' has no auto-layout, so its instance cannot `" + axis + ": \"hug\"`";
   }
   refs.instances.set(node, { main, props: mapped.ok });
   return null;
+}
+
+/** The variant of `set` an instance made from `start` shows once `props` are set: each VARIANT property at its given
+ *  value, else at `start`'s. `start` itself when no variant matches (Figma keeps it then too). */
+function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions): ComponentNode {
+  const want: Record<string, string> = {};
+  const from = start.variantProperties || {};
+  for (const k of Object.keys(defs)) {
+    const d = defs[k];
+    if (!d || d.type !== "VARIANT") continue;
+    const given = props[k];
+    const v = typeof given === "string" ? given : from[k];
+    if (v !== undefined) want[k] = v;
+  }
+  for (const c of set.children) {
+    if (c.type !== "COMPONENT") continue;
+    const vp = c.variantProperties || {};
+    if (Object.keys(want).every((k) => vp[k] === want[k])) return c;
+  }
+  return start;
 }
 
 /** An instance's property values keyed the way setProperties takes them: a VARIANT property by its name, the others
@@ -292,12 +331,13 @@ function fileLookups() {
       const exact = all.filter((c) => c.key === ref || c.id === ref);
       const first = exact[0];
       if (first && exact.length === 1) return { ok: first };
+      // A key is exact: it imports the item it names, even when some local component happens to be called that.
+      if (isKey(ref)) return { later: (allowed) => importComponent(ref, allowed) };
       // By name: a component set, or a component outside one (a variant is chosen through `props`).
       const named = all.filter((c) => !(c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET"));
       const m = matchByName(ref, named, (c) => c.name);
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return ambiguous("component", ref, m.matches);
-      if (isKey(ref)) return { later: () => importComponent(ref) };
       return none("component", ref, m.candidates, "in this file (a library component is named by its key)");
     },
     async variable(ref: string): Promise<Found<Variable>> {
@@ -306,38 +346,51 @@ function fileLookups() {
       if (byId) return { ok: byId };
       if (!variables) variables = figma.variables.getLocalVariablesAsync();
       const locals = await variables;
-      const m = matchByName(ref, locals, (v) => v.name, (v) => [v.id, v.key]);
+      const exact = locals.filter((v) => v.id === ref || v.key === ref);
+      const first = exact[0];
+      if (first && exact.length === 1) return { ok: first };
+      if (isKey(ref)) {
+        // A key is exact: a library variable listed with it says its type before the import.
+        const listed = (await libraryVariables()).filter((v) => v.key === ref)[0];
+        if (listed) libraryTypes.set(ref, listed.resolvedType);
+        return { later: () => figma.variables.importVariableByKeyAsync(ref) };
+      }
+      const m = matchByName(ref, locals, (v) => v.name);
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return ambiguous("variable", ref, m.matches);
-      const lib = (await libraryVariables()).filter((v) => v.name === ref || v.key === ref);
+      const lib = (await libraryVariables()).filter((v) => v.name === ref);
       const one = lib[0];
       if (one && lib.length === 1) {
         libraryTypes.set(ref, one.resolvedType);
         return { later: () => figma.variables.importVariableByKeyAsync(one.key) };
       }
       if (lib.length > 1) return { error: "variable '" + ref + "' matches " + lib.length + " library variables — pass one's key: " + lib.slice(0, 3).map((v) => "'" + v.name + "' in '" + v.libraryName + "' (" + v.key + ")").join(", ") };
-      if (isKey(ref)) return { later: () => figma.variables.importVariableByKeyAsync(ref) };
       const near = nearestNames(ref, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
       return none("variable", ref, near, "in this file or an enabled library");
     },
     async textStyle(ref: string): Promise<Found<BaseStyle>> {
       if (!styles) styles = figma.getLocalTextStylesAsync();
       const locals = await styles;
-      const m = matchByName(ref, locals, (st) => st.name, (st) => [st.id, st.key]);
-      if (m.kind === "one") return { ok: m.item };
-      if (m.kind === "many") return ambiguous("text style", ref, m.matches);
+      const exact = locals.filter((st) => st.id === ref || st.key === ref);
+      const first = exact[0];
+      if (first && exact.length === 1) return { ok: first };
       let byId: BaseStyle | null = null;
       try { byId = ref.indexOf("S:") === 0 ? await figma.getStyleByIdAsync(ref) : null; } catch { byId = null; }
       if (byId) return { ok: byId };
+      // A key is exact: it imports the style it names, even when a local style happens to be called that.
       if (isKey(ref)) return { later: () => figma.importStyleByKeyAsync(ref) };
+      const m = matchByName(ref, locals, (st) => st.name);
+      if (m.kind === "one") return { ok: m.item };
+      if (m.kind === "many") return ambiguous("text style", ref, m.matches);
       return none("text style", ref, m.candidates, "in this file (a library style is named by its key)");
     },
   };
 }
 
-/** A library component by key: a component, else a component set. */
-async function importComponent(key: string): Promise<ComponentNode | ComponentSetNode> {
+/** A library component by key: a component, else a component set (consent checked again before the second import). */
+async function importComponent(key: string, allowed: () => boolean): Promise<ComponentNode | ComponentSetNode> {
   try { return await figma.importComponentByKeyAsync(key); } catch (e) {
+    if (!allowed()) throw new ImportsRevoked("'Allow edits' was turned off");
     try { return await figma.importComponentSetByKeyAsync(key); } catch { throw e; }
   }
 }

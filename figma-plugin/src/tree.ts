@@ -30,7 +30,7 @@ import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
 import { checkTree, fontOf, isTreeSpec, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
-import { resolveRefs, type ResolvedRefs } from "./tree-refs";
+import { resolveRefs, type RefResolution, type ResolvedRefs } from "./tree-refs";
 import type { Change, OpProblem } from "./write-batch";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
@@ -49,7 +49,7 @@ export const PLACE_GAP = 100;
  * refusal lists every bad page name and every missing font at once. The available-font list is read only when a font
  * fails to load (for its candidates).
  */
-export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, TreeTarget>; problems: OpProblem[]; imports: () => Promise<OpProblem[]>; importCount: number }> {
+export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, TreeTarget>; problems: OpProblem[]; imports: RefResolution["imports"]; importCount: number }> {
   const targets = new Map<number, TreeTarget>();
   const specs = new Map<number, TreeNodeSpec>();
   const problems: OpProblem[] = [];
@@ -111,7 +111,8 @@ function variationProblems(spec: TreeNodeSpec): string[] {
   const out: string[] = [];
   for (const { s, path } of textsOf(spec, "tree", [])) {
     const vs = s.font && s.font.variationSettings;
-    if (!vs || !Object.keys(vs).length) continue;
+    // A styled text takes its font from the style: its own `font` axes set nothing (checkTree warns), so they are not checked.
+    if (!vs || !Object.keys(vs).length || (s.styles && s.styles.text !== undefined)) continue;
     const { family } = fontOf(s.font);
     let axes: string[] | null;
     try { axes = figma.getFontFamilyVariationAxes(family); } catch { axes = null; }

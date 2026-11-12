@@ -233,7 +233,10 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
   if (trees.importCount) {
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const late = await trees.imports();
+    const { problems: late, revoked } = await trees.imports(editsAllowedNow);
+    // Unticked between imports: the ones before stay (an import cannot be put back, and it only makes the item
+    // available), nothing else runs.
+    if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     const firstLate = late[0];
     if (firstLate) {
       return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };

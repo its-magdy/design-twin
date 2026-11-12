@@ -110,7 +110,7 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
   let seq = 0;
   const made: FakeNode[] = [];
   const imports: string[] = [];
-  const hooks: { onStyle?: (() => Promise<void>) | undefined } = {};
+  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
   const trap = new Set<string>();
   const pageLoads: string[] = [];
@@ -148,7 +148,17 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
     if (main) {
       fields.mainComponent = main;
       fields.props = {};
-      fields.setProperties = (p: Record<string, unknown>) => { fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p }; };
+      fields.setProperties = (p: Record<string, unknown>) => {
+        fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
+        // A variant value switches the instance to that variant, and to its layout (as Figma's does).
+        const set = parentOf(main);
+        const was = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
+        if (set?.type === "COMPONENT_SET") {
+          const want = { ...was, ...Object.fromEntries(Object.entries(p).filter(([k]) => !k.includes("#"))) };
+          const v = kids(set).find((c) => isNode(c.variantProperties) && Object.entries(want).every(([k, x]) => isNode(c.variantProperties) && c.variantProperties[k] === x));
+          if (v) { fields.mainComponent = v; fields.layoutMode = v.layoutMode; }
+        }
+      };
     }
     if (type === "TEXT") {
       fields.setTextStyleIdAsync = async (id: string) => {
@@ -207,11 +217,11 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
     listAvailableFontsAsync: async () => AVAILABLE_FONTS.map(([family, style]) => ({ fontName: { family, style } })),
     getFontFamilyVariationAxes: fontAxes,
     ...(kit ? {
-      importComponentByKeyAsync: async (key: string) => { imports.push("component " + key); const c = kit.library.components[key]; if (!c) throw new Error("not published"); return c; },
+      importComponentByKeyAsync: async (key: string) => { imports.push("component " + key); if (hooks.onImport) await hooks.onImport(); const c = kit.library.components[key]; if (!c) throw new Error("not published"); return c; },
       importComponentSetByKeyAsync: async (key: string) => { imports.push("component set " + key); throw new Error("not published"); },
       importStyleByKeyAsync: async (key: string) => { imports.push("style " + key); const st = kit.library.styles[key]; if (!st) throw new Error("not published"); imported.push(st); return st; },
       variables: {
-        importVariableByKeyAsync: async (key: string) => { imports.push("variable " + key); const v = kit.library.variables[key]; if (!v) throw new Error("not published"); return v; },
+        importVariableByKeyAsync: async (key: string) => { imports.push("variable " + key); if (hooks.onImport) await hooks.onImport(); const v = kit.library.variables[key]; if (!v) throw new Error("not published"); return v; },
         setBoundVariableForPaint: (paint: FakeNode, field: string, v: FakeVariable | null) => ({ ...paint, boundVariables: v ? { [field]: { type: "VARIABLE_ALIAS", id: v.id } } : {} }),
       },
     } : {}),
@@ -257,15 +267,24 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
     "Icon#1:1": { type: "BOOLEAN", defaultValue: false },
     "Glyph#1:2": { type: "INSTANCE_SWAP", defaultValue: "9:9" },
   } };
-  const medium = comp("5:2", "Size=Medium", { parent: set });
+  const medium = comp("5:2", "Size=Medium", { parent: set, variantProperties: { Size: "Medium" } });
   Object.defineProperty(medium, "componentPropertyDefinitions", { get() { throw new Error("in Figma: componentPropertyDefinitions can only be read on a component set or a non-variant component"); } });
-  const large = comp("5:6", "Size=Large", { parent: set });
+  const large = comp("5:6", "Size=Large", { parent: set, variantProperties: { Size: "Large" } });
   set.defaultVariant = medium;
   set.children = [medium, large];
   const badge = comp("5:3", "Badge", { layoutMode: "NONE", componentPropertyDefinitions: {} });
   const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
-  const all = [set, medium, large, badge, ...cards];
-  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards], loadAsync: async () => {},
+  // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
+  const chip: FakeNode = { id: "6:1", type: "COMPONENT_SET", name: "Chip", key: "local-chip", parent: null, componentPropertyDefinitions: {
+    Size: { type: "VARIANT", defaultValue: "Small", variantOptions: ["Small", "Large"] },
+  } };
+  const chipSmall = comp("6:2", "Size=Small", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small" } });
+  const chipLarge = comp("6:3", "Size=Large", { parent: chip, variantProperties: { Size: "Large" } });
+  chip.defaultVariant = chipSmall;
+  chip.children = [chipSmall, chipLarge];
+  const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
+  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike];
+  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
   const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
   const library = {
@@ -929,11 +948,19 @@ export const cases: Case[] = [{
     ok("[REFS] …and the reply warns that the style sets them", JSON.stringify(r.warnings) === JSON.stringify(["ops[0].tree.children[0]: `font.family`, `font.size` are set by the text style, so they are not set"]));
     ok("[REFS] `tokens.fills` on a text with no fills: one bound paint", JSON.stringify((note?.fills as unknown[] | undefined)?.map((p) => isNode(p) ? p.boundVariables : null)) === JSON.stringify([{ color: { type: "VARIABLE_ALIAS", id: "VariableID:30:1" } }]));
     ok("[REFS] a corner names a variable; the raw radius stays on the others", num(card, "cornerRadius") === 4 && JSON.stringify(card?.boundVariables) === JSON.stringify({ topLeftRadius: { type: "VARIABLE_ALIAS", id: "VariableID:30:3" } }));
-    ok("[REFS] an instance of a component set: made from its default variant, properties keyed as Figma takes them",
-      pay?.type === "INSTANCE" && isNode(pay.mainComponent) && pay.mainComponent.id === "5:2" && pay.layoutSizingHorizontal === "FILL"
+    ok("[REFS] an instance of a component set: made from its default variant, switched to the variant its props pick, properties keyed as Figma takes them",
+      pay?.type === "INSTANCE" && isNode(pay.mainComponent) && pay.mainComponent.id === "5:6" && pay.layoutSizingHorizontal === "FILL"
       && JSON.stringify(pay.props) === JSON.stringify({ Size: "Large", "Label#1:0": "Pay now", "Icon#1:1": true }));
     ok("[REFS] a component by its key, renamed", badge?.type === "INSTANCE" && isNode(badge.mainComponent) && badge.mainComponent.id === "5:3" && badge.name === "New" && badge.props !== undefined);
     ok("[REFS] raw values are counted as unbound (the card's stroke colour, weight and the note's raw font)", a?.unbound === 4);
+    // Hug follows the variant the props pick: the default Chip has no auto-layout, the Large one has.
+    const chips = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", props: { Size: "Large" }, widthMode: "hug" }] } }]);
+    const flat = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", widthMode: "hug" }] } }]);
+    ok("[REFS] an instance may hug when the variant its props pick has auto-layout, not when the default it stays on has none",
+      chips.ok === true && flat.ok === false && /component 'Chip' has no auto-layout, so its instance cannot `widthMode: "hug"`/.test(flat.error ?? ""));
+    // A styled text's own font axes set nothing, so a family the file lacks is not checked for them.
+    const axes = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "Hello", styles: { text: "Body" }, font: { family: "Ignored Font", variationSettings: { wght: 600 } } }] } }]);
+    ok("[REFS] a styled text's font axes are not checked (the style sets the font)", axes.ok === true);
   },
 }, {
   name: "design-system references (createTree): every bad name refused in one reply, with candidates; nothing imported",
@@ -1006,6 +1033,25 @@ export const cases: Case[] = [{
     w.hooks.onStyle = undefined;
     ok("[REFS-LIB] Allow edits turned off while a text style is set: refused as edits-off, the half-built tree removed",
       mid.ok === false && mid.refused === "edits-off" && alive().length === before);
+    // Unticked during the first of two imports: the second never runs.
+    await w.allowEdits(true);
+    w.hooks.onImport = async () => { await w.allowEdits(false); };
+    const m = w.imports.length;
+    const raced = await api.applyWrites([{ op: "createTree", tree: { fills: [{ type: "solid", tokens: { color: KEY("c") } }], tokens: { itemSpacing: KEY("d") }, layout: { display: "flex" } } }]);
+    w.hooks.onImport = undefined;
+    ok("[REFS-LIB] unticked during an import: no further import runs, refused as edits-off, nothing built",
+      raced.ok === false && raced.refused === "edits-off" && w.imports.length === m + 1 && alive().length === before);
+    await w.allowEdits(true);
+    // A key is exact: it imports the keyed component even though a local one is named exactly like the key.
+    const k = w.imports.length;
+    const keyed = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: KEY("e") }] } }]);
+    const keyedInst = kids(alive().find((n) => n.id === keyed.applied[0]?.id))[0];
+    ok("[REFS-LIB] a key beats a local component named like it", keyed.ok === true && w.imports.length === k + 1
+      && isNode(keyedInst?.mainComponent) && keyedInst.mainComponent.id === "9:1");
+    // An unpublished key used twice: one problem, with how many more places.
+    const twice = await api.applyWrites([{ op: "createTree", tree: { children: [{ fills: [{ type: "solid", tokens: { color: KEY("b") } }] }, { fills: [{ type: "solid", tokens: { color: KEY("b") } }] }] } }]);
+    ok("[REFS-LIB] a failed import is reported once per name, with the other places counted",
+      twice.ok === false && /^ops\[0\] \(createTree\): tree\.children\[0\]\.fills\[0\]\.tokens\.color: no variable in this file or an enabled library has the key 'b{40}'.* \(and 1 more place in this spec\)\. Nothing was changed\.$/.test(twice.error ?? ""));
   },
 }, {
   name: "design-system references (createTree): the shape is checked by the dry run, the wire check and the plugin alike",
