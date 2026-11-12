@@ -8,8 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { check, report } from "./assert.ts";
 import {
-  PLUGIN_FILES, copyToClipboard, describeState, importGuide, installPlugin, nextSteps, openFigmaDesktop, pluginSetup, pluginSource,
-  pluginState, refreshInstalledPlugin, resetRefreshForTests, uninstallPlugin,
+  PLUGIN_FILES, copyToClipboard, describeState, importGuide, installPlugin, launchDetached, nextSteps, openFigmaDesktop, pluginSetup,
+  pluginSource, pluginState, refreshInstalledPlugin, resetRefreshForTests, runSync, uninstallPlugin,
 } from "../bridge/src/plugin-install.ts";
 import type { Desktop, PluginSource } from "../bridge/src/plugin-install.ts";
 import { PLUGIN_MENU } from "../bridge/src/hints.ts";
@@ -171,32 +171,65 @@ console.log("copyToClipboard / openFigmaDesktop — per platform, against a fake
     const d: Desktop = {
       platform, env, exists: (p) => files.includes(p),
       run: (cmd, args, input) => { const c = input === undefined ? { cmd, args } : { cmd, args, input }; calls.push(c); return ok(c); },
-      launch: (cmd, args) => { const c = { cmd, args }; calls.push(c); return ok(c); },
+      launch: (cmd, args) => { const c = { cmd, args }; calls.push(c); return Promise.resolve(ok(c)); },
     };
     return { d, calls };
   };
   const p = "/a/b/manifest.json";
   const mac = desk("darwin", () => true);
   t("macOS: pbcopy with the path on stdin", () => copyToClipboard(p, mac.d) && mac.calls[0]?.cmd === "pbcopy" && mac.calls[0].input === p);
-  t("macOS: open -a Figma", () => openFigmaDesktop(mac.d) && mac.calls[1]?.cmd === "open" && mac.calls[1].args.join(" ") === "-a Figma");
+  const macOpened = await openFigmaDesktop(mac.d);
+  t("macOS: open -a Figma", () => macOpened && mac.calls[1]?.cmd === "open" && mac.calls[1].args.join(" ") === "-a Figma");
   const noFigma = desk("darwin", (c) => c.cmd !== "open");
-  t("macOS without Figma: false, not thrown", () => !openFigmaDesktop(noFigma.d));
+  const noFigmaOpened = await openFigmaDesktop(noFigma.d);
+  t("macOS without Figma: false, not thrown", () => !noFigmaOpened);
 
   const wp = "C:\\Users\\O'Neil\\AppData\\Roaming\\design-twin\\figma-plugin\\manifest.json";
-  const win = desk("win32", () => true, ["C:\\L\\Figma\\Figma.exe".replaceAll("\\", path.sep)], { LOCALAPPDATA: "C:\\L".replaceAll("\\", path.sep) });
+  const winHome = "C:\\L".replaceAll("\\", path.sep);
+  const win = desk("win32", () => true, [path.join(winHome, "Figma", "Figma.exe")], { LOCALAPPDATA: winHome });
   t("Windows: Set-Clipboard with the path as a quoted argument, ' doubled", () =>
     copyToClipboard(wp, win.d) && win.calls[0]?.cmd === "powershell.exe" && win.calls[0].input === undefined &&
     (win.calls[0].args.at(-1) ?? "") === "Set-Clipboard -Value 'C:\\Users\\O''Neil\\AppData\\Roaming\\design-twin\\figma-plugin\\manifest.json'");
-  t("Windows: launches %LOCALAPPDATA%\\Figma\\Figma.exe", () => openFigmaDesktop(win.d) && win.calls[1]?.cmd === path.join("C:\\L".replaceAll("\\", path.sep), "Figma", "Figma.exe"));
-  const winNo = desk("win32", () => true, [], { LOCALAPPDATA: "C:\\L" });
-  t("Windows without Figma.exe: false, nothing launched", () => !openFigmaDesktop(winNo.d) && winNo.calls.length === 0);
-  t("Windows without LOCALAPPDATA: false", () => !openFigmaDesktop(desk("win32", () => true, [path.join("", "Figma", "Figma.exe")]).d));
+  const winOpened = await openFigmaDesktop(win.d);
+  t("Windows: launches %LOCALAPPDATA%\\Figma\\Figma.exe", () => winOpened && win.calls[1]?.cmd === path.join(winHome, "Figma", "Figma.exe"));
+  const winFails = desk("win32", () => false, [path.join(winHome, "Figma", "Figma.exe")], { LOCALAPPDATA: winHome });
+  const winFailsOpened = await openFigmaDesktop(winFails.d);
+  t("Windows: Figma.exe there but it does not start: false", () => !winFailsOpened && winFails.calls.length === 1);
+  const winNo = desk("win32", () => true, [], { LOCALAPPDATA: winHome });
+  const winNoOpened = await openFigmaDesktop(winNo.d);
+  t("Windows without Figma.exe: false, nothing launched", () => !winNoOpened && winNo.calls.length === 0);
+  const winNoEnv = desk("win32", () => true, [path.join("", "Figma", "Figma.exe")]);
+  const winNoEnvOpened = await openFigmaDesktop(winNoEnv.d);
+  t("Windows without LOCALAPPDATA: false, nothing launched", () => !winNoEnvOpened && winNoEnv.calls.length === 0);
 
   const lin = desk("linux", (c) => c.cmd === "xclip");
   t("Linux: wl-copy, then xclip — the first that works", () => copyToClipboard(p, lin.d) && lin.calls.map((c) => c.cmd).join() === "wl-copy,xclip");
   const linNone = desk("linux", () => false);
   t("Linux with no clipboard tool: false after trying all three", () => !copyToClipboard(p, linNone.d) && linNone.calls.length === 3);
-  t("Linux: no Figma desktop app to open", () => !openFigmaDesktop(desk("linux", () => true).d));
+  const linOpened = await openFigmaDesktop(desk("linux", () => true).d);
+  t("Linux: no Figma desktop app to open", () => !linOpened);
+}
+
+console.log("runSync / launchDetached — the real process wrappers:");
+{
+  const bun = process.execPath;
+  t("runSync: exit 0 is true, exit 1 is false", () => runSync(bun, ["-e", "process.exit(0)"]) && !runSync(bun, ["-e", "process.exit(1)"]));
+  t("runSync: a missing program is false, not thrown", () => !runSync(path.join(mk(), "no-such-program"), []));
+  // A helper that ignores SIGTERM and would then exit 0: past the timeout it is killed hard, and still a failure.
+  const t0 = Date.now();
+  const stuck = runSync(bun, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000)"], undefined, 500);
+  const took = Date.now() - t0;
+  t(`runSync: a helper past its timeout is killed and counted as failed (took ${took} ms)`, () => !stuck && took < 4000);
+  const missing = await launchDetached(path.join(mk(), "no-such-program"), []);
+  t("launchDetached: a program that cannot start is false (its error event), not claimed opened", () => !missing);
+  if (process.platform !== "win32") {
+    const notExec = path.join(mk(), "not-executable");
+    fs.writeFileSync(notExec, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+    const denied = await launchDetached(notExec, []);
+    t("launchDetached: a file without the execute bit is false (EACCES)", () => !denied);
+  }
+  const started = await launchDetached(bun, ["-e", "process.exit(0)"]);
+  t("launchDetached: a program that starts is true", () => started);
 }
 
 console.log("dtwin plugin — the CLI, as a real child:");

@@ -218,24 +218,29 @@ export function importGuide(manifest: string, copied: boolean, platform: NodeJS.
 
 /** Runs `cmd` to completion (stdin: `input`); true when it exited 0. Never throws. */
 export type RunSync = (cmd: string, args: string[], input?: string) => boolean;
-/** Starts `cmd` detached, not waiting for it; true when it started. Never throws. */
-export type Launch = (cmd: string, args: string[]) => boolean;
+/** Starts `cmd` detached, not waiting for it to exit; true once it has started, false if it could not. Never rejects. */
+export type Launch = (cmd: string, args: string[]) => Promise<boolean>;
 export interface Desktop { run: RunSync; launch: Launch; exists: (p: string) => boolean; env: NodeJS.ProcessEnv; platform: NodeJS.Platform }
 
-const runSync: RunSync = (cmd, args, input) => {
+/** The real RunSync. A helper that outlives `timeoutMs` is killed with SIGKILL (one that ignores SIGTERM would
+ *  otherwise hold the command), and a timed-out run is a failure even when it then exits 0. */
+export function runSync(cmd: string, args: string[], input?: string, timeoutMs = 10_000): boolean {
   try {
-    const r = spawnSync(cmd, args, { input, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "ignore"], timeout: 10_000, windowsHide: true });
-    return r.status === 0;
+    const r = spawnSync(cmd, args, { input, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "ignore"], timeout: timeoutMs, killSignal: "SIGKILL", windowsHide: true });
+    return !r.error && r.status === 0;
   } catch { return false; }
-};
-const launchDetached: Launch = (cmd, args) => {
-  try {
-    const p = spawn(cmd, args, { stdio: "ignore", detached: true });
-    p.on("error", () => { /* reported as not opened by the caller's own check */ });
-    p.unref();
-    return true;
-  } catch { return false; }
-};
+}
+/** The real Launch: settles on the child's `spawn` (started) or `error` (ENOENT, EACCES, …) event, so a program
+ *  that cannot start is reported as not opened rather than claimed. */
+export function launchDetached(cmd: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const p = spawn(cmd, args, { stdio: "ignore", detached: true });
+      p.once("spawn", () => { p.unref(); resolve(true); });
+      p.once("error", () => { resolve(false); });
+    } catch { resolve(false); }
+  });
+}
 const realDesktop = (): Desktop => ({ run: runSync, launch: launchDetached, exists: (p) => fs.existsSync(p), env: process.env, platform: process.platform });
 
 /** Put `text` on the system clipboard; false when no clipboard tool worked (the caller prints the text anyway). */
@@ -248,11 +253,12 @@ export function copyToClipboard(text: string, d: Desktop = realDesktop()): boole
 }
 
 /** Open (or bring forward) the Figma desktop app; false when it could not be found. Figma ships no Linux app. */
-export function openFigmaDesktop(d: Desktop = realDesktop()): boolean {
+export async function openFigmaDesktop(d: Desktop = realDesktop()): Promise<boolean> {
   if (d.platform === "darwin") return d.run("open", ["-a", "Figma"]);
   if (d.platform === "win32") {
-    const exe = path.join(d.env.LOCALAPPDATA ?? "", "Figma", "Figma.exe");
-    return d.env.LOCALAPPDATA !== undefined && d.exists(exe) && d.launch(exe, []);
+    if (d.env.LOCALAPPDATA === undefined) return false;
+    const exe = path.join(d.env.LOCALAPPDATA, "Figma", "Figma.exe");
+    return d.exists(exe) && await d.launch(exe, []);
   }
   return false;
 }
@@ -305,7 +311,7 @@ const isSub = (s: string | undefined): s is Sub => SUBS.some((x) => x === s);
 
 /** `dtwin plugin import`. A checkout imports its own figma-plugin/ (nothing is installed); a package installs (or
  *  refreshes) the per-user copy first, exactly as `install` does. */
-function importCmd(source: PluginSource, o: { json: boolean; open: boolean; printOnly: boolean; log: (m: string) => void }): void {
+async function importCmd(source: PluginSource, o: { json: boolean; open: boolean; printOnly: boolean; log: (m: string) => void }): Promise<void> {
   let r: InstallResult | null = null;
   if (source.kind === "package") {
     try { r = installPlugin(source); } catch (e) {
@@ -315,7 +321,7 @@ function importCmd(source: PluginSource, o: { json: boolean; open: boolean; prin
   }
   const manifest = r ? r.manifest : path.join(source.dir, "manifest.json");
   const copied = !o.printOnly && copyToClipboard(manifest);
-  const figmaOpened = !o.printOnly && openFigmaDesktop();
+  const figmaOpened = !o.printOnly && await openFigmaDesktop();
   const steps = importGuide(manifest, copied);
   if (o.json) console.log(JSON.stringify({ manifest, from: source.kind, install: r, copied, figmaOpened, steps }, null, 2));
   else {
@@ -336,7 +342,7 @@ function importCmd(source: PluginSource, o: { json: boolean; open: boolean; prin
   if (o.open) reveal(manifest);
 }
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(PLUGIN_HELP); exitCli(0); }
   const json = argv.includes("--json"), open = argv.includes("--open"), printOnly = argv.includes("--print-only");
   const rest = argv.filter((a) => a !== "--json" && a !== "--open" && a !== "--print-only");
@@ -380,7 +386,7 @@ export function main(argv: string[]): void {
     log("error: this dtwin carries no Figma plugin files to install — reinstall it: bun add -g @design-twin/dtwin");
     exitCli(1);
   }
-  if (word === "import") { importCmd(source, { json, open, printOnly, log }); return; }
+  if (word === "import") { await importCmd(source, { json, open, printOnly, log }); return; }
   let r: InstallResult;
   try { r = installPlugin(source); } catch (e) {
     log(`error: could not install the Figma plugin into ${pluginHome()}: ${errMsg(e)}`);
