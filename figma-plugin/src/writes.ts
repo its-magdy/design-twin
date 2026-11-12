@@ -140,9 +140,20 @@ async function applyWrite(op: WriteOp, mode: ModeTarget | undefined, changes: Mo
 // everything just created, leaving orphan nodes the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
-  const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+  const list = Array.isArray(ops) ? ops : [];
+  // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
+  // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
+  // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
+  // the next one never joins it. Committing with nothing pending is a no-op.
+  if (list.length) commitUndo();
+  const r = await gatedWrites(list);
+  if (list.length) commitUndo();
   announce(r);
   return r;
+}
+
+function commitUndo(): void {
+  try { figma.commitUndo(); } catch (e) { console.error("[export] figma.commitUndo failed:", e); }
 }
 
 // A write is never silent: whatever changed the file (or was refused from changing it) is said in Figma's own

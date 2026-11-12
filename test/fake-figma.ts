@@ -77,6 +77,8 @@ export interface FakeFigma {
   clientStorage: { getAsync(key: string): Promise<unknown>; setAsync(key: string, value: unknown): Promise<void> };
   /** Figma's toast; the fake records each message in `World.notified`. */
   notify(message: string, options?: { error?: boolean }): void;
+  /** Figma's undo checkpoint; the fake counts calls in `World.undo.commits`. */
+  commitUndo(): void;
   currentPage: FakePage;
   fileKey: string;
   root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData?: (key: string) => string };
@@ -229,6 +231,9 @@ export interface World {
   send(msg: unknown): Promise<PostedMessage[]>;
   /** every figma.notify message, in order */
   notified: string[];
+  /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each). A box, not a number or a
+   *  getter, so it stays live through the `{ ...world }` spreads the harness helpers make. */
+  undo: { commits: number };
   /** what clientStorage holds (seed it with Scene.clientStorage) */
   storage: Map<string, unknown>;
   /** Tick "Allow edits" the way the plugin window does (a set-allow-edits message) — what a write case needs. */
@@ -316,6 +321,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   if (selection) currentPage.selection = selection;
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
+  const undo = { commits: 0 };
   const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
   const teamLibrary = delta.teamLibrary ?? base.teamLibrary;
@@ -326,6 +332,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     ui: { onmessage: null, postMessage: (m) => { posted.push(m); } },
     clientStorage: { getAsync: async (k) => storage.get(k), setAsync: async (k, v) => { storage.set(k, v); } },
     notify: (m) => { notified.push(m); },
+    commitUndo: () => { undo.commits++; },
     currentPage,
     fileKey: file.fileKey ?? "",
     root: {
@@ -378,6 +385,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   };
   return {
     figma, api, scene, posted, send, notified, storage,
+    undo,
     async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
   };
 }

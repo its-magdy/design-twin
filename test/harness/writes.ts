@@ -142,6 +142,17 @@ export const cases: Case[] = [{
     ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode");
     ok("write: empty/omitted batch is a no-op success", (await api.applyWrites(undefined)).ok === true);
 
+    // One batch is one Cmd-Z step: an undo checkpoint before and after every non-empty batch (a failed one included,
+    // since its applied prefix stays in the file), none for an empty one. Without them Figma keeps every plugin
+    // action in one undo step, and the designer's first Cmd-Z undid every batch since the plugin started.
+    const commitsBefore = w.undo.commits;
+    await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#00f" }]);
+    ok("write: a batch ends its own undo step (checkpoint before and after)", w.undo.commits === commitsBefore + 2);
+    await api.applyWrites([{ op: "createFrame", name: "C" }, { op: "setFill", nodeId: "missing:9", color: "#fff" }]);
+    ok("write: a failed batch is its own undo step too", w.undo.commits === commitsBefore + 4);
+    await api.applyWrites([]);
+    ok("write: an empty batch sets no undo checkpoint", w.undo.commits === commitsBefore + 4);
+
     // A dry run refuses a createText with no `text` ("missing text"), so applying it must refuse it too — not
     // create an empty text node the preview said would never be made.
     const beforeNoText = created.length;
@@ -232,7 +243,7 @@ export const cases: Case[] = [{
     await refused([{ collection: "Density", mode: "Same" }], "ambiguous mode name", /mode 'Same' appears 2 times in collection 'Density' — pass its modeId: 'Same' \(10:0\), 'Same' \(10:1\)/);
     await refused([{ collection: "theme", mode: "dark" }], "a case-only match is not taken", /collection 'theme' matches no local variable collection; closest: 'Theme'/);
     await refused([{ collection: "Brand Colors", mode: "Default" }], "a library collection not in the file is refused by name, naming its library",
-      /collection 'Brand Colors' is in the library 'Core Library'.*a write cannot import one yet/);
+      /collection 'Brand Colors' is in the library 'Core Library'.*a write cannot import one yet.*bind one of its variables in this file first/);
     await refused([{ nodeId: "gone:1", collection: "Theme", mode: "Dark" }], "missing node", /no node with id 'gone:1'/);
     await refused([{ nodeId: "0:0", collection: "Theme", mode: "Dark" }], "a node type without variable modes, named", /node 'Document' is a DOCUMENT, which cannot carry a variable mode/);
     // Every bad name in the batch, at once; ops before the first bad one are not run either.

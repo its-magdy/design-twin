@@ -104,7 +104,7 @@ async function resolveCollection(
   const lib = (await libraryCollections()).filter((c) => c.name === ref || c.key === ref);
   if (lib.length) {
     const from = [...new Set(lib.map((c) => c.libraryName))];
-    return { error: "collection '" + ref + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) — use a local collection, or the id of a library collection already used here (the design-system export lists it)" };
+    return { error: "collection '" + ref + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) — use a local collection, or bind one of its variables in this file first" };
   }
   return { error: "collection '" + ref + "' matches no local variable collection" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "; this file has none") };
 }

@@ -817,16 +817,15 @@ registerTool(
     // fix is the PERSON's (a checkbox in the plugin window), so say exactly that rather than "write failed".
     if (r.refused === "edits-off" && !r.applied.length) return errorResult(r.error || EDITS_OFF_MESSAGE);
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
-    // exist in the document and the agent needs their ids to continue or undo.
+    // exist in the document and the agent needs their ids to continue or undo. A section with nothing in it
+    // (no mode put back, no op left applied) is left out rather than printed as an empty list.
     if (!r.ok) {
       const applied = r.applied;
       const restored = r.restored ?? [];
-      return errorResult(
-        `Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}\n` +
-          (restored.length ? `${restored.length} earlier variable-mode change(s) were put back as they were.\n` : "") +
-          `${applied.length} earlier op(s) were applied and NOT rolled back:\n` +
-          JSON.stringify(applied, null, 2)
-      );
+      const lines = [`Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}`];
+      if (restored.length) lines.push(`${restored.length} earlier variable-mode change(s) were put back as they were:\n` + JSON.stringify(restored, null, 2));
+      if (applied.length) lines.push(`${applied.length} earlier op(s) were applied and NOT rolled back:\n` + JSON.stringify(applied, null, 2));
+      return errorResult(lines.join("\n"));
     }
     return textResult(r);
   })

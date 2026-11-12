@@ -4128,7 +4128,7 @@
     const lib = (await libraryCollections()).filter((c) => c.name === ref || c.key === ref);
     if (lib.length) {
       const from = [...new Set(lib.map((c) => c.libraryName))];
-      return { error: "collection '" + ref + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) \u2014 use a local collection, or the id of a library collection already used here (the design-system export lists it)" };
+      return { error: "collection '" + ref + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) \u2014 use a local collection, or bind one of its variables in this file first" };
     }
     return { error: "collection '" + ref + "' matches no local variable collection" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "; this file has none") };
   }
@@ -4277,9 +4277,19 @@
     }
   }
   async function applyWrites(ops) {
-    const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+    const list = Array.isArray(ops) ? ops : [];
+    if (list.length) commitUndo();
+    const r = await gatedWrites(list);
+    if (list.length) commitUndo();
     announce(r);
     return r;
+  }
+  function commitUndo() {
+    try {
+      figma.commitUndo();
+    } catch (e) {
+      console.error("[export] figma.commitUndo failed:", e);
+    }
   }
   function announce(r) {
     const n = r.applied.length;
