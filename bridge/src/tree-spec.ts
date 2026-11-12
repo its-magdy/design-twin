@@ -15,7 +15,7 @@
 //
 // Pure and dependency-free (bar two pure siblings): the plugin bundle imports it, so it must type-check
 // under figma-plugin/tsconfig.json (ES2019 lib, no Node types).
-import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, SizeLimits, Strokes } from "./doc-types.ts";
+import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, RenderBox, SizeLimits, Strokes } from "./doc-types.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "./hex-color.ts";
 import { nearestNames, quoteList } from "./name-match.ts";
 
@@ -50,6 +50,10 @@ export interface TreeFont {
   letterSpacing?: { unit: "px" | "percent"; value: number };
   case?: "upper" | "lower" | "title" | "small_caps" | "small_caps_forced";
   decoration?: "underline" | "strikethrough";
+  /** Variable-font axis values, e.g. `{ wght: 560 }`; an axis left out keeps the value `weight` names. */
+  variationSettings?: Record<string, number>;
+  /** The read's numeric weight: it follows `weight` (and `variationSettings`), so a write accepts it and sets nothing. */
+  weightValue?: number;
 }
 /** The writable slice of `strokes` (Strokes). */
 export interface TreeStrokes {
@@ -57,6 +61,8 @@ export interface TreeStrokes {
   weight?: number;
   weights?: { top?: number; right?: number; bottom?: number; left?: number };
   align?: "inside" | "outside" | "center";
+  /** Only the read's default, `{ profile: "uniform" }` (an even stroke), which sets nothing. */
+  variableWidth?: { profile: "uniform" };
 }
 /** One node of a tree spec. `type` defaults to TEXT when the node has `text`, else FRAME. */
 export interface TreeNodeSpec {
@@ -69,7 +75,10 @@ export interface TreeNodeSpec {
    *  for a child of a frame without auto-layout or an `absolute` one. */
   x?: number;
   y?: number;
-  box?: { w: number; h: number };
+  /** `x`/`y` are the read's page coordinates of the node's own `x`/`y`: accepted, and they set nothing. */
+  box?: { w: number; h: number; x?: number; y?: number };
+  /** What the read says Figma renders: it follows `box` (and effects), so a write accepts it and sets nothing. */
+  renderBox?: { x: number; y: number; w: number; h: number };
   layout?: TreeLayout;
   absolute?: true;
   grow?: number;
@@ -78,6 +87,8 @@ export interface TreeNodeSpec {
   heightMode?: "fill" | "hug";
   sizeLimits?: SizeLimits;
   clip?: true;
+  /** The strokes count toward the auto-layout size (border-box). Only on a frame with auto-layout. */
+  strokesInLayout?: true;
   fills?: TreeFill[];
   strokes?: TreeStrokes;
   radius?: number | RadiusCorners;
@@ -127,6 +138,7 @@ const MIN_SIZE = 0.01;
 const size: Check = (v) => (isNum(v) && v >= MIN_SIZE ? null : "must be a number ≥ " + MIN_SIZE);
 const nonEmpty: Check = (v) => (typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string");
 const count: Check = (v) => (isNum(v) && Number.isInteger(v) && v >= 1 ? null : "must be a whole number ≥ 1");
+const positive: Check = (v) => (isNum(v) && v > 0 ? null : "must be a number > 0 (leave it out for no limit)");
 const unit: Check = (v) => (isNum(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1");
 const trueOnly: Check = (v) => (v === true ? null : "must be true (omit it for false)");
 const oneOf = (...vals: readonly string[]): Check => (v) => (typeof v === "string" && vals.includes(v) ? null : "must be one of " + vals.join(" | "));
@@ -166,13 +178,24 @@ const FONT_RULES: Record<keyof FontSpec, Rule> = {
   family: nonEmpty, weight: nonEmpty, color: hex,
   align: oneOf("left", "center", "right", "justified"),
   valign: oneOf("center", "bottom"),
-  lineHeight: (v) => (isObj(v) && v.unit === "auto" && v.value === undefined ? null : LENGTH(["px", "percent"], nonNeg)(v)),
+  lineHeight: (v) => {
+    if (!isObj(v) || v.unit !== "auto") return LENGTH(["px", "percent"], nonNeg)(v);
+    // `auto` has no value: every other key is refused, not dropped.
+    const extra = Object.keys(v).filter((k) => k !== "unit" && v[k] !== undefined);
+    return extra.length ? "." + extra[0] + ": not a field of an `auto` line height (it is `{unit:\"auto\"}` alone)" : null;
+  },
   letterSpacing: LENGTH(["px", "percent"]),
   case: oneOf("upper", "lower", "title", "small_caps", "small_caps_forced"),
   decoration: oneOf("underline", "strikethrough"),
-  weightValue: refuse("the weight is the style name in `weight`"),
+  // The read writes it on every text; it follows the style named in `weight`, so it is accepted and sets nothing.
+  weightValue: (v) => (isNum(v) && v >= 1 && v <= 1000 ? null : "must be a number from 1 to 1000 (it follows `weight`, and sets nothing)"),
+  variationSettings: (v) => {
+    if (!isObj(v)) return "must be an object of axis tag → number, e.g. {\"wght\": 560}";
+    for (const [k, x] of Object.entries(v)) if (!isNum(x)) return "." + k + " must be a number";
+    return null;
+  },
   fontStyle: refuse("italic is part of the style name in `weight`, e.g. \"Italic\""),
-  variationSettings: NOT_YET, decorationStyle: NOT_YET, decorationColor: NOT_YET, decorationThickness: NOT_YET,
+  decorationStyle: NOT_YET, decorationColor: NOT_YET, decorationThickness: NOT_YET,
   decorationOffset: NOT_YET, decorationSkipInk: NOT_YET, openType: NOT_YET, openTypeOff: NOT_YET, paragraphSpacing: NOT_YET,
   paragraphIndent: NOT_YET, listSpacing: NOT_YET, leadingTrim: NOT_YET, textWrap: NOT_YET, hangingList: NOT_YET,
   hangingPunctuation: NOT_YET,
@@ -184,15 +207,20 @@ const STROKE_RULES: Record<keyof Strokes, Rule> = {
   weights: objOf(SIDES),
   align: oneOf("inside", "outside", "center"),
   paints: refuse("only solid stroke `colors` can be written yet"),
-  dash: NOT_YET, cap: NOT_YET, join: NOT_YET, miter: NOT_YET, variableWidth: NOT_YET, complex: NOT_YET,
+  // The read writes `{profile:"uniform"}` on an ordinary stroke: that default is accepted (it sets nothing); a taper is not yet.
+  variableWidth: (v) => (isObj(v) && v.profile === "uniform" && Object.keys(v).every((k) => k === "profile") ? null
+    : "only the default {profile:\"uniform\"} can be written yet (a tapered or custom-width stroke cannot)"),
+  dash: NOT_YET, cap: NOT_YET, join: NOT_YET, miter: NOT_YET, complex: NOT_YET,
 };
 const BOX_RULES: Record<keyof Box, Rule> = {
   w: size, h: size,
-  x: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
-  y: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
+  // The read's page coordinates of the node's own `x`/`y` (written alongside them): accepted, and they set nothing.
+  x: num, y: num,
 };
 const RADIUS_RULES: Record<keyof RadiusCorners, Rule> = { tl: nonNeg, tr: nonNeg, br: nonNeg, bl: nonNeg };
-const LIMIT_RULES: Record<keyof SizeLimits, Rule> = { minWidth: nonNeg, maxWidth: nonNeg, minHeight: nonNeg, maxHeight: nonNeg };
+// Figma: "Value must be positive. Set to null to remove" — a 0 would throw mid-build.
+const LIMIT_RULES: Record<keyof SizeLimits, Rule> = { minWidth: positive, maxWidth: positive, minHeight: positive, maxHeight: positive };
+const RENDER_BOX_RULES: Record<keyof RenderBox, Rule> = { x: num, y: num, w: nonNeg, h: nonNeg };
 const FILL_RULES: Readonly<Record<string, Rule>> = {
   type: (v) => (v === "solid" ? null : typeof v === "string" ? "'" + v + "' cannot be written yet (solid can)" : "must be \"solid\""),
   color: hex,
@@ -217,7 +245,9 @@ const DS_REF = "design-system references (variables, styles) come in a later wri
 const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
   type: str, children: (v) => (Array.isArray(v) ? null : "must be a list of nodes"),
   name: str,
-  handle: (v) => (typeof v === "string" && v.length > 0 ? null : "must be a non-empty string"),
+  // "__proto__" is refused: Figma's own main-thread → UI message copy drops a key of that name (seen live), so the
+  // reply could not carry it back however the plugin builds it.
+  handle: (v) => (typeof v !== "string" || v.length === 0 ? "must be a non-empty string" : v === "__proto__" ? "'__proto__' cannot be a handle (Figma's message passing drops that key); pick another name" : null),
   id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
   hidden: trueOnly,
   x: num, y: num,
@@ -244,9 +274,10 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
   propTokens: refuse(DS_REF), component: refuse("component instances come with design-system references"),
   mainComponent: refuse("component instances come with design-system references"),
   propRefs: NOT_YET, overrides: NOT_YET, exposedInstances: NOT_YET, detachedFrom: NOT_YET,
-  renderBox: refuse("it is what Figma renders; set `box`"), layoutGrids: NOT_YET, scroll: NOT_YET,
+  renderBox: objOf(RENDER_BOX_RULES), // it follows `box`: accepted, sets nothing
+  layoutGrids: NOT_YET, scroll: NOT_YET,
   gridColumnSpan: NOT_YET, gridRowSpan: NOT_YET, gridColumnStart: NOT_YET, gridRowStart: NOT_YET, gridJustifySelf: NOT_YET,
-  gridAlignSelf: NOT_YET, pin: NOT_YET, fixedChildren: NOT_YET, strokesInLayout: NOT_YET, effects: NOT_YET,
+  gridAlignSelf: NOT_YET, pin: NOT_YET, fixedChildren: NOT_YET, strokesInLayout: trueOnly, effects: NOT_YET,
   radiusFull: refuse("set `radius` to the size it should render at"), rotation: NOT_YET, flipped: NOT_YET, skew: NOT_YET,
   blendMode: NOT_YET, mask: NOT_YET, maskType: NOT_YET, cornerSmoothing: NOT_YET, aspectRatio: NOT_YET, arc: NOT_YET,
   shape: NOT_YET, booleanOp: NOT_YET, exportSettings: NOT_YET, overlay: NOT_YET,
@@ -258,6 +289,12 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
   sourceTransform: refuse("it is read-only"), geometry: NOT_YET, tableCells: NOT_YET, reference: refuse("it is read-only"),
   devResources: NOT_YET, runs: refuse("mixed-format text comes in a later write step; give one `font`"), href: NOT_YET,
   linkNode: NOT_YET, list: NOT_YET, indent: NOT_YET, textStyleOverrides: refuse(DS_REF), missingFont: refuse("it is read-only"),
+};
+
+/** `k` is a field `rules` lets a write set (not unknown, not refused by name). */
+const settable = (rules: Readonly<Record<string, Rule>>, k: string): boolean => {
+  const r = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : undefined;
+  return r !== undefined && !isRefuse(r);
 };
 
 /** Every problem with the keys of `o` against `rules`: refused read fields by name, unknown keys with the nearest
@@ -315,7 +352,8 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
     const say = (msg: string): void => { problems.push(path + ": " + msg); };
     if (kind === "TEXT") {
       if (typeof n.text !== "string") say("a TEXT node needs `text`");
-      for (const k of ["children", "layout", "clip", "radius", "sizeLimits"]) if (n[k] !== undefined) say("`" + k + "` is not on a TEXT node");
+      for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== undefined) say("`" + k + "` is not on a TEXT node");
+      if (n.maxLines !== undefined && n.truncate !== true) summary.warnings.push(path + ": `maxLines` has no effect without `truncate: true`, so it is not set");
     } else if (kind === "FRAME") {
       for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== undefined) say("`" + k + "` is only on a TEXT node (give the node `text`)");
     }
@@ -328,6 +366,13 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
       for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== undefined) say("`" + k + "` needs a parent with auto-layout");
     }
     if (n.sizeLimits !== undefined && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
+    if (n.absolute === true && parentFlex === true) {
+      // Out of the flow, a child cannot fill or grow in it: Figma refuses these on an absolute child mid-build.
+      for (const axis of ["widthMode", "heightMode"] as const) if (n[axis] === "fill") say("`" + axis + ": \"fill\"` is not on an `absolute` child (it is out of the auto-layout flow)");
+      if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
+      if (n.alignSelf === "stretch") say("`alignSelf: \"stretch\"` is not on an `absolute` child (it is out of the auto-layout flow)");
+    }
+    if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
     if (parentFlex === true && n.absolute !== true && (n.x !== undefined || n.y !== undefined)) {
       summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
     }
@@ -347,7 +392,12 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
       if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
       if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
     }
-    if (isObj(n.layout) && n.layout.mode === "absolute" && n.layout.display !== undefined) say("`layout` is either `display: \"flex\"` or `mode: \"absolute\"`, not both");
+    if (isObj(n.layout) && n.layout.mode === "absolute") {
+      const l = n.layout;
+      if (l.display !== undefined) say("`layout` is either `display: \"flex\"` or `mode: \"absolute\"`, not both");
+      // No auto-layout: its fields would be dropped, so they are refused (width/height are the frame's size either way).
+      else for (const k of Object.keys(l)) if (l[k] !== undefined && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + "` is an auto-layout field; `mode: \"absolute\"` has none (use `display: \"flex\"`)");
+    }
     if (isObj(n.layout) && n.layout.display === undefined && n.layout.mode === undefined) say("`layout` needs `display: \"flex\"` (or `mode: \"absolute\"` for none)");
     if (typeof n.handle === "string" && n.handle) {
       if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");

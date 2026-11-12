@@ -105,6 +105,9 @@ void (async () => {
       dryTree.creates === 2 && dryTree.invalid === 1 && dryTree.steps[0]?.target === "new frame on the current page"
       && /^creates frame 'Screen' 390×844, vertical auto-layout with 3 nodes \(2 frames, 1 text\) on the current page, placed beside the existing frames; ids come back for 'title'/.test(dryTree.steps[0]?.change ?? "")
       && dryTree.steps[1]?.target === "new frame on page 'Screens'" && dryTree.steps[1]?.invalid === "tree.effects: a read field a write cannot set yet");
+    const dryProto = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: { handle: "__proto__" } }] } }))) as WritePreview;
+    ok("dryRun refuses a '__proto__' handle (the plugin's reply could not carry it back), through the tool",
+      dryProto.invalid === 1 && /^tree\.handle '__proto__' cannot be a handle/.test(dryProto.steps[0]?.invalid ?? ""));
     ok("figma_write's published schema stays short: the tree is an open object, not the grammar", (() => {
       const item = JSON.stringify(write.inputSchema.properties?.ops);
       return /"tree":\{"type":"object"/.test(item) && !/"children"/.test(item);
@@ -374,6 +377,16 @@ void (async () => {
     ok("[EDITS] dryRun with edits on reports editsAllowed:true and no refusal", dryOn.editsAllowed === true && dryOn.wouldRefuse === undefined);
     const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
     ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
+    // A createTree reply through the real bridge path (plugin socket → bridge → tool text): handles named after
+    // Object.prototype members arrive as own keys with their ids.
+    const handles: Record<string, string> = Object.fromEntries([["constructor", "1:9"], ["toString", "1:10"], ["hasOwnProperty", "1:11"]]);
+    failWith = { ok: true, applied: [{ id: "1:9", created: { frames: 2, texts: 1 }, handles }] };
+    const treeReply = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "createTree", tree: { handle: "constructor", children: [{ text: "a", handle: "toString" }, { handle: "hasOwnProperty" }] } }] } });
+    failWith = null;
+    const gotHandles = (JSON.parse(firstText(treeReply)) as WriteResult).applied[0]?.handles ?? {};
+    ok(`[WRITE] a createTree reply's handles survive the bridge as own keys (got ${JSON.stringify(gotHandles)})`,
+      !treeReply.isError && JSON.stringify(Object.keys(gotHandles)) === JSON.stringify(["constructor", "toString", "hasOwnProperty"])
+      && Object.getOwnPropertyDescriptor(gotHandles, "toString")?.value === "1:10");
 
     // A failed write's text has a section only for what is in it: a refusal that changed nothing has no empty
     // "0 earlier op(s) ... NOT rolled back: []" tail, a put-back lists the modes it restored, and ops that stay

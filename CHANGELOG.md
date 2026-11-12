@@ -31,8 +31,9 @@ list of merged PRs.
   written with the read export's field names and no ids, and an optional `page`. Everything is checked before the
   file is touched (the spec, the page name and the fonts, each miss listed with candidates), and the tree lands whole
   or not at all, beside the existing frames unless it has coordinates. The reply is the root id, the counts and the
-  ids of the nodes the spec gave a `handle`; a read field a write cannot set yet is refused by name. The dry run
-  describes the screen in one sentence.
+  ids of the nodes the spec gave a `handle`; a read field a write cannot set yet is refused by name. What the read
+  writes on an ordinary frame or text (variable-font axes, `strokesInLayout`, the derived `weightValue` and
+  `renderBox`) is accepted, so a read node can be fed back in. The dry run describes the screen in one sentence.
 - `figma_write` can set a node's variable mode: `setVariableMode` (`nodeId`, `collection`, `mode`) makes a dark or
   brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
   mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several

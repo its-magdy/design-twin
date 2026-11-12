@@ -107,6 +107,7 @@ export interface FakeFigma {
   createText?: () => FakeNode;
   loadFontAsync?: (font: { family: string; style: string }) => Promise<void>;
   listAvailableFontsAsync?: () => Promise<Array<{ fontName: { family: string; style: string } }>>;
+  getFontFamilyVariationAxes?: (family: string) => string[] | null;
 }
 
 // ---- what code.js's `__designExport` hands back, typed by the producer contract the bridge consumes

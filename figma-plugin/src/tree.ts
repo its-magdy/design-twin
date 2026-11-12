@@ -75,11 +75,37 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     if ("error" in page) bad(page.error);
     const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e): e is string => e !== null);
     for (const e of fontErrors) bad(e);
-    if ("error" in page || fontErrors.length) continue;
+    const axisErrors = fontErrors.length ? [] : variationProblems(spec);
+    for (const e of axisErrors) bad(e);
+    if ("error" in page || fontErrors.length || axisErrors.length) continue;
     await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
     targets.set(index, { spec, page: page.ok, summary });
   }
   return { targets, problems };
+}
+
+/** Every text node of a spec, with its path (as checkTree names it). */
+function textsOf(s: TreeNodeSpec, path: string, out: Array<{ s: TreeNodeSpec; path: string }>): Array<{ s: TreeNodeSpec; path: string }> {
+  if (nodeKind(s) === "TEXT") out.push({ s, path });
+  (s.children || []).forEach((c, i) => textsOf(c, path + ".children[" + i + "]", out));
+  return out;
+}
+
+/** A `font.variationSettings` axis the family does not define makes Figma throw when the font is set: refused here,
+ *  before the build, with the axes it has (getFontFamilyVariationAxes: null for a static family). */
+function variationProblems(spec: TreeNodeSpec): string[] {
+  const out: string[] = [];
+  for (const { s, path } of textsOf(spec, "tree", [])) {
+    const vs = s.font && s.font.variationSettings;
+    if (!vs || !Object.keys(vs).length) continue;
+    const { family } = fontOf(s.font);
+    let axes: string[] | null;
+    try { axes = figma.getFontFamilyVariationAxes(family); } catch { axes = null; }
+    const unknown = Object.keys(vs).filter((k) => !axes || axes.indexOf(k) < 0);
+    if (!unknown.length) continue;
+    out.push(path + ".font.variationSettings: " + (axes ? "'" + family + "' has no axis " + quoteList(unknown) + "; its axes are " + quoteList(axes) : "'" + family + "' is not a variable font, so it has no axes to set"));
+  }
+  return out;
 }
 
 function resolvePage(ref: string | undefined): { ok: PageNode } | { error: string } {
@@ -230,6 +256,7 @@ function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: 
     if (l.flexWrap && track !== undefined) f.counterAxisSpacing = track;
     if (l.alignContent) f.counterAxisAlignContent = "SPACE_BETWEEN";
     if (l.reverseZ) f.itemReverseZIndex = true;
+    if (s.strokesInLayout) f.strokesIncludedInLayout = true; // applicable only with auto-layout (checkTree warns otherwise)
   }
   const w = s.box ? s.box.w : l && l.width;
   const h = s.box ? s.box.h : l && l.height;
@@ -261,7 +288,9 @@ function applyText(t: TextNode, s: TreeNodeSpec, parent: Parent, made: Made): vo
   parent.appendChild(t);
   const font = s.font || {};
   const { family, weight } = fontOf(font);
-  t.fontName = { family, style: weight }; // loaded by resolveTreeOps
+  // Loaded by resolveTreeOps, which also checked every axis against the family. An axis left out keeps the style's.
+  const vs = font.variationSettings;
+  t.fontName = vs && Object.keys(vs).length ? { family, style: weight, variationSettings: vs } : { family, style: weight };
   if (font.size !== undefined) t.fontSize = font.size;
   t.characters = s.text || "";
   if (s.fills) t.fills = paints(s.fills);
@@ -278,7 +307,7 @@ function applyText(t: TextNode, s: TreeNodeSpec, parent: Parent, made: Made): vo
   if (s.autoResize) t.textAutoResize = s.autoResize === "height" ? "HEIGHT" : s.autoResize === "truncate" ? "TRUNCATE" : "WIDTH_AND_HEIGHT";
   else if (s.box) t.textAutoResize = "NONE";
   if (s.truncate) t.textTruncation = "ENDING";
-  if (s.maxLines !== undefined) t.maxLines = s.maxLines;
+  if (s.maxLines !== undefined && s.truncate) t.maxLines = s.maxLines; // only with truncation (checkTree warns otherwise)
   common(t, s, parent, made);
   sizing(t, s);
 }

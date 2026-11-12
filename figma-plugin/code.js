@@ -881,6 +881,7 @@
   var size = (v) => isNum(v) && v >= MIN_SIZE ? null : "must be a number \u2265 " + MIN_SIZE;
   var nonEmpty2 = (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string";
   var count = (v) => isNum(v) && Number.isInteger(v) && v >= 1 ? null : "must be a whole number \u2265 1";
+  var positive = (v) => isNum(v) && v > 0 ? null : "must be a number > 0 (leave it out for no limit)";
   var unit = (v) => isNum(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1";
   var trueOnly = (v) => v === true ? null : "must be true (omit it for false)";
   var oneOf = (...vals) => (v) => typeof v === "string" && vals.includes(v) ? null : "must be one of " + vals.join(" | ");
@@ -927,13 +928,22 @@
     color: hex,
     align: oneOf("left", "center", "right", "justified"),
     valign: oneOf("center", "bottom"),
-    lineHeight: (v) => isObj(v) && v.unit === "auto" && v.value === void 0 ? null : LENGTH(["px", "percent"], nonNeg)(v),
+    lineHeight: (v) => {
+      if (!isObj(v) || v.unit !== "auto") return LENGTH(["px", "percent"], nonNeg)(v);
+      const extra = Object.keys(v).filter((k) => k !== "unit" && v[k] !== void 0);
+      return extra.length ? "." + extra[0] + ': not a field of an `auto` line height (it is `{unit:"auto"}` alone)' : null;
+    },
     letterSpacing: LENGTH(["px", "percent"]),
     case: oneOf("upper", "lower", "title", "small_caps", "small_caps_forced"),
     decoration: oneOf("underline", "strikethrough"),
-    weightValue: refuse("the weight is the style name in `weight`"),
+    // The read writes it on every text; it follows the style named in `weight`, so it is accepted and sets nothing.
+    weightValue: (v) => isNum(v) && v >= 1 && v <= 1e3 ? null : "must be a number from 1 to 1000 (it follows `weight`, and sets nothing)",
+    variationSettings: (v) => {
+      if (!isObj(v)) return 'must be an object of axis tag \u2192 number, e.g. {"wght": 560}';
+      for (const [k, x] of Object.entries(v)) if (!isNum(x)) return "." + k + " must be a number";
+      return null;
+    },
     fontStyle: refuse('italic is part of the style name in `weight`, e.g. "Italic"'),
-    variationSettings: NOT_YET,
     decorationStyle: NOT_YET,
     decorationColor: NOT_YET,
     decorationThickness: NOT_YET,
@@ -956,21 +966,24 @@
     weights: objOf(SIDES),
     align: oneOf("inside", "outside", "center"),
     paints: refuse("only solid stroke `colors` can be written yet"),
+    // The read writes `{profile:"uniform"}` on an ordinary stroke: that default is accepted (it sets nothing); a taper is not yet.
+    variableWidth: (v) => isObj(v) && v.profile === "uniform" && Object.keys(v).every((k) => k === "profile") ? null : 'only the default {profile:"uniform"} can be written yet (a tapered or custom-width stroke cannot)',
     dash: NOT_YET,
     cap: NOT_YET,
     join: NOT_YET,
     miter: NOT_YET,
-    variableWidth: NOT_YET,
     complex: NOT_YET
   };
   var BOX_RULES = {
     w: size,
     h: size,
-    x: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
-    y: refuse("the read's page coordinate; place a node with its own `x`/`y`")
+    // The read's page coordinates of the node's own `x`/`y` (written alongside them): accepted, and they set nothing.
+    x: num,
+    y: num
   };
   var RADIUS_RULES = { tl: nonNeg, tr: nonNeg, br: nonNeg, bl: nonNeg };
-  var LIMIT_RULES = { minWidth: nonNeg, maxWidth: nonNeg, minHeight: nonNeg, maxHeight: nonNeg };
+  var LIMIT_RULES = { minWidth: positive, maxWidth: positive, minHeight: positive, maxHeight: positive };
+  var RENDER_BOX_RULES = { x: num, y: num, w: nonNeg, h: nonNeg };
   var FILL_RULES = {
     type: (v) => v === "solid" ? null : typeof v === "string" ? "'" + v + "' cannot be written yet (solid can)" : 'must be "solid"',
     color: hex,
@@ -994,7 +1007,9 @@
     type: str,
     children: (v) => Array.isArray(v) ? null : "must be a list of nodes",
     name: str,
-    handle: (v) => typeof v === "string" && v.length > 0 ? null : "must be a non-empty string",
+    // "__proto__" is refused: Figma's own main-thread → UI message copy drops a key of that name (seen live), so the
+    // reply could not carry it back however the plugin builds it.
+    handle: (v) => typeof v !== "string" || v.length === 0 ? "must be a non-empty string" : v === "__proto__" ? "'__proto__' cannot be a handle (Figma's message passing drops that key); pick another name" : null,
     id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
     hidden: trueOnly,
     x: num,
@@ -1026,7 +1041,8 @@
     overrides: NOT_YET,
     exposedInstances: NOT_YET,
     detachedFrom: NOT_YET,
-    renderBox: refuse("it is what Figma renders; set `box`"),
+    renderBox: objOf(RENDER_BOX_RULES),
+    // it follows `box`: accepted, sets nothing
     layoutGrids: NOT_YET,
     scroll: NOT_YET,
     gridColumnSpan: NOT_YET,
@@ -1037,7 +1053,7 @@
     gridAlignSelf: NOT_YET,
     pin: NOT_YET,
     fixedChildren: NOT_YET,
-    strokesInLayout: NOT_YET,
+    strokesInLayout: trueOnly,
     effects: NOT_YET,
     radiusFull: refuse("set `radius` to the size it should render at"),
     rotation: NOT_YET,
@@ -1081,6 +1097,10 @@
     indent: NOT_YET,
     textStyleOverrides: refuse(DS_REF),
     missingFont: refuse("it is read-only")
+  };
+  var settable = (rules, k) => {
+    const r = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
+    return r !== void 0 && !isRefuse(r);
   };
   function objectProblems(o, rules, path) {
     const out = [];
@@ -1142,7 +1162,8 @@
       };
       if (kind === "TEXT") {
         if (typeof n.text !== "string") say("a TEXT node needs `text`");
-        for (const k of ["children", "layout", "clip", "radius", "sizeLimits"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
+        for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
+        if (n.maxLines !== void 0 && n.truncate !== true) summary.warnings.push(path + ": `maxLines` has no effect without `truncate: true`, so it is not set");
       } else if (kind === "FRAME") {
         for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say("`" + k + "` is only on a TEXT node (give the node `text`)");
       }
@@ -1155,6 +1176,12 @@
         for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say("`" + k + "` needs a parent with auto-layout");
       }
       if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
+      if (n.absolute === true && parentFlex === true) {
+        for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
+        if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
+        if (n.alignSelf === "stretch") say('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
+      }
+      if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
       if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
         summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
       }
@@ -1175,7 +1202,11 @@
         if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
         if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
       }
-      if (isObj(n.layout) && n.layout.mode === "absolute" && n.layout.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+      if (isObj(n.layout) && n.layout.mode === "absolute") {
+        const l = n.layout;
+        if (l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+        else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
+      }
       if (isObj(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
       if (typeof n.handle === "string" && n.handle) {
         if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
@@ -3937,7 +3968,7 @@
   }
   function addDistinctTexts(g, walks, listing, sink) {
     let skipped = 0;
-    const textsOf = g.map((row) => {
+    const textsOf2 = g.map((row) => {
       const w = walks.get(row.id);
       if (!w) return { texts: /* @__PURE__ */ new Set(), cut: false };
       if (listing.spent) {
@@ -3956,9 +3987,9 @@
     });
     if (skipped) return g.filter((row) => walks.has(row.id)).map((row) => row.id);
     g.forEach((row, i) => {
-      const mine = textsOf[i];
+      const mine = textsOf2[i];
       if (!mine || mine.cut) return;
-      const others = textsOf.filter((o, j) => j !== i && !!o).map((o) => o.texts);
+      const others = textsOf2.filter((o, j) => j !== i && !!o).map((o) => o.texts);
       const unique = [];
       const notCommon = [];
       for (const t of mine.texts) {
@@ -4552,11 +4583,36 @@
       if ("error" in page) bad(page.error);
       const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e) => e !== null);
       for (const e of fontErrors) bad(e);
-      if ("error" in page || fontErrors.length) continue;
+      const axisErrors = fontErrors.length ? [] : variationProblems(spec);
+      for (const e of axisErrors) bad(e);
+      if ("error" in page || fontErrors.length || axisErrors.length) continue;
       await page.ok.loadAsync();
       targets.set(index, { spec, page: page.ok, summary });
     }
     return { targets, problems };
+  }
+  function textsOf(s, path, out) {
+    if (nodeKind(s) === "TEXT") out.push({ s, path });
+    (s.children || []).forEach((c, i) => textsOf(c, path + ".children[" + i + "]", out));
+    return out;
+  }
+  function variationProblems(spec) {
+    const out = [];
+    for (const { s, path } of textsOf(spec, "tree", [])) {
+      const vs = s.font && s.font.variationSettings;
+      if (!vs || !Object.keys(vs).length) continue;
+      const { family } = fontOf(s.font);
+      let axes;
+      try {
+        axes = figma.getFontFamilyVariationAxes(family);
+      } catch {
+        axes = null;
+      }
+      const unknown = Object.keys(vs).filter((k) => !axes || axes.indexOf(k) < 0);
+      if (!unknown.length) continue;
+      out.push(path + ".font.variationSettings: " + (axes ? "'" + family + "' has no axis " + quoteList(unknown) + "; its axes are " + quoteList(axes) : "'" + family + "' is not a variable font, so it has no axes to set"));
+    }
+    return out;
   }
   function resolvePage(ref) {
     if (ref === void 0) return { ok: figma.currentPage };
@@ -4693,6 +4749,7 @@
       if (l.flexWrap && track !== void 0) f.counterAxisSpacing = track;
       if (l.alignContent) f.counterAxisAlignContent = "SPACE_BETWEEN";
       if (l.reverseZ) f.itemReverseZIndex = true;
+      if (s.strokesInLayout) f.strokesIncludedInLayout = true;
     }
     const w = s.box ? s.box.w : l && l.width;
     const h = s.box ? s.box.h : l && l.height;
@@ -4721,7 +4778,8 @@
     parent.appendChild(t);
     const font = s.font || {};
     const { family, weight } = fontOf(font);
-    t.fontName = { family, style: weight };
+    const vs = font.variationSettings;
+    t.fontName = vs && Object.keys(vs).length ? { family, style: weight, variationSettings: vs } : { family, style: weight };
     if (font.size !== void 0) t.fontSize = font.size;
     t.characters = s.text || "";
     if (s.fills) t.fills = paints2(s.fills);
@@ -4736,7 +4794,7 @@
     if (s.autoResize) t.textAutoResize = s.autoResize === "height" ? "HEIGHT" : s.autoResize === "truncate" ? "TRUNCATE" : "WIDTH_AND_HEIGHT";
     else if (s.box) t.textAutoResize = "NONE";
     if (s.truncate) t.textTruncation = "ENDING";
-    if (s.maxLines !== void 0) t.maxLines = s.maxLines;
+    if (s.maxLines !== void 0 && s.truncate) t.maxLines = s.maxLines;
     common(t, s, parent, made);
     sizing(t, s);
   }

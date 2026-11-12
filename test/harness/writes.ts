@@ -81,6 +81,12 @@ async function writableOn(nodes: Record<string, FakeNode>, editorType?: string) 
 // ---- tree specs (createTree): a file whose nodes behave like Figma's where a tree build leans on it.
 
 const AVAILABLE_FONTS = [["Inter", "Regular"], ["Inter", "Bold"], ["Inter", "Semi Bold"], ["Roboto", "Regular"]] as const;
+/** Inter is a variable family here, Roboto a static one (getFontFamilyVariationAxes: null); any other family throws. */
+const fontAxes = (family: string): string[] | null => {
+  if (family === "Inter") return ["wght", "opsz"];
+  if (family === "Roboto") return null;
+  throw new Error("in Figma: unknown font family " + family);
+};
 const isNode = (v: unknown): v is FakeNode => typeof v === "object" && v !== null;
 /** A fake node's field, read back as what tree.ts set. */
 const num = (n: FakeNode | undefined, k: string): number => { const v = n?.[k]; return typeof v === "number" ? v : NaN; };
@@ -134,6 +140,10 @@ async function treeWorld() {
         if (type === "TEXT" && !quiet.has(key) && !loadedFonts.has(fontKey(key === "fontName" ? v : t.fontName))) {
           throw new Error("in Figma: font " + fontKey(key === "fontName" ? v : t.fontName) + " is not loaded (setting " + key + ")");
         }
+        if (key === "fontName" && isNode(v) && isNode(v.variationSettings)) {
+          const axes = fontAxes(String(v.family));
+          for (const tag of Object.keys(v.variationSettings)) if (!axes || !axes.includes(tag)) throw new Error("in Figma: '" + String(v.family) + "' has no axis " + tag);
+        }
         if (key === "layoutSizingHorizontal" || key === "layoutSizingVertical") {
           const parent = parentOf(t);
           if (v === "FILL" && (!parent || parent.layoutMode === "NONE" || parent.layoutMode === undefined)) throw new Error("in Figma: FILL can only be set on children of auto-layout frames");
@@ -163,6 +173,7 @@ async function treeWorld() {
       loadedFonts.add(fontKey(f));
     },
     listAvailableFontsAsync: async () => AVAILABLE_FONTS.map(([family, style]) => ({ fontName: { family, style } })),
+    getFontFamilyVariationAxes: fontAxes,
   });
   await w.allowEdits();
   /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
@@ -659,6 +670,45 @@ export const cases: Case[] = [{
       && tooSmall.includes("ops[1].tree.children[0].font.letterSpacing is missing unit") && tooSmall.includes("ops[1].tree.children[1]: `strokes.weights` (per side) is not on a TEXT node")
       && tooSmall.includes("ops[1].tree.children[2].font.family must be a non-empty string") && tooSmall.includes("`sizeLimits.minWidth` is above `maxWidth`")
       && tooSmall.includes("ops[1].tree.children[4]: `layout.rowGap` needs `flexWrap: \"wrap\"`"));
+    // The live check's gaps: values the pre-check passed that Figma then refused mid-build (an earlier createFrame stayed).
+    const outOfFlow = await refused("an absolute child that fills, grows or stretches, a 0 size limit", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", tree: { name: "S", layout: { display: "flex" }, children: [
+        { name: "Badge", absolute: true, widthMode: "fill", heightMode: "fill" },
+        { name: "Grow", absolute: true, grow: 1, alignSelf: "stretch" },
+        { name: "Min", sizeLimits: { minWidth: 0 } },
+        { name: "Max", sizeLimits: { maxHeight: 0 } },
+      ] } },
+    ], /problems in the tree spec/, 1);
+    ok("[TREE-REFUSE] …an absolute child cannot fill, grow or stretch, and a size limit must be above 0",
+      outOfFlow.includes("ops[1].tree.children[0]: `widthMode: \"fill\"` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[0]: `heightMode: \"fill\"` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[1]: `grow: 1` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[1]: `alignSelf: \"stretch\"` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[2].sizeLimits.minWidth must be a number > 0")
+      && outOfFlow.includes("ops[1].tree.children[3].sizeLimits.maxHeight must be a number > 0"));
+    // Inputs that would be dropped are refused instead: auto-layout fields with no auto-layout, extras on an auto line height.
+    const dropped = await refused("auto-layout fields under mode absolute, extra keys on an auto line height", [{ op: "createTree", tree: {
+      name: "S", layout: { mode: "absolute", width: 200, gap: 8, padding: [1, 2, 3, 4] }, children: [{ text: "x", font: { lineHeight: { unit: "auto", value: 20 } } }],
+    } }], /problems in the tree spec/);
+    ok("[TREE-REFUSE] …each named",
+      dropped.includes("ops[0].tree: `layout.gap` is an auto-layout field; `mode: \"absolute\"` has none")
+      && dropped.includes("ops[0].tree: `layout.padding` is an auto-layout field") && !dropped.includes("layout.width")
+      && dropped.includes("ops[0].tree.children[0].font.lineHeight.value: not a field of an `auto` line height"));
+    await refused("a handle named __proto__ (Figma's message passing would drop it from the reply)", [{ op: "createTree", tree: { handle: "__proto__" } }],
+      /tree\.handle '__proto__' cannot be a handle/);
+    await refused("a tapered stroke (only the default uniform width)", [{ op: "createTree", tree: { strokes: { colors: ["#000"], variableWidth: { profile: "taper" } } } }],
+      /tree\.strokes\.variableWidth only the default \{profile:"uniform"\} can be written yet/);
+    // A variable-font axis is checked against the family before the build (Figma throws on one it lacks).
+    const axes = await refused("an axis the family lacks, axes on a static family", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", tree: { children: [
+        { text: "a", font: { variationSettings: { wght: 600, slnt: -10 } } },
+        { text: "b", font: { family: "Roboto", variationSettings: { wght: 600 } } },
+      ] } },
+    ], /^2 problems — nothing was changed:/, 1);
+    ok("[TREE-REFUSE] …with the axes the family has", axes.includes("ops[1] (createTree): tree.children[0].font.variationSettings: 'Inter' has no axis 'slnt'; its axes are 'wght', 'opsz'")
+      && axes.includes("tree.children[1].font.variationSettings: 'Roboto' is not a variable font"));
     // File problems (resolved before the first op): page names and fonts, with candidates, together.
     const fileErr = await refused("an unknown page and a missing font, both listed, with candidates", [
       { op: "createFrame", name: "never" },
@@ -683,11 +733,32 @@ export const cases: Case[] = [{
       later.ok === false && later.failedAt === 2 && alive().length === 1 && alive()[0]?.name === "Kept"
       && later.applied.length === 1 && later.restored?.[0]?.handles?.title !== undefined);
 
-    // A handle is the agent's own string: "__proto__" comes back like any other.
-    const proto = await api.applyWrites([{ op: "createTree", tree: { handle: "__proto__", children: [{ handle: "constructor" }] } }]);
+    // A handle is the agent's own string: names on Object.prototype come back as own keys like any other.
+    const proto = await api.applyWrites([{ op: "createTree", tree: { handle: "constructor", children: [{ handle: "toString" }] } }]);
     const handles = proto.applied[0]?.handles ?? {};
-    ok("[TREE] the handles '__proto__' and 'constructor' come back as own keys with their ids",
-      proto.ok === true && JSON.stringify(Object.keys(handles)) === JSON.stringify(["__proto__", "constructor"]) && Object.getOwnPropertyDescriptor(handles, "__proto__")?.value === proto.applied[0]?.id);
+    ok("[TREE] the handles 'constructor' and 'toString' come back as own keys with their ids",
+      proto.ok === true && JSON.stringify(Object.keys(handles)) === JSON.stringify(["constructor", "toString"]) && Object.getOwnPropertyDescriptor(handles, "constructor")?.value === proto.applied[0]?.id);
+    // A read node fed back in: what the read writes on an ordinary frame and text is accepted (and set where it means something).
+    const roundTrip = await api.applyWrites([{ op: "createTree", page: "0:3", tree: {
+      name: "Read", x: 3000, y: 0, box: { w: 390, h: 844, x: 3000, y: 0 }, layout: { display: "flex", flexDirection: "column" }, strokesInLayout: true,
+      strokes: { colors: ["#e5e5e5"], weight: 1, align: "inside", variableWidth: { profile: "uniform" } },
+      children: [
+        { text: "Title", font: { size: 24, family: "Inter", weight: "Bold", weightValue: 700, variationSettings: { wght: 700, opsz: 32 }, lineHeight: { unit: "auto" } }, renderBox: { x: 3000, y: 2, w: 50, h: 20 } },
+        { name: "Plain", strokesInLayout: true },
+        { text: "Clamp", maxLines: 2 },
+      ],
+    } }]);
+    const rtRoot = alive().find((n) => n.id === roundTrip.applied[0]?.id);
+    const rtTitle = kids(rtRoot)[0];
+    ok("[TREE] a read frame and text round-trip: accepted, strokesInLayout set, the axes on the font",
+      roundTrip.ok === true && rtRoot?.strokesIncludedInLayout === true
+      && JSON.stringify(rtTitle?.fontName) === JSON.stringify({ family: "Inter", style: "Bold", variationSettings: { wght: 700, opsz: 32 } }));
+    ok("[TREE] …and what has no effect is not set, with a warning naming the node",
+      kids(rtRoot)[1]?.strokesIncludedInLayout === undefined && kids(rtRoot)[2]?.maxLines === undefined
+      && JSON.stringify(roundTrip.warnings) === JSON.stringify([
+        "ops[0].tree.children[1]: `strokesInLayout` has no effect without auto-layout on the frame, so it is not set",
+        "ops[0].tree.children[2]: `maxLines` has no effect without `truncate: true`, so it is not set",
+      ]));
     // Placement reads what a frame occupies on the page, rotation included (its bounding box), not its x + width.
     const rotated: FakeNode = { id: "1:9", type: "FRAME", name: "Rotated", x: 2000, y: 0, width: 100, height: 1000, absoluteBoundingBox: { x: 1300, y: 0, width: 1400, height: 1000 } };
     (w.pages.current.appendChild as (c: FakeNode) => void)(rotated);

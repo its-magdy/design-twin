@@ -978,20 +978,22 @@ node: the same field names and values, defaults left out, no ids and no parent r
 |---|---|
 | `type` | `FRAME` \| `TEXT` (default: `TEXT` when the node has `text`, else `FRAME`; the root is a frame) |
 | `name`, `hidden` | as read; `hidden: true` creates the node hidden |
-| `handle` | a name of your own; the reply maps each handle to the created node's id (unique in the spec) |
-| `box` | `{w, h}`: the node's size |
-| `layout` | `{display: "flex", flexDirection: "row" \| "column", gap, padding: [t, r, b, l], justifyContent, alignItems, flexWrap: "wrap", rowGap, columnGap, alignContent: "space-between", reverseZ}`, or `{mode: "absolute", width, height}` for none |
+| `handle` | a name of your own; the reply maps each handle to the created node's id (unique in the spec; not `__proto__`, which Figma's message passing drops) |
+| `box` | `{w, h}`: the node's size (the read's page-coordinate `x`/`y` in it are accepted and set nothing) |
+| `layout` | `{display: "flex", flexDirection: "row" \| "column", gap, padding: [t, r, b, l], justifyContent, alignItems, flexWrap: "wrap", rowGap, columnGap, alignContent: "space-between", reverseZ}`, or `{mode: "absolute", width, height}` for none (an auto-layout field beside `mode: "absolute"` is refused) |
 | `widthMode`, `heightMode` | `fill` (in an auto-layout parent) \| `hug` (an auto-layout frame, or text); fixed when left out |
-| `grow`, `alignSelf`, `absolute` | a child's role in its auto-layout parent |
+| `grow`, `alignSelf`, `absolute` | a child's role in its auto-layout parent; an `absolute` child is out of the flow, so it cannot `fill`, `grow: 1` or `alignSelf: "stretch"` |
 | `x`, `y` | the root: page coordinates; a child: its place in a parent without auto-layout, or an `absolute` one |
-| `sizeLimits` | `{minWidth, maxWidth, minHeight, maxHeight}` |
+| `sizeLimits` | `{minWidth, maxWidth, minHeight, maxHeight}`, each above 0 (leave one out for no limit) |
+| `strokesInLayout` | `true`: the strokes count toward the auto-layout size; on a frame without auto-layout it has no effect (a warning) |
 | `fills` | `[{type: "solid", color: "#hex", opacity?}]`; a frame without `fills` has none (not Figma's white) |
-| `strokes` | `{colors: ["#hex"], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}` |
+| `strokes` | `{colors: ["#hex"], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}`; the read's default `variableWidth: {profile: "uniform"}` is accepted |
 | `radius` | a number, or `{tl, tr, br, bl}` |
 | `opacity`, `clip` | as read; a frame without `clip: true` does not clip |
 | `text` | the characters (a TEXT node only) |
-| `font` | `{family, weight (the style name, e.g. "Semi Bold"), size, color, align, valign, lineHeight: {unit, value}, letterSpacing: {unit, value}, case, decoration}`; Inter Regular when left out |
-| `autoResize`, `truncate`, `maxLines` | as read; a text with `box` and no `autoResize` keeps a fixed box, one with neither grows with its text |
+| `font` | `{family, weight (the style name, e.g. "Semi Bold"), size, color, align, valign, lineHeight: {unit, value} or {unit: "auto"}, letterSpacing: {unit, value}, case, decoration, variationSettings: {wght: 560, …}}`; Inter Regular when left out. A `variationSettings` axis the family lacks is refused before the build; the read's `weightValue` is accepted and follows `weight` |
+| `autoResize`, `truncate`, `maxLines` | as read; a text with `box` and no `autoResize` keeps a fixed box, one with neither grows with its text; `maxLines` needs `truncate: true` (else a warning) |
+| `renderBox` | the read's render bounds: accepted, and it sets nothing (it follows `box`) |
 | `children` | the child nodes, in order |
 
 Every other field of the read export (`effects`, `tokens`, `styles`, `props`, `runs`, …) is refused by name, saying
@@ -1002,7 +1004,8 @@ The tree is built hidden, then moved to its page and shown only when every node 
 at all; if a later op of the batch fails, the tree is removed and listed as `restored`. Without `x`/`y` on the root,
 the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
 The reply is small: `{id, created: {frames, texts}, handles}` for the tree, plus `warnings` for anything that had no
-effect (an `x`/`y` inside auto-layout). The dry run says the change in one sentence: the frame, its size and layout,
+effect (an `x`/`y` inside auto-layout, `strokesInLayout` without auto-layout, `maxLines` without `truncate`). So a
+read node can be fed back in: what the read writes on an ordinary frame or text is accepted. The dry run says the change in one sentence: the frame, its size and layout,
 the node counts, where it lands, the handles and the fonts. A spec holds at most 500 nodes.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
