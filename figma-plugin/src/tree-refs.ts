@@ -214,6 +214,10 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   // An instance hugs only when the variant it ends up as has auto-layout (checkTree cannot know; Figma would refuse
   // mid-build): the variant the given variant values pick, the default's values for the rest.
   const shown = set ? variantFor(set, main, mapped.ok, defs) : main;
+  if ("missing" in shown) {
+    const have = set ? set.children.filter((k): k is ComponentNode => k.type === "COMPONENT").map((k) => k.name) : [];
+    return "component '" + (set || c).name + "' has no variant " + shown.missing + (have.length ? "; closest: " + quoteList(nearestNames(shown.missing, have)) : "");
+  }
   if (shown.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"] as const) {
     if (node[axis] === "hug") return "component '" + (set || c).name + "' has no auto-layout, so its instance cannot `" + axis + ": \"hug\"`";
   }
@@ -222,8 +226,9 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
 }
 
 /** The variant of `set` an instance made from `start` shows once `props` are set: each VARIANT property at its given
- *  value, else at `start`'s. `start` itself when no variant matches (Figma keeps it then too). */
-function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions): ComponentNode {
+ *  value, else at `start`'s. A combination the set does not have is `missing` (as "Size=Large, Tone=Off"): Figma would
+ *  keep the instance on another variant, so it is refused rather than built wrong. */
+function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions): ComponentNode | { missing: string } {
   const want: Record<string, string> = {};
   const from = start.variantProperties || {};
   for (const k of Object.keys(defs)) {
@@ -238,7 +243,7 @@ function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly
     const vp = c.variantProperties || {};
     if (Object.keys(want).every((k) => vp[k] === want[k])) return c;
   }
-  return start;
+  return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };
 }
 
 /** An instance's property values keyed the way setProperties takes them: a VARIANT property by its name, the others

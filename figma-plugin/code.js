@@ -4868,6 +4868,10 @@
     const mapped = mapProps(node.props || {}, defs, (set || c).name);
     if ("errors" in mapped) return mapped.errors.join("; ");
     const shown2 = set ? variantFor(set, main, mapped.ok, defs) : main;
+    if ("missing" in shown2) {
+      const have = set ? set.children.filter((k) => k.type === "COMPONENT").map((k) => k.name) : [];
+      return "component '" + (set || c).name + "' has no variant " + shown2.missing + (have.length ? "; closest: " + quoteList(nearestNames(shown2.missing, have)) : "");
+    }
     if (shown2.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
       if (node[axis] === "hug") return "component '" + (set || c).name + "' has no auto-layout, so its instance cannot `" + axis + ': "hug"`';
     }
@@ -4889,7 +4893,7 @@
       const vp = c.variantProperties || {};
       if (Object.keys(want).every((k) => vp[k] === want[k])) return c;
     }
-    return start;
+    return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };
   }
   function mapProps(given, defs, component) {
     const keys = Object.keys(defs);

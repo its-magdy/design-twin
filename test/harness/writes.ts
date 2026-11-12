@@ -275,11 +275,13 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const badge = comp("5:3", "Badge", { layoutMode: "NONE", componentPropertyDefinitions: {} });
   const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
   // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
+  // Its two variants are Small/Off and Large/On: a sparse set, so Large/Off does not exist.
   const chip: FakeNode = { id: "6:1", type: "COMPONENT_SET", name: "Chip", key: "local-chip", parent: null, componentPropertyDefinitions: {
     Size: { type: "VARIANT", defaultValue: "Small", variantOptions: ["Small", "Large"] },
+    Tone: { type: "VARIANT", defaultValue: "Off", variantOptions: ["Off", "On"] },
   } };
-  const chipSmall = comp("6:2", "Size=Small", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small" } });
-  const chipLarge = comp("6:3", "Size=Large", { parent: chip, variantProperties: { Size: "Large" } });
+  const chipSmall = comp("6:2", "Size=Small, Tone=Off", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small", Tone: "Off" } });
+  const chipLarge = comp("6:3", "Size=Large, Tone=On", { parent: chip, variantProperties: { Size: "Large", Tone: "On" } });
   chip.defaultVariant = chipSmall;
   chip.children = [chipSmall, chipLarge];
   const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
@@ -954,10 +956,14 @@ export const cases: Case[] = [{
     ok("[REFS] a component by its key, renamed", badge?.type === "INSTANCE" && isNode(badge.mainComponent) && badge.mainComponent.id === "5:3" && badge.name === "New" && badge.props !== undefined);
     ok("[REFS] raw values are counted as unbound (the card's stroke colour, weight and the note's raw font)", a?.unbound === 4);
     // Hug follows the variant the props pick: the default Chip has no auto-layout, the Large one has.
-    const chips = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", props: { Size: "Large" }, widthMode: "hug" }] } }]);
+    const chips = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", props: { Size: "Large", Tone: "On" }, widthMode: "hug" }] } }]);
     const flat = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", widthMode: "hug" }] } }]);
     ok("[REFS] an instance may hug when the variant its props pick has auto-layout, not when the default it stays on has none",
       chips.ok === true && flat.ok === false && /component 'Chip' has no auto-layout, so its instance cannot `widthMode: "hug"`/.test(flat.error ?? ""));
+    // A combination of variant values the set does not have is refused (Figma would leave the instance on another one).
+    const sparse = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: "Chip", props: { Size: "Large" } }] } }]);
+    ok("[REFS] a variant combination the set lacks is refused, with the variants it has",
+      sparse.ok === false && /tree\.children\[0\]\.component: component 'Chip' has no variant Size=Large, Tone=Off; closest: /.test(sparse.error ?? ""));
     // A styled text's own font axes set nothing, so a family the file lacks is not checked for them.
     const axes = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "Hello", styles: { text: "Body" }, font: { family: "Ignored Font", variationSettings: { wght: 600 } } }] } }]);
     ok("[REFS] a styled text's font axes are not checked (the style sets the font)", axes.ok === true);
