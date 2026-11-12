@@ -21,7 +21,7 @@ import { CODE_JS, pluginBuildOptions } from "../figma-plugin/build-options.ts";
 import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc, Asset,
 } from "../bridge/src/doc-types.ts";
-import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply } from "../bridge/src/commands.ts";
+import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, WriteResult } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
@@ -66,7 +66,7 @@ export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
   getVariablesInLibraryCollectionAsync(key: string): Promise<Array<{ name: string; key: string; resolvedType: string }>>;
 }
-type FakePage = FakeNode & { selection: FakeNode[]; appendChild?: () => void };
+type FakePage = FakeNode & { selection: FakeNode[]; appendChild?: (node: FakeNode) => void; loadAsync?: () => Promise<void> };
 export interface FakeFigma {
   mixed: symbol;
   showUI(): void;
@@ -105,7 +105,8 @@ export interface FakeFigma {
   skipInvisibleInstanceChildren?: boolean;
   createFrame?: () => FakeNode;
   createText?: () => FakeNode;
-  loadFontAsync?: () => Promise<void>;
+  loadFontAsync?: (font: { family: string; style: string }) => Promise<void>;
+  listAvailableFontsAsync?: () => Promise<Array<{ fontName: { family: string; style: string } }>>;
 }
 
 // ---- what code.js's `__designExport` hands back, typed by the producer contract the bridge consumes
@@ -150,8 +151,8 @@ export interface ListChildrenResult {
   assets?: undefined;
 }
 /** writes.ts WriteResult (applied rows are `{ id }`; a variable-mode row adds collection/from/to) */
-interface AppliedRow { id?: string; collection?: string; from?: string; to?: string }
-export interface WriteResult { ok: boolean; applied: AppliedRow[]; failedAt?: number; failedOp?: string; error?: string; refused?: "edits-off"; restored?: AppliedRow[] }
+/** writes.ts applyWrites' reply: the bridge's wire contract (commands.ts), which the plugin builds. */
+export type { WriteResult } from "../bridge/src/commands.ts";
 interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
 export interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }

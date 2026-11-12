@@ -98,6 +98,18 @@ void (async () => {
       !dryModes.isError && modes.overwrites === 3 && modes.invalid === 1 && modes.steps[0]?.newMode === "Dark" && modes.steps[1]?.newMode === "inherited"
       && /the 'Theme' variable mode goes from its current mode to 'Dark'/.test(modes.steps[0]?.change ?? "") && /missing mode/.test(modes.steps[2]?.invalid ?? ""));
 
+    // createTree: one op for a whole screen. The dry run describes it, and refuses a read field by name, through the tool.
+    const tree = { name: "Screen", box: { w: 390, h: 844 }, layout: { display: "flex", flexDirection: "column", gap: 8 }, children: [{ text: "Title", handle: "title" }, { name: "Body", widthMode: "fill" }] };
+    const dryTree = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree }, { op: "createTree", page: "Screens", tree: { effects: [] } }] } }))) as WritePreview;
+    ok("dryRun previews a createTree as one create with a plain description, and flags a read field it cannot set by name",
+      dryTree.creates === 2 && dryTree.invalid === 1 && dryTree.steps[0]?.target === "new frame on the current page"
+      && /^creates frame 'Screen' 390×844, vertical auto-layout with 3 nodes \(2 frames, 1 text\) on the current page, placed beside the existing frames; ids come back for 'title'/.test(dryTree.steps[0]?.change ?? "")
+      && dryTree.steps[1]?.target === "new frame on page 'Screens'" && dryTree.steps[1]?.invalid === "tree.effects: a read field a write cannot set yet");
+    ok("figma_write's published schema stays short: the tree is an open object, not the grammar", (() => {
+      const item = JSON.stringify(write.inputSchema.properties?.ops);
+      return /"tree":\{"type":"object"/.test(item) && !/"children"/.test(item);
+    })());
+
     const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
     ok("an op outside the four implemented ones is rejected at the schema boundary", bad.isError === true);
 
@@ -378,7 +390,7 @@ void (async () => {
     const putBack = { id: "1:2", collection: "Theme", from: "Light", to: "Dark" };
     const putBackText = await failText({ ok: false, applied: [], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)", restored: [putBack] });
     ok(`[WRITE-FAIL] a put-back lists the restored mode changes and no empty applied section (got ${JSON.stringify(putBackText)})`,
-      /^Write failed at op 1 \(setFill\): .*\n1 earlier variable-mode change\(s\) were put back as they were:\n/.test(putBackText)
+      /^Write failed at op 1 \(setFill\): .*\n1 earlier change\(s\) were undone \(variable modes put back, created trees removed\):\n/.test(putBackText)
       && putBackText.includes('"to": "Dark"') && !/NOT rolled back/.test(putBackText));
     const partialText = await failText({ ok: false, applied: [{ id: "1:9" }], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)" });
     ok(`[WRITE-FAIL] ops that stay applied are still listed with their ids (got ${JSON.stringify(partialText)})`,

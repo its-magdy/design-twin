@@ -824,8 +824,373 @@
     return parseNodeId(raw) || (raw == null ? "" : String(raw));
   }
 
+  // ../bridge/src/name-match.ts
+  function distance(a, b) {
+    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    let last2 = b.length;
+    for (let i = 1; i <= a.length; i++) {
+      const next = [i];
+      let diag = i - 1;
+      let left = i;
+      for (const [k, up] of row.slice(1).entries()) {
+        const cur = Math.min(up + 1, left + 1, diag + (a[i - 1] === b[k] ? 0 : 1));
+        next.push(cur);
+        diag = up;
+        left = cur;
+      }
+      row = next;
+      last2 = left;
+    }
+    return last2;
+  }
+  var MAX_CANDIDATES = 3;
+  function nearestNames(ref, names, max = MAX_CANDIDATES) {
+    const r = ref.toLowerCase();
+    const scored = [...new Set(names)].map((n, i) => {
+      const l = n.toLowerCase();
+      return { n, i, contains: l.includes(r) || r.includes(l) ? 0 : 1, d: distance(r, l) };
+    });
+    scored.sort((a, b) => a.contains - b.contains || a.d - b.d || a.i - b.i);
+    return scored.slice(0, max).map((s) => s.n);
+  }
+  function matchByName(ref, items, name, exact = () => []) {
+    const byId = items.filter((t) => exact(t).includes(ref));
+    if (byId.length === 1 && byId[0] !== void 0) return { kind: "one", item: byId[0] };
+    const byName = items.filter((t) => name(t) === ref);
+    if (byName.length === 1 && byName[0] !== void 0) return { kind: "one", item: byName[0] };
+    if (byName.length > 1) return { kind: "many", matches: byName };
+    return { kind: "none", candidates: nearestNames(ref, items.map(name)) };
+  }
+  function quoteList(names) {
+    return names.map((n) => "'" + n + "'").join(", ");
+  }
+
+  // ../bridge/src/tree-spec.ts
+  var MAX_TREE_NODES = 500;
+  var MAX_TREE_DEPTH = 40;
+  var DEFAULT_FONT = { family: "Inter", weight: "Regular" };
+  var NOT_YET = { refuse: "" };
+  var refuse = (why) => ({ refuse: why });
+  var isRefuse = (r) => typeof r !== "function";
+  var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isNum = (v) => typeof v === "number" && Number.isFinite(v);
+  var str = (v) => typeof v === "string" ? null : "must be a string";
+  var num = (v) => isNum(v) ? null : "must be a number";
+  var nonNeg = (v) => isNum(v) && v >= 0 ? null : "must be a number \u2265 0";
+  var positive = (v) => isNum(v) && v > 0 ? null : "must be a number > 0";
+  var unit = (v) => isNum(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1";
+  var trueOnly = (v) => v === true ? null : "must be true (omit it for false)";
+  var oneOf = (...vals) => (v) => typeof v === "string" && vals.includes(v) ? null : "must be one of " + vals.join(" | ");
+  var hex = (v) => parseHexColor(v) ? null : "is not " + HEX_COLOR_HINT;
+  var fourNums = (v) => Array.isArray(v) && v.length === 4 && v.every((n) => isNum(n) && n >= 0) ? null : "must be four numbers \u2265 0 [top, right, bottom, left]";
+  var objOf = (rules) => (v) => {
+    var _a;
+    return isObj(v) ? (_a = objectProblems(v, rules, "")[0]) != null ? _a : null : "must be an object";
+  };
+  var LAYOUT_RULES = {
+    display: (v) => v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : 'must be "flex"',
+    mode: oneOf("absolute"),
+    width: positive,
+    height: positive,
+    flexDirection: oneOf("row", "column"),
+    gap: num,
+    padding: fourNums,
+    justifyContent: oneOf("flex-start", "center", "flex-end", "space-between", "space-evenly", "space-around"),
+    alignItems: oneOf("flex-start", "center", "flex-end", "baseline"),
+    flexWrap: oneOf("wrap"),
+    rowGap: nonNeg,
+    columnGap: nonNeg,
+    alignContent: oneOf("space-between"),
+    reverseZ: trueOnly,
+    inferred: refuse("it says the read guessed the auto-layout; a write sets a real one"),
+    columns: refuse("grid layout cannot be written yet"),
+    rows: refuse("grid layout cannot be written yet"),
+    columnSizes: refuse("grid layout cannot be written yet"),
+    rowSizes: refuse("grid layout cannot be written yet"),
+    autoFlow: refuse("grid layout cannot be written yet"),
+    autoTracks: refuse("grid layout cannot be written yet")
+  };
+  var LENGTH = (units) => objOf({ unit: oneOf(...units), value: num });
+  var FONT_RULES = {
+    size: (v) => v === "mixed" ? "'mixed' cannot be written (one size per text node)" : positive(v),
+    family: str,
+    weight: str,
+    color: hex,
+    align: oneOf("left", "center", "right", "justified"),
+    valign: oneOf("center", "bottom"),
+    lineHeight: (v) => isObj(v) && v.unit === "auto" && v.value === void 0 ? null : LENGTH(["px", "percent"])(v),
+    letterSpacing: LENGTH(["px", "percent"]),
+    case: oneOf("upper", "lower", "title", "small_caps", "small_caps_forced"),
+    decoration: oneOf("underline", "strikethrough"),
+    weightValue: refuse("the weight is the style name in `weight`"),
+    fontStyle: refuse('italic is part of the style name in `weight`, e.g. "Italic"'),
+    variationSettings: NOT_YET,
+    decorationStyle: NOT_YET,
+    decorationColor: NOT_YET,
+    decorationThickness: NOT_YET,
+    decorationOffset: NOT_YET,
+    decorationSkipInk: NOT_YET,
+    openType: NOT_YET,
+    openTypeOff: NOT_YET,
+    paragraphSpacing: NOT_YET,
+    paragraphIndent: NOT_YET,
+    listSpacing: NOT_YET,
+    leadingTrim: NOT_YET,
+    textWrap: NOT_YET,
+    hangingList: NOT_YET,
+    hangingPunctuation: NOT_YET
+  };
+  var SIDES = { top: nonNeg, right: nonNeg, bottom: nonNeg, left: nonNeg };
+  var STROKE_RULES = {
+    colors: (v) => {
+      var _a;
+      return Array.isArray(v) && v.length > 0 ? (_a = v.map(hex).find((e) => e !== null)) != null ? _a : null : "must be a non-empty list of hex colours";
+    },
+    weight: nonNeg,
+    weights: objOf(SIDES),
+    align: oneOf("inside", "outside", "center"),
+    paints: refuse("only solid stroke `colors` can be written yet"),
+    dash: NOT_YET,
+    cap: NOT_YET,
+    join: NOT_YET,
+    miter: NOT_YET,
+    variableWidth: NOT_YET,
+    complex: NOT_YET
+  };
+  var BOX_RULES = {
+    w: positive,
+    h: positive,
+    x: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
+    y: refuse("the read's page coordinate; place a node with its own `x`/`y`")
+  };
+  var RADIUS_RULES = { tl: nonNeg, tr: nonNeg, br: nonNeg, bl: nonNeg };
+  var LIMIT_RULES = { minWidth: nonNeg, maxWidth: nonNeg, minHeight: nonNeg, maxHeight: nonNeg };
+  var FILL_RULES = {
+    type: (v) => v === "solid" ? null : typeof v === "string" ? "'" + v + "' cannot be written yet (solid can)" : 'must be "solid"',
+    color: hex,
+    opacity: unit,
+    tokens: refuse("binding a variable comes with design-system references"),
+    blend: NOT_YET,
+    visible: refuse("an invisible paint is never written; leave it out")
+  };
+  var fillsCheck = (v) => {
+    if (!Array.isArray(v)) return 'must be a list of paints ({type:"solid", color})';
+    for (const [i, p] of v.entries()) {
+      if (!isObj(p)) return "[" + i + "] must be a paint object";
+      const bad = objectProblems(p, FILL_RULES, "")[0];
+      if (bad) return "[" + i + "]" + (bad.startsWith(".") ? "" : " ") + bad;
+      if (p.color === void 0) return "[" + i + "] is missing color";
+    }
+    return null;
+  };
+  var DS_REF = "design-system references (variables, styles) come in a later write step";
+  var NODE_RULES = {
+    type: str,
+    children: (v) => Array.isArray(v) ? null : "must be a list of nodes",
+    name: str,
+    handle: (v) => typeof v === "string" && v.length > 0 ? null : "must be a non-empty string",
+    id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
+    hidden: trueOnly,
+    x: num,
+    y: num,
+    box: objOf(BOX_RULES),
+    layout: objOf(LAYOUT_RULES),
+    absolute: trueOnly,
+    grow: (v) => v === 0 || v === 1 ? null : "must be 0 or 1",
+    alignSelf: oneOf("min", "center", "max", "stretch"),
+    widthMode: oneOf("fill", "hug"),
+    heightMode: oneOf("fill", "hug"),
+    sizeLimits: objOf(LIMIT_RULES),
+    clip: trueOnly,
+    fills: fillsCheck,
+    strokes: objOf(STROKE_RULES),
+    radius: (v) => isNum(v) ? nonNeg(v) : objOf(RADIUS_RULES)(v),
+    opacity: unit,
+    text: str,
+    font: objOf(FONT_RULES),
+    autoResize: oneOf("width_and_height", "height", "truncate"),
+    truncate: trueOnly,
+    maxLines: positive,
+    // Read fields a write does not set (yet). Each is refused by name.
+    props: refuse("component instances come with design-system references"),
+    propTokens: refuse(DS_REF),
+    component: refuse("component instances come with design-system references"),
+    mainComponent: refuse("component instances come with design-system references"),
+    propRefs: NOT_YET,
+    overrides: NOT_YET,
+    exposedInstances: NOT_YET,
+    detachedFrom: NOT_YET,
+    renderBox: refuse("it is what Figma renders; set `box`"),
+    layoutGrids: NOT_YET,
+    scroll: NOT_YET,
+    gridColumnSpan: NOT_YET,
+    gridRowSpan: NOT_YET,
+    gridColumnStart: NOT_YET,
+    gridRowStart: NOT_YET,
+    gridJustifySelf: NOT_YET,
+    gridAlignSelf: NOT_YET,
+    pin: NOT_YET,
+    fixedChildren: NOT_YET,
+    strokesInLayout: NOT_YET,
+    effects: NOT_YET,
+    radiusFull: refuse("set `radius` to the size it should render at"),
+    rotation: NOT_YET,
+    flipped: NOT_YET,
+    skew: NOT_YET,
+    blendMode: NOT_YET,
+    mask: NOT_YET,
+    maskType: NOT_YET,
+    cornerSmoothing: NOT_YET,
+    aspectRatio: NOT_YET,
+    arc: NOT_YET,
+    shape: NOT_YET,
+    booleanOp: NOT_YET,
+    exportSettings: NOT_YET,
+    overlay: NOT_YET,
+    tokens: refuse(DS_REF),
+    styles: refuse(DS_REF),
+    textTokens: refuse(DS_REF),
+    reactions: NOT_YET,
+    variableModes: refuse("set a frame's mode with a setVariableMode op after the tree lands"),
+    resolvedModes: refuse("it is read-only (what the frame inherits)"),
+    annotations: NOT_YET,
+    devStatus: NOT_YET,
+    devStatusNote: NOT_YET,
+    css: refuse("it is read-only"),
+    pluginData: NOT_YET,
+    sharedData: NOT_YET,
+    motion: NOT_YET,
+    asset: refuse("images come in a later write step"),
+    assetSkipped: refuse("it is read-only"),
+    assetFrom: refuse("it is read-only"),
+    sourceTransform: refuse("it is read-only"),
+    geometry: NOT_YET,
+    tableCells: NOT_YET,
+    reference: refuse("it is read-only"),
+    devResources: NOT_YET,
+    runs: refuse("mixed-format text comes in a later write step; give one `font`"),
+    href: NOT_YET,
+    linkNode: NOT_YET,
+    list: NOT_YET,
+    indent: NOT_YET,
+    textStyleOverrides: refuse(DS_REF),
+    missingFont: refuse("it is read-only")
+  };
+  function objectProblems(o, rules, path) {
+    const out = [];
+    for (const [k, v] of Object.entries(o)) {
+      if (v === void 0) continue;
+      const at = path + "." + k;
+      const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
+      if (rule === void 0) {
+        const near = nearestNames(k, Object.keys(rules).filter((r) => {
+          const x = rules[r];
+          return x !== void 0 && !isRefuse(x);
+        }));
+        out.push(at + ": not a field the write accepts" + (near.length ? "; closest: " + quoteList(near) : ""));
+      } else if (isRefuse(rule)) {
+        out.push(at + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
+      } else {
+        const bad = rule(v);
+        if (bad !== null) out.push(at + (bad.startsWith(".") || bad.startsWith("[") ? "" : " ") + bad);
+      }
+    }
+    return out;
+  }
+  function nodeKind(n) {
+    if (n.type === void 0) return n.text !== void 0 ? "TEXT" : "FRAME";
+    return n.type === "FRAME" || n.type === "TEXT" ? n.type : null;
+  }
+  var isFlex = (n) => isObj(n.layout) && n.layout.display === "flex";
+  function fontOf(font) {
+    return { family: font && font.family || DEFAULT_FONT.family, weight: font && font.weight || DEFAULT_FONT.weight };
+  }
+  function checkTree(spec) {
+    const problems = [];
+    const summary = { frames: 0, texts: 0, handles: [], fonts: [], warnings: [] };
+    const seenHandles = /* @__PURE__ */ new Set();
+    const seenFonts = /* @__PURE__ */ new Set();
+    let count = 0;
+    let tooMany = false;
+    const walk = (n, path, depth, parentFlex) => {
+      if (++count > MAX_TREE_NODES) {
+        tooMany = true;
+        return;
+      }
+      if (!isObj(n)) {
+        problems.push(path + ": must be a node object");
+        return;
+      }
+      if (depth > MAX_TREE_DEPTH) {
+        problems.push(path + ": nested deeper than " + MAX_TREE_DEPTH + " levels");
+        return;
+      }
+      const before = problems.length;
+      problems.push(...objectProblems(n, NODE_RULES, path));
+      const kind = nodeKind(n);
+      if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME and TEXT can)");
+      const isRoot = parentFlex === null;
+      const flex = isFlex(n);
+      const say = (msg) => {
+        problems.push(path + ": " + msg);
+      };
+      if (kind === "TEXT") {
+        if (typeof n.text !== "string") say("a TEXT node needs `text`");
+        for (const k of ["children", "layout", "clip", "radius", "sizeLimits"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
+      } else if (kind === "FRAME") {
+        for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say("`" + k + "` is only on a TEXT node (give the node `text`)");
+      }
+      for (const axis of ["widthMode", "heightMode"]) {
+        const m = n[axis];
+        if (m === "fill" && parentFlex !== true) say("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
+        if (m === "hug" && !flex && kind !== "TEXT") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
+      }
+      if (parentFlex !== true) {
+        for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say("`" + k + "` needs a parent with auto-layout");
+      }
+      if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
+      if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
+        summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
+      }
+      if (isObj(n.layout) && n.layout.mode === "absolute" && n.layout.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+      if (isObj(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
+      if (typeof n.handle === "string" && n.handle) {
+        if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
+        seenHandles.add(n.handle);
+      }
+      if (problems.length === before) {
+        if (kind === "TEXT") {
+          summary.texts++;
+          const f = fontOf(isObj(n.font) ? n.font : void 0);
+          const key = f.family + "|" + f.weight;
+          if (!seenFonts.has(key)) {
+            seenFonts.add(key);
+            summary.fonts.push(f);
+          }
+        } else summary.frames++;
+        if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
+      }
+      if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path + ".children[" + i + "]", depth + 1, flex));
+    };
+    if (!isObj(spec)) problems.push("tree: must be a node object (the root frame)");
+    else {
+      walk(spec, "tree", 0, null);
+      if (nodeKind(spec) !== "FRAME") problems.push("tree: the root must be a FRAME (a screen); put the text inside one");
+      if (tooMany) problems.push("tree: more than " + MAX_TREE_NODES + " nodes \u2014 send a large screen as several trees");
+    }
+    return { problems, summary };
+  }
+  function isTreeSpec(v) {
+    return checkTree(v).problems.length === 0;
+  }
+  function treeRefusal(problems) {
+    const first2 = problems[0];
+    if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
+    return problems.length + " problems in the tree spec \u2014 nothing was changed:\n" + problems.join("\n");
+  }
+
   // ../bridge/src/commands.ts
-  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode"];
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree"];
   var INHERITED = "inherited";
   var WRITE_OPS = {
     createFrame: { effect: "creates", required: [], shows: {} },
@@ -833,7 +1198,8 @@
     setFill: { effect: "overwrites", required: ["nodeId", "color"], shows: { newFill: "color" } },
     setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } },
     setVariableMode: { effect: "overwrites", required: ["nodeId", "collection", "mode"], shows: { collection: "collection", newMode: "mode" } },
-    clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } }
+    clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
+    createTree: { effect: "creates", required: ["tree"], shows: {} }
   };
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
@@ -864,7 +1230,7 @@
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
-  var isNum = (v) => typeof v === "number";
+  var isNum2 = (v) => typeof v === "number";
   function opt(a, key, ok, what, label = key) {
     const v = a[key];
     return v === void 0 || ok(v) ? null : `\`${label}\` is not ${what}`;
@@ -879,8 +1245,8 @@
   var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
   var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
   var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
-  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum);
-  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode"];
+  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum2);
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   function writeOpError(o, i) {
     const at = `ops[${i}]`;
@@ -889,13 +1255,18 @@
     if (!isWriteOpName(op)) return `\`${at}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
       ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
-      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum, "a number", `${at}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum2, "a number", `${at}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at}.padding`)
     ]);
     if (typeErr !== null) return typeErr;
     const missing = missingWriteFields(op, o);
-    return missing.length ? `\`${at}\` (${op}): missing ${missing.join(", ")}` : null;
+    if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
+    if (op === "createTree") {
+      const { problems } = checkTree(o.tree);
+      if (problems.length) return treeRefusal(problems.map((p) => p.replace(/^tree/, `${at}.tree`)));
+    }
+    return null;
   }
   var writeArgs = (a) => {
     if (!Array.isArray(a.ops)) return a.ops === void 0 ? "`ops` is missing" : "`ops` is not an array";
@@ -914,7 +1285,7 @@
     exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr, "a string")]),
     exportSelection: readOptArgs,
     exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
-    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum, "a number")]),
+    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum2, "a number")]),
     write: writeArgs
   };
   function argsShapeError(cmd, args) {
@@ -1766,8 +2137,8 @@
     const solids = vis.filter((s) => s.type === "SOLID");
     if (solids.length) out.colors = solids.map(solidHex);
     if (vis.some((s) => s.type !== "SOLID")) {
-      const paints2 = await simplifyFills(vis);
-      if (paints2) out.paints = paints2;
+      const paints3 = await simplifyFills(vis);
+      if (paints3) out.paints = paints3;
     }
     const strokeNode = node;
     const strokeWeight = strokeNode.strokeWeight;
@@ -4019,47 +4390,6 @@
     return allowed;
   }
 
-  // ../bridge/src/name-match.ts
-  function distance(a, b) {
-    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    let last2 = b.length;
-    for (let i = 1; i <= a.length; i++) {
-      const next = [i];
-      let diag = i - 1;
-      let left = i;
-      for (const [k, up] of row.slice(1).entries()) {
-        const cur = Math.min(up + 1, left + 1, diag + (a[i - 1] === b[k] ? 0 : 1));
-        next.push(cur);
-        diag = up;
-        left = cur;
-      }
-      row = next;
-      last2 = left;
-    }
-    return last2;
-  }
-  var MAX_CANDIDATES = 3;
-  function nearestNames(ref, names, max = MAX_CANDIDATES) {
-    const r = ref.toLowerCase();
-    const scored = [...new Set(names)].map((n, i) => {
-      const l = n.toLowerCase();
-      return { n, i, contains: l.includes(r) || r.includes(l) ? 0 : 1, d: distance(r, l) };
-    });
-    scored.sort((a, b) => a.contains - b.contains || a.d - b.d || a.i - b.i);
-    return scored.slice(0, max).map((s) => s.n);
-  }
-  function matchByName(ref, items, name, exact = () => []) {
-    const byId = items.filter((t) => exact(t).includes(ref));
-    if (byId.length === 1 && byId[0] !== void 0) return { kind: "one", item: byId[0] };
-    const byName = items.filter((t) => name(t) === ref);
-    if (byName.length === 1 && byName[0] !== void 0) return { kind: "one", item: byName[0] };
-    if (byName.length > 1) return { kind: "many", matches: byName };
-    return { kind: "none", candidates: nearestNames(ref, items.map(name)) };
-  }
-  function quoteList(names) {
-    return names.map((n) => "'" + n + "'").join(", ");
-  }
-
   // src/variable-modes.ts
   var isModeOp = (op) => op.op === "setVariableMode" || op.op === "clearVariableMode";
   async function resolveModeOps(ops) {
@@ -4140,12 +4470,6 @@
     }
     return { error: "mode '" + ref + "' is not in collection '" + collection.name + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
   }
-  function modeRefusal(problems) {
-    const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
-    const first2 = problems[0];
-    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
-    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
-  }
   function modeName(collection, modeId) {
     if (modeId === void 0 || modeId === null) return INHERITED;
     const m = collection.modes.find((md) => md.modeId === modeId);
@@ -4158,13 +4482,240 @@
     else node.setExplicitVariableModeForCollection(collection, modeId);
     return {
       applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
+      kind: "variable mode change",
+      what: "the '" + collection.name + "' mode on node " + node.id,
       restore() {
         if (prev === void 0) node.clearExplicitVariableModeForCollection(collection);
         else node.setExplicitVariableModeForCollection(collection, prev);
       }
     };
   }
-  function restoreModes(changes) {
+
+  // src/tree.ts
+  var PLACE_GAP = 100;
+  async function resolveTreeOps(ops) {
+    const targets = /* @__PURE__ */ new Map();
+    const problems = [];
+    const loaded2 = /* @__PURE__ */ new Map();
+    let available = null;
+    const availableNames = () => {
+      if (!available) available = figma.listAvailableFontsAsync().then((fs) => fs.map((f) => f.fontName.family + " " + f.fontName.style), () => []);
+      return available;
+    };
+    const load = (family, weight) => {
+      const key = family + "|" + weight;
+      let p = loaded2.get(key);
+      if (!p) {
+        p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
+          const near = nearestNames(family + " " + weight, await availableNames());
+          return "font '" + family + " " + weight + "' is not available in this file" + (near.length ? "; closest: " + quoteList(near) : "");
+        });
+        loaded2.set(key, p);
+      }
+      return p;
+    };
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree") continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const spec = op.tree;
+      if (!isTreeSpec(spec)) {
+        bad("the tree spec did not pass its check");
+        continue;
+      }
+      const summary = checkTree(spec).summary;
+      const page = resolvePage(op.page);
+      if ("error" in page) bad(page.error);
+      const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e) => e !== null);
+      for (const e of fontErrors) bad(e);
+      if ("error" in page || fontErrors.length) continue;
+      await page.ok.loadAsync();
+      targets.set(index, { spec, page: page.ok, summary });
+    }
+    return { targets, problems };
+  }
+  function resolvePage(ref) {
+    if (ref === void 0) return { ok: figma.currentPage };
+    const m = matchByName(ref, figma.root.children, (p) => p.name, (p) => [p.id]);
+    if (m.kind === "one") return { ok: m.item };
+    if (m.kind === "many") return { error: "page '" + ref + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
+    return { error: "page '" + ref + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+  }
+  function buildTree(t) {
+    const made = { frames: 0, texts: 0, handles: {} };
+    const root = figma.createFrame();
+    root.visible = false;
+    try {
+      applyFrame(root, t.spec, null, made);
+      const { x, y } = placement(t.page, root, t.spec);
+      t.page.appendChild(root);
+      root.x = x;
+      root.y = y;
+      root.visible = t.spec.hidden !== true;
+    } catch (e) {
+      try {
+        root.remove();
+      } catch {
+      }
+      throw e;
+    }
+    const applied = { id: root.id, created: { frames: made.frames, texts: made.texts } };
+    if (Object.keys(made.handles).length) applied.handles = made.handles;
+    return {
+      applied,
+      kind: "created tree",
+      what: "the tree '" + root.name + "' (" + root.id + ")",
+      restore() {
+        root.remove();
+      }
+    };
+  }
+  function placement(page, root, spec) {
+    if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
+    let right = null;
+    let top = null;
+    for (const c of page.children) {
+      if (c.id === root.id) continue;
+      right = right === null ? c.x + c.width : Math.max(right, c.x + c.width);
+      top = top === null ? c.y : Math.min(top, c.y);
+    }
+    return {
+      x: spec.x !== void 0 ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
+      y: spec.y !== void 0 ? spec.y : top === null ? 0 : Math.round(top)
+    };
+  }
+  var ALIGN_MAIN = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" };
+  var ALIGN_CROSS = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" };
+  var SIZING = { fill: "FILL", hug: "HUG" };
+  function paints2(fills) {
+    return (fills || []).map((f) => solid(f.color, f.opacity));
+  }
+  function solid(color, opacity) {
+    const c = parseHexColor(color);
+    if (!c) throw new Error("'" + color + "' is not a hex colour");
+    const alpha = (c.a === void 0 ? 1 : c.a) * (opacity === void 0 ? 1 : opacity);
+    return alpha < 1 ? { type: "SOLID", color: { r: c.r, g: c.g, b: c.b }, opacity: alpha } : { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
+  }
+  function common(n, s, parent, made) {
+    if (s.name !== void 0) n.name = s.name;
+    if (s.hidden && parent) n.visible = false;
+    if (s.opacity !== void 0) n.opacity = s.opacity;
+    if (s.strokes) {
+      if (s.strokes.colors) n.strokes = s.strokes.colors.map((c) => solid(c));
+      if (s.strokes.weight !== void 0) n.strokeWeight = s.strokes.weight;
+      const w = s.strokes.weights;
+      if (w && n.type === "FRAME") {
+        if (w.top !== void 0) n.strokeTopWeight = w.top;
+        if (w.right !== void 0) n.strokeRightWeight = w.right;
+        if (w.bottom !== void 0) n.strokeBottomWeight = w.bottom;
+        if (w.left !== void 0) n.strokeLeftWeight = w.left;
+      }
+      if (s.strokes.align) n.strokeAlign = s.strokes.align === "inside" ? "INSIDE" : s.strokes.align === "outside" ? "OUTSIDE" : "CENTER";
+    }
+    if (s.handle) made.handles[s.handle] = n.id;
+    if (!parent) return;
+    const inFlex = parent.layoutMode !== "NONE";
+    if (inFlex) {
+      if (s.absolute) n.layoutPositioning = "ABSOLUTE";
+      if (s.grow !== void 0) n.layoutGrow = s.grow;
+      if (s.alignSelf) n.layoutAlign = s.alignSelf === "min" ? "MIN" : s.alignSelf === "center" ? "CENTER" : s.alignSelf === "max" ? "MAX" : "STRETCH";
+    }
+    if (!inFlex || s.absolute) {
+      if (s.x !== void 0) n.x = s.x;
+      if (s.y !== void 0) n.y = s.y;
+    }
+  }
+  function sizing(n, s) {
+    if (s.widthMode) n.layoutSizingHorizontal = SIZING[s.widthMode];
+    if (s.heightMode) n.layoutSizingVertical = SIZING[s.heightMode];
+  }
+  function applyFrame(f, s, parent, made) {
+    made.frames++;
+    if (parent) parent.appendChild(f);
+    f.fills = paints2(s.fills);
+    f.clipsContent = s.clip === true;
+    if (typeof s.radius === "number") f.cornerRadius = s.radius;
+    else if (s.radius) {
+      if (s.radius.tl !== void 0) f.topLeftRadius = s.radius.tl;
+      if (s.radius.tr !== void 0) f.topRightRadius = s.radius.tr;
+      if (s.radius.br !== void 0) f.bottomRightRadius = s.radius.br;
+      if (s.radius.bl !== void 0) f.bottomLeftRadius = s.radius.bl;
+    }
+    const l = s.layout;
+    if (l && l.display === "flex") {
+      f.layoutMode = l.flexDirection === "column" ? "VERTICAL" : "HORIZONTAL";
+      if (l.gap !== void 0) f.itemSpacing = l.gap;
+      const p = l.padding;
+      if (p) {
+        f.paddingTop = p[0] || 0;
+        f.paddingRight = p[1] || 0;
+        f.paddingBottom = p[2] || 0;
+        f.paddingLeft = p[3] || 0;
+      }
+      if (l.justifyContent) f.primaryAxisAlignItems = ALIGN_MAIN[l.justifyContent];
+      if (l.alignItems) f.counterAxisAlignItems = ALIGN_CROSS[l.alignItems];
+      if (l.flexWrap) f.layoutWrap = "WRAP";
+      const track = l.flexDirection === "column" ? l.columnGap : l.rowGap;
+      if (l.flexWrap && track !== void 0) f.counterAxisSpacing = track;
+      if (l.alignContent) f.counterAxisAlignContent = "SPACE_BETWEEN";
+      if (l.reverseZ) f.itemReverseZIndex = true;
+    }
+    const w = s.box ? s.box.w : l && l.width;
+    const h = s.box ? s.box.h : l && l.height;
+    if (w !== void 0 && h !== void 0) f.resize(w, h);
+    else if (w !== void 0 || h !== void 0) f.resize(w !== void 0 ? w : f.width, h !== void 0 ? h : f.height);
+    if (l && l.display === "flex" || parent && parent.layoutMode !== "NONE") {
+      f.layoutSizingHorizontal = "FIXED";
+      f.layoutSizingVertical = "FIXED";
+    }
+    common(f, s, parent, made);
+    if (s.sizeLimits) {
+      const m = s.sizeLimits;
+      if (m.minWidth !== void 0) f.minWidth = m.minWidth;
+      if (m.maxWidth !== void 0) f.maxWidth = m.maxWidth;
+      if (m.minHeight !== void 0) f.minHeight = m.minHeight;
+      if (m.maxHeight !== void 0) f.maxHeight = m.maxHeight;
+    }
+    for (const c of s.children || []) {
+      if (nodeKind(c) === "TEXT") applyText(figma.createText(), c, f, made);
+      else applyFrame(figma.createFrame(), c, f, made);
+    }
+    sizing(f, s);
+  }
+  function applyText(t, s, parent, made) {
+    made.texts++;
+    parent.appendChild(t);
+    const font = s.font || {};
+    const { family, weight } = fontOf(font);
+    t.fontName = { family, style: weight };
+    if (font.size !== void 0) t.fontSize = font.size;
+    t.characters = s.text || "";
+    if (s.fills) t.fills = paints2(s.fills);
+    else if (font.color) t.fills = [solid(font.color)];
+    if (font.align) t.textAlignHorizontal = font.align === "justified" ? "JUSTIFIED" : font.align === "center" ? "CENTER" : font.align === "right" ? "RIGHT" : "LEFT";
+    if (font.valign) t.textAlignVertical = font.valign === "center" ? "CENTER" : "BOTTOM";
+    if (font.lineHeight) t.lineHeight = font.lineHeight.unit === "auto" || font.lineHeight.value === void 0 ? { unit: "AUTO" } : { unit: font.lineHeight.unit === "px" ? "PIXELS" : "PERCENT", value: font.lineHeight.value };
+    if (font.letterSpacing) t.letterSpacing = { unit: font.letterSpacing.unit === "px" ? "PIXELS" : "PERCENT", value: font.letterSpacing.value };
+    if (font.case) t.textCase = font.case === "small_caps" ? "SMALL_CAPS" : font.case === "small_caps_forced" ? "SMALL_CAPS_FORCED" : font.case === "upper" ? "UPPER" : font.case === "lower" ? "LOWER" : "TITLE";
+    if (font.decoration) t.textDecoration = font.decoration === "underline" ? "UNDERLINE" : "STRIKETHROUGH";
+    if (s.box) t.resize(s.box.w, s.box.h);
+    if (s.autoResize) t.textAutoResize = s.autoResize === "height" ? "HEIGHT" : s.autoResize === "truncate" ? "TRUNCATE" : "WIDTH_AND_HEIGHT";
+    else if (s.box) t.textAutoResize = "NONE";
+    if (s.truncate) t.textTruncation = "ENDING";
+    if (s.maxLines !== void 0) t.maxLines = s.maxLines;
+    common(t, s, parent, made);
+    sizing(t, s);
+  }
+
+  // src/write-batch.ts
+  function batchRefusal(problems) {
+    const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
+    const first2 = problems[0];
+    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
+    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
+  }
+  function restoreChanges(changes) {
     const restored = [];
     const failed = [];
     for (const c of [...changes].reverse()) {
@@ -4172,16 +4723,21 @@
         c.restore();
         restored.push(c);
       } catch (e) {
-        failed.push("could not put back the '" + (c.applied.collection || "?") + "' mode on node " + (c.applied.id || "?") + " (" + errMsg(e) + ")");
+        failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
       }
     }
     return { restored, failed };
   }
+  function countChanges(changes) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const c of changes) counts.set(c.kind, (counts.get(c.kind) || 0) + 1);
+    return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
+  }
 
   // src/writes.ts
-  function solidPaint(hex, what) {
-    const c = parseHexColor(hex);
-    if (!c) throw new Error(what + ": '" + String(hex) + "' is not a valid colour \u2014 expected " + HEX_COLOR_HINT);
+  function solidPaint(hex2, what) {
+    const c = parseHexColor(hex2);
+    if (!c) throw new Error(what + ": '" + String(hex2) + "' is not a valid colour \u2014 expected " + HEX_COLOR_HINT);
     const p = { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
     if (c.a !== void 0) p.opacity = c.a;
     return p;
@@ -4204,7 +4760,7 @@
   function consent() {
     if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch \u2014 the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
   }
-  async function applyWrite(op, mode, changes) {
+  async function applyWrite(op, { mode, tree }, changes) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
@@ -4272,6 +4828,15 @@
         changes.push(change);
         return change.applied;
       }
+      // Resolved up front: its page exists and its fonts are loaded, so the build below never awaits — consent is
+      // checked once and holds for the whole tree, which lands whole or not at all (tree.ts buildTree).
+      case "createTree": {
+        if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
+        consent();
+        const change = buildTree(tree);
+        changes.push(change);
+        return change.applied;
+      }
       default:
         throw new Error("unknown write op: " + op.op);
     }
@@ -4298,7 +4863,7 @@
     if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
-    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin put back " + r.restored.length + " variable mode change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
     if (text === null) return;
     try {
       figma.notify(text, r.ok ? void 0 : { error: true });
@@ -4327,19 +4892,22 @@
       const bad = writeOpError(op, i);
       if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
     }
-    const { targets, problems } = await resolveModeOps(list);
+    const modes = await resolveModeOps(list);
+    const trees = await resolveTreeOps(list);
+    const problems = [...modes.problems, ...trees.problems].sort((a, b) => a.index - b.index);
     const firstProblem = problems[0];
-    if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: modeRefusal(problems) };
+    if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
+    const warnings = [...trees.targets].reduce((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
     const changes = [];
     for (const [i, op] of list.entries()) {
       try {
-        applied.push(await applyWrite(op, targets.get(i), changes));
+        applied.push(await applyWrite(op, { mode: modes.targets.get(i), tree: trees.targets.get(i) }, changes));
       } catch (e) {
         const revoked = e instanceof EditsRevoked;
         const off = revoked || !editsAllowedNow();
-        const { restored, failed } = off ? { restored: [], failed: [] } : restoreModes(changes);
+        const { restored, failed } = off ? { restored: [], failed: [] } : restoreChanges(changes);
         const back = new Set(restored.map((c) => c.applied));
-        const kept = !revoked && off && changes.length ? "; 'Allow edits' was turned off before the batch could put back its " + changes.length + " earlier variable mode change" + (changes.length === 1 ? "" : "s") + ", so they stay applied" : "";
+        const kept = !revoked && off && changes.length ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied" : "";
         return {
           ok: false,
           applied: applied.filter((a) => !back.has(a)),
@@ -4351,7 +4919,7 @@
         };
       }
     }
-    return { ok: true, applied };
+    return { ok: true, applied, ...warnings.length ? { warnings } : {} };
   }
 
   // src/bridge.ts

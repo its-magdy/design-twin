@@ -729,6 +729,10 @@ const writeOpShape = z.object({
   color: hexColor.optional(),
   collection: z.string().optional(),
   mode: z.string().optional(),
+  // createTree: the spec is checked by tree-spec.ts checkTree (the dry run, the wire check and the plugin all run it),
+  // not spelled out here — a recursive schema would cost every tool listing its size (spec decision 19).
+  tree: z.record(z.string(), z.unknown()).optional(),
+  page: z.string().optional(),
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
@@ -778,10 +782,16 @@ registerTool(
       "{op:'createText', text, fontSize?, fill?, parentId?} | " +
       "{op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text} | " +
       "{op:'setVariableMode', nodeId, collection, mode} (collection: a variable collection's exact name, id or key; mode: a mode's exact name or modeId — e.g. a frame's Theme to Dark) | " +
-      "{op:'clearVariableMode', nodeId, collection} (back to the mode the node inherits). " +
-      "A collection or mode name that matches nothing or several things refuses the whole batch before anything runs, with candidates. " +
+      "{op:'clearVariableMode', nodeId, collection} (back to the mode the node inherits) | " +
+      "{op:'createTree', tree, page?} — a whole screen in ONE op: `tree` is a nested node in the read export's field names, defaults omitted, no ids: " +
+      "{type?('FRAME'|'TEXT', TEXT when it has text), name?, handle?, box?{w,h}, layout?{display:'flex', flexDirection:'row'|'column', gap?, padding?[t,r,b,l], justifyContent?, alignItems?, flexWrap?}, " +
+      "widthMode?/heightMode?('fill'|'hug'), grow?, alignSelf?, absolute?, x?, y?, fills?[{type:'solid', color:#hex}], strokes?{colors,weight,align}, radius?, opacity?, clip?, hidden?, " +
+      "text?, font?{family, weight(style name), size, color, align, lineHeight{unit,value}}, autoResize?, children?[...]}. " +
+      "It lands whole or not at all, on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
+      "the reply is the root id, counts, and ids only for nodes given a `handle`. A read field a write cannot set is refused by name. " +
+      "A collection, mode or page name that matches nothing or several things, or a font the file lacks, refuses the whole batch before anything runs, with candidates. " +
       "Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied " +
-      "and their node ids are reported alongside the error so you can continue or clean up — except variable-mode changes, which are put back. " +
+      "and their node ids are reported alongside the error so you can continue or clean up — except variable-mode changes, which are put back, and createTree trees, which are removed. " +
       "There is no undo from here (only the designer's own Cmd-Z) — so for anything that OVERWRITES " +
       "(setFill/setText/setVariableMode/clearVariableMode), call once with dryRun:true, show the user the preview, and only then apply. " +
       "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
@@ -823,7 +833,7 @@ registerTool(
       const applied = r.applied;
       const restored = r.restored ?? [];
       const lines = [`Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}`];
-      if (restored.length) lines.push(`${restored.length} earlier variable-mode change(s) were put back as they were:\n` + JSON.stringify(restored, null, 2));
+      if (restored.length) lines.push(`${restored.length} earlier change(s) were undone (variable modes put back, created trees removed):\n` + JSON.stringify(restored, null, 2));
       if (applied.length) lines.push(`${applied.length} earlier op(s) were applied and NOT rolled back:\n` + JSON.stringify(applied, null, 2));
       return errorResult(lines.join("\n"));
     }

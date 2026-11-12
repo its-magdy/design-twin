@@ -1,5 +1,6 @@
 // The WRITE plane (writes.ts) and parentId.
 import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
+import { MAX_TREE_NODES } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
 import type { FakeCollection, FakeNode, Scene } from "../fake-figma.ts";
@@ -65,6 +66,9 @@ function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, cli
     loadFontAsync: async () => {},
   });
   w.figma.currentPage.appendChild = () => {};
+  w.figma.currentPage.loadAsync = async () => {};
+  w.figma.currentPage.children = [];
+  w.figma.root.children = [w.figma.currentPage];
   return { ...w, created };
 }
 /** writableWorld with "Allow edits" ticked. */
@@ -73,6 +77,120 @@ async function writableOn(nodes: Record<string, FakeNode>, editorType?: string) 
   await w.allowEdits();
   return w;
 }
+
+// ---- tree specs (createTree): a file whose nodes behave like Figma's where a tree build leans on it.
+
+const AVAILABLE_FONTS = [["Inter", "Regular"], ["Inter", "Bold"], ["Inter", "Semi Bold"], ["Roboto", "Regular"]] as const;
+const isNode = (v: unknown): v is FakeNode => typeof v === "object" && v !== null;
+/** A fake node's field, read back as what tree.ts set. */
+const num = (n: FakeNode | undefined, k: string): number => { const v = n?.[k]; return typeof v === "number" ? v : NaN; };
+const parentOf = (n: FakeNode | undefined): FakeNode | null => { const p = n?.parent; return isNode(p) ? p : null; };
+const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? [];
+
+/**
+ * A writable file for tree specs: "Page 1" (current, with two frames), "Screens" (empty), and two pages both named
+ * "Archive". createFrame/createText make nodes that land on the current page like Figma's, move on appendChild, go on
+ * remove(), and refuse what Figma refuses: FILL on a node whose parent has no auto-layout, HUG on a frame without one,
+ * a text change before its font is loaded. A property named in `trap` throws when set (a value Figma refuses partway
+ * through a build). "Allow edits" is ticked.
+ */
+async function treeWorld() {
+  let seq = 0;
+  const made: FakeNode[] = [];
+  const loadedFonts = new Set<string>();
+  const trap = new Set<string>();
+  const pageLoads: string[] = [];
+  const fontKey = (f: unknown): string => (isNode(f) ? String(f.family) + "|" + String(f.style) : "?");
+
+  const appendTo = (n: FakeNode) => (c: FakeNode): void => {
+    const old = parentOf(c);
+    if (old) old.children = kids(old).filter((k) => k !== c);
+    n.children = [...kids(n), c];
+    c.parent = n;
+  };
+  const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
+    const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], loadAsync: async () => { pageLoads.push(id); } };
+    pg.appendChild = appendTo(pg);
+    for (const k of existing) appendTo(pg)(k);
+    return pg;
+  };
+  const current = page("0:1", "Page 1", [
+    { id: "1:1", type: "FRAME", name: "Existing A", x: 0, y: 40, width: 390, height: 844 },
+    { id: "1:2", type: "FRAME", name: "Existing B", x: 500, y: -20, width: 390, height: 844 },
+  ]);
+  const screens = page("0:2", "Screens");
+  const node = (type: "FRAME" | "TEXT"): FakeNode => {
+    const fields: FakeNode = {
+      id: "t:" + ++seq, type, name: type === "FRAME" ? "Frame" : "", visible: true, parent: null, removed: false,
+      x: 0, y: 0, width: 100, height: 100, layoutMode: "NONE", clipsContent: true, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
+      characters: "", fontName: { family: "Inter", style: "Regular" },
+      fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }],
+    };
+    const quiet = new Set(["parent", "removed", "x", "y", "visible", "name", "children"]);
+    const n = new Proxy<FakeNode>(fields, {
+      set(t, k, v) {
+        const key = String(k);
+        if (trap.has(key)) throw new Error("in Figma: cannot set " + key + " to " + JSON.stringify(v));
+        if (type === "TEXT" && !quiet.has(key) && !loadedFonts.has(fontKey(key === "fontName" ? v : t.fontName))) {
+          throw new Error("in Figma: font " + fontKey(key === "fontName" ? v : t.fontName) + " is not loaded (setting " + key + ")");
+        }
+        if (key === "layoutSizingHorizontal" || key === "layoutSizingVertical") {
+          const parent = parentOf(t);
+          if (v === "FILL" && (!parent || parent.layoutMode === "NONE" || parent.layoutMode === undefined)) throw new Error("in Figma: FILL can only be set on children of auto-layout frames");
+          if (v === "HUG" && type !== "TEXT" && t.layoutMode === "NONE") throw new Error("in Figma: HUG can only be set on auto-layout frames and text");
+        }
+        t[key] = v;
+        return true;
+      },
+    });
+    fields.resize = (w: number, h: number) => { fields.width = w; fields.height = h; };
+    fields.remove = () => {
+      const parent = parentOf(fields);
+      if (parent) parent.children = kids(parent).filter((k) => k !== n);
+      fields.parent = null;
+      fields.removed = true;
+    };
+    if (type === "FRAME") fields.appendChild = appendTo(n);
+    made.push(n);
+    appendTo(current)(n); // Figma puts a new node on the current page
+    return n;
+  };
+  const w = world({ pages: [current, screens, page("0:3", "Archive"), page("0:4", "Archive")], currentPage: current }, {
+    createFrame: () => node("FRAME"),
+    createText: () => node("TEXT"),
+    loadFontAsync: async (f) => {
+      if (!AVAILABLE_FONTS.some(([fam, st]) => fam === f.family && st === f.style)) throw new Error("font not found");
+      loadedFonts.add(fontKey(f));
+    },
+    listAvailableFontsAsync: async () => AVAILABLE_FONTS.map(([family, style]) => ({ fontName: { family, style } })),
+  });
+  await w.allowEdits();
+  /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
+   *  parent is null, so everything below it is gone with it, as in Figma) */
+  const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
+  const alive = (): FakeNode[] => made.filter((n) => onPage(n));
+  return { ...w, made, alive, trap, pageLoads, pages: { current, screens } };
+}
+
+/** A sign-in screen: a column of a title, a form of two fields and a button; three handles. */
+const signIn = (): Record<string, unknown> => ({
+  name: "Sign in", handle: "screen", box: { w: 390, h: 844 }, fills: [{ type: "solid", color: "#ffffff" }],
+  layout: { display: "flex", flexDirection: "column", gap: 24, padding: [48, 24, 48, 24] },
+  children: [
+    { text: "Welcome back", handle: "title", font: { family: "Inter", weight: "Bold", size: 28, color: "#111111" }, widthMode: "fill" },
+    { name: "Form", widthMode: "fill", heightMode: "hug", layout: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+      { name: "Email", widthMode: "fill", box: { w: 342, h: 48 }, radius: 8, strokes: { colors: ["#d0d0d0"], weight: 1, align: "inside" },
+        layout: { display: "flex", flexDirection: "row", padding: [0, 16, 0, 16], alignItems: "center" },
+        children: [{ text: "you@example.com", font: { size: 16, color: "#888888" } }] },
+      { name: "Password", widthMode: "fill", box: { w: 342, h: 48 }, radius: 8, layout: { display: "flex", padding: [0, 16, 0, 16], alignItems: "center" },
+        children: [{ text: "Password", font: { size: 16 } }] },
+    ] },
+    { name: "Submit", handle: "submit", widthMode: "fill", box: { w: 342, h: 52 }, radius: { tl: 12, tr: 12, br: 12, bl: 12 }, fills: [{ type: "solid", color: "#3355ff" }],
+      layout: { display: "flex", justifyContent: "center", alignItems: "center" },
+      children: [{ text: "Sign in", font: { family: "Inter", weight: "Semi Bold", size: 16, color: "#ffffff", align: "center" } }] },
+  ],
+});
+const byName = (n: FakeNode | undefined, name: string): FakeNode | undefined => kids(n).find((c) => c.name === name);
 
 export const cases: Case[] = [{
   name: "WRITE plane (writes.ts)",
@@ -139,7 +257,7 @@ export const cases: Case[] = [{
     ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree");
     ok("write: empty/omitted batch is a no-op success", (await api.applyWrites(undefined)).ok === true);
 
     // One batch is one Cmd-Z step: an undo checkpoint before and after every non-empty batch (a failed one included,
@@ -172,6 +290,7 @@ export const cases: Case[] = [{
     const complete: { [K in WriteOpName]: WriteOp } = {
       createFrame: { op: "createFrame", name: "F", width: 10, height: 10, fill: "#fff" },
       createText: { op: "createText", text: "T", fontSize: 12, fill: "#000" },
+      createTree: { op: "createTree", tree: { name: "S", children: [{ text: "Hi" }] }, page: "Page 1" },
       setFill: { op: "setFill", nodeId: "r:1", color: "#00f" },
       setText: { op: "setText", nodeId: "t:1", text: "x" },
       setVariableMode: { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
@@ -426,5 +545,155 @@ export const cases: Case[] = [{
     // Anything but a stored `true` reads as off.
     const odd = writableWorld(nodes, undefined, { allowEdits: "true" });
     ok("[EDITS] a stored non-boolean reads as off", (await odd.api.applyWrites(batch)).refused === "edits-off");
+  },
+}, {
+  name: "tree spec (createTree): one call creates a whole screen, beside the existing frames, all or nothing",
+  async run() {
+    const w = await treeWorld();
+    const { api, alive, pages } = w;
+    const commits = w.undo.commits;
+
+    // ---- one call, the whole tree
+    const r = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
+    const a = r.applied[0];
+    ok("[TREE] one createTree op lands the whole screen: ok, one applied entry", r.ok === true && r.applied.length === 1 && r.error === undefined);
+    ok("[TREE] the reply is the root id, the counts and the handles only (no tree)",
+      JSON.stringify(Object.keys(a ?? {}).sort()) === JSON.stringify(["created", "handles", "id"])
+      && a?.created?.frames === 5 && a.created.texts === 4 && r.warnings === undefined);
+    const root = alive().find((n) => n.id === a?.id);
+    ok("[TREE] ids come back only for the nodes the spec gave a handle",
+      JSON.stringify(Object.keys(a?.handles ?? {})) === JSON.stringify(["screen", "title", "submit"]) && a?.handles?.screen === a?.id
+      && a?.handles?.title === kids(root)[0]?.id && a?.handles?.submit === byName(root, "Submit")?.id);
+    ok("[TREE] one batch is one Cmd-Z step", w.undo.commits === commits + 2);
+    ok("[TREE] the root is on the current page, shown, named, sized", parentOf(root) === pages.current && root?.visible === true
+      && root?.name === "Sign in" && num(root, "width") === 390 && num(root, "height") === 844);
+    ok("[TREE] placed right of the rightmost frame (500+390+100), top-aligned with the topmost (-20)", num(root, "x") === 990 && num(root, "y") === -20);
+    ok("[TREE] the auto-layout reads back as written (column, gap, padding, fixed size)",
+      root?.layoutMode === "VERTICAL" && num(root, "itemSpacing") === 24 && num(root, "paddingTop") === 48 && num(root, "paddingLeft") === 24
+      && root.layoutSizingHorizontal === "FIXED" && root.clipsContent === false);
+    const form = byName(root, "Form"), email = byName(form, "Email"), submit = byName(root, "Submit");
+    ok("[TREE] children nest in spec order, and fill / hug land on them",
+      JSON.stringify(kids(root).map((c) => c.type + ":" + String(c.name))) === JSON.stringify(["TEXT:", "FRAME:Form", "FRAME:Submit"])
+      && form?.layoutSizingHorizontal === "FILL" && form.layoutSizingVertical === "HUG" && email?.layoutSizingHorizontal === "FILL");
+    ok("[TREE] a frame without fills has none (not Figma's white default); a solid fill is parsed",
+      JSON.stringify(form?.fills) === "[]" && JSON.stringify(submit?.fills) === JSON.stringify([{ type: "SOLID", color: { r: 0.2, g: 1 / 3, b: 1 } }]));
+    ok("[TREE] radius, per-corner radius and strokes land",
+      num(email, "cornerRadius") === 8 && num(submit, "topLeftRadius") === 12 && num(email, "strokeWeight") === 1 && email?.strokeAlign === "INSIDE"
+      && JSON.stringify(email.strokes) === JSON.stringify([{ type: "SOLID", color: { r: 208 / 255, g: 208 / 255, b: 208 / 255 } }]));
+    ok("[TREE] justify / align read back as Figma's enums", submit?.primaryAxisAlignItems === "CENTER" && submit.counterAxisAlignItems === "CENTER" && email?.layoutMode === "HORIZONTAL");
+    const title = kids(root)[0], label = kids(submit)[0];
+    ok("[TREE] text: characters, font, size, colour, fill width",
+      title?.characters === "Welcome back" && JSON.stringify(title.fontName) === JSON.stringify({ family: "Inter", style: "Bold" }) && num(title, "fontSize") === 28
+      && title.layoutSizingHorizontal === "FILL" && label?.textAlignHorizontal === "CENTER" && JSON.stringify(label.fontName) === JSON.stringify({ family: "Inter", style: "Semi Bold" }));
+    ok("[TREE] a text with no font gets Inter Regular", JSON.stringify(kids(byName(form, "Password"))[0]?.fontName) === JSON.stringify({ family: "Inter", style: "Regular" }));
+    ok("[TREE] nothing else was left on the page (every node is inside the root)", alive().filter((n) => parentOf(n) === pages.current).length === 1);
+    ok("[TREE] and announced", w.notified.some((t) => /applied 1 edit to this file/.test(t)));
+
+    // ---- placement: a named page, explicit coordinates
+    const onScreens = await api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "Empty state", box: { w: 200, h: 100 } } }]);
+    const second = alive().find((n) => n.id === onScreens.applied[0]?.id);
+    ok("[TREE] page by name: lands on 'Screens' (loaded first), at 0,0 on an empty page, and no handles key without handles",
+      onScreens.ok === true && parentOf(second) === pages.screens && w.pageLoads.includes("0:2") && num(second, "x") === 0 && num(second, "y") === 0
+      && onScreens.applied[0]?.handles === undefined);
+    const byId = await api.applyWrites([{ op: "createTree", page: "0:2", tree: { name: "At", x: -400, y: 1200 } }]);
+    const third = alive().find((n) => n.id === byId.applied[0]?.id);
+    ok("[TREE] page by id, with explicit x/y", byId.ok === true && parentOf(third) === pages.screens && num(third, "x") === -400 && num(third, "y") === 1200);
+    const xOnly = await api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "X only", x: 5 } }]);
+    const fourth = alive().find((n) => n.id === xOnly.applied[0]?.id);
+    ok("[TREE] only x given: y still comes from placement (the topmost frame on 'Screens' is at 0)", xOnly.ok === true && num(fourth, "x") === 5 && num(fourth, "y") === 0);
+
+    // ---- warnings: accepted, no effect
+    const warned = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ name: "Pinned", x: 10, y: 10 }] } }]);
+    ok("[TREE] x/y inside auto-layout: applied, with a warning naming the node", warned.ok === true
+      && JSON.stringify(warned.warnings) === JSON.stringify(["ops[0].tree.children[0]: `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)"]));
+  },
+}, {
+  name: "tree spec (createTree): everything is checked before the file is touched; every problem listed",
+  async run() {
+    const w = await treeWorld();
+    const { api, alive, made } = w;
+    const refused = async (label: string, ops: WriteOp[], re: RegExp, failedAt = 0): Promise<string> => {
+      const before = made.length, commits = w.undo.commits;
+      const r = await api.applyWrites(ops.map((o) => ({ ...o })));
+      const err = r.error ?? "";
+      ok(`[TREE-REFUSE] ${label}: refused whole, nothing made (${err.split("\n")[0]})`,
+        r.ok === false && re.test(err) && r.failedAt === failedAt && r.applied.length === 0 && made.length === before && w.undo.commits === commits + 2);
+      return err;
+    };
+    // Spec problems (the shared check): read fields refused by name, unknown keys with candidates, rules of the tree.
+    const many = await refused("read fields refused by name, unknown keys with candidates, every problem at once", [{ op: "createTree", tree: {
+      name: "S", effects: [], children: [
+        { text: "Hi", font: { size: 14, colour: "#000" } },
+        { type: "RECTANGLE" },
+        { name: "Pill", widthMode: "hug", tokens: { fills: "color/primary" } },
+        { text: "Mixed", runs: [] },
+      ] } }], /^6 problems in the tree spec — nothing was changed:\n/);
+    ok("[TREE-REFUSE] …each named by its path, read fields with the reason",
+      many.includes("ops[0].tree.effects: a read field a write cannot set yet")
+      && many.includes("ops[0].tree.children[0].font.colour: not a field the write accepts; closest: 'color'")
+      && many.includes("ops[0].tree.children[1].type: 'RECTANGLE' cannot be written yet (FRAME and TEXT can)")
+      && many.includes("ops[0].tree.children[2].tokens: a read field a write cannot set yet — design-system references")
+      && many.includes("ops[0].tree.children[2]: `widthMode: \"hug\"` needs the node itself to have auto-layout")
+      && many.includes("ops[0].tree.children[3].runs: a read field a write cannot set yet — mixed-format text comes in a later write step"));
+    await refused("a fill on the root (no auto-layout parent)", [{ op: "createTree", tree: { widthMode: "fill" } }], /`widthMode: "fill"` needs a parent with auto-layout \(this is the root\)/);
+    await refused("a TEXT root", [{ op: "createTree", tree: { text: "Lonely" } }], /the root must be a FRAME/);
+    await refused("a handle used twice", [{ op: "createTree", tree: { handle: "a", children: [{ handle: "a" }] } }], /handle 'a' is used twice/);
+    await refused("an id in the spec", [{ op: "createTree", tree: { id: "1:2" } }], /tree\.id: a read field a write cannot set yet — a new node gets its id from Figma; give it a `handle`/);
+    await refused("a grid layout", [{ op: "createTree", tree: { layout: { display: "grid", columns: 2 } } }], /layout\.display 'grid' cannot be written yet/);
+    await refused("a bad colour", [{ op: "createTree", tree: { fills: [{ type: "solid", color: "red" }] } }], /tree\.fills\[0\]\.color is not a hex colour/);
+    const big = { name: "Big", children: Array.from({ length: MAX_TREE_NODES }, () => ({ name: "n" })) };
+    await refused("more nodes than the cap", [{ op: "createTree", tree: big }], new RegExp("more than " + MAX_TREE_NODES + " nodes"));
+    // File problems (resolved before the first op): page names and fonts, with candidates, together.
+    const fileErr = await refused("an unknown page and a missing font, both listed, with candidates", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", page: "Screen", tree: { children: [{ text: "x", font: { family: "Inter", weight: "Semibold" } }] } },
+    ], /^2 problems — nothing was changed:/, 1);
+    ok("[TREE-REFUSE] …the page with its closest names, the font with the file's nearest",
+      /ops\[1\] \(createTree\): page 'Screen' matches no page in this file; closest: 'Screens'/.test(fileErr)
+      && /ops\[1\] \(createTree\): font 'Inter Semibold' is not available in this file; closest: 'Inter Semi Bold'/.test(fileErr));
+    await refused("an ambiguous page name", [{ op: "createTree", page: "Archive", tree: {} }], /page 'Archive' matches 2 pages — pass one's id: 'Archive' \(0:3\), 'Archive' \(0:4\)/);
+
+    // A value Figma refuses partway through the build: the root (and so every node under it) is removed.
+    w.trap.add("textCase");
+    const partway = await api.applyWrites([{ op: "createTree", tree: signIn() }, { op: "createTree", tree: { name: "Never", children: [{ text: "x", font: { case: "upper" } }] } }]);
+    ok("[TREE-ATOMIC] Figma refusing a value deep in the tree: ok:false at that op, the first tree removed too, nothing alive",
+      partway.ok === false && partway.failedAt === 1 && /cannot set textCase/.test(partway.error ?? "") && partway.applied.length === 0
+      && alive().length === 0 && (partway.restored ?? []).length === 1 && partway.restored?.[0]?.created?.frames === 5);
+    ok("[TREE-ATOMIC] …and the toast says the earlier change was undone", w.notified.some((t) => /undid 1 earlier change after an edit failed/.test(t)));
+    w.trap.clear();
+    // A later op of the batch failing takes the tree back; an older-style createFrame stays (it always has).
+    const later = await api.applyWrites([{ op: "createTree", tree: signIn() }, { op: "createFrame", name: "Kept" }, { op: "setFill", nodeId: "gone:1", color: "#fff" }]);
+    ok("[TREE-ATOMIC] a later op failing removes the tree and lists it as restored; the createFrame stays applied",
+      later.ok === false && later.failedAt === 2 && alive().length === 1 && alive()[0]?.name === "Kept"
+      && later.applied.length === 1 && later.restored?.[0]?.handles?.title !== undefined);
+
+    // The same gates as every write: Allow edits off, Dev Mode.
+    const before = made.length;
+    w.figma.editorType = "dev";
+    const dev = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
+    w.figma.editorType = "figma";
+    await w.allowEdits(false);
+    const off = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
+    ok("[TREE-GATES] Dev Mode and Allow edits off refuse a tree whole, nothing made",
+      dev.ok === false && /Dev Mode/.test(dev.error ?? "") && off.refused === "edits-off" && made.length === before);
+  },
+}, {
+  name: "tree spec (createTree): the dry run describes the change, and agrees with the wire check and the plugin",
+  async run() {
+    const step = writeOpPreview({ op: "createTree", tree: signIn() }, 0);
+    ok("[TREE-DRY] a plain description: the frame, its size and layout, the counts, where, the handles, the fonts",
+      step.effect === "creates" && step.target === "new frame on the current page" && step.invalid === undefined
+      && step.change === "creates frame 'Sign in' 390×844, vertical auto-layout with 9 nodes (5 frames, 4 texts) on the current page, placed beside the existing frames; "
+        + "ids come back for 'screen', 'title', 'submit'; fonts 'Inter Bold', 'Inter Regular', 'Inter Semi Bold' — the page and fonts are checked against the file when applied, and nothing lands unless all of it does");
+    const onPage = writeOpPreview({ op: "createTree", page: "Screens", tree: { name: "A", x: 0, y: 0, layout: { display: "flex" }, children: [{ name: "B", x: 1 }] } }, 3);
+    ok("[TREE-DRY] a named page and explicit coordinates are said; warnings are carried",
+      onPage.target === "new frame on page 'Screens'" && /on page 'Screens' at 0,0/.test(onPage.change ?? "") && onPage.warnings?.length === 1);
+    const bad = writeOpPreview({ op: "createTree", tree: { effects: [] } }, 0);
+    ok("[TREE-DRY] an invalid spec: the same problem the plugin refuses with", bad.invalid === "tree.effects: a read field a write cannot set yet" && bad.change === undefined);
+    // The wire check (handleBridge's gate) refuses what the dry run calls invalid, with the op's path.
+    ok("[TREE-DRY] the wire check refuses the same spec, by path", argsShapeError("write", { ops: [{ op: "createTree", tree: { effects: [] } }] })
+      === "bad write args: ops[0].tree.effects: a read field a write cannot set yet. Nothing was changed.");
+    ok("[TREE-DRY] …and passes a valid one", argsShapeError("write", { ops: [{ op: "createTree", tree: signIn() }] }) === null);
+    ok("[TREE-DRY] a non-object tree is refused", /tree: must be a node object/.test(argsShapeError("write", { ops: [{ op: "createTree", tree: "screen" }] }) ?? ""));
   },
 }];
