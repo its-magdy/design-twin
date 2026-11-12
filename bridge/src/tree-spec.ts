@@ -133,7 +133,8 @@ const oneOf = (...vals: readonly string[]): Check => (v) => (typeof v === "strin
 const hex: Check = (v) => (parseHexColor(v) ? null : "is not " + HEX_COLOR_HINT);
 const fourNums: Check = (v) => (Array.isArray(v) && v.length === 4 && v.every((n) => isNum(n) && n >= 0) ? null : "must be four numbers ≥ 0 [top, right, bottom, left]");
 /** An object whose keys follow `rules` (the read type's own Record), checked recursively by `objectProblems`. */
-const objOf = (rules: Readonly<Record<string, Rule>>): Check => (v) => (isObj(v) ? objectProblems(v, rules, "")[0] ?? null : "must be an object");
+const firstOr = (list: ReadonlyArray<string | null>): string | null => { for (const e of list) if (e !== null) return e; return null; };
+const objOf = (rules: Readonly<Record<string, Rule>>): Check => (v) => (isObj(v) ? firstOr(objectProblems(v, rules, "")) : "must be an object");
 
 const LAYOUT_RULES: Record<keyof LayoutSpec, Rule> = {
   display: (v) => (v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : "must be \"flex\""),
@@ -178,7 +179,7 @@ const FONT_RULES: Record<keyof FontSpec, Rule> = {
 };
 const SIDES: Record<"top" | "right" | "bottom" | "left", Rule> = { top: nonNeg, right: nonNeg, bottom: nonNeg, left: nonNeg };
 const STROKE_RULES: Record<keyof Strokes, Rule> = {
-  colors: (v) => (Array.isArray(v) && v.length > 0 ? v.map(hex).find((e) => e !== null) ?? null : "must be a non-empty list of hex colours"),
+  colors: (v) => (Array.isArray(v) && v.length > 0 ? firstOr(v.map(hex)) : "must be a non-empty list of hex colours"),
   weight: nonNeg,
   weights: objOf(SIDES),
   align: oneOf("inside", "outside", "center"),
@@ -390,7 +391,7 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
   const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
   const nodes = s.frames + s.texts;
   const where = (page ? "on page '" + page + "'" : "on the current page") +
-    (spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x ?? "auto") + "," + (spec.y ?? "auto") : ", placed beside the existing frames");
+    (spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : ", placed beside the existing frames");
   const parts = [
     "creates frame '" + (spec.name || "Frame") + "'" + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") +
       " (" + s.frames + " frame" + (s.frames === 1 ? "" : "s") + ", " + s.texts + " text" + (s.texts === 1 ? "" : "s") + ") " + where,

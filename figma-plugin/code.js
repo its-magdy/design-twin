@@ -886,10 +886,11 @@
   var oneOf = (...vals) => (v) => typeof v === "string" && vals.includes(v) ? null : "must be one of " + vals.join(" | ");
   var hex = (v) => parseHexColor(v) ? null : "is not " + HEX_COLOR_HINT;
   var fourNums = (v) => Array.isArray(v) && v.length === 4 && v.every((n) => isNum(n) && n >= 0) ? null : "must be four numbers \u2265 0 [top, right, bottom, left]";
-  var objOf = (rules) => (v) => {
-    var _a;
-    return isObj(v) ? (_a = objectProblems(v, rules, "")[0]) != null ? _a : null : "must be an object";
+  var firstOr = (list) => {
+    for (const e of list) if (e !== null) return e;
+    return null;
   };
+  var objOf = (rules) => (v) => isObj(v) ? firstOr(objectProblems(v, rules, "")) : "must be an object";
   var LAYOUT_RULES = {
     display: (v) => v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : 'must be "flex"',
     mode: oneOf("absolute"),
@@ -950,10 +951,7 @@
   };
   var SIDES = { top: nonNeg, right: nonNeg, bottom: nonNeg, left: nonNeg };
   var STROKE_RULES = {
-    colors: (v) => {
-      var _a;
-      return Array.isArray(v) && v.length > 0 ? (_a = v.map(hex).find((e) => e !== null)) != null ? _a : null : "must be a non-empty list of hex colours";
-    },
+    colors: (v) => Array.isArray(v) && v.length > 0 ? firstOr(v.map(hex)) : "must be a non-empty list of hex colours",
     weight: nonNeg,
     weights: objOf(SIDES),
     align: oneOf("inside", "outside", "center"),
