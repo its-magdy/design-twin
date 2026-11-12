@@ -937,7 +937,8 @@
     case: oneOf("upper", "lower", "title", "small_caps", "small_caps_forced"),
     decoration: oneOf("underline", "strikethrough"),
     // The read writes it on every text; it follows the style named in `weight`, so it is accepted and sets nothing.
-    weightValue: (v) => isNum(v) && v >= 1 && v <= 1e3 ? null : "must be a number from 1 to 1000 (it follows `weight`, and sets nothing)",
+    // No upper bound: Figma takes a `wght` axis past 1000 (seen live: 5000) and the read then writes that weight.
+    weightValue: (v) => isNum(v) && v > 0 ? null : "must be a number > 0 (it follows `weight`, and sets nothing)",
     variationSettings: (v) => {
       if (!isObj(v)) return 'must be an object of axis tag \u2192 number, e.g. {"wght": 560}';
       for (const [k, x] of Object.entries(v)) if (!isNum(x)) return "." + k + " must be a number";
@@ -1088,7 +1089,8 @@
     sourceTransform: refuse("it is read-only"),
     geometry: NOT_YET,
     tableCells: NOT_YET,
-    reference: refuse("it is read-only"),
+    reference: str,
+    // the read's path to its reference PNG: accepted, sets nothing
     devResources: NOT_YET,
     runs: refuse("mixed-format text comes in a later write step; give one `font`"),
     href: NOT_YET,

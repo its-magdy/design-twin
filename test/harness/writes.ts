@@ -740,19 +740,19 @@ export const cases: Case[] = [{
       proto.ok === true && JSON.stringify(Object.keys(handles)) === JSON.stringify(["constructor", "toString"]) && Object.getOwnPropertyDescriptor(handles, "constructor")?.value === proto.applied[0]?.id);
     // A read node fed back in: what the read writes on an ordinary frame and text is accepted (and set where it means something).
     const roundTrip = await api.applyWrites([{ op: "createTree", page: "0:3", tree: {
-      name: "Read", x: 3000, y: 0, box: { w: 390, h: 844, x: 3000, y: 0 }, layout: { display: "flex", flexDirection: "column" }, strokesInLayout: true,
+      name: "Read", reference: "assets/3_2_ref.png", x: 3000, y: 0, box: { w: 390, h: 844, x: 3000, y: 0 }, layout: { display: "flex", flexDirection: "column" }, strokesInLayout: true,
       strokes: { colors: ["#e5e5e5"], weight: 1, align: "inside", variableWidth: { profile: "uniform" } },
       children: [
-        { text: "Title", font: { size: 24, family: "Inter", weight: "Bold", weightValue: 700, variationSettings: { wght: 700, opsz: 32 }, lineHeight: { unit: "auto" } }, renderBox: { x: 3000, y: 2, w: 50, h: 20 } },
+        { text: "Title", font: { size: 24, family: "Inter", weight: "Bold", weightValue: 5000, variationSettings: { wght: 5000, opsz: 32 }, lineHeight: { unit: "auto" } }, renderBox: { x: 3000, y: 2, w: 50, h: 20 } },
         { name: "Plain", strokesInLayout: true },
         { text: "Clamp", maxLines: 2 },
       ],
     } }]);
     const rtRoot = alive().find((n) => n.id === roundTrip.applied[0]?.id);
     const rtTitle = kids(rtRoot)[0];
-    ok("[TREE] a read frame and text round-trip: accepted, strokesInLayout set, the axes on the font",
+    ok("[TREE] a read frame and text round-trip (reference, a wght past 1000 as Figma takes it): accepted, strokesInLayout set, the axes on the font",
       roundTrip.ok === true && rtRoot?.strokesIncludedInLayout === true
-      && JSON.stringify(rtTitle?.fontName) === JSON.stringify({ family: "Inter", style: "Bold", variationSettings: { wght: 700, opsz: 32 } }));
+      && JSON.stringify(rtTitle?.fontName) === JSON.stringify({ family: "Inter", style: "Bold", variationSettings: { wght: 5000, opsz: 32 } }));
     ok("[TREE] …and what has no effect is not set, with a warning naming the node",
       kids(rtRoot)[1]?.strokesIncludedInLayout === undefined && kids(rtRoot)[2]?.maxLines === undefined
       && JSON.stringify(roundTrip.warnings) === JSON.stringify([

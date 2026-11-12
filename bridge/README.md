@@ -993,7 +993,7 @@ node: the same field names and values, defaults left out, no ids and no parent r
 | `text` | the characters (a TEXT node only) |
 | `font` | `{family, weight (the style name, e.g. "Semi Bold"), size, color, align, valign, lineHeight: {unit, value} or {unit: "auto"}, letterSpacing: {unit, value}, case, decoration, variationSettings: {wght: 560, …}}`; Inter Regular when left out. A `variationSettings` axis the family lacks is refused before the build; the read's `weightValue` is accepted and follows `weight` |
 | `autoResize`, `truncate`, `maxLines` | as read; a text with `box` and no `autoResize` keeps a fixed box, one with neither grows with its text; `maxLines` needs `truncate: true` (else a warning) |
-| `renderBox` | the read's render bounds: accepted, and it sets nothing (it follows `box`) |
+| `renderBox`, `reference` | the read's render bounds and its reference-image path: accepted, and they set nothing |
 | `children` | the child nodes, in order |
 
 Every other field of the read export (`effects`, `tokens`, `styles`, `props`, `runs`, …) is refused by name, saying
