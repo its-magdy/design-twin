@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts and the ids of nodes with a `handle`), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
+| `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -971,12 +971,12 @@ not read the file, so it names the new mode only). If a later op of the batch fa
 in it are put back and listed as `restored`; other ops are not rolled back.
 
 `createTree` creates a whole screen in one op. `tree` is the root frame, written the way the read export writes a
-node: the same field names and values, defaults left out, no ids and no parent references. A node is a `FRAME`, or a
-`TEXT` when it has `text` (`type` may say so). The fields a write sets so far:
+node: the same field names and values, defaults left out, no ids and no parent references. A node is a `FRAME`, a
+`TEXT` when it has `text`, or an `INSTANCE` when it names a `component` (`type` may say so). The fields a write sets so far:
 
 | Field | Value |
 |---|---|
-| `type` | `FRAME` \| `TEXT` (default: `TEXT` when the node has `text`, else `FRAME`; the root is a frame) |
+| `type` | `FRAME` \| `TEXT` \| `INSTANCE` (default: `INSTANCE` when the node has `component`, `TEXT` when it has `text`, else `FRAME`; the root is a frame) |
 | `name`, `hidden` | as read; `hidden: true` creates the node hidden |
 | `handle` | a name of your own; the reply maps each handle to the created node's id (unique in the spec; not `__proto__`, which Figma's message passing drops) |
 | `box` | `{w, h}`: the node's size (the read's page-coordinate `x`/`y` in it are accepted and set nothing) |
@@ -995,18 +995,35 @@ node: the same field names and values, defaults left out, no ids and no parent r
 | `autoResize`, `truncate`, `maxLines` | as read; a text with `box` and no `autoResize` keeps a fixed box, one with neither grows with its text; `maxLines` needs `truncate: true` (else a warning) |
 | `renderBox`, `reference` | the read's render bounds and its reference-image path: accepted, and they set nothing |
 | `children` | the child nodes, in order |
+| `component`, `props` | an `INSTANCE`: the component (a component set or component by exact name, or a component's key or id) and its property values by name — a variant's value, a text, a boolean (`{Size: "Large", Label: "Pay", Icon: true}`; a property's full `name#id` key works too). An instance takes `name`, `handle`, `hidden`, `box`, `x`/`y`, its place in an auto-layout parent and `opacity`; its content comes from the component, so `children`, `fills` and the rest are refused on it |
+| `fills[].tokens` | `{color: variable}`: the paint is bound to a colour variable (the raw `color` may then be left out) |
+| `tokens` | Figma's bindable fields → a variable: `itemSpacing`, `counterAxisSpacing`, `paddingTop`/`Right`/`Bottom`/`Left`, `topLeftRadius`/`topRightRadius`/`bottomRightRadius`/`bottomLeftRadius`, `width`, `height`, `minWidth`/`maxWidth`/`minHeight`/`maxHeight`, `strokeWeight` and the per-side stroke weights, `opacity` (a number variable each), and `fills` / `strokes` (colour variables, one per paint; with no raw list, one bound paint each). A text binds `width`, `height`, `opacity`, `strokeWeight`, `fills`, `strokes`; an instance `width`, `height`, `opacity` |
+| `styles` | `{text: style}` on a TEXT: the text style (its font, size, line height, letter spacing, case and decoration; those `font` fields are then accepted and not set, with a warning) |
 
-Every other field of the read export (`effects`, `tokens`, `styles`, `props`, `runs`, …) is refused by name, saying
+A variable, component or text style is named by its exact name (case-sensitive, never guessed), or by its exact key or
+id. A variable not in the file but in an enabled library is found by name too; a library component or text style is
+named by its key (the Plugin API lists no library components or styles). A name that matches nothing or more than one
+thing, a variable of the wrong type for its field (a number on a paint), a property the component lacks or a variant
+value it does not have, or an instance that hugs when its component has no auto-layout — every one is listed in one
+refusal, each with up to three candidates, before anything runs. Importing a library item is itself a write: it runs
+only after the whole batch resolved, with "Allow edits" still on, and a key no enabled library publishes refuses the
+batch then (an item already imported stays available in the file; nothing is built). Raw values still work: the reply
+counts them as `unbound` (each raw colour, spacing, radius and stroke weight, and each text without a text style).
+
+Every other field of the read export (`effects`, `textTokens`, `mainComponent`, `runs`, …) is refused by name, saying
 why; a key the read export does not have is refused with the closest field names. Everything is checked before the file
-is touched: the spec itself (by the dry run, the bridge and the plugin alike), then the `page` name and every font
-against the file, with up to three candidates for each miss — and a bad spec, page or font refuses the whole batch.
+is touched: the spec itself (by the dry run, the bridge and the plugin alike), then the `page` name, every font and
+every design-system name against the file, with up to three candidates for each miss — and a bad spec, page, font or
+name refuses the whole batch.
 The tree is built hidden, then moved to its page and shown only when every node is in place, so it lands whole or not
 at all; if a later op of the batch fails, the tree is removed and listed as `restored`. Without `x`/`y` on the root,
 the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
-The reply is small: `{id, created: {frames, texts}, handles}` for the tree, plus `warnings` for anything that had no
-effect (an `x`/`y` inside auto-layout, `strokesInLayout` without auto-layout, `maxLines` without `truncate`). So a
+The reply is small: `{id, created: {frames, texts, instances}, handles, unbound}` for the tree (`instances`, `handles`
+and `unbound` only when there are any), plus `warnings` for anything that had no effect (an `x`/`y` inside auto-layout,
+`strokesInLayout` without auto-layout, `maxLines` without `truncate`, a `font` field a text style sets). So a
 read node can be fed back in: what the read writes on an ordinary frame or text is accepted. The dry run says the change in one sentence: the frame, its size and layout,
-the node counts, where it lands, the handles and the fonts. A spec holds at most 500 nodes.
+the node counts, where it lands, the handles, the fonts, the components, variables and text styles it names, and how
+many raw values stay unbound (it does not read the file, so the names are checked when applied). A spec holds at most 500 nodes.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

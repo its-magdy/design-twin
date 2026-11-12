@@ -2,14 +2,17 @@
 //
 // The spec has been checked whole before this module sees it (bridge/src/tree-spec.ts checkTree, run by the wire
 // check and again by applyWrites). What is left can only be answered by the file, and is answered BEFORE the first op
-// of the batch runs (resolveTreeOps): the page the frame lands on resolves to exactly one page, and every font the
-// texts use loads. A spec that fails either is refused with the rest of the batch, every problem listed.
+// of the batch runs (resolveTreeOps): the page the frame lands on resolves to exactly one page, every font the
+// texts use loads, and every component, variable and text style the spec names resolves to one thing that fits
+// (tree-refs.ts). A spec that fails any of it is refused with the rest of the batch, every problem listed. A library
+// item the spec names by key is imported only after all of that passed (writes.ts runs `imports`).
 //
-// Building (buildTree) then touches nothing that can wait: every await is behind it, so the designer cannot untick
-// "Allow edits" halfway through a tree. The root is built hidden on the page Figma creates nodes on, and only once
-// every node is in place is it moved to its page, placed, and shown. Any throw on the way removes the root — and
-// with it everything below — so a tree either lands whole or leaves no trace. Applied, it is a Change (write-batch.ts)
-// whose undo removes it, so a later op of the same batch failing takes it back too.
+// Building (buildTree) makes every node without an await, so the designer cannot untick "Allow edits" halfway
+// through the nodes. The root is built hidden on the page Figma creates nodes on; then the texts that name a text
+// style get it (setTextStyleIdAsync, the one await, with consent checked after each); and only once every node is in
+// place is the root moved to its page, placed, and shown. Any throw on the way removes the root — and with it
+// everything below — so a tree either lands whole or leaves no trace. Applied, it is a Change (write-batch.ts) whose
+// undo removes it, so a later op of the same batch failing takes it back too.
 //
 // Plugin API facts this leans on (@figma/plugin-typings):
 //   * figma.createFrame/createText append the new node to figma.currentPage; appendChild moves a node (reparents it).
@@ -19,18 +22,23 @@
 //     append), "HUG" only on an auto-layout frame or a text node.
 //   * Setting `characters` or any text property needs the node's font loaded (figma.loadFontAsync) first.
 //   * Under documentAccess "dynamic-page" a page other than the current one must be loaded (loadAsync) before its
-//     children are read or it is appended to.
+//     children are read or it is appended to, and a text style is set with setTextStyleIdAsync (textStyleId is
+//     read-only there).
+//   * A paint is bound with figma.variables.setBoundVariableForPaint (it returns a bound copy); a number field with
+//     node.setBoundVariable(field, variable). Setting the raw value afterwards unbinds it, so binding comes last.
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
-import { checkTree, fontOf, isTreeSpec, nodeKind, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
+import { checkTree, fontOf, isTreeSpec, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
+import { resolveRefs, type RefResolution, type ResolvedRefs } from "./tree-refs";
 import type { Change, OpProblem } from "./write-batch";
 
-/** A createTree op whose page resolved and whose fonts loaded. */
+/** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
   spec: TreeNodeSpec;
   page: PageNode;
   summary: TreeSummary;
+  refs: ResolvedRefs;
 }
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
@@ -41,8 +49,9 @@ export const PLACE_GAP = 100;
  * refusal lists every bad page name and every missing font at once. The available-font list is read only when a font
  * fails to load (for its candidates).
  */
-export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, TreeTarget>; problems: OpProblem[] }> {
+export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, TreeTarget>; problems: OpProblem[]; imports: RefResolution["imports"]; importCount: number }> {
   const targets = new Map<number, TreeTarget>();
+  const specs = new Map<number, TreeNodeSpec>();
   const problems: OpProblem[] = [];
   const loaded = new Map<string, Promise<string | null>>();
   let available: Promise<string[]> | null = null;
@@ -77,11 +86,16 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     for (const e of fontErrors) bad(e);
     const axisErrors = fontErrors.length ? [] : variationProblems(spec);
     for (const e of axisErrors) bad(e);
+    specs.set(index, spec);
     if ("error" in page || fontErrors.length || axisErrors.length) continue;
     await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
-    targets.set(index, { spec, page: page.ok, summary });
+    targets.set(index, { spec, page: page.ok, summary, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() } });
   }
-  return { targets, problems };
+  // Every op's references, resolved together (one lookup per name across the batch), into one shared map.
+  const r = await resolveRefs(specs, (f) => load(f.family, f.style));
+  problems.push(...r.problems);
+  for (const t of targets.values()) t.refs = r.refs;
+  return { targets, problems, imports: r.imports, importCount: r.importCount };
 }
 
 /** Every text node of a spec, with its path (as checkTree names it). */
@@ -97,7 +111,8 @@ function variationProblems(spec: TreeNodeSpec): string[] {
   const out: string[] = [];
   for (const { s, path } of textsOf(spec, "tree", [])) {
     const vs = s.font && s.font.variationSettings;
-    if (!vs || !Object.keys(vs).length) continue;
+    // A styled text takes its font from the style: its own `font` axes set nothing (checkTree warns), so they are not checked.
+    if (!vs || !Object.keys(vs).length || (s.styles && s.styles.text !== undefined)) continue;
     const { family } = fontOf(s.font);
     let axes: string[] | null;
     try { axes = figma.getFontFamilyVariationAxes(family); } catch { axes = null; }
@@ -116,14 +131,22 @@ function resolvePage(ref: string | undefined): { ok: PageNode } | { error: strin
   return { error: "page '" + ref + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
 }
 
-/** Build a resolved tree and attach it to its page. Throws (leaving nothing behind) when Figma refuses a value. */
-export function buildTree(t: TreeTarget): Change {
+/**
+ * Build a resolved tree and attach it to its page. Throws (leaving nothing behind) when Figma refuses a value, or when
+ * `consent` throws: it is called after each await, so "Allow edits" turned off while the text styles are set stops
+ * the build and removes the hidden, unplaced root (it never showed in the file).
+ */
+export async function buildTree(t: TreeTarget, consent: () => void): Promise<Change> {
   // Handles are the agent's own strings: a Map, so one called "__proto__" is a key like any other.
-  const made: Made = { frames: 0, texts: 0, handles: new Map<string, string>() };
+  const made: Made = { frames: 0, texts: 0, instances: 0, handles: new Map<string, string>(), refs: t.refs, styled: [] };
   const root = figma.createFrame();
   root.visible = false; // built to the side: nothing shows until the whole tree is in place
   try {
     applyFrame(root, t.spec, null, made);
+    for (const [text, style] of made.styled) {
+      await text.setTextStyleIdAsync(style.id);
+      consent();
+    }
     const { x, y } = placement(t.page, root, t.spec);
     t.page.appendChild(root);
     root.x = x;
@@ -133,8 +156,9 @@ export function buildTree(t: TreeTarget): Change {
     try { root.remove(); } catch { /* already gone */ }
     throw e;
   }
-  const applied: AppliedWrite = { id: root.id, created: { frames: made.frames, texts: made.texts } };
+  const applied: AppliedWrite = { id: root.id, created: made.instances ? { frames: made.frames, texts: made.texts, instances: made.instances } : { frames: made.frames, texts: made.texts } };
   if (made.handles.size) applied.handles = handleRecord(made.handles);
+  if (t.summary.unbound) applied.unbound = t.summary.unbound;
   return {
     applied,
     kind: "created tree",
@@ -173,15 +197,47 @@ function placement(page: PageNode, root: FrameNode, spec: TreeNodeSpec): { x: nu
   };
 }
 
-interface Made { frames: number; texts: number; handles: Map<string, string> }
+interface Made {
+  frames: number;
+  texts: number;
+  instances: number;
+  handles: Map<string, string>;
+  refs: ResolvedRefs;
+  /** the texts that name a text style, set once every node is made (it awaits) */
+  styled: Array<[TextNode, TextStyle]>;
+}
 type Parent = FrameNode;
+type Built = FrameNode | TextNode | InstanceNode;
 
 const ALIGN_MAIN = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" } as const;
 const ALIGN_CROSS = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" } as const;
 const SIZING = { fill: "FILL", hug: "HUG" } as const;
 
-function paints(fills: readonly TreeFill[] | undefined): SolidPaint[] {
-  return (fills || []).map((f) => solid(f.color, f.opacity));
+/** The node's paints: `fills` (each bound to its `tokens.color`), else one bound paint per name in `names` (the
+ *  node's `tokens.fills` / `tokens.strokes` without the raw list). */
+function paints(fills: readonly TreeFill[] | undefined, names: string | string[] | undefined, made: Made): SolidPaint[] {
+  if (fills) return fills.map((f) => bindPaint(solid(f.color === undefined ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color, made));
+  return nameList(names).map((n) => bindPaint(solid("#000000"), n, made));
+}
+const nameList = (v: string | string[] | undefined): string[] => (v === undefined ? [] : typeof v === "string" ? [v] : v);
+/** `p` bound to the variable `ref` resolved to (tree-refs.ts), or `p` itself without one. */
+function bindPaint(p: SolidPaint, ref: string | undefined, made: Made): SolidPaint {
+  if (ref === undefined) return p;
+  return figma.variables.setBoundVariableForPaint(p, "color", variable(ref, made));
+}
+function variable(ref: string, made: Made): Variable {
+  const v = made.refs.variables.get(ref);
+  if (!v) throw new Error("variable '" + ref + "' was not resolved before the batch ran");
+  return v;
+}
+/** Bind the spec's number tokens: last, as a raw value set afterwards would unbind it. */
+function bindNumbers(n: Built, s: TreeNodeSpec, made: Made): void {
+  const t = s.tokens;
+  if (!t) return;
+  for (const k of NUMBER_TOKEN_FIELDS) {
+    const ref = t[k];
+    if (ref !== undefined) n.setBoundVariable(k, variable(ref, made));
+  }
 }
 function solid(color: string, opacity?: number): SolidPaint {
   const c = parseHexColor(color);
@@ -191,12 +247,17 @@ function solid(color: string, opacity?: number): SolidPaint {
 }
 
 /** The props every node kind shares, then its place in the parent. Runs after the node is appended to `parent`. */
-function common(n: FrameNode | TextNode, s: TreeNodeSpec, parent: Parent | null, made: Made): void {
+function common(n: Built, s: TreeNodeSpec, parent: Parent | null, made: Made): void {
   if (s.name !== undefined) n.name = s.name;
   if (s.hidden && parent) n.visible = false; // the root stays hidden until it is placed (buildTree)
   if (s.opacity !== undefined) n.opacity = s.opacity;
+  const strokeNames = nameList(s.tokens && s.tokens.strokes);
+  if (s.strokes || strokeNames.length) {
+    // Each colour bound to the variable at its place (checkTree made the counts match), or one bound paint per name.
+    if (s.strokes && s.strokes.colors) n.strokes = s.strokes.colors.map((c, i) => bindPaint(solid(c), strokeNames[i], made));
+    else if (strokeNames.length) n.strokes = paints(undefined, strokeNames, made);
+  }
   if (s.strokes) {
-    if (s.strokes.colors) n.strokes = s.strokes.colors.map((c) => solid(c));
     if (s.strokes.weight !== undefined) n.strokeWeight = s.strokes.weight;
     const w = s.strokes.weights;
     if (w && n.type === "FRAME") {
@@ -221,7 +282,7 @@ function common(n: FrameNode | TextNode, s: TreeNodeSpec, parent: Parent | null,
   }
 }
 
-function sizing(n: FrameNode | TextNode, s: TreeNodeSpec): void {
+function sizing(n: Built, s: TreeNodeSpec): void {
   if (s.widthMode) n.layoutSizingHorizontal = SIZING[s.widthMode];
   if (s.heightMode) n.layoutSizingVertical = SIZING[s.heightMode];
 }
@@ -229,7 +290,7 @@ function sizing(n: FrameNode | TextNode, s: TreeNodeSpec): void {
 function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: Made): void {
   made.frames++;
   if (parent) parent.appendChild(f);
-  f.fills = paints(s.fills);
+  f.fills = paints(s.fills, s.tokens && s.tokens.fills, made);
   f.clipsContent = s.clip === true;
   if (typeof s.radius === "number") f.cornerRadius = s.radius;
   else if (s.radius) {
@@ -276,31 +337,61 @@ function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: 
     if (m.maxHeight !== undefined) f.maxHeight = m.maxHeight;
   }
   for (const c of s.children || []) {
-    if (nodeKind(c) === "TEXT") applyText(figma.createText(), c, f, made);
+    const kind = nodeKind(c);
+    if (kind === "TEXT") applyText(figma.createText(), c, f, made);
+    else if (kind === "INSTANCE") applyInstance(c, f, made);
     else applyFrame(figma.createFrame(), c, f, made);
   }
   // After the children: a hugging frame sizes to them, and a fill needs the parent's layout in place (it is).
   sizing(f, s);
+  bindNumbers(f, s, made);
+}
+
+/** An instance of the component the spec named (resolved by tree-refs.ts), with its property values. */
+function applyInstance(s: TreeNodeSpec, parent: Parent, made: Made): void {
+  const r = made.refs.instances.get(s);
+  if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
+  made.instances++;
+  const inst = r.main.createInstance();
+  parent.appendChild(inst);
+  if (Object.keys(r.props).length) inst.setProperties(r.props);
+  if (s.box) inst.resize(s.box.w, s.box.h);
+  common(inst, s, parent, made);
+  sizing(inst, s);
+  bindNumbers(inst, s, made);
 }
 
 function applyText(t: TextNode, s: TreeNodeSpec, parent: Parent, made: Made): void {
   made.texts++;
   parent.appendChild(t);
   const font = s.font || {};
-  const { family, weight } = fontOf(font);
-  // Loaded by resolveTreeOps, which also checked every axis against the family. An axis left out keeps the style's.
-  const vs = font.variationSettings;
-  t.fontName = vs && Object.keys(vs).length ? { family, style: weight, variationSettings: vs } : { family, style: weight };
-  if (font.size !== undefined) t.fontSize = font.size;
+  const styleRef = s.styles && s.styles.text;
+  const style = styleRef !== undefined ? made.refs.textStyles.get(styleRef) : undefined;
+  if (styleRef !== undefined && !style) throw new Error("text style '" + styleRef + "' was not resolved before the batch ran");
+  if (style) {
+    // The style's own font (loaded by resolveTreeOps); the style itself is set once every node is made (buildTree).
+    t.fontName = style.fontName;
+    made.styled.push([t, style]);
+  } else {
+    const { family, weight } = fontOf(font);
+    // Loaded by resolveTreeOps, which also checked every axis against the family. An axis left out keeps the style's.
+    const vs = font.variationSettings;
+    t.fontName = vs && Object.keys(vs).length ? { family, style: weight, variationSettings: vs } : { family, style: weight };
+    if (font.size !== undefined) t.fontSize = font.size;
+  }
   t.characters = s.text || "";
-  if (s.fills) t.fills = paints(s.fills);
+  const fillNames = s.tokens && s.tokens.fills;
+  if (s.fills || fillNames !== undefined) t.fills = paints(s.fills, fillNames, made);
   else if (font.color) t.fills = [solid(font.color)];
   if (font.align) t.textAlignHorizontal = font.align === "justified" ? "JUSTIFIED" : font.align === "center" ? "CENTER" : font.align === "right" ? "RIGHT" : "LEFT";
   if (font.valign) t.textAlignVertical = font.valign === "center" ? "CENTER" : "BOTTOM";
-  if (font.lineHeight) t.lineHeight = font.lineHeight.unit === "auto" || font.lineHeight.value === undefined ? { unit: "AUTO" } : { unit: font.lineHeight.unit === "px" ? "PIXELS" : "PERCENT", value: font.lineHeight.value };
-  if (font.letterSpacing) t.letterSpacing = { unit: font.letterSpacing.unit === "px" ? "PIXELS" : "PERCENT", value: font.letterSpacing.value };
-  if (font.case) t.textCase = font.case === "small_caps" ? "SMALL_CAPS" : font.case === "small_caps_forced" ? "SMALL_CAPS_FORCED" : font.case === "upper" ? "UPPER" : font.case === "lower" ? "LOWER" : "TITLE";
-  if (font.decoration) t.textDecoration = font.decoration === "underline" ? "UNDERLINE" : "STRIKETHROUGH";
+  // A text style sets these (checkTree warned that they are not set on a styled text).
+  if (!style) {
+    if (font.lineHeight) t.lineHeight = font.lineHeight.unit === "auto" || font.lineHeight.value === undefined ? { unit: "AUTO" } : { unit: font.lineHeight.unit === "px" ? "PIXELS" : "PERCENT", value: font.lineHeight.value };
+    if (font.letterSpacing) t.letterSpacing = { unit: font.letterSpacing.unit === "px" ? "PIXELS" : "PERCENT", value: font.letterSpacing.value };
+    if (font.case) t.textCase = font.case === "small_caps" ? "SMALL_CAPS" : font.case === "small_caps_forced" ? "SMALL_CAPS_FORCED" : font.case === "upper" ? "UPPER" : font.case === "lower" ? "LOWER" : "TITLE";
+    if (font.decoration) t.textDecoration = font.decoration === "underline" ? "UNDERLINE" : "STRIKETHROUGH";
+  }
   // Box first (resize fixes the size), then how the box follows the text: the read writes `autoResize` only when it
   // is not NONE, so a box without it is a fixed box, and neither keeps Figma's default (grow with the text).
   if (s.box) t.resize(s.box.w, s.box.h);
@@ -310,4 +401,5 @@ function applyText(t: TextNode, s: TreeNodeSpec, parent: Parent, made: Made): vo
   if (s.maxLines !== undefined && s.truncate) t.maxLines = s.maxLines; // only with truncation (checkTree warns otherwise)
   common(t, s, parent, made);
   sizing(t, s);
+  bindNumbers(t, s, made);
 }

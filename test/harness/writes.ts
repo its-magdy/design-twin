@@ -3,7 +3,7 @@ import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPr
 import { MAX_TREE_NODES } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import type { FakeCollection, FakeNode, Scene } from "../fake-figma.ts";
+import type { FakeCollection, FakeNode, FakeVariable, Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -99,10 +99,18 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * remove(), and refuse what Figma refuses: FILL on a node whose parent has no auto-layout, HUG on a frame without one,
  * a text change before its font is loaded. A property named in `trap` throws when set (a value Figma refuses partway
  * through a build). "Allow edits" is ticked.
+ *
+ * With `kit`, the file also has a design system (KIT below): a "Components" page, variables, text styles, and a team
+ * library to import from. Every node can bind a variable (setBoundVariable), a text can take a text style
+ * (setTextStyleIdAsync, which needs the style's font loaded), and a component's createInstance makes an INSTANCE that
+ * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
+ * setTextStyleIdAsync (to untick "Allow edits" there).
  */
-async function treeWorld() {
+async function treeWorld(opts: { kit?: boolean } = {}) {
   let seq = 0;
   const made: FakeNode[] = [];
+  const imports: string[] = [];
+  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
   const trap = new Set<string>();
   const pageLoads: string[] = [];
@@ -125,13 +133,43 @@ async function treeWorld() {
     { id: "1:2", type: "FRAME", name: "Existing B", x: 500, y: -20, width: 390, height: 844 },
   ]);
   const screens = page("0:2", "Screens");
-  const node = (type: "FRAME" | "TEXT"): FakeNode => {
+  const node = (type: "FRAME" | "TEXT" | "INSTANCE", main?: FakeNode): FakeNode => {
     const fields: FakeNode = {
-      id: "t:" + ++seq, type, name: type === "FRAME" ? "Frame" : "", visible: true, parent: null, removed: false,
-      x: 0, y: 0, width: 100, height: 100, layoutMode: "NONE", clipsContent: true, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
+      id: "t:" + ++seq, type, name: type === "FRAME" ? "Frame" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
+      x: 0, y: 0, width: 100, height: 100, layoutMode: main ? main.layoutMode : "NONE", clipsContent: true, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
       characters: "", fontName: { family: "Inter", style: "Regular" },
-      fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }],
+      fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
+      boundVariables: {},
     };
+    fields.setBoundVariable = (field: string, v: unknown) => {
+      if (!isNode(v) || typeof v.id !== "string") throw new Error("in Figma: setBoundVariable takes a Variable object");
+      fields.boundVariables = { ...(isNode(fields.boundVariables) ? fields.boundVariables : {}), [field]: { type: "VARIABLE_ALIAS", id: v.id } };
+    };
+    if (main) {
+      fields.mainComponent = main;
+      fields.props = {};
+      fields.setProperties = (p: Record<string, unknown>) => {
+        fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
+        // A variant value switches the instance to that variant, and to its layout (as Figma's does).
+        const set = parentOf(main);
+        const was = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
+        if (set?.type === "COMPONENT_SET") {
+          const want = { ...was, ...Object.fromEntries(Object.entries(p).filter(([k]) => !k.includes("#"))) };
+          const v = kids(set).find((c) => isNode(c.variantProperties) && Object.entries(want).every(([k, x]) => isNode(c.variantProperties) && c.variantProperties[k] === x));
+          if (v) { fields.mainComponent = v; fields.layoutMode = v.layoutMode; }
+        }
+      };
+    }
+    if (type === "TEXT") {
+      fields.setTextStyleIdAsync = async (id: string) => {
+        const st = KIT_STYLES.find((x) => x.id === id) ?? imported.find((x) => x.id === id);
+        if (!st) throw new Error("in Figma: no style " + id);
+        if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");
+        fields.textStyleId = id;
+        fields.fontName = st.fontName;
+        if (hooks.onStyle) await hooks.onStyle();
+      };
+    }
     const quiet = new Set(["parent", "removed", "x", "y", "visible", "name", "children"]);
     const n = new Proxy<FakeNode>(fields, {
       set(t, k, v) {
@@ -165,7 +203,11 @@ async function treeWorld() {
     appendTo(current)(n); // Figma puts a new node on the current page
     return n;
   };
-  const w = world({ pages: [current, screens, page("0:3", "Archive"), page("0:4", "Archive")], currentPage: current }, {
+  // ---- the design system (opts.kit)
+  const imported: FakeNode[] = [];
+  const kit = opts.kit ? designKit((m) => node("INSTANCE", m)) : null;
+  const pages = [current, screens, page("0:3", "Archive"), page("0:4", "Archive"), ...(kit ? [kit.page] : [])];
+  const w = world({ pages, currentPage: current, ...(kit ? kit.scene : {}) }, {
     createFrame: () => node("FRAME"),
     createText: () => node("TEXT"),
     loadFontAsync: async (f) => {
@@ -174,13 +216,104 @@ async function treeWorld() {
     },
     listAvailableFontsAsync: async () => AVAILABLE_FONTS.map(([family, style]) => ({ fontName: { family, style } })),
     getFontFamilyVariationAxes: fontAxes,
+    ...(kit ? {
+      importComponentByKeyAsync: async (key: string) => { imports.push("component " + key); if (hooks.onImport) await hooks.onImport(); const c = kit.library.components[key]; if (!c) throw new Error("not published"); return c; },
+      importComponentSetByKeyAsync: async (key: string) => { imports.push("component set " + key); throw new Error("not published"); },
+      importStyleByKeyAsync: async (key: string) => { imports.push("style " + key); const st = kit.library.styles[key]; if (!st) throw new Error("not published"); imported.push(st); return st; },
+      variables: {
+        importVariableByKeyAsync: async (key: string) => { imports.push("variable " + key); if (hooks.onImport) await hooks.onImport(); const v = kit.library.variables[key]; if (!v) throw new Error("not published"); return v; },
+        setBoundVariableForPaint: (paint: FakeNode, field: string, v: FakeVariable | null) => ({ ...paint, boundVariables: v ? { [field]: { type: "VARIABLE_ALIAS", id: v.id } } : {} }),
+      },
+    } : {}),
   });
   await w.allowEdits();
   /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
    *  parent is null, so everything below it is gone with it, as in Figma) */
   const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
-  return { ...w, made, alive, trap, pageLoads, pages: { current, screens } };
+  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens } };
+}
+
+// ---- the design system a kit world has: components, variables, text styles, and a library
+
+const KEY = (c: string): string => c.repeat(40); // a key as Figma writes one: 40 hex digits
+const variable = (id: string, name: string, resolvedType: string, key: string): FakeVariable =>
+  ({ id, name, key, resolvedType, variableCollectionId: "VariableCollectionId:30:1", scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false, valuesByMode: { "30:0": resolvedType === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : 8 } });
+const KIT_VARS: Record<string, FakeVariable> = {
+  "VariableID:30:1": variable("VariableID:30:1", "color/brand", "COLOR", "local-brand"),
+  "VariableID:30:2": variable("VariableID:30:2", "space/md", "FLOAT", "local-space-md"),
+  "VariableID:30:3": variable("VariableID:30:3", "radius/md", "FLOAT", "local-radius-md"),
+  "VariableID:30:4": variable("VariableID:30:4", "color/text", "COLOR", "local-text-a"),
+  "VariableID:31:4": variable("VariableID:31:4", "color/text", "COLOR", "local-text-b"),
+};
+const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight } });
+const KIT_STYLES: FakeNode[] = [
+  style("S:h1,", "Heading/H1", "local-h1", "Inter", "Bold"),
+  style("S:body,", "Body", "local-body", "Inter", "Regular"),
+  style("S:fancy,", "Fancy", "local-fancy", "Papyrus", "Regular"),
+];
+/** The kit: a "Components" page with a Button set (variants by Size; Label text, Icon boolean, Glyph swap), a Badge
+ *  without auto-layout, two components both named Card; and a library with a colour and a number variable (listed by
+ *  name), an Avatar component and a Caption text style (by key only). */
+function designKit(instanceOf: (main: FakeNode) => FakeNode) {
+  const comp = (id: string, name: string, extra: FakeNode): FakeNode => {
+    const c: FakeNode = { id, type: "COMPONENT", name, key: "local-" + id, layoutMode: "HORIZONTAL", parent: null, ...extra };
+    c.createInstance = () => instanceOf(c);
+    return c;
+  };
+  const set: FakeNode = { id: "5:1", type: "COMPONENT_SET", name: "Button", key: "local-button", parent: null, componentPropertyDefinitions: {
+    Size: { type: "VARIANT", defaultValue: "Medium", variantOptions: ["Small", "Medium", "Large"] },
+    "Label#1:0": { type: "TEXT", defaultValue: "Button" },
+    "Icon#1:1": { type: "BOOLEAN", defaultValue: false },
+    "Glyph#1:2": { type: "INSTANCE_SWAP", defaultValue: "9:9" },
+  } };
+  const medium = comp("5:2", "Size=Medium", { parent: set, variantProperties: { Size: "Medium" } });
+  Object.defineProperty(medium, "componentPropertyDefinitions", { get() { throw new Error("in Figma: componentPropertyDefinitions can only be read on a component set or a non-variant component"); } });
+  const large = comp("5:6", "Size=Large", { parent: set, variantProperties: { Size: "Large" } });
+  set.defaultVariant = medium;
+  set.children = [medium, large];
+  const badge = comp("5:3", "Badge", { layoutMode: "NONE", componentPropertyDefinitions: {} });
+  const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
+  // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
+  // Its two variants are Small/Off and Large/On: a sparse set, so Large/Off does not exist.
+  const chip: FakeNode = { id: "6:1", type: "COMPONENT_SET", name: "Chip", key: "local-chip", parent: null, componentPropertyDefinitions: {
+    Size: { type: "VARIANT", defaultValue: "Small", variantOptions: ["Small", "Large"] },
+    Tone: { type: "VARIANT", defaultValue: "Off", variantOptions: ["Off", "On"] },
+  } };
+  const chipSmall = comp("6:2", "Size=Small, Tone=Off", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small", Tone: "Off" } });
+  const chipLarge = comp("6:3", "Size=Large, Tone=On", { parent: chip, variantProperties: { Size: "Large", Tone: "On" } });
+  chip.defaultVariant = chipSmall;
+  chip.children = [chipSmall, chipLarge];
+  const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
+  // A conflicting set (Figma allows it): two variants with the same values, the first without auto-layout.
+  const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, componentPropertyDefinitions: {
+    Kind: { type: "VARIANT", defaultValue: "A", variantOptions: ["A"] },
+  } };
+  const twinFlat = comp("7:2", "Kind=A", { parent: twin, layoutMode: "NONE", variantProperties: { Kind: "A" } });
+  const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
+  twin.defaultVariant = twinFlat;
+  twin.children = [twinFlat, twinFlex];
+  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, twin, twinFlat, twinFlex];
+  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, twin], loadAsync: async () => {},
+    findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
+  const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
+  const library = {
+    components: { [KEY("e")]: avatar } as Record<string, FakeNode>,
+    styles: { [KEY("f")]: style("S:caption,", "Caption", KEY("f"), "Inter", "Regular") } as Record<string, FakeNode>,
+    variables: {
+      [KEY("c")]: variable("VariableID:lib/1:1", "color/accent", "COLOR", KEY("c")),
+      [KEY("d")]: variable("VariableID:lib/1:2", "space/lg", "FLOAT", KEY("d")),
+    } as Record<string, FakeVariable>,
+  };
+  const scene: Scene = {
+    variables: KIT_VARS,
+    localStyles: { text: KIT_STYLES },
+    teamLibrary: {
+      getAvailableLibraryVariableCollectionsAsync: async () => [{ name: "Core tokens", key: "lib-core", libraryName: "Core Library" }],
+      getVariablesInLibraryCollectionAsync: async () => Object.values(library.variables).map((v) => ({ name: v.name, key: String(v.key), resolvedType: v.resolvedType })),
+    },
+  };
+  return { page, scene, library };
 }
 
 /** A sign-in screen: a column of a title, a form of two fields and a button; three handles. */
@@ -568,9 +701,9 @@ export const cases: Case[] = [{
     const r = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
     const a = r.applied[0];
     ok("[TREE] one createTree op lands the whole screen: ok, one applied entry", r.ok === true && r.applied.length === 1 && r.error === undefined);
-    ok("[TREE] the reply is the root id, the counts and the handles only (no tree)",
-      JSON.stringify(Object.keys(a ?? {}).sort()) === JSON.stringify(["created", "handles", "id"])
-      && a?.created?.frames === 5 && a.created.texts === 4 && r.warnings === undefined);
+    ok("[TREE] the reply is the root id, the counts, the handles and the unbound count only (no tree)",
+      JSON.stringify(Object.keys(a ?? {}).sort()) === JSON.stringify(["created", "handles", "id", "unbound"])
+      && JSON.stringify(a?.created) === JSON.stringify({ frames: 5, texts: 4 }) && a?.unbound === 31 && r.warnings === undefined);
     const root = alive().find((n) => n.id === a?.id);
     ok("[TREE] ids come back only for the nodes the spec gave a handle",
       JSON.stringify(Object.keys(a?.handles ?? {})) === JSON.stringify(["screen", "title", "submit"]) && a?.handles?.screen === a?.id
@@ -636,14 +769,14 @@ export const cases: Case[] = [{
       name: "S", effects: [], children: [
         { text: "Hi", font: { size: 14, colour: "#000" } },
         { type: "RECTANGLE" },
-        { name: "Pill", widthMode: "hug", tokens: { fills: "color/primary" } },
+        { name: "Pill", widthMode: "hug", mainComponent: { name: "Pill" } },
         { text: "Mixed", runs: [] },
       ] } }], /^6 problems in the tree spec — nothing was changed:\n/);
     ok("[TREE-REFUSE] …each named by its path, read fields with the reason",
       many.includes("ops[0].tree.effects: a read field a write cannot set yet")
       && many.includes("ops[0].tree.children[0].font.colour: not a field the write accepts; closest: 'color'")
-      && many.includes("ops[0].tree.children[1].type: 'RECTANGLE' cannot be written yet (FRAME and TEXT can)")
-      && many.includes("ops[0].tree.children[2].tokens: a read field a write cannot set yet — design-system references")
+      && many.includes("ops[0].tree.children[1].type: 'RECTANGLE' cannot be written yet (FRAME, TEXT and INSTANCE can)")
+      && many.includes("ops[0].tree.children[2].mainComponent: a read field a write cannot set yet — name the component in `component`")
       && many.includes("ops[0].tree.children[2]: `widthMode: \"hug\"` needs the node itself to have auto-layout")
       && many.includes("ops[0].tree.children[3].runs: a read field a write cannot set yet — mixed-format text comes in a later write step"));
     await refused("a fill on the root (no auto-layout parent)", [{ op: "createTree", tree: { widthMode: "fill" } }], /`widthMode: "fill"` needs a parent with auto-layout \(this is the root\)/);
@@ -783,7 +916,7 @@ export const cases: Case[] = [{
     ok("[TREE-DRY] a plain description: the frame, its size and layout, the counts, where, the handles, the fonts",
       step.effect === "creates" && step.target === "new frame on the current page" && step.invalid === undefined
       && step.change === "creates frame 'Sign in' 390×844, vertical auto-layout with 9 nodes (5 frames, 4 texts) on the current page, placed beside the existing frames; "
-        + "ids come back for 'screen', 'title', 'submit'; fonts 'Inter Bold', 'Inter Regular', 'Inter Semi Bold' — the page and fonts are checked against the file when applied, and nothing lands unless all of it does");
+        + "ids come back for 'screen', 'title', 'submit'; fonts 'Inter Bold', 'Inter Regular', 'Inter Semi Bold'; 31 raw values left unbound — the page and fonts are checked against the file when applied, and nothing lands unless all of it does");
     const onPage = writeOpPreview({ op: "createTree", page: "Screens", tree: { name: "A", x: 0, y: 0, layout: { display: "flex" }, children: [{ name: "B", x: 1 }] } }, 3);
     ok("[TREE-DRY] a named page and explicit coordinates are said; warnings are carried",
       onPage.target === "new frame on page 'Screens'" && /on page 'Screens' at 0,0/.test(onPage.change ?? "") && onPage.warnings?.length === 1);
@@ -794,5 +927,186 @@ export const cases: Case[] = [{
       === "bad write args: ops[0].tree.effects: a read field a write cannot set yet. Nothing was changed.");
     ok("[TREE-DRY] …and passes a valid one", argsShapeError("write", { ops: [{ op: "createTree", tree: signIn() }] }) === null);
     ok("[TREE-DRY] a non-object tree is refused", /tree: must be a node object/.test(argsShapeError("write", { ops: [{ op: "createTree", tree: "screen" }] }) ?? ""));
+  },
+}, {
+  name: "design-system references (createTree): instances, variables and text styles by name, bound in one call",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const { api, alive } = w;
+    const r = await api.applyWrites([{ op: "createTree", tree: {
+      name: "Checkout", handle: "root", layout: { display: "flex", flexDirection: "column", padding: [16, 16, 16, 16] },
+      fills: [{ type: "solid", tokens: { color: "color/brand" } }],
+      tokens: { itemSpacing: "space/md", paddingTop: "space/md", paddingRight: "space/md", paddingBottom: "space/md", paddingLeft: "space/md" },
+      children: [
+        { text: "Order summary", handle: "title", styles: { text: "Heading/H1" }, font: { size: 40, family: "Inter", align: "center" } },
+        { text: "Free delivery", tokens: { fills: "color/brand" } },
+        { name: "Card", radius: 4, tokens: { topLeftRadius: "radius/md" }, strokes: { colors: ["#cccccc"], weight: 1 } },
+        { component: "Button", handle: "pay", props: { Size: "Large", Label: "Pay now", Icon: true }, widthMode: "fill" },
+        { type: "INSTANCE", component: "local-5:3", name: "New" },
+      ] } }]);
+    const a = r.applied[0];
+    const root = alive().find((n) => n.id === a?.id);
+    const [title, note, card, pay, badge] = kids(root);
+    ok("[REFS] one call: ok, instances counted, handles back, nothing imported", r.ok === true
+      && JSON.stringify(a?.created) === JSON.stringify({ frames: 2, texts: 2, instances: 2 }) && a?.handles?.pay === pay?.id && w.imports.length === 0);
+    ok("[REFS] a paint names a variable: bound, with no raw colour given",
+      JSON.stringify(root?.fills) === JSON.stringify([{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, boundVariables: { color: { type: "VARIABLE_ALIAS", id: "VariableID:30:1" } } }]));
+    ok("[REFS] spacing fields name a number variable: bound after the raw values",
+      JSON.stringify(root?.boundVariables) === JSON.stringify(Object.fromEntries(["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].map((k) => [k, { type: "VARIABLE_ALIAS", id: "VariableID:30:2" }]))));
+    ok("[REFS] a text names a text style: set, in the style's font; the font fields it sets are not set, the rest are",
+      title?.textStyleId === "S:h1," && JSON.stringify(title.fontName) === JSON.stringify({ family: "Inter", style: "Bold" }) && title.fontSize === undefined && title.textAlignHorizontal === "CENTER");
+    ok("[REFS] …and the reply warns that the style sets them", JSON.stringify(r.warnings) === JSON.stringify(["ops[0].tree.children[0]: `font.family`, `font.size` are set by the text style, so they are not set"]));
+    ok("[REFS] `tokens.fills` on a text with no fills: one bound paint", JSON.stringify((note?.fills as unknown[] | undefined)?.map((p) => isNode(p) ? p.boundVariables : null)) === JSON.stringify([{ color: { type: "VARIABLE_ALIAS", id: "VariableID:30:1" } }]));
+    ok("[REFS] a corner names a variable; the raw radius stays on the others", num(card, "cornerRadius") === 4 && JSON.stringify(card?.boundVariables) === JSON.stringify({ topLeftRadius: { type: "VARIABLE_ALIAS", id: "VariableID:30:3" } }));
+    ok("[REFS] an instance of a component set: made from its default variant, switched to the variant its props pick, properties keyed as Figma takes them",
+      pay?.type === "INSTANCE" && isNode(pay.mainComponent) && pay.mainComponent.id === "5:6" && pay.layoutSizingHorizontal === "FILL"
+      && JSON.stringify(pay.props) === JSON.stringify({ Size: "Large", "Label#1:0": "Pay now", "Icon#1:1": true }));
+    ok("[REFS] a component by its key, renamed", badge?.type === "INSTANCE" && isNode(badge.mainComponent) && badge.mainComponent.id === "5:3" && badge.name === "New" && badge.props !== undefined);
+    ok("[REFS] raw values are counted as unbound (the card's stroke colour, weight and the note's raw font)", a?.unbound === 4);
+    // Hug follows the variant the props pick: the default Chip has no auto-layout, the Large one has.
+    const chips = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", props: { Size: "Large", Tone: "On" }, widthMode: "hug" }] } }]);
+    const flat = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", widthMode: "hug" }] } }]);
+    ok("[REFS] an instance may hug when the variant its props pick has auto-layout, not when the default it stays on has none",
+      chips.ok === true && flat.ok === false && /component 'Chip' has no auto-layout, so its instance cannot `widthMode: "hug"`/.test(flat.error ?? ""));
+    // A combination of variant values the set does not have is refused (Figma would leave the instance on another one).
+    const sparse = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: "Chip", props: { Size: "Large" } }] } }]);
+    ok("[REFS] a variant combination the set lacks is refused, with the variants it has",
+      sparse.ok === false && /tree\.children\[0\]\.component: component 'Chip' has no variant Size=Large, Tone=Off; closest: /.test(sparse.error ?? ""));
+    // A variant picked by id, with no variant values given, is the one checked (not a twin with the same values).
+    const picked = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "7:3", widthMode: "hug" }] } }]);
+    ok("[REFS] a variant picked by id and given no variant values is checked as itself", picked.ok === true);
+    // A styled text's own font axes set nothing, so a family the file lacks is not checked for them.
+    const axes = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "Hello", styles: { text: "Body" }, font: { family: "Ignored Font", variationSettings: { wght: 600 } } }] } }]);
+    ok("[REFS] a styled text's font axes are not checked (the style sets the font)", axes.ok === true);
+  },
+}, {
+  name: "design-system references (createTree): every bad name refused in one reply, with candidates; nothing imported",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const { api, alive } = w;
+    const before = alive().length;
+    const r = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [
+      { component: "Buton" },
+      { component: "Card" },
+      { component: "Button", props: { Sise: "Large", Size: "Huge", Icon: "yes", Glyph: "9:9" } },
+      { component: "Badge", widthMode: "hug" },
+      { fills: [{ type: "solid", tokens: { color: "color/brnd" } }] },
+      { fills: [{ type: "solid", tokens: { color: "color/text" } }] },
+      { fills: [{ type: "solid", tokens: { color: "space/md" } }] },
+      { text: "a", styles: { text: "Heading/H2" } },
+      { text: "b", styles: { text: "Fancy" } },
+      { component: KEY("e") },
+      { fills: [{ type: "solid", tokens: { color: "color/brnd" } }] },
+    ] } }]);
+    const err = r.error ?? "";
+    const has = (line: string): boolean => err.split("\n").includes(line);
+    ok("[REFS-REFUSE] refused whole, nothing made, nothing imported (a library item waits for the whole batch)",
+      r.ok === false && r.failedAt === 0 && alive().length === before && w.imports.length === 0);
+    ok("[REFS-REFUSE] a component that matches nothing: the nearest names", has("ops[0] (createTree): tree.children[0].component: component 'Buton' matches no component in this file (a library component is named by its key); closest: 'Button', 'Badge', 'Twin'"));
+    ok("[REFS-REFUSE] a component that matches two: pass a key or id", has("ops[0] (createTree): tree.children[1].component: component 'Card' matches 2 components — pass one's key or id: 'Card' (5:4), 'Card' (5:5)"));
+    ok("[REFS-REFUSE] property names and values checked against the component, every one at once",
+      has("ops[0] (createTree): tree.children[2].component: component 'Button' has no property 'Sise'; closest: 'Size', 'Label', 'Icon'; property 'Size' of 'Button' has no value \"Huge\"; closest: 'Large', 'Small', 'Medium'; "
+        + "property 'Icon' of 'Button' is a boolean: give true or false; property 'Glyph' of 'Button' swaps a nested instance, which a write cannot set yet"));
+    ok("[REFS-REFUSE] an instance cannot hug when its component has no auto-layout", has("ops[0] (createTree): tree.children[3].component: component 'Badge' has no auto-layout, so its instance cannot `widthMode: \"hug\"`"));
+    ok("[REFS-REFUSE] a variable that matches nothing: candidates from the file and the library, reported once with how many more places",
+      has("ops[0] (createTree): tree.children[4].fills[0].tokens.color: variable 'color/brnd' matches no variable in this file or an enabled library; closest: 'color/brand', 'color/text', 'color/accent' (and 1 more place in this spec)"));
+    ok("[REFS-REFUSE] a variable that matches two", has("ops[0] (createTree): tree.children[5].fills[0].tokens.color: variable 'color/text' matches 2 variables — pass one's key or id: 'color/text' (VariableID:30:4), 'color/text' (VariableID:31:4)"));
+    ok("[REFS-REFUSE] a number variable on a paint", has("ops[0] (createTree): tree.children[6].fills[0].tokens.color: variable 'space/md' holds a float, and this field takes a color variable"));
+    ok("[REFS-REFUSE] a text style that matches nothing, and one whose font the file lacks",
+      has("ops[0] (createTree): tree.children[7].styles.text: text style 'Heading/H2' matches no text style in this file (a library style is named by its key); closest: 'Heading/H1', 'Fancy', 'Body'")
+      && has("ops[0] (createTree): tree.children[8].styles.text: text style 'Fancy': its font 'Papyrus Regular' is not available in this file; closest: 'Inter Regular', 'Roboto Regular', 'Inter Bold'"));
+    ok("[REFS-REFUSE] one refusal lists them all", /^9 problems — nothing was changed:\n/.test(err));
+  },
+}, {
+  name: "design-system references (createTree): library items import only once the batch resolved, under Allow edits",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const { api, alive } = w;
+    const spec = { layout: { display: "flex" }, tokens: { itemSpacing: "space/lg" }, fills: [{ type: "solid", tokens: { color: "color/accent" } }], children: [
+      { component: KEY("e"), props: { Initials: "JD" } },
+      { text: "Hi", styles: { text: KEY("f") } },
+      { text: "Again", styles: { text: KEY("f") } },
+    ] };
+    const r = await api.applyWrites([{ op: "createTree", tree: spec }]);
+    const root = alive().find((n) => n.id === r.applied[0]?.id);
+    const [avatar, hi] = kids(root);
+    ok("[REFS-LIB] library variables by name and a component and style by key: each imported once, then used", r.ok === true
+      && JSON.stringify(w.imports) === JSON.stringify(["variable " + KEY("c"), "variable " + KEY("d"), "component " + KEY("e"), "style " + KEY("f")])
+      && isNode(avatar?.mainComponent) && avatar.mainComponent.id === "9:1" && JSON.stringify(avatar.props) === JSON.stringify({ "Initials#2:0": "JD" })
+      && hi?.textStyleId === "S:caption," && JSON.stringify(root?.boundVariables) === JSON.stringify({ itemSpacing: { type: "VARIABLE_ALIAS", id: "VariableID:lib/1:2" } }));
+    // A key no library publishes: tried (it may be a library's), and the refusal says so — nothing built.
+    const before = alive().length;
+    const missing = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: KEY("a") }] } }]);
+    ok("[REFS-LIB] a key no library has: refused after the import is tried, nothing built",
+      missing.ok === false && alive().length === before && w.imports.includes("component " + KEY("a")) && w.imports.includes("component set " + KEY("a"))
+      && /tree\.children\[0\]\.component: no component in this file or an enabled library has the key 'a{40}'/.test(missing.error ?? ""));
+    // A batch with any other problem imports nothing (a bad page here), and Allow edits off imports nothing either.
+    const n = w.imports.length;
+    const badPage = await api.applyWrites([{ op: "createTree", page: "Nowhere", tree: spec }]);
+    ok("[REFS-LIB] another problem in the batch: nothing is imported", badPage.ok === false && w.imports.length === n);
+    // Unticked while a text style is being set: the build stops and the hidden root is removed.
+    w.hooks.onStyle = async () => { await w.allowEdits(false); };
+    const mid = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "x", styles: { text: "Body" } }] } }]);
+    w.hooks.onStyle = undefined;
+    ok("[REFS-LIB] Allow edits turned off while a text style is set: refused as edits-off, the half-built tree removed",
+      mid.ok === false && mid.refused === "edits-off" && alive().length === before);
+    // Unticked during the first of two imports: the second never runs.
+    await w.allowEdits(true);
+    w.hooks.onImport = async () => { await w.allowEdits(false); };
+    const m = w.imports.length;
+    const raced = await api.applyWrites([{ op: "createTree", tree: { fills: [{ type: "solid", tokens: { color: KEY("c") } }], tokens: { itemSpacing: KEY("d") }, layout: { display: "flex" } } }]);
+    w.hooks.onImport = undefined;
+    ok("[REFS-LIB] unticked during an import: no further import runs, refused as edits-off, nothing built",
+      raced.ok === false && raced.refused === "edits-off" && w.imports.length === m + 1 && alive().length === before);
+    await w.allowEdits(true);
+    // A key is exact: it imports the keyed component even though a local one is named exactly like the key.
+    const k = w.imports.length;
+    const keyed = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: KEY("e") }] } }]);
+    const keyedInst = kids(alive().find((n) => n.id === keyed.applied[0]?.id))[0];
+    ok("[REFS-LIB] a key beats a local component named like it", keyed.ok === true && w.imports.length === k + 1
+      && isNode(keyedInst?.mainComponent) && keyedInst.mainComponent.id === "9:1");
+    // An unpublished key used twice: one problem, with how many more places.
+    const twice = await api.applyWrites([{ op: "createTree", tree: { children: [{ fills: [{ type: "solid", tokens: { color: KEY("b") } }] }, { fills: [{ type: "solid", tokens: { color: KEY("b") } }] }] } }]);
+    ok("[REFS-LIB] a failed import is reported once per name, with the other places counted",
+      twice.ok === false && /^ops\[0\] \(createTree\): tree\.children\[0\]\.fills\[0\]\.tokens\.color: no variable in this file or an enabled library has the key 'b{40}'.* \(and 1 more place in this spec\)\. Nothing was changed\.$/.test(twice.error ?? ""));
+  },
+}, {
+  name: "design-system references (createTree): the shape is checked by the dry run, the wire check and the plugin alike",
+  async run() {
+    const bad = { layout: { display: "flex" }, tokens: { counterAxisSpacing: "space/md", cornerRadius: "radius/md" }, styles: { text: "Body", fill: "Brand" }, children: [
+      { component: "Button", children: [{ text: "x" }], fills: [] },
+      { name: "Box", props: { a: "b" }, tokens: { itemSpacing: "space/md", fills: "color/brand" }, fills: [{ type: "solid", color: "#fff" }] },
+      { text: "t", tokens: { itemSpacing: "space/md" }, strokes: { colors: ["#000", "#111"] }, styles: {} },
+      { text: "u", tokens: { strokes: ["a"] }, strokes: { colors: ["#000", "#111"] } },
+      { fills: [{ type: "solid" }] },
+      { type: "INSTANCE" },
+    ] };
+    const step = writeOpPreview({ op: "createTree", tree: bad }, 0);
+    const lines = (step.invalid ?? "").split("\n");
+    const want = [
+      "tree.tokens.cornerRadius: a read field a write cannot set yet — bind each corner: topLeftRadius, topRightRadius, bottomRightRadius, bottomLeftRadius",
+      "tree.styles.fill: a read field a write cannot set yet — bind the paint to a colour variable instead: `fills[].tokens.color`",
+      "tree: `styles.text` is only on a TEXT node",
+      "tree: `tokens.counterAxisSpacing` is the gap between wrapped tracks: it needs `layout.flexWrap: \"wrap\"`",
+      "tree.children[0]: `children` is not on an INSTANCE node (its content comes from its component; set its `props`)",
+      "tree.children[0]: `fills` is not on an INSTANCE node (its content comes from its component; set its `props`)",
+      "tree.children[1]: `props` is only on an INSTANCE node",
+      "tree.children[1]: `tokens.itemSpacing` needs auto-layout on the node (layout.display \"flex\")",
+      "tree.children[1]: `tokens.fills` names 'color/brand', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`",
+      "tree.children[2]: `tokens.itemSpacing` is not on a TEXT node",
+      "tree.children[3]: `tokens.strokes` names 1 variable for 2 stroke colours; give one per colour, in order (or leave `strokes.colors` out)",
+      "tree.children[4].fills[0] is missing color (a hex colour, or a colour variable in `tokens.color`)",
+      "tree.children[5]: an INSTANCE node needs `component` (a component's name, key or id)",
+    ];
+    const missing = want.filter((l) => !lines.includes(l));
+    ok("[REFS-SHAPE] every shape problem, by path" + (missing.length ? " (missing: " + missing.join(" | ") + "; got: " + lines.join(" | ") + ")" : ""), missing.length === 0 && lines.length === want.length);
+    ok("[REFS-SHAPE] the wire check refuses the same spec", (argsShapeError("write", { ops: [{ op: "createTree", tree: bad }] }) ?? "").includes(want[0] ?? "?"));
+    const good = writeOpPreview({ op: "createTree", tree: { name: "Pay", layout: { display: "flex" }, tokens: { itemSpacing: "space/md" }, fills: [{ type: "solid", tokens: { color: "color/brand" } }], children: [
+      { component: "Button", props: { Size: "Large" } }, { component: "Button" }, { text: "Hi", styles: { text: "Body" } }, { text: "Raw", font: { color: "#000000" } },
+    ] } }, 0);
+    ok("[REFS-SHAPE] the dry run names every component, variable and text style, and the unbound count",
+      good.invalid === undefined && good.change === "creates frame 'Pay', horizontal auto-layout with 5 nodes (1 frame, 2 texts, 2 instances) on the current page, placed beside the existing frames; "
+        + "fonts 'Inter Regular'; components 'Button'; variables 'color/brand', 'space/md'; text styles 'Body'; 2 raw values left unbound — "
+        + "the page, fonts and names are checked against the file when applied (a library item is imported only then), and nothing lands unless all of it does");
   },
 }];

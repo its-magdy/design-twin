@@ -133,12 +133,13 @@ async function applyWrite(op: WriteOp, { mode, tree }: Resolved, changes: Change
       changes.push(change);
       return change.applied;
     }
-    // Resolved up front: its page exists and its fonts are loaded, so the build below never awaits — consent is
-    // checked once and holds for the whole tree, which lands whole or not at all (tree.ts buildTree).
+    // Resolved up front: its page exists, its fonts are loaded and its names resolved, so the build makes every node
+    // without an await; only setting text styles awaits, and consent is checked after each (tree.ts buildTree). The
+    // tree lands whole or not at all.
     case "createTree": {
       if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
       consent();
-      const change = buildTree(tree);
+      const change = await buildTree(tree, consent);
       changes.push(change);
       return change.applied;
     }
@@ -227,6 +228,20 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const problems = [...modes.problems, ...trees.problems].sort((a, b) => a.index - b.index);
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
+  // A library item a spec names by key (or a library variable it names) is imported only now: the whole batch
+  // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
+  // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
+  if (trees.importCount) {
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    const { problems: late, revoked } = await trees.imports(editsAllowedNow);
+    // Unticked between imports: the ones before stay (an import cannot be put back, and it only makes the item
+    // available), nothing else runs.
+    if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    const firstLate = late[0];
+    if (firstLate) {
+      return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+    }
+  }
   const warnings = [...trees.targets].reduce<string[]>((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
   const changes: Change[] = [];
   for (const [i, op] of list.entries()) {

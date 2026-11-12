@@ -134,10 +134,14 @@ function checkNewScreens(f: AppFile, pageNode: CNode, wants: readonly Want[], be
 const walk = (root: CNode): CNode[] => [root, ...(root.children ?? []).flatMap(walk)];
 
 // ---- the jobs
+/** The design system an agent composes from, as it knows it from the file's design-system export (read once per
+ *  session, so not counted per job): each component with the TEXT properties it takes (each named after the text
+ *  sublayer it drives), and the variables by name. */
+export interface Kit { components: Record<string, readonly string[]>; variables: readonly string[] }
 /** What each job tells the agent. A route may use nothing else about the file: it has to find the rest. */
 export interface Briefs {
-  /** build `want` on the current page (`pageId`) */
-  "new-screen": { pageId: string; want: Want };
+  /** build `want` on the current page (`pageId`); the file's design system is `kit` */
+  "new-screen": { pageId: string; want: Want; kit: Kit };
   /** make `want` (screens like the existing `sourceId`, with other values) beside it */
   "similar-screens": { pageId: string; sourceId: string; want: readonly Want[] };
   /** on the screen `screenId`, the text `wrong` should read `right` */
@@ -165,14 +169,21 @@ export interface Job<J extends JobId> {
 
 const newScreen: Job<"new-screen"> = {
   id: "new-screen", title: "New screen",
-  what: "a 28-node settings screen, four levels deep, on a page that has one screen",
+  what: "a 28-node settings screen, four levels deep, on a page that has one screen; the file has a Row component",
   fixture() {
     const f = appFile();
     const screens = page(f, "Screens");
     build(f, screens, settingsScreen("Home", "jane@example.com"));
+    // The settings rows as a component (made after the existing screen, so its ids stay as they were): a row built
+    // from it shows what a row built node by node shows, so the check takes either.
+    const rowMain = f.c.component(page(f, "Components"), { name: "Row", layoutMode: "HORIZONTAL", w: 358, h: 44, gap: 8 });
+    f.c.text(rowMain, { name: "Label", text: "Label" });
+    f.c.text(rowMain, { name: "Value", text: "Value", fill: rgb(MUTED) });
+    f.c.textProps(rowMain, { Label: "Label", Value: "Value" });
     const before = new Set(Object.keys(f.c.nodes));
     const want = settingsScreen("Settings", "jane@example.com");
-    return { c: f.c, brief: { pageId: screens.id, want }, check: () => checkNewScreens(f, screens, [want], before) };
+    const kit: Kit = { components: { Row: ["Label", "Value"] }, variables: [BRAND.name] };
+    return { c: f.c, brief: { pageId: screens.id, want, kit }, check: () => checkNewScreens(f, screens, [want], before) };
   },
 };
 
