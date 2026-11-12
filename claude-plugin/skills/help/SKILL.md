@@ -132,7 +132,10 @@ its-magdy/design-twin`, then `claude plugin install designtwin@designtwin-market
    `bun link` inside `bridge/` — or use `bun --no-install --no-env-file <the clone>/bridge/src/figma-pull.ts` in
    place of `dtwin` (the two flags keep the project's `.env` and Bun's auto-install out of it, as the linked
    `dtwin`'s shebang does). `dtwin --version` confirms it.
-2. **Import the Figma plugin, once.** `dtwin plugin install` (or `dtwin init`) copies it to a per-user folder that
+2. **Import the Figma plugin, once.** Quickest: `dtwin plugin import` installs it, puts the manifest's path on the
+   clipboard, opens Figma desktop and prints the clicks left (no tool can click Import for the user; with the MCP
+   server, `figma_status` returns the same steps as `setup` while nothing is connected). Step by step:
+   `dtwin plugin install` (or `dtwin init`) copies it to a per-user folder that
    never moves (`<config dir>/figma-plugin`, beside the bridge token) and prints its `manifest.json`
    (`dtwin plugin path` prints it again; `--open` shows it in Finder / Explorer). Figma desktop → **Plugins →
    Development → Import plugin from manifest…** → pick that file (the folder is hidden: ⌘⇧G in the macOS file

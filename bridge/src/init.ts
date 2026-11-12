@@ -421,7 +421,8 @@ function main(argv: string[]): void {
 
   const steps = [
     "In Figma DESKTOP, once: " + importStep(manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)") +
-      (manifest && hiddenHint(manifest) ? ` (${hiddenHint(manifest) ?? ""})` : ""),
+      (manifest && hiddenHint(manifest) ? ` (${hiddenHint(manifest) ?? ""})` : "") +
+      (manifest ? " — or run `dtwin plugin import`: it puts that path on your clipboard and opens Figma" : ""),
     sentence(`${runPlugin}; then, once, ${pasteToken}`),
   ];
   if (!pluginInstalled) {

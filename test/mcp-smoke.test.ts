@@ -120,6 +120,12 @@ void (async () => {
 
     const status = await client.callTool({ name: "figma_status", arguments: {} });
     ok("figma_status answers with no plugin connected (no hang, parseable JSON)", (() => { try { JSON.parse(firstText(status)) as unknown; return true; } catch { return false; } })());
+    const setup = (() => { try { const v: unknown = JSON.parse(firstText(status)); return typeof v === "object" && v !== null && "setup" in v ? v.setup : null; } catch { return null; } })();
+    const repoManifest = path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json");
+    ok("…with `setup`: from this checkout the checkout's own manifest, and the import steps naming it",
+      typeof setup === "object" && setup !== null && "importPath" in setup && setup.importPath === repoManifest && "installed" in setup && setup.installed === true &&
+      "steps" in setup && Array.isArray(setup.steps) && setup.steps.some((s: unknown) => typeof s === "string" && s.includes("Import plugin from manifest")) &&
+      setup.steps.some((s: unknown) => typeof s === "string" && s.includes(repoManifest)) && "note" in setup && typeof setup.note === "string" && setup.note.includes("dtwin plugin import"));
 
     // design_drift_lint is the CLI's own run (design-to-code/drift-lint.ts runDriftLint — test/drift-lint-run.test.ts
     // checks the run and the CLI/tool parity). Here only the wiring over stdio: a run that is not linted is a tool

@@ -73,7 +73,8 @@ instead).
 ## Import the Figma plugin
 
 ```bash
-dtwin plugin install   # copies the plugin to a per-user folder that never moves, and prints its manifest path
+dtwin plugin import    # installs it, puts the manifest's path on the clipboard, opens Figma desktop, prints the steps
+dtwin plugin install   # or just copy the plugin to a per-user folder that never moves, and print its manifest path
 ```
 
 Then, once, in Figma desktop: **Plugins → Development → Import plugin from manifest…** and pick that `manifest.json`

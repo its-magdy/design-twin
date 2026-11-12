@@ -59,11 +59,12 @@ the app you are building.
    ```bash
    dtwin init --mcp
    ```
-4. Import the Figma plugin, once: in Figma desktop, **Plugins → Development → Import plugin from manifest…**, and
-   pick the file this prints. The folder is hidden: on macOS press ⌘⇧G in the file picker and paste the path; on Windows paste it into the
-   file picker's **File name** box.
+4. Import the Figma plugin, once. This puts the manifest's path on your clipboard, opens Figma desktop and prints the
+   steps: **Plugins → Development → Import plugin from manifest…**, then paste the path into the file picker (the
+   folder is hidden: on macOS press ⌘⇧G first; on Windows use the **File name** box). `dtwin plugin path` prints the
+   path again.
    ```bash
-   dtwin plugin path
+   dtwin plugin import
    ```
 5. Connect the plugin, once: run **Plugins → Development → Design Twin — Design Export for AI**, open **Connect to
    Claude Code (optional)**, paste the token this prints, and press **Save**.
