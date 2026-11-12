@@ -122,7 +122,11 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 const str: Check = (v) => (typeof v === "string" ? null : "must be a string");
 const num: Check = (v) => (isNum(v) ? null : "must be a number");
 const nonNeg: Check = (v) => (isNum(v) && v >= 0 ? null : "must be a number ≥ 0");
-const positive: Check = (v) => (isNum(v) && v > 0 ? null : "must be a number > 0");
+/** Figma's resize() refuses a dimension under 0.01. */
+const MIN_SIZE = 0.01;
+const size: Check = (v) => (isNum(v) && v >= MIN_SIZE ? null : "must be a number ≥ " + MIN_SIZE);
+const nonEmpty: Check = (v) => (typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string");
+const count: Check = (v) => (isNum(v) && Number.isInteger(v) && v >= 1 ? null : "must be a whole number ≥ 1");
 const unit: Check = (v) => (isNum(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1");
 const trueOnly: Check = (v) => (v === true ? null : "must be true (omit it for false)");
 const oneOf = (...vals: readonly string[]): Check => (v) => (typeof v === "string" && vals.includes(v) ? null : "must be one of " + vals.join(" | "));
@@ -134,7 +138,7 @@ const objOf = (rules: Readonly<Record<string, Rule>>): Check => (v) => (isObj(v)
 const LAYOUT_RULES: Record<keyof LayoutSpec, Rule> = {
   display: (v) => (v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : "must be \"flex\""),
   mode: oneOf("absolute"),
-  width: positive, height: positive,
+  width: size, height: size,
   flexDirection: oneOf("row", "column"),
   gap: num,
   padding: fourNums,
@@ -149,13 +153,19 @@ const LAYOUT_RULES: Record<keyof LayoutSpec, Rule> = {
   columnSizes: refuse("grid layout cannot be written yet"), rowSizes: refuse("grid layout cannot be written yet"),
   autoFlow: refuse("grid layout cannot be written yet"), autoTracks: refuse("grid layout cannot be written yet"),
 };
-const LENGTH = (units: readonly string[]): Check => objOf({ unit: oneOf(...units), value: num });
+/** A `{unit, value}` length: both present (an object missing either is refused, not sent to Figma half-made). */
+const LENGTH = (units: readonly string[], value: Check = num): Check => (v) => {
+  if (!isObj(v)) return "must be an object {unit, value}";
+  const bad = objOf({ unit: oneOf(...units), value })(v);
+  if (bad !== null) return bad;
+  return v.unit === undefined ? "is missing unit" : v.value === undefined ? "is missing value" : null;
+};
 const FONT_RULES: Record<keyof FontSpec, Rule> = {
-  size: (v) => (v === "mixed" ? "'mixed' cannot be written (one size per text node)" : positive(v)),
-  family: str, weight: str, color: hex,
+  size: (v) => (v === "mixed" ? "'mixed' cannot be written (one size per text node)" : isNum(v) && v >= 1 ? null : "must be a number ≥ 1"),
+  family: nonEmpty, weight: nonEmpty, color: hex,
   align: oneOf("left", "center", "right", "justified"),
   valign: oneOf("center", "bottom"),
-  lineHeight: (v) => (isObj(v) && v.unit === "auto" && v.value === undefined ? null : LENGTH(["px", "percent"])(v)),
+  lineHeight: (v) => (isObj(v) && v.unit === "auto" && v.value === undefined ? null : LENGTH(["px", "percent"], nonNeg)(v)),
   letterSpacing: LENGTH(["px", "percent"]),
   case: oneOf("upper", "lower", "title", "small_caps", "small_caps_forced"),
   decoration: oneOf("underline", "strikethrough"),
@@ -176,7 +186,7 @@ const STROKE_RULES: Record<keyof Strokes, Rule> = {
   dash: NOT_YET, cap: NOT_YET, join: NOT_YET, miter: NOT_YET, variableWidth: NOT_YET, complex: NOT_YET,
 };
 const BOX_RULES: Record<keyof Box, Rule> = {
-  w: positive, h: positive,
+  w: size, h: size,
   x: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
   y: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
 };
@@ -227,7 +237,7 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
   font: objOf(FONT_RULES),
   autoResize: oneOf("width_and_height", "height", "truncate"),
   truncate: trueOnly,
-  maxLines: positive,
+  maxLines: count,
   // Read fields a write does not set (yet). Each is refused by name.
   props: refuse("component instances come with design-system references"),
   propTokens: refuse(DS_REF), component: refuse("component instances come with design-system references"),
@@ -279,7 +289,8 @@ const isFlex = (n: Record<string, unknown>): boolean => isObj(n.layout) && n.lay
 
 /** A text node's font as Figma names it: family + style (`weight`), defaults filled in. */
 export function fontOf(font: TreeFont | undefined): { family: string; weight: string } {
-  return { family: (font && font.family) || DEFAULT_FONT.family, weight: (font && font.weight) || DEFAULT_FONT.weight };
+  // Only an OMITTED name takes the default; checkTree refuses an empty one (a name is never guessed).
+  return { family: font && font.family !== undefined ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== undefined ? font.weight : DEFAULT_FONT.weight };
 }
 
 /** The check of a whole spec: every problem (empty when it is valid) and, for a valid one, what it makes. */
@@ -318,6 +329,22 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
     if (n.sizeLimits !== undefined && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
     if (parentFlex === true && n.absolute !== true && (n.x !== undefined || n.y !== undefined)) {
       summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
+    }
+    if (isObj(n.layout) && n.layout.display === "flex") {
+      // Values Figma refuses, or ignores, only in context: caught here so nothing is sent that fails mid-build.
+      const l = n.layout;
+      const column = l.flexDirection === "column";
+      if (l.alignItems === "baseline" && column) say("`layout.alignItems: \"baseline\"` works only in a row (Figma refuses it in a column)");
+      if (l.flexWrap === undefined) for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== undefined) say("`layout." + k + "` needs `flexWrap: \"wrap\"`");
+      if (l.flexWrap !== undefined && (column ? l.rowGap : l.columnGap) !== undefined) {
+        say("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
+      }
+    }
+    if (kind === "TEXT" && isObj(n.strokes) && n.strokes.weights !== undefined) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
+    if (isObj(n.sizeLimits)) {
+      const m = n.sizeLimits;
+      if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
+      if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
     }
     if (isObj(n.layout) && n.layout.mode === "absolute" && n.layout.display !== undefined) say("`layout` is either `display: \"flex\"` or `mode: \"absolute\"`, not both");
     if (isObj(n.layout) && n.layout.display === undefined && n.layout.mode === undefined) say("`layout` needs `display: \"flex\"` (or `mode: \"absolute\"` for none)");

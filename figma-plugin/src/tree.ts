@@ -92,7 +92,8 @@ function resolvePage(ref: string | undefined): { ok: PageNode } | { error: strin
 
 /** Build a resolved tree and attach it to its page. Throws (leaving nothing behind) when Figma refuses a value. */
 export function buildTree(t: TreeTarget): Change {
-  const made = { frames: 0, texts: 0, handles: {} as Record<string, string> };
+  // Handles are the agent's own strings: a Map, so one called "__proto__" is a key like any other.
+  const made: Made = { frames: 0, texts: 0, handles: new Map<string, string>() };
   const root = figma.createFrame();
   root.visible = false; // built to the side: nothing shows until the whole tree is in place
   try {
@@ -107,13 +108,26 @@ export function buildTree(t: TreeTarget): Change {
     throw e;
   }
   const applied: AppliedWrite = { id: root.id, created: { frames: made.frames, texts: made.texts } };
-  if (Object.keys(made.handles).length) applied.handles = made.handles;
+  if (made.handles.size) applied.handles = handleRecord(made.handles);
   return {
     applied,
     kind: "created tree",
     what: "the tree '" + root.name + "' (" + root.id + ")",
     restore() { root.remove(); },
   };
+}
+
+/** The handles as a reply record, own properties all ("__proto__" included: defineProperty, not assignment). */
+function handleRecord(m: ReadonlyMap<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+  return out;
+}
+
+/** What a top-level node occupies on the page: its bounding box (rotation included), else its own x/y/size. */
+function occupied(c: SceneNode): { x: number; y: number; width: number; height: number } {
+  const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
+  return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
 }
 
 /** Where the root lands: its own x/y, else right of everything already on the page, top-aligned with it. */
@@ -123,8 +137,9 @@ function placement(page: PageNode, root: FrameNode, spec: TreeNodeSpec): { x: nu
   let top: number | null = null;
   for (const c of page.children) {
     if (c.id === root.id) continue; // built on the current page, which may be this one
-    right = right === null ? c.x + c.width : Math.max(right, c.x + c.width);
-    top = top === null ? c.y : Math.min(top, c.y);
+    const b = occupied(c);
+    right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
+    top = top === null ? b.y : Math.min(top, b.y);
   }
   return {
     x: spec.x !== undefined ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
@@ -132,7 +147,7 @@ function placement(page: PageNode, root: FrameNode, spec: TreeNodeSpec): { x: nu
   };
 }
 
-interface Made { frames: number; texts: number; handles: Record<string, string> }
+interface Made { frames: number; texts: number; handles: Map<string, string> }
 type Parent = FrameNode;
 
 const ALIGN_MAIN = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" } as const;
@@ -166,7 +181,7 @@ function common(n: FrameNode | TextNode, s: TreeNodeSpec, parent: Parent | null,
     }
     if (s.strokes.align) n.strokeAlign = s.strokes.align === "inside" ? "INSIDE" : s.strokes.align === "outside" ? "OUTSIDE" : "CENTER";
   }
-  if (s.handle) made.handles[s.handle] = n.id;
+  if (s.handle) made.handles.set(s.handle, n.id);
   if (!parent) return;
   const inFlex = parent.layoutMode !== "NONE";
   if (inFlex) {

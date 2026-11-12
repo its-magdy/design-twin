@@ -643,6 +643,22 @@ export const cases: Case[] = [{
     await refused("a bad colour", [{ op: "createTree", tree: { fills: [{ type: "solid", color: "red" }] } }], /tree\.fills\[0\]\.color is not a hex colour/);
     const big = { name: "Big", children: Array.from({ length: MAX_TREE_NODES }, () => ({ name: "n" })) };
     await refused("more nodes than the cap", [{ op: "createTree", tree: big }], new RegExp("more than " + MAX_TREE_NODES + " nodes"));
+    // Values Figma refuses only once it is building: refused up front, with an earlier op in the batch, so nothing lands.
+    const tooSmall = await refused("a box under Figma's 0.01 minimum, a column baseline, a half-made letterSpacing, a text's per-side stroke, an empty font name, a min above its max", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", tree: { name: "S", box: { w: 0.001, h: 100 }, layout: { display: "flex", flexDirection: "column", alignItems: "baseline" }, children: [
+        { text: "a", font: { letterSpacing: {} } },
+        { text: "b", strokes: { colors: ["#000"], weights: { top: 4 } } },
+        { text: "c", font: { family: "" } },
+        { name: "L", sizeLimits: { minWidth: 200, maxWidth: 100 } },
+        { name: "W", layout: { display: "flex", rowGap: 4 } },
+      ] } },
+    ], /^bad|problems in the tree spec/, 1);
+    ok("[TREE-REFUSE] …each by path",
+      tooSmall.includes("ops[1].tree.box.w must be a number ≥ 0.01") && tooSmall.includes("`layout.alignItems: \"baseline\"` works only in a row")
+      && tooSmall.includes("ops[1].tree.children[0].font.letterSpacing is missing unit") && tooSmall.includes("ops[1].tree.children[1]: `strokes.weights` (per side) is not on a TEXT node")
+      && tooSmall.includes("ops[1].tree.children[2].font.family must be a non-empty string") && tooSmall.includes("`sizeLimits.minWidth` is above `maxWidth`")
+      && tooSmall.includes("ops[1].tree.children[4]: `layout.rowGap` needs `flexWrap: \"wrap\"`"));
     // File problems (resolved before the first op): page names and fonts, with candidates, together.
     const fileErr = await refused("an unknown page and a missing font, both listed, with candidates", [
       { op: "createFrame", name: "never" },
@@ -666,6 +682,18 @@ export const cases: Case[] = [{
     ok("[TREE-ATOMIC] a later op failing removes the tree and lists it as restored; the createFrame stays applied",
       later.ok === false && later.failedAt === 2 && alive().length === 1 && alive()[0]?.name === "Kept"
       && later.applied.length === 1 && later.restored?.[0]?.handles?.title !== undefined);
+
+    // A handle is the agent's own string: "__proto__" comes back like any other.
+    const proto = await api.applyWrites([{ op: "createTree", tree: { handle: "__proto__", children: [{ handle: "constructor" }] } }]);
+    const handles = proto.applied[0]?.handles ?? {};
+    ok("[TREE] the handles '__proto__' and 'constructor' come back as own keys with their ids",
+      proto.ok === true && JSON.stringify(Object.keys(handles)) === JSON.stringify(["__proto__", "constructor"]) && Object.getOwnPropertyDescriptor(handles, "__proto__")?.value === proto.applied[0]?.id);
+    // Placement reads what a frame occupies on the page, rotation included (its bounding box), not its x + width.
+    const rotated: FakeNode = { id: "1:9", type: "FRAME", name: "Rotated", x: 2000, y: 0, width: 100, height: 1000, absoluteBoundingBox: { x: 1300, y: 0, width: 1400, height: 1000 } };
+    (w.pages.current.appendChild as (c: FakeNode) => void)(rotated);
+    const beside = await api.applyWrites([{ op: "createTree", tree: { name: "Beside" } }]);
+    ok("[TREE] a rotated frame's bounding box is what the new frame is placed beside (1300+1400+100)",
+      num(alive().find((n) => n.id === beside.applied[0]?.id), "x") === 2800);
 
     // The same gates as every write: Allow edits off, Dev Mode.
     const before = made.length;

@@ -877,7 +877,10 @@
   var str = (v) => typeof v === "string" ? null : "must be a string";
   var num = (v) => isNum(v) ? null : "must be a number";
   var nonNeg = (v) => isNum(v) && v >= 0 ? null : "must be a number \u2265 0";
-  var positive = (v) => isNum(v) && v > 0 ? null : "must be a number > 0";
+  var MIN_SIZE = 0.01;
+  var size = (v) => isNum(v) && v >= MIN_SIZE ? null : "must be a number \u2265 " + MIN_SIZE;
+  var nonEmpty2 = (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string";
+  var count = (v) => isNum(v) && Number.isInteger(v) && v >= 1 ? null : "must be a whole number \u2265 1";
   var unit = (v) => isNum(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1";
   var trueOnly = (v) => v === true ? null : "must be true (omit it for false)";
   var oneOf = (...vals) => (v) => typeof v === "string" && vals.includes(v) ? null : "must be one of " + vals.join(" | ");
@@ -890,8 +893,8 @@
   var LAYOUT_RULES = {
     display: (v) => v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : 'must be "flex"',
     mode: oneOf("absolute"),
-    width: positive,
-    height: positive,
+    width: size,
+    height: size,
     flexDirection: oneOf("row", "column"),
     gap: num,
     padding: fourNums,
@@ -910,15 +913,20 @@
     autoFlow: refuse("grid layout cannot be written yet"),
     autoTracks: refuse("grid layout cannot be written yet")
   };
-  var LENGTH = (units) => objOf({ unit: oneOf(...units), value: num });
+  var LENGTH = (units, value = num) => (v) => {
+    if (!isObj(v)) return "must be an object {unit, value}";
+    const bad = objOf({ unit: oneOf(...units), value })(v);
+    if (bad !== null) return bad;
+    return v.unit === void 0 ? "is missing unit" : v.value === void 0 ? "is missing value" : null;
+  };
   var FONT_RULES = {
-    size: (v) => v === "mixed" ? "'mixed' cannot be written (one size per text node)" : positive(v),
-    family: str,
-    weight: str,
+    size: (v) => v === "mixed" ? "'mixed' cannot be written (one size per text node)" : isNum(v) && v >= 1 ? null : "must be a number \u2265 1",
+    family: nonEmpty2,
+    weight: nonEmpty2,
     color: hex,
     align: oneOf("left", "center", "right", "justified"),
     valign: oneOf("center", "bottom"),
-    lineHeight: (v) => isObj(v) && v.unit === "auto" && v.value === void 0 ? null : LENGTH(["px", "percent"])(v),
+    lineHeight: (v) => isObj(v) && v.unit === "auto" && v.value === void 0 ? null : LENGTH(["px", "percent"], nonNeg)(v),
     letterSpacing: LENGTH(["px", "percent"]),
     case: oneOf("upper", "lower", "title", "small_caps", "small_caps_forced"),
     decoration: oneOf("underline", "strikethrough"),
@@ -958,8 +966,8 @@
     complex: NOT_YET
   };
   var BOX_RULES = {
-    w: positive,
-    h: positive,
+    w: size,
+    h: size,
     x: refuse("the read's page coordinate; place a node with its own `x`/`y`"),
     y: refuse("the read's page coordinate; place a node with its own `x`/`y`")
   };
@@ -1010,7 +1018,7 @@
     font: objOf(FONT_RULES),
     autoResize: oneOf("width_and_height", "height", "truncate"),
     truncate: trueOnly,
-    maxLines: positive,
+    maxLines: count,
     // Read fields a write does not set (yet). Each is refused by name.
     props: refuse("component instances come with design-system references"),
     propTokens: refuse(DS_REF),
@@ -1103,17 +1111,17 @@
   }
   var isFlex = (n) => isObj(n.layout) && n.layout.display === "flex";
   function fontOf(font) {
-    return { family: font && font.family || DEFAULT_FONT.family, weight: font && font.weight || DEFAULT_FONT.weight };
+    return { family: font && font.family !== void 0 ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== void 0 ? font.weight : DEFAULT_FONT.weight };
   }
   function checkTree(spec) {
     const problems = [];
     const summary = { frames: 0, texts: 0, handles: [], fonts: [], warnings: [] };
     const seenHandles = /* @__PURE__ */ new Set();
     const seenFonts = /* @__PURE__ */ new Set();
-    let count = 0;
+    let count2 = 0;
     let tooMany = false;
     const walk = (n, path, depth, parentFlex) => {
-      if (++count > MAX_TREE_NODES) {
+      if (++count2 > MAX_TREE_NODES) {
         tooMany = true;
         return;
       }
@@ -1151,6 +1159,23 @@
       if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
       if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
         summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
+      }
+      if (isObj(n.layout) && n.layout.display === "flex") {
+        const l = n.layout;
+        const column = l.flexDirection === "column";
+        if (l.alignItems === "baseline" && column) say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
+        if (l.flexWrap === void 0) {
+          for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs `flexWrap: "wrap"`');
+        }
+        if (l.flexWrap !== void 0 && (column ? l.rowGap : l.columnGap) !== void 0) {
+          say("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
+        }
+      }
+      if (kind === "TEXT" && isObj(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
+      if (isObj(n.sizeLimits)) {
+        const m = n.sizeLimits;
+        if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
+        if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
       }
       if (isObj(n.layout) && n.layout.mode === "absolute" && n.layout.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
       if (isObj(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
@@ -1808,12 +1833,12 @@
     return p;
   }
   async function readSourceImage(hash) {
-    let size;
+    let size2;
     try {
       const img = figma.getImageByHash(hash);
       if (img) {
         const s = await img.getSizeAsync();
-        if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
+        if (s && typeof s.width === "number") size2 = { w: s.width, h: s.height };
         if (run().sourceBytes) {
           try {
             const bytes = await img.getBytesAsync();
@@ -1825,7 +1850,7 @@
     } catch (e) {
       run().warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
     }
-    return size;
+    return size2;
   }
   var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
   var ICON_CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
@@ -2094,8 +2119,8 @@
           o = gp;
         } else if (f.type === "IMAGE") {
           const mp = mediaPaint(f, "image", f.imageHash, f.imageTransform);
-          const size = await collectSourceImage(f.imageHash);
-          if (size) mp.intrinsicSize = size;
+          const size2 = await collectSourceImage(f.imageHash);
+          if (size2) mp.intrinsicSize = size2;
           o = mp;
         } else if (f.type === "VIDEO") {
           o = mediaPaint(f, "video", f.videoHash, f.videoTransform);
@@ -2283,25 +2308,25 @@
     ["bottomLeftRadius", "bl"]
   ];
   var RADIUS_SENTINEL = 1e4;
-  function radiusOut(raw, size, flag) {
+  function radiusOut(raw, size2, flag) {
     if (raw < RADIUS_SENTINEL) return round(raw);
     flag.full = true;
-    const w = size && typeof size.w === "number" ? size.w : void 0;
-    const h = size && typeof size.h === "number" ? size.h : void 0;
+    const w = size2 && typeof size2.w === "number" ? size2.w : void 0;
+    const h = size2 && typeof size2.h === "number" ? size2.h : void 0;
     if (w === void 0 && h === void 0) return round(raw);
     return round(Math.min(w === void 0 ? Infinity : w, h === void 0 ? Infinity : h) / 2);
   }
-  function nodeCorners(node, size) {
+  function nodeCorners(node, size2) {
     const out = {};
     if (!("cornerRadius" in node)) return out;
     const flag = {};
     let radius;
-    if (node.cornerRadius !== figma.mixed && node.cornerRadius) radius = radiusOut(node.cornerRadius, size, flag);
+    if (node.cornerRadius !== figma.mixed && node.cornerRadius) radius = radiusOut(node.cornerRadius, size2, flag);
     else if (node.cornerRadius === figma.mixed) {
       const corners = {};
       for (const [k, s] of CORNER_KEYS) {
         const v = numProp(node, k);
-        if (k in node && typeof v === "number" && v) corners[s] = radiusOut(v, size, flag);
+        if (k in node && typeof v === "number" && v) corners[s] = radiusOut(v, size2, flag);
       }
       radius = nonEmpty(corners);
     }
@@ -2315,8 +2340,8 @@
   function nodeBlendMode(node) {
     return "blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH" ? String(node.blendMode).toLowerCase() : void 0;
   }
-  async function nodeVisuals(node, size) {
-    const out = { ...await nodePaints(node), ...nodeCorners(node, size) };
+  async function nodeVisuals(node, size2) {
+    const out = { ...await nodePaints(node), ...nodeCorners(node, size2) };
     const opacity = nodeOpacity(node);
     if (opacity !== void 0) out.opacity = opacity;
     const blendMode = nodeBlendMode(node);
@@ -3363,8 +3388,8 @@
     for (const [i, c] of collections.entries()) {
       const lib = c.libraryName || UNKNOWN_LIBRARY;
       const entry = { key: c.key, name: c.name };
-      const count = counts[i];
-      if (count !== void 0) entry.variableCount = count;
+      const count2 = counts[i];
+      if (count2 !== void 0) entry.variableCount = count2;
       const list = byLibrary.get(lib);
       if (list) list.push(entry);
       else byLibrary.set(lib, [entry]);
@@ -3422,14 +3447,14 @@
         note: componentCount === void 0 ? "variable collections are complete; component attribution is impossible via the API \u2014 any components from this library are counted under '" + UNKNOWN_LIBRARY + "'" : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers \u2014 library components cannot be enumerated"
       });
     }
-    for (const [source, count] of compBySource) {
+    for (const [source, count2] of compBySource) {
       if (seenSources.has(source)) continue;
       libraries.push({
         key: source,
         name: source,
         kind: "library",
         variableCollections: [],
-        componentCount: count,
+        componentCount: count2,
         note: source === UNKNOWN_LIBRARY ? "components consumed from published libraries that the API cannot attribute to a source (only VARIABLES carry a libraryName). componentCount counts DISTINCT components USED IN THIS FILE, not what any library offers." : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers"
       });
     }
@@ -3841,8 +3866,8 @@
   function collisionNote(g, what, tellBy) {
     const first2 = g[0];
     const name = first2 ? first2.name : "";
-    const size = first2 ? first2.w + "\xD7" + first2.h : "";
-    return g.length + " " + what + " share name '" + name + "' and size " + size + " \u2014 told apart by " + tellBy + "; when those match too, `dtwin screenshot <id> --scale 0.25` each (" + g.map((r) => r.id).join(", ") + ")";
+    const size2 = first2 ? first2.w + "\xD7" + first2.h : "";
+    return g.length + " " + what + " share name '" + name + "' and size " + size2 + " \u2014 told apart by " + tellBy + "; when those match too, `dtwin screenshot <id> --scale 0.25` each (" + g.map((r) => r.id).join(", ") + ")";
   }
   var TITLE_VISIT_CAP = 5e3;
   var TitleCapReached = class extends Error {
@@ -4006,11 +4031,11 @@
   }
   var CSS_AUTO_NODE_CAP = 60;
   function subtreeIsSmall(node) {
-    let count = 0;
+    let count2 = 0;
     const stack = [node];
     while (stack.length) {
       const n = stack.pop();
-      if (++count > CSS_AUTO_NODE_CAP) return false;
+      if (++count2 > CSS_AUTO_NODE_CAP) return false;
       if (n && "children" in n && isList(n.children)) {
         for (const c of n.children) stack.push(c);
       }
@@ -4126,8 +4151,8 @@
     if (!reference) {
       throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed \u2014 see warnings).");
     }
-    const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
-    return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node, opts), reference, manifest: manifestOf(r), assets: r.assets.slice() };
+    const size2 = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
+    return { id: node.id, name: node.name, type: node.type, ...size2, scale: referenceScale(node, opts), reference, manifest: manifestOf(r), assets: r.assets.slice() };
   }
   var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
     "FRAME",
@@ -4543,7 +4568,7 @@
     return { error: "page '" + ref + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
   }
   function buildTree(t) {
-    const made = { frames: 0, texts: 0, handles: {} };
+    const made = { frames: 0, texts: 0, handles: /* @__PURE__ */ new Map() };
     const root = figma.createFrame();
     root.visible = false;
     try {
@@ -4561,7 +4586,7 @@
       throw e;
     }
     const applied = { id: root.id, created: { frames: made.frames, texts: made.texts } };
-    if (Object.keys(made.handles).length) applied.handles = made.handles;
+    if (made.handles.size) applied.handles = handleRecord(made.handles);
     return {
       applied,
       kind: "created tree",
@@ -4571,14 +4596,24 @@
       }
     };
   }
+  function handleRecord(m) {
+    const out = {};
+    for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    return out;
+  }
+  function occupied(c) {
+    const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
+    return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
+  }
   function placement(page, root, spec) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
     let right = null;
     let top = null;
     for (const c of page.children) {
       if (c.id === root.id) continue;
-      right = right === null ? c.x + c.width : Math.max(right, c.x + c.width);
-      top = top === null ? c.y : Math.min(top, c.y);
+      const b = occupied(c);
+      right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
+      top = top === null ? b.y : Math.min(top, b.y);
     }
     return {
       x: spec.x !== void 0 ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
@@ -4613,7 +4648,7 @@
       }
       if (s.strokes.align) n.strokeAlign = s.strokes.align === "inside" ? "INSIDE" : s.strokes.align === "outside" ? "OUTSIDE" : "CENTER";
     }
-    if (s.handle) made.handles[s.handle] = n.id;
+    if (s.handle) made.handles.set(s.handle, n.id);
     if (!parent) return;
     const inFlex = parent.layoutMode !== "NONE";
     if (inFlex) {
