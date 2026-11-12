@@ -34,6 +34,11 @@ list of merged PRs.
   ids of the nodes the spec gave a `handle`; a read field a write cannot set yet is refused by name. What the read
   writes on an ordinary frame or text (variable-font axes, `strokesInLayout`, the derived `weightValue` and
   `renderBox`) is accepted, so a read node can be fed back in. The dry run describes the screen in one sentence.
+- A write-cost suite (`bun test/write-cost.test.ts`) measures what an agent spends to write to Figma: estimated tokens
+  out and in, and round trips, for the six jobs of the write-plane design (new screen, several similar screens, fix
+  one node, the same change on many screens, a colour update, a fault in a repeated part). It runs the real MCP server
+  against a fake file, with no live Figma, and records today's four-op route as the baseline later routes are
+  compared with.
 - `figma_write` can set a node's variable mode: `setVariableMode` (`nodeId`, `collection`, `mode`) makes a dark or
   brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
   mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several

@@ -125,7 +125,8 @@ screens.
     the new root is the check.
 21. **A measured budget.** A fixture suite measures total tokens (spec out, reply in, verify and fix
     rounds) and round trips for each job in the table above, against the fake plugin, with the four-op
-    path as the baseline.
+    path as the baseline. It is `test/write-cost.test.ts` (`bun test/write-cost.test.ts`); the recorded numbers are in
+    `test/write-cost/baseline.json`, and a new route is added to `test/write-cost/routes.ts`.
 
 ## Build order
 

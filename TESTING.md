@@ -120,6 +120,9 @@ bun test/verify-sets.test.ts          # expect: all checks pass, exit 0 — a ve
 bun test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
 bun test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
+bun test/write-cost.test.ts           # expect: all checks pass, exit 0 — what each write-plane job costs an agent (tokens, round trips) per
+                                       # route, through the real MCP server and the plugin's own write/read code on a fake file; checked
+                                       # against test/write-cost/baseline.json (`--record` rewrites it)
 bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/cross-check-core.ts design-to-code/map-validate-core.ts design-to-code/resolve-screen-core.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts design-to-code/node-artefacts.ts design-to-code/report-freshness.ts design-to-code/plan-binding.ts design-to-code/plan-status.ts design-to-code/session-claim.ts design-to-code/verification-evidence.ts
 ```
 
