@@ -784,12 +784,13 @@ registerTool(
       "{op:'setVariableMode', nodeId, collection, mode} (collection: a variable collection's exact name, id or key; mode: a mode's exact name or modeId — e.g. a frame's Theme to Dark) | " +
       "{op:'clearVariableMode', nodeId, collection} (back to the mode the node inherits) | " +
       "{op:'createTree', tree, page?} — a whole screen in ONE op: `tree` is a nested node in the read export's field names, defaults omitted, no ids: " +
-      "{type?('FRAME'|'TEXT', TEXT when it has text), name?, handle?, box?{w,h}, layout?{display:'flex', flexDirection:'row'|'column', gap?, padding?[t,r,b,l], justifyContent?, alignItems?, flexWrap?}, " +
+      "{type?('FRAME'|'TEXT'|'INSTANCE', TEXT when it has text), name?, handle?, box?{w,h}, layout?{display:'flex', flexDirection:'row'|'column', gap?, padding?[t,r,b,l], justifyContent?, alignItems?, flexWrap?}, " +
       "widthMode?/heightMode?('fill'|'hug'), grow?, alignSelf?, absolute?, x?, y?, fills?[{type:'solid', color:#hex}], strokes?{colors,weight,align}, radius?, opacity?, clip?, hidden?, " +
       "text?, font?{family, weight(style name), size, color, align, lineHeight{unit,value}}, autoResize?, children?[...]}. " +
+      "Prefer the design system: {component, props?} is an instance; paint tokens:{color: variable}; tokens?{itemSpacing|padding*|*Radius|…: variable}; styles?{text}. Exact name, key or id; library items are imported. " +
       "It lands whole or not at all, on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
       "the reply is the root id, counts, and ids only for nodes given a `handle`. A read field a write cannot set is refused by name. " +
-      "A collection, mode or page name that matches nothing or several things, or a font the file lacks, refuses the whole batch before anything runs, with candidates. " +
+      "A name (collection, mode, page, component, variable, style) that matches nothing or several things, or a font the file lacks, refuses the whole batch before anything runs, with candidates. " +
       "Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied " +
       "and their node ids are reported alongside the error so you can continue or clean up — except variable-mode changes, which are put back, and createTree trees, which are removed. " +
       "There is no undo from here (only the designer's own Cmd-Z) — so for anything that OVERWRITES " +

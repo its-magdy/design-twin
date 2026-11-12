@@ -337,8 +337,11 @@ export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | Sc
  *  names the collection and the mode before and after (by name; "inherited" when no mode was set on the node). */
 export interface AppliedWrite {
   id?: string;
-  /** createTree: how many nodes the tree made */
-  created?: { frames: number; texts: number };
+  /** createTree: how many nodes the tree made (`instances` only when it made any) */
+  created?: { frames: number; texts: number; instances?: number };
+  /** createTree: the raw values where a variable or text style could stand (colours, spacing, radii, stroke weights,
+   *  texts without a style); absent when none */
+  unbound?: number;
   /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did) */
   handles?: Record<string, string>;
   collection?: string;

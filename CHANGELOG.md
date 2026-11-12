@@ -27,6 +27,14 @@ list of merged PRs.
 
 ### Added
 
+- A `createTree` spec can name the file's design system instead of raw values: an `INSTANCE` node names a component
+  (by exact name, key or id) with its property values, a paint or a spacing, radius or stroke field names a variable,
+  and a text names a text style. Every name is resolved before anything runs; one that matches nothing or several
+  things, a variable of the wrong type, or a property or variant value the component lacks refuses the whole batch,
+  listing every problem with up to three candidates. A library variable is found by name and a library component or
+  text style by key; importing it is a write, so it runs only once the whole batch resolved and "Allow edits" is on.
+  Raw values still work and the reply counts them as `unbound`. On the write-cost suite's new-screen job this sends
+  412 tokens of spec instead of 638.
 - `figma_write` can create a whole screen in one op: `createTree` takes one nested spec of frames, auto-layout and text,
   written with the read export's field names and no ids, and an optional `page`. Everything is checked before the
   file is touched (the spec, the page name and the fonts, each miss listed with candidates), and the tree lands whole

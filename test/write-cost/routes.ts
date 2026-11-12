@@ -19,7 +19,7 @@
 // The suite runs it on the same fixtures, checks the file afterwards, and prints its cost beside the baseline; record
 // its numbers with `bun test/write-cost.test.ts --record`.
 import type { Phase } from "./meter.ts";
-import { isFrame, type Briefs, type JobId, type Want, type WantFill } from "./jobs.ts";
+import { isFrame, type Briefs, type JobId, type Kit, type Want, type WantFill } from "./jobs.ts";
 import { BRAND } from "./jobs.ts";
 
 export interface Reply { text: string; isError: boolean }
@@ -211,6 +211,39 @@ export const treeSpec: Route = {
   },
 };
 
+// ---- design-system references (#165): the same tree spec, composed from the file's design system by name
+/** `want` as a tree spec that names the kit: a frame the kit has as a component (its texts named after the
+ *  component's TEXT properties) becomes an instance with those property values, and a colour variable is named on
+ *  the paint instead of sent as its hex. Everything else is as treeOf writes it. */
+function dsTreeOf(w: Want, kit: Kit): Record<string, unknown> {
+  const fills = w.fill === undefined ? {} : { fills: [typeof w.fill === "string" ? { type: "solid", color: w.fill } : { type: "solid", tokens: { color: w.fill.variable } }] };
+  if (!isFrame(w)) {
+    const { fill: _raw, ...text } = w;
+    return { ...treeOf(text), ...fills };
+  }
+  // A frame the kit has as a component, whose children are exactly texts its TEXT properties drive: an instance. Its
+  // look (sizes, layout, the texts' colours) comes from the component.
+  const props = kit.components[w.frame];
+  const kids = w.children ?? [];
+  const values: Array<[string, string]> = [];
+  for (const k of kids) if (!isFrame(k) && k.name !== undefined && props?.includes(k.name)) values.push([k.name, k.text]);
+  if (props && kids.length && values.length === kids.length) return { component: w.frame, props: Object.fromEntries(values) };
+  const { fill: _raw, children: _kids, ...frame } = w;
+  return { ...treeOf(frame), ...fills, ...(kids.length ? { children: kids.map((k) => dsTreeOf(k, kit)) } : {}) };
+}
+
+export const dsRefs: Route = {
+  name: "ds-refs",
+  ticket: "#165",
+  jobs: {
+    "new-screen": async (s, b) => {
+      const r = must(await s.call("figma_write", { ops: [{ op: "createTree", tree: dsTreeOf(b.want, b.kit) }] }, "write"), "figma_write");
+      const [root] = appliedIds(r);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+  },
+};
+
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs];
 export const BASELINE = fourOp.name;

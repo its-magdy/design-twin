@@ -105,6 +105,14 @@ void (async () => {
       dryTree.creates === 2 && dryTree.invalid === 1 && dryTree.steps[0]?.target === "new frame on the current page"
       && /^creates frame 'Screen' 390×844, vertical auto-layout with 3 nodes \(2 frames, 1 text\) on the current page, placed beside the existing frames; ids come back for 'title'/.test(dryTree.steps[0]?.change ?? "")
       && dryTree.steps[1]?.target === "new frame on page 'Screens'" && dryTree.steps[1]?.invalid === "tree.effects: a read field a write cannot set yet");
+    // Design-system references: named in the dry run (it does not read the file); a misplaced one refused by path.
+    const refsTree = { layout: { display: "flex" }, tokens: { itemSpacing: "space/md" }, children: [{ component: "Button", props: { Size: "Large" } }, { text: "Hi", styles: { text: "Body" } }] };
+    const dryRefs = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: refsTree }, { op: "createTree", tree: { children: [{ text: "x", props: { a: "b" } }] } }] } }))) as WritePreview;
+    ok("dryRun names a spec's components, variables and text styles, and refuses `props` off an instance, through the tool",
+      dryRefs.creates === 2 && dryRefs.invalid === 1
+      && /with 3 nodes \(1 frame, 1 text, 1 instance\)/.test(dryRefs.steps[0]?.change ?? "")
+      && /components 'Button'; variables 'space\/md'; text styles 'Body'/.test(dryRefs.steps[0]?.change ?? "")
+      && dryRefs.steps[1]?.invalid === "tree.children[0]: `props` is only on an INSTANCE node");
     const dryProto = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: { handle: "__proto__" } }] } }))) as WritePreview;
     ok("dryRun refuses a '__proto__' handle (the plugin's reply could not carry it back), through the tool",
       dryProto.invalid === 1 && /^tree\.handle '__proto__' cannot be a handle/.test(dryProto.steps[0]?.invalid ?? ""));

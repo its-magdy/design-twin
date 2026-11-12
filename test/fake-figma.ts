@@ -87,6 +87,8 @@ export interface FakeFigma {
   getNodeByIdAsync(id: string): Promise<FakeNode | null>;
   getStyleByIdAsync(id: string): Promise<FakeNode | null>;
   importStyleByKeyAsync?(key: string): Promise<FakeNode>;
+  importComponentByKeyAsync?(key: string): Promise<FakeNode>;
+  importComponentSetByKeyAsync?(key: string): Promise<FakeNode>;
   getLocalPaintStylesAsync(): Promise<FakeNode[]>;
   getLocalTextStylesAsync(): Promise<FakeNode[]>;
   getLocalEffectStylesAsync(): Promise<FakeNode[]>;
@@ -98,6 +100,7 @@ export interface FakeFigma {
     getVariableByIdAsync(id: string): Promise<FakeVariable | null>;
     getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
     importVariableByKeyAsync?(key: string): Promise<FakeVariable>;
+    setBoundVariableForPaint?(paint: FakeNode, field: string, variable: FakeVariable | null): FakeNode;
   };
   annotations?: { getAnnotationCategoriesAsync(): Promise<Array<{ id: string; label: string }>> };
   editorType?: string;

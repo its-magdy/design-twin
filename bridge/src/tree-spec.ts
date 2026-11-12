@@ -1,5 +1,12 @@
 // tree-spec.ts — the tree spec a `createTree` write carries: one nested document for a whole screen
-// (docs/write-plane-spec.md decisions 1, 4, 13, 14, 20).
+// (docs/write-plane-spec.md decisions 1, 4, 5, 13, 14, 15, 20).
+//
+// Design-system references (decision 5): a node may be an INSTANCE of a named component with property values
+// (`component`, `props`), a paint or a bindable number may name a variable (`fills[].tokens.color`, `tokens`), and a
+// text may name a text style (`styles.text`), each in the read export's own fields. This module checks their shape and
+// lists every name a spec uses (`TreeSummary.refs`); only the file can say what a name resolves to, so the plugin
+// resolves them (figma-plugin/src/tree-refs.ts) before the batch runs. A raw value where a reference could stand is
+// counted as `unbound`.
 //
 // The spec is the read export run backwards: a node uses the field names and values of an IrNode
 // (doc-types.ts) with defaults omitted, carries no ids and no parent references, and may give itself a
@@ -15,12 +22,24 @@
 //
 // Pure and dependency-free (bar two pure siblings): the plugin bundle imports it, so it must type-check
 // under figma-plugin/tsconfig.json (ES2019 lib, no Node types).
-import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, RenderBox, SizeLimits, Strokes } from "./doc-types.ts";
+import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, RenderBox, SizeLimits, StyleRefs, Strokes } from "./doc-types.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "./hex-color.ts";
 import { nearestNames, quoteList } from "./name-match.ts";
 
-/** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity. */
-export interface TreeFill { type: "solid"; color: string; opacity?: number }
+/** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity, and the colour
+ *  variable it is bound to (`tokens.color`: a variable's name, key or id; the colour may then be left out). */
+export interface TreeFill { type: "solid"; color?: string; opacity?: number; tokens?: { color: string } }
+/** The node fields a number variable can be bound to: Figma's own field names, which the read writes under `tokens`. */
+export const NUMBER_TOKEN_FIELDS = [
+  "itemSpacing", "counterAxisSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius", "width", "height",
+  "minWidth", "maxWidth", "minHeight", "maxHeight",
+  "strokeWeight", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "opacity",
+] as const;
+export type NumberTokenField = (typeof NUMBER_TOKEN_FIELDS)[number];
+/** A node's variable bindings, as the read writes them: a number field → a variable's name, key or id, and
+ *  `fills` / `strokes` → the colour variable(s) of its paints. */
+export type TreeTokens = { [K in NumberTokenField]?: string } & { fills?: string | string[]; strokes?: string | string[] };
 /** The writable slice of `layout` (LayoutSpec): flex only. */
 export interface TreeLayout {
   display?: "flex";
@@ -64,9 +83,18 @@ export interface TreeStrokes {
   /** Only the read's default, `{ profile: "uniform" }` (an even stroke), which sets nothing. */
   variableWidth?: { profile: "uniform" };
 }
-/** One node of a tree spec. `type` defaults to TEXT when the node has `text`, else FRAME. */
+/** One node of a tree spec. `type` defaults to INSTANCE when the node names a `component`, TEXT when it has `text`,
+ *  else FRAME. */
 export interface TreeNodeSpec {
-  type?: "FRAME" | "TEXT";
+  type?: "FRAME" | "TEXT" | "INSTANCE";
+  /** INSTANCE: the component — a local component or component set's exact name, or a component's key or id */
+  component?: string;
+  /** INSTANCE: property values by name (a variant's value, a text, a boolean) */
+  props?: Record<string, string | boolean>;
+  /** variables bound to this node's fields (Figma's field names) */
+  tokens?: TreeTokens;
+  /** TEXT: the text style it uses (a local style's exact name, or a style's key or id) */
+  styles?: { text?: string };
   name?: string;
   /** A name the reply maps to the created node's id. Unique within the spec. */
   handle?: string;
@@ -107,13 +135,25 @@ export const MAX_TREE_DEPTH = 40;
 /** The font a text node gets when its spec names none (Figma's own default for a new text node). */
 export const DEFAULT_FONT = { family: "Inter", weight: "Regular" } as const;
 
+/** The design-system names a spec uses, each once, in first-use order. */
+export interface TreeRefs {
+  components: string[];
+  variables: string[];
+  textStyles: string[];
+}
 /** What a valid spec makes, for the dry run and the reply. */
 export interface TreeSummary {
   frames: number;
   texts: number;
+  instances: number;
+  /** every component, variable and text style the spec names (resolved against the file by the plugin) */
+  refs: TreeRefs;
+  /** raw values where a reference could stand: colours, spacing, radii and stroke weights without a variable, and
+   *  texts without a text style */
+  unbound: number;
   /** every handle, in spec order */
   handles: string[];
-  /** every font the texts use, as `family|weight`, first-use order */
+  /** every font the texts without a text style use, first-use order (a styled text uses its style's font) */
   fonts: Array<{ family: string; weight: string }>;
   /** what is accepted but has no effect (x/y inside auto-layout, …), with the node's path */
   warnings: string[];
@@ -226,7 +266,11 @@ const FILL_RULES: Readonly<Record<string, Rule>> = {
   type: (v) => (v === "solid" ? null : typeof v === "string" ? "'" + v + "' cannot be written yet (solid can)" : "must be \"solid\""),
   color: hex,
   opacity: unit,
-  tokens: refuse("binding a variable comes with design-system references"),
+  tokens: (v) => {
+    if (!isObj(v)) return "must be an object {color: variable}";
+    const bad = firstOr(objectProblems(v, PAINT_TOKEN_RULES, ""));
+    return bad !== null ? bad : v.color === undefined ? "is missing color (the colour variable's name, key or id)" : null;
+  },
   blend: NOT_YET,
   visible: refuse("an invisible paint is never written; leave it out"),
 };
@@ -236,11 +280,41 @@ const fillsCheck: Check = (v) => {
     if (!isObj(p)) return "[" + i + "] must be a paint object";
     const bad = objectProblems(p, FILL_RULES, "")[0];
     if (bad) return "[" + i + "]" + (bad.startsWith(".") ? "" : " ") + bad;
-    if (p.color === undefined) return "[" + i + "] is missing color";
+    if (p.color === undefined && p.tokens === undefined) return "[" + i + "] is missing color (a hex colour, or a colour variable in `tokens.color`)";
   }
   return null;
 };
-const DS_REF = "design-system references (variables, styles) come in a later write step";
+/** A reference to a variable, style or component: its name, key or id. */
+const ref: Check = nonEmpty;
+const refs: Check = (v) => (typeof v === "string" ? ref(v) : Array.isArray(v) && v.length > 0 ? firstOr(v.map((x, i) => { const bad = ref(x); return bad === null ? null : "[" + i + "] " + bad; })) : "must be a variable's name, key or id, or a non-empty list of them");
+const PAINT_TOKEN_RULES: Readonly<Record<string, Rule>> = { color: ref };
+/** `tokens`: Figma's bindable field names (the read's own keys) → a variable. Which fields fit which node is checked by the walk. */
+const TOKEN_RULES: Readonly<Record<string, Rule>> = {
+  ...Object.fromEntries(NUMBER_TOKEN_FIELDS.map((k) => [k, ref])),
+  fills: refs, strokes: refs,
+  characters: refuse("a text's content cannot be bound to a variable yet; give `text`"),
+  visible: refuse("visibility cannot be bound to a variable yet; give `hidden`"),
+  cornerRadius: refuse("bind each corner: topLeftRadius, topRightRadius, bottomRightRadius, bottomLeftRadius"),
+};
+/** The number fields each node kind can bind (the rest are refused on that kind by name). */
+const FRAME_TOKENS: readonly string[] = [...NUMBER_TOKEN_FIELDS, "fills", "strokes"];
+const TEXT_TOKENS: readonly string[] = ["width", "height", "opacity", "strokeWeight", "fills", "strokes"];
+const INSTANCE_TOKENS: readonly string[] = ["width", "height", "opacity"];
+const STYLE_RULES: Record<keyof StyleRefs, Rule> = {
+  text: ref,
+  fill: refuse("bind the paint to a colour variable instead: `fills[].tokens.color`"),
+  stroke: refuse("bind the strokes to colour variables instead: `tokens.strokes`"),
+  effect: refuse("effects cannot be written yet"), grid: refuse("layout grids cannot be written yet"),
+};
+const propsCheck: Check = (v) => {
+  if (!isObj(v)) return "must be an object of property name → value";
+  for (const [k, x] of Object.entries(v)) {
+    if (!k.trim()) return "has an empty property name";
+    if (x !== undefined && typeof x !== "string" && typeof x !== "boolean") return "." + k + " must be a string (a variant's value, a text) or a boolean";
+  }
+  return null;
+};
+const DS_REF = "binding a text field to a variable cannot be written yet; name a text style in `styles.text`";
 
 /** Every IrNode field, and whether a tree spec may carry it. `children` and `type` are checked by the walk. */
 const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
@@ -270,10 +344,13 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
   autoResize: oneOf("width_and_height", "height", "truncate"),
   truncate: trueOnly,
   maxLines: count,
+  component: ref,
+  props: propsCheck,
+  tokens: objOf(TOKEN_RULES),
+  styles: objOf(STYLE_RULES),
   // Read fields a write does not set (yet). Each is refused by name.
-  props: refuse("component instances come with design-system references"),
-  propTokens: refuse(DS_REF), component: refuse("component instances come with design-system references"),
-  mainComponent: refuse("component instances come with design-system references"),
+  propTokens: refuse("a property bound to a variable cannot be written yet; give its value in `props`"),
+  mainComponent: refuse("name the component in `component` (its name, key or id)"),
   propRefs: NOT_YET, overrides: NOT_YET, exposedInstances: NOT_YET, detachedFrom: NOT_YET,
   renderBox: objOf(RENDER_BOX_RULES), // it follows `box`: accepted, sets nothing
   layoutGrids: NOT_YET, scroll: NOT_YET,
@@ -282,14 +359,14 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
   radiusFull: refuse("set `radius` to the size it should render at"), rotation: NOT_YET, flipped: NOT_YET, skew: NOT_YET,
   blendMode: NOT_YET, mask: NOT_YET, maskType: NOT_YET, cornerSmoothing: NOT_YET, aspectRatio: NOT_YET, arc: NOT_YET,
   shape: NOT_YET, booleanOp: NOT_YET, exportSettings: NOT_YET, overlay: NOT_YET,
-  tokens: refuse(DS_REF), styles: refuse(DS_REF), textTokens: refuse(DS_REF),
+  textTokens: refuse(DS_REF),
   reactions: NOT_YET, variableModes: refuse("set a frame's mode with a setVariableMode op after the tree lands"),
   resolvedModes: refuse("it is read-only (what the frame inherits)"), annotations: NOT_YET, devStatus: NOT_YET,
   devStatusNote: NOT_YET, css: refuse("it is read-only"), pluginData: NOT_YET, sharedData: NOT_YET, motion: NOT_YET,
   asset: refuse("images come in a later write step"), assetSkipped: refuse("it is read-only"), assetFrom: refuse("it is read-only"),
   sourceTransform: refuse("it is read-only"), geometry: NOT_YET, tableCells: NOT_YET, reference: str, // the read's path to its reference PNG: accepted, sets nothing
   devResources: NOT_YET, runs: refuse("mixed-format text comes in a later write step; give one `font`"), href: NOT_YET,
-  linkNode: NOT_YET, list: NOT_YET, indent: NOT_YET, textStyleOverrides: refuse(DS_REF), missingFont: refuse("it is read-only"),
+  linkNode: NOT_YET, list: NOT_YET, indent: NOT_YET, textStyleOverrides: refuse("it is read-only (which fields differ from the text style)"), missingFont: refuse("it is read-only"),
 };
 
 /** `k` is a field `rules` lets a write set (not unknown, not refused by name). */
@@ -319,10 +396,51 @@ function objectProblems(o: Record<string, unknown>, rules: Readonly<Record<strin
   return out;
 }
 
-/** The kind a node spec is: its `type`, else TEXT when it has `text`, else FRAME. */
-export function nodeKind(n: { type?: unknown; text?: unknown }): "FRAME" | "TEXT" | null {
-  if (n.type === undefined) return n.text !== undefined ? "TEXT" : "FRAME";
-  return n.type === "FRAME" || n.type === "TEXT" ? n.type : null;
+export type NodeKind = "FRAME" | "TEXT" | "INSTANCE";
+/** The kind a node spec is: its `type`, else INSTANCE when it names a `component`, TEXT when it has `text`, else FRAME. */
+export function nodeKind(n: { type?: unknown; text?: unknown; component?: unknown }): NodeKind | null {
+  if (n.type === undefined) return n.component !== undefined ? "INSTANCE" : n.text !== undefined ? "TEXT" : "FRAME";
+  return n.type === "FRAME" || n.type === "TEXT" || n.type === "INSTANCE" ? n.type : null;
+}
+/** The fields an INSTANCE node may carry: its place and size, and the component with its property values. Its
+ *  content comes from the component, so everything else is refused on it. */
+const INSTANCE_FIELDS = new Set(["type", "component", "props", "name", "handle", "hidden", "x", "y", "box", "renderBox", "reference",
+  "absolute", "grow", "alignSelf", "widthMode", "heightMode", "opacity", "tokens"]);
+/** The font fields a text style sets: on a styled text they are accepted and set nothing. */
+const STYLE_FONT_FIELDS = ["family", "weight", "size", "lineHeight", "letterSpacing", "case", "decoration", "variationSettings"] as const;
+const SIDE_PAD = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const;
+const CORNERS = [["tl", "topLeftRadius"], ["tr", "topRightRadius"], ["br", "bottomRightRadius"], ["bl", "bottomLeftRadius"]] as const;
+const STROKE_SIDES = [["top", "strokeTopWeight"], ["right", "strokeRightWeight"], ["bottom", "strokeBottomWeight"], ["left", "strokeLeftWeight"]] as const;
+const nameList = (v: unknown): string[] => (typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/** The raw values of one (valid) node where a reference could stand: each colour, spacing, radius and stroke weight
+ *  without a variable, and a text without a text style. */
+function unboundOf(n: Record<string, unknown>, kind: NodeKind): number {
+  const t = isObj(n.tokens) ? n.tokens : {};
+  const has = (k: string): boolean => t[k] !== undefined;
+  let c = 0;
+  if (Array.isArray(n.fills)) for (const p of n.fills) if (isObj(p) && p.tokens === undefined) c++;
+  if (kind === "TEXT") {
+    const styled = isObj(n.styles) && n.styles.text !== undefined;
+    if (!styled) c++;
+    if (n.fills === undefined && !has("fills") && isObj(n.font) && n.font.color !== undefined) c++;
+  }
+  const st = isObj(n.strokes) ? n.strokes : null;
+  if (st) {
+    if (Array.isArray(st.colors) && !has("strokes")) c += st.colors.length;
+    if (st.weight !== undefined && !has("strokeWeight")) c++;
+    if (isObj(st.weights)) for (const [side, field] of STROKE_SIDES) if (st.weights[side] !== undefined && !has(field)) c++;
+  }
+  const l = isObj(n.layout) ? n.layout : null;
+  if (l && l.display === "flex") {
+    if (l.gap !== undefined && !has("itemSpacing")) c++;
+    if (Array.isArray(l.padding)) SIDE_PAD.forEach((f) => { if (!has(f)) c++; });
+    const track = l.flexDirection === "column" ? l.columnGap : l.rowGap;
+    if (l.flexWrap !== undefined && track !== undefined && !has("counterAxisSpacing")) c++;
+  }
+  if (typeof n.radius === "number") { if (!CORNERS.every(([, f]) => has(f))) c++; }
+  else if (isObj(n.radius)) for (const [k, f] of CORNERS) if (n.radius[k] !== undefined && !has(f)) c++;
+  return c;
 }
 const isFlex = (n: Record<string, unknown>): boolean => isObj(n.layout) && n.layout.display === "flex";
 
@@ -332,10 +450,37 @@ export function fontOf(font: TreeFont | undefined): { family: string; weight: st
   return { family: font && font.family !== undefined ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== undefined ? font.weight : DEFAULT_FONT.weight };
 }
 
+/** The context `tokens` needs on a node of `kind` (its shape is checked by TOKEN_RULES): each field is one the kind
+ *  has, a spacing field sits on an auto-layout frame, a size is not also `fill`/`hug`, and `fills`/`strokes` name the
+ *  node's paints. */
+function tokenProblems(n: Record<string, unknown>, t: Record<string, unknown>, kind: NodeKind, flex: boolean, inFlex: boolean, say: (m: string) => void): void {
+  const fits = kind === "FRAME" ? FRAME_TOKENS : kind === "TEXT" ? TEXT_TOKENS : INSTANCE_TOKENS;
+  const l = isObj(n.layout) ? n.layout : {};
+  for (const k of Object.keys(t)) {
+    if (t[k] === undefined || !settable(TOKEN_RULES, k)) continue;
+    const at = "`tokens." + k + "`";
+    if (fits.indexOf(k) < 0) { say(at + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : "")); continue; }
+    if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at + " needs auto-layout on the node (layout.display \"flex\")");
+    if (k === "counterAxisSpacing" && (!flex || l.flexWrap === undefined)) say(at + " is the gap between wrapped tracks: it needs `layout.flexWrap: \"wrap\"`");
+    if (k === "width" && n.widthMode !== undefined) say(at + " sizes the node, which `widthMode` already does; leave one out");
+    if (k === "height" && n.heightMode !== undefined) say(at + " sizes the node, which `heightMode` already does; leave one out");
+    if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at + " needs auto-layout on the node or its parent");
+  }
+  const fills = nameList(t.fills);
+  if (t.fills !== undefined && Array.isArray(n.fills)) {
+    // The read writes a bound paint's variable both on the paint and here: here it adds nothing, so it must agree.
+    const onPaints = n.fills.map((p) => (isObj(p) && isObj(p.tokens) ? p.tokens.color : undefined));
+    for (const name of fills) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
+  }
+  const strokes = nameList(t.strokes);
+  const colors = isObj(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
+  if (t.strokes !== undefined && colors && colors.length !== strokes.length) say("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
+}
+
 /** The check of a whole spec: every problem (empty when it is valid) and, for a valid one, what it makes. */
 export function checkTree(spec: unknown): { problems: string[]; summary: TreeSummary } {
   const problems: string[] = [];
-  const summary: TreeSummary = { frames: 0, texts: 0, handles: [], fonts: [], warnings: [] };
+  const summary: TreeSummary = { frames: 0, texts: 0, instances: 0, refs: { components: [], variables: [], textStyles: [] }, unbound: 0, handles: [], fonts: [], warnings: [] };
   const seenHandles = new Set<string>();
   const seenFonts = new Set<string>();
   let count = 0;
@@ -347,7 +492,7 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
     const before = problems.length;
     problems.push(...objectProblems(n, NODE_RULES, path));
     const kind = nodeKind(n);
-    if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME and TEXT can)");
+    if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can)");
     const isRoot = parentFlex === null;
     const flex = isFlex(n);
     const say = (msg: string): void => { problems.push(path + ": " + msg); };
@@ -357,12 +502,19 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
       if (n.maxLines !== undefined && n.truncate !== true) summary.warnings.push(path + ": `maxLines` has no effect without `truncate: true`, so it is not set");
     } else if (kind === "FRAME") {
       for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== undefined) say("`" + k + "` is only on a TEXT node (give the node `text`)");
+    } else if (kind === "INSTANCE") {
+      if (n.component === undefined) say("an INSTANCE node needs `component` (a component's name, key or id)");
+      for (const k of Object.keys(n)) if (n[k] !== undefined && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
     }
+    if (kind !== "INSTANCE") for (const k of ["component", "props"]) if (n[k] !== undefined) say("`" + k + "` is only on an INSTANCE node");
+    if (isObj(n.styles) && n.styles.text !== undefined && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
     for (const axis of ["widthMode", "heightMode"] as const) {
       const m = n[axis];
       if (m === "fill" && parentFlex !== true) say("`" + axis + ": \"fill\"` needs a parent with auto-layout" + (isRoot ? " (this is the root)" : ""));
-      if (m === "hug" && !flex && kind !== "TEXT") say("`" + axis + ": \"hug\"` needs the node itself to have auto-layout (layout.display \"flex\") or be TEXT");
+      // An instance hugs when its component has auto-layout: only the file knows, so the plugin checks it.
+      if (m === "hug" && !flex && kind === "FRAME") say("`" + axis + ": \"hug\"` needs the node itself to have auto-layout (layout.display \"flex\") or be TEXT");
     }
+    if (isObj(n.tokens) && kind !== null) tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
     if (parentFlex !== true) {
       for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== undefined) say("`" + k + "` needs a parent with auto-layout");
     }
@@ -404,21 +556,34 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
       if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
       seenHandles.add(n.handle);
     }
-    if (problems.length === before) {
+    if (problems.length === before && kind !== null) {
+      const styled = isObj(n.styles) && typeof n.styles.text === "string";
       if (kind === "TEXT") {
         summary.texts++;
-        const f = fontOf(isObj(n.font) ? n.font : undefined);
-        const key = f.family + "|" + f.weight;
-        if (!seenFonts.has(key)) { seenFonts.add(key); summary.fonts.push(f); }
-      } else summary.frames++;
+        if (styled) {
+          const set = isObj(n.font) ? STYLE_FONT_FIELDS.filter((k) => isObj(n.font) && n.font[k] !== undefined) : [];
+          if (set.length) summary.warnings.push(path + ": " + set.map((k) => "`font." + k + "`").join(", ") + " " + (set.length === 1 ? "is" : "are") + " set by the text style, so " + (set.length === 1 ? "it is" : "they are") + " not set");
+        } else {
+          const f = fontOf(isObj(n.font) ? n.font : undefined);
+          const key = f.family + "|" + f.weight;
+          if (!seenFonts.has(key)) { seenFonts.add(key); summary.fonts.push(f); }
+        }
+      } else if (kind === "INSTANCE") summary.instances++;
+      else summary.frames++;
       if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
+      const addRef = (list: string[], name: unknown): void => { if (typeof name === "string" && list.indexOf(name) < 0) list.push(name); };
+      if (kind === "INSTANCE") addRef(summary.refs.components, n.component);
+      if (styled && isObj(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
+      if (Array.isArray(n.fills)) for (const p of n.fills) if (isObj(p) && isObj(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
+      if (isObj(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
+      summary.unbound += unboundOf(n, kind);
     }
     if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path + ".children[" + i + "]", depth + 1, flex));
   };
   if (!isObj(spec)) problems.push("tree: must be a node object (the root frame)");
   else {
     walk(spec, "tree", 0, null);
-    if (nodeKind(spec) !== "FRAME") problems.push("tree: the root must be a FRAME (a screen); put the text inside one");
+    if (nodeKind(spec) !== "FRAME") problems.push("tree: the root must be a FRAME (a screen); put the " + (nodeKind(spec) === "INSTANCE" ? "instance" : "text") + " inside one");
     if (tooMany) problems.push("tree: more than " + MAX_TREE_NODES + " nodes — send a large screen as several trees");
   }
   return { problems, summary };
@@ -440,14 +605,23 @@ export function treeRefusal(problems: readonly string[]): string {
 export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: TreeSummary): string {
   const size = spec.box ? " " + spec.box.w + "×" + spec.box.h : spec.layout && spec.layout.width && spec.layout.height ? " " + spec.layout.width + "×" + spec.layout.height : "";
   const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
-  const nodes = s.frames + s.texts;
+  const nodes = s.frames + s.texts + s.instances;
+  const plural = (n: number, one: string): string => n + " " + one + (n === 1 ? "" : "s");
   const where = (page ? "on page '" + page + "'" : "on the current page") +
     (spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : ", placed beside the existing frames");
   const parts = [
     "creates frame '" + (spec.name || "Frame") + "'" + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") +
-      " (" + s.frames + " frame" + (s.frames === 1 ? "" : "s") + ", " + s.texts + " text" + (s.texts === 1 ? "" : "s") + ") " + where,
+      " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + ") " + where,
   ];
   if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
   if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
-  return parts.join("; ") + " — the page and fonts are checked against the file when applied, and nothing lands unless all of it does";
+  const { components, variables, textStyles } = s.refs;
+  if (components.length) parts.push("components " + quoteList(components));
+  if (variables.length) parts.push("variables " + quoteList(variables));
+  if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
+  if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
+  const checked = components.length + variables.length + textStyles.length
+    ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)"
+    : "the page and fonts are checked against the file when applied";
+  return parts.join("; ") + " — " + checked + ", and nothing lands unless all of it does";
 }

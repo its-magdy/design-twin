@@ -15,6 +15,9 @@
 // An instance is what Figma makes: its sublayers are its own nodes (ids `I<instance>;<main sublayer>`) that read
 // through to the main component's sublayers until one is set on the instance (an override). So a fix to the main
 // component shows in every instance, and a fix made through an instance's sublayer id changes that instance only.
+// A component made with TEXT properties (`textProps`) drives its sublayers' text from them: the plugin's
+// main.createInstance() + setProperties sets the sublayer's characters on that instance only. A paint the plugin binds
+// (figma.variables.setBoundVariableForPaint) shows the variable's value, as one a fixture binds does.
 import { fakeWorld, type FakeCollection, type FakeNode, type FakeVariable, type Scene, type World } from "../fake-figma.ts";
 
 export interface Rgb { r: number; g: number; b: number }
@@ -35,6 +38,8 @@ export type CPage = CNode & { selection: FakeNode[] };
 /** A fill: a colour, or a colour variable of this file (the paint is bound to it, as a designer's would be). */
 export type Fill = Rgb | { variable: string };
 export interface FrameSpec { name: string; w?: number; h?: number; layoutMode?: "HORIZONTAL" | "VERTICAL"; gap?: number; padding?: readonly [number, number, number, number]; fill?: Fill }
+/** A component's TEXT properties: property name → the name of the sublayer whose text it drives. */
+export type TextProps = Record<string, string>;
 export interface TextSpec { name?: string; text: string; size?: number; fill?: Fill }
 
 export const rgb = (hex: string): Rgb => {
@@ -49,8 +54,10 @@ export interface Canvas {
   page(name: string): CPage;
   frame(parent: CNode, spec: FrameSpec): CNode;
   text(parent: CNode, spec: TextSpec): CNode;
-  /** a main component (a frame of type COMPONENT); give it its children before making instances of it */
+  /** a main component (a frame of type COMPONENT); give it its children before making instances of it, then its
+   *  TEXT properties (`textProps`, once the sublayers they name exist) */
   component(parent: CNode, spec: FrameSpec): CNode;
+  textProps(main: CNode, props: TextProps): void;
   /** an instance of `main`, its sublayers read through to the main component's */
   instance(parent: CNode, main: CNode, spec: { name?: string }): CNode;
   /** a colour variable of this file; returns its id */
@@ -89,6 +96,9 @@ export function canvas(): Canvas {
   // What every node carries for the read: no dev resources, and a reference render that is one fixed tiny byte string.
   const common = { visible: true, strokes: [], effects: [], opacity: 1, rotation: 0, blendMode: "NORMAL", isMask: false, x: 0, y: 0,
     getDevResourcesAsync: async () => [], exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
+  // A page's components, as findAllWithCriteria finds them (every level).
+  const findAll = (root: CNode, types: readonly string[]): CNode[] =>
+    (root.children ?? []).flatMap((k) => [...(types.includes(k.type) ? [k] : []), ...findAll(k, types)]);
   // An auto-layout frame resizes with its content in Figma; the fake keeps the numbers it was given (no layout
   // engine), which is all a read needs.
   const frameLike = (type: string, spec: FrameSpec): CNode => {
@@ -146,28 +156,65 @@ export function canvas(): Canvas {
     return s;
   };
 
+  // An instance of `main`: its size, auto-layout and fills, and sublayers that read through to the main's. Its TEXT
+  // properties set the text of the sublayer each drives, on this instance only (an override).
+  const makeInstance = (main: CNode, spec: { name?: string }): CNode => {
+    const f = frameLike("INSTANCE", {
+      name: spec.name ?? main.name, w: Number(main.width), h: Number(main.height), gap: Number(main.itemSpacing ?? 0),
+      ...(main.layoutMode !== "NONE" ? { layoutMode: main.layoutMode as "HORIZONTAL" | "VERTICAL" } : {}),
+    });
+    f.fills = main.fills ?? [];
+    f.getMainComponentAsync = async () => main;
+    const props: Record<string, { type: string; value: string | boolean }> = {};
+    f.componentProperties = props;
+    f.overrides = [];
+    f.children = (main.children ?? []).map((k) => sublayer(f.id, k, f));
+    f.setProperties = (given: Record<string, string | boolean>) => {
+      const defs = (main.componentPropertyDefinitions ?? {}) as Record<string, { type: string }>;
+      for (const [key, value] of Object.entries(given)) {
+        const def = defs[key];
+        if (!def) throw new Error(`in Figma: ${main.name} has no property ${key}`);
+        props[key] = { type: def.type, value };
+        const sub = f.children?.find((k) => (k.componentPropertyReferences as { characters?: string } | undefined)?.characters === key);
+        if (sub && typeof value === "string") sub.characters = value;
+      }
+    };
+    return f;
+  };
+
   const c: Canvas = {
     nodes, pages, variables,
     page(name) {
       const id = nextId();
-      const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, loadAsync: async () => {} };
+      const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, loadAsync: async () => {},
+        findAllWithCriteria: (c: { types: string[] }) => findAll(p, c.types) };
       nodes[id] = p;
       pages.push(p);
       return p;
     },
     frame(parent, spec) { const f = frameLike("FRAME", spec); adopt(parent, f); return f; },
     text(parent, spec) { const t = textNode(spec); adopt(parent, t); return t; },
-    component(parent, spec) { const f = frameLike("COMPONENT", spec); f.key = `key-${f.id}`; f.remote = false; adopt(parent, f); return f; },
-    instance(parent, main, spec) {
-      const f = frameLike("INSTANCE", { name: spec.name ?? main.name, w: Number(main.width), h: Number(main.height), ...(main.layoutMode !== "NONE" ? { layoutMode: main.layoutMode as "HORIZONTAL" | "VERTICAL" } : {}) });
-      f.fills = main.fills ?? [];
-      f.getMainComponentAsync = async () => main;
-      f.componentProperties = {};
-      f.overrides = [];
-      f.children = (main.children ?? []).map((k) => sublayer(f.id, k, f));
+    component(parent, spec) {
+      const f = frameLike("COMPONENT", spec);
+      f.key = `key-${f.id}`;
+      f.remote = false;
+      f.componentPropertyDefinitions = {};
+      f.createInstance = () => makeInstance(f, {});
       adopt(parent, f);
       return f;
     },
+    textProps(main, props) {
+      const defs: Record<string, { type: "TEXT"; defaultValue: string }> = {};
+      Object.entries(props).forEach(([prop, layer], i) => {
+        const key = `${prop}#0:${i}`;
+        const sub = main.children?.find((k) => k.name === layer);
+        if (!sub) throw new Error(`canvas: ${main.name} has no sublayer ${layer}`);
+        defs[key] = { type: "TEXT", defaultValue: String(sub.characters ?? "") };
+        sub.componentPropertyReferences = { characters: key };
+      });
+      main.componentPropertyDefinitions = defs;
+    },
+    instance(parent, main, spec) { const f = makeInstance(main, spec); adopt(parent, f); return f; },
     variable(name, hex) {
       const id = `VariableID:1:${Object.keys(variables).length + 1}`;
       variables[id] = { id, name, resolvedType: "COLOR", variableCollectionId: COLLECTION.id, scopes: ["ALL_FILLS"], codeSyntax: {}, remote: false, valuesByMode: { "1:0": rgb(hex) } };
@@ -180,6 +227,16 @@ export function canvas(): Canvas {
         createFrame: () => frameLike("FRAME", { name: "Frame" }),
         createText: () => textNode({ text: "" }),
         loadFontAsync: async () => {},
+        // A bound paint shows the variable's value, as a fixture's does (paintOf).
+        variables: {
+          setBoundVariableForPaint: (p: FakeNode, field: string, v: FakeVariable | null) => {
+            if (field !== "color" || !v) return p;
+            // a live read of the variable, as paintOf's: change the variable and the paint follows
+            const bound: FakeNode = { type: "SOLID", visible: true, get color() { return v.valuesByMode["1:0"]; }, opacity: typeof p.opacity === "number" ? p.opacity : 1,
+              boundVariables: { color: { type: "VARIABLE_ALIAS", id: v.id } } };
+            return bound;
+          },
+        },
         // the live table, not the copy fakeWorld made: a node a write creates is found by the next op that names it
         getNodeByIdAsync: async (id: string) => nodes[id] ?? null,
       });
