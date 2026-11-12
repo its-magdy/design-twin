@@ -25,8 +25,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 
 ## Connecting the plugin and the bridge
 
-- **Plugin isn't in the menu** → import it via *Import plugin from manifest…* → the file `dtwin plugin path`
-  prints (`dtwin plugin install` first if it was never installed; `--open` shows the hidden folder). It lives
+- **Plugin isn't in the menu** → it was never imported: `dtwin plugin import` puts the manifest's path on the
+  clipboard, opens Figma and prints the steps (*Import plugin from manifest…* → paste the path; `dtwin plugin path`
+  prints it again, `--open` shows the hidden folder). It lives
   under **Plugins → Development**, not the main plugin list.
 - **"plugin vX is older than this bridge" / a manifest change didn't take** → `dtwin plugin update` (any `dtwin`
   that starts a bridge does it too), turn on **Plugins → Development → Hot reload plugin**, then reopen the plugin —

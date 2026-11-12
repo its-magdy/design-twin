@@ -8,10 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { check, report } from "./assert.ts";
 import {
-  PLUGIN_FILES, describeState, installPlugin, nextSteps, pluginSource, pluginState, refreshInstalledPlugin,
-  resetRefreshForTests, uninstallPlugin,
+  PLUGIN_FILES, copyToClipboard, describeState, importGuide, installPlugin, launchDetached, nextSteps, openFigmaDesktop, pluginSetup,
+  pluginSource, pluginState, refreshInstalledPlugin, resetRefreshForTests, runSync, uninstallPlugin,
 } from "../bridge/src/plugin-install.ts";
-import type { PluginSource } from "../bridge/src/plugin-install.ts";
+import type { Desktop, PluginSource } from "../bridge/src/plugin-install.ts";
+import { PLUGIN_MENU } from "../bridge/src/hints.ts";
 import { BRIDGE_VERSION } from "../bridge/src/staleness.ts";
 
 const REPO = path.join(import.meta.dirname, "..");
@@ -136,6 +137,101 @@ console.log("uninstallPlugin:");
   t("nothing installed: nothing removed", () => uninstallPlugin(home).length === 0);
 }
 
+console.log("importGuide / pluginSetup — the clicks left in Figma:");
+{
+  const m = "/Users/someone/.config/design-twin/figma-plugin/manifest.json";
+  const mac = importGuide(m, true, "darwin");
+  t("four steps: the menu, the picker, run it, the token", () => mac.length === 4 && (mac[0] ?? "").includes("Import plugin from manifest") &&
+    (mac[2] ?? "").includes(PLUGIN_MENU) && (mac[3] ?? "").includes("dtwin --show-token"));
+  t("macOS: ⌘⇧G, says the path is on the clipboard, and names it", () => (mac[1] ?? "").includes("⌘⇧G") && (mac[1] ?? "").includes("on your clipboard") && (mac[1] ?? "").endsWith(m));
+  t("not copied: no clipboard claim, the path still named", () => { const s = importGuide(m, false, "darwin")[1] ?? ""; return !s.includes("clipboard") && s.endsWith(m); });
+  const win = importGuide("C:\\Users\\x\\AppData\\Roaming\\design-twin\\figma-plugin\\manifest.json", true, "win32")[1] ?? "";
+  t("Windows: the File name box and Ctrl+V", () => win.includes("File name box") && win.includes("Ctrl+V"));
+  t("Linux: a plain pick, the path named", () => (importGuide(m, false, "linux")[1] ?? "").endsWith(m));
+
+  const src = fakeSource();
+  const home = path.join(mk(), "figma-plugin");
+  const before = pluginSetup(pluginState(src, home));
+  t("pluginSetup, nothing installed: installed false, the copy's manifest, steps naming it, the note points at dtwin plugin import", () =>
+    !before.installed && before.importPath === path.join(home, "manifest.json") && before.steps.some((s) => s.includes(before.importPath)) && before.note.includes("dtwin plugin import"));
+  t("…and it creates nothing", () => !fs.existsSync(home));
+  installPlugin(src, home);
+  t("pluginSetup once installed: installed true", () => pluginSetup(pluginState(src, home)).installed);
+  t("pluginSetup from a checkout: installed true, the checkout's manifest", () => {
+    const s = pluginSetup(pluginState({ ...src, kind: "checkout" }, mk()));
+    return s.installed && s.importPath === path.join(src.dir, "manifest.json");
+  });
+}
+
+console.log("copyToClipboard / openFigmaDesktop — per platform, against a fake desktop:");
+{
+  type Call = { cmd: string; args: string[]; input?: string };
+  const desk = (platform: NodeJS.Platform, ok: (c: Call) => boolean, files: string[] = [], env: NodeJS.ProcessEnv = {}): { d: Desktop; calls: Call[] } => {
+    const calls: Call[] = [];
+    const d: Desktop = {
+      platform, env, exists: (p) => files.includes(p),
+      run: (cmd, args, input) => { const c = input === undefined ? { cmd, args } : { cmd, args, input }; calls.push(c); return ok(c); },
+      launch: (cmd, args) => { const c = { cmd, args }; calls.push(c); return Promise.resolve(ok(c)); },
+    };
+    return { d, calls };
+  };
+  const p = "/a/b/manifest.json";
+  const mac = desk("darwin", () => true);
+  t("macOS: pbcopy with the path on stdin", () => copyToClipboard(p, mac.d) && mac.calls[0]?.cmd === "pbcopy" && mac.calls[0].input === p);
+  const macOpened = await openFigmaDesktop(mac.d);
+  t("macOS: open -a Figma", () => macOpened && mac.calls[1]?.cmd === "open" && mac.calls[1].args.join(" ") === "-a Figma");
+  const noFigma = desk("darwin", (c) => c.cmd !== "open");
+  const noFigmaOpened = await openFigmaDesktop(noFigma.d);
+  t("macOS without Figma: false, not thrown", () => !noFigmaOpened);
+
+  const wp = "C:\\Users\\O'Neil\\AppData\\Roaming\\design-twin\\figma-plugin\\manifest.json";
+  const winHome = "C:\\L".replaceAll("\\", path.sep);
+  const win = desk("win32", () => true, [path.join(winHome, "Figma", "Figma.exe")], { LOCALAPPDATA: winHome });
+  t("Windows: Set-Clipboard with the path as a quoted argument, ' doubled", () =>
+    copyToClipboard(wp, win.d) && win.calls[0]?.cmd === "powershell.exe" && win.calls[0].input === undefined &&
+    (win.calls[0].args.at(-1) ?? "") === "Set-Clipboard -Value 'C:\\Users\\O''Neil\\AppData\\Roaming\\design-twin\\figma-plugin\\manifest.json'");
+  const winOpened = await openFigmaDesktop(win.d);
+  t("Windows: launches %LOCALAPPDATA%\\Figma\\Figma.exe", () => winOpened && win.calls[1]?.cmd === path.join(winHome, "Figma", "Figma.exe"));
+  const winFails = desk("win32", () => false, [path.join(winHome, "Figma", "Figma.exe")], { LOCALAPPDATA: winHome });
+  const winFailsOpened = await openFigmaDesktop(winFails.d);
+  t("Windows: Figma.exe there but it does not start: false", () => !winFailsOpened && winFails.calls.length === 1);
+  const winNo = desk("win32", () => true, [], { LOCALAPPDATA: winHome });
+  const winNoOpened = await openFigmaDesktop(winNo.d);
+  t("Windows without Figma.exe: false, nothing launched", () => !winNoOpened && winNo.calls.length === 0);
+  const winNoEnv = desk("win32", () => true, [path.join("", "Figma", "Figma.exe")]);
+  const winNoEnvOpened = await openFigmaDesktop(winNoEnv.d);
+  t("Windows without LOCALAPPDATA: false, nothing launched", () => !winNoEnvOpened && winNoEnv.calls.length === 0);
+
+  const lin = desk("linux", (c) => c.cmd === "xclip");
+  t("Linux: wl-copy, then xclip — the first that works", () => copyToClipboard(p, lin.d) && lin.calls.map((c) => c.cmd).join() === "wl-copy,xclip");
+  const linNone = desk("linux", () => false);
+  t("Linux with no clipboard tool: false after trying all three", () => !copyToClipboard(p, linNone.d) && linNone.calls.length === 3);
+  const linOpened = await openFigmaDesktop(desk("linux", () => true).d);
+  t("Linux: no Figma desktop app to open", () => !linOpened);
+}
+
+console.log("runSync / launchDetached — the real process wrappers:");
+{
+  const bun = process.execPath;
+  t("runSync: exit 0 is true, exit 1 is false", () => runSync(bun, ["-e", "process.exit(0)"]) && !runSync(bun, ["-e", "process.exit(1)"]));
+  t("runSync: a missing program is false, not thrown", () => !runSync(path.join(mk(), "no-such-program"), []));
+  // A helper that ignores SIGTERM and would then exit 0: past the timeout it is killed hard, and still a failure.
+  const t0 = Date.now();
+  const stuck = runSync(bun, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000)"], undefined, 500);
+  const took = Date.now() - t0;
+  t(`runSync: a helper past its timeout is killed and counted as failed (took ${took} ms)`, () => !stuck && took < 4000);
+  const missing = await launchDetached(path.join(mk(), "no-such-program"), []);
+  t("launchDetached: a program that cannot start is false (its error event), not claimed opened", () => !missing);
+  if (process.platform !== "win32") {
+    const notExec = path.join(mk(), "not-executable");
+    fs.writeFileSync(notExec, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+    const denied = await launchDetached(notExec, []);
+    t("launchDetached: a file without the execute bit is false (EACCES)", () => !denied);
+  }
+  const started = await launchDetached(bun, ["-e", "process.exit(0)"]);
+  t("launchDetached: a program that starts is true", () => started);
+}
+
 console.log("dtwin plugin — the CLI, as a real child:");
 {
   const cfg = mk();
@@ -162,6 +258,19 @@ console.log("dtwin plugin — the CLI, as a real child:");
   const sj: unknown = (() => { try { const v: unknown = JSON.parse(st.out); return v; } catch { return null; } })();
   t("status --json: installed, and the checkout is what to import", () =>
     st.code === 0 && typeof sj === "object" && sj !== null && "installed" in sj && sj.installed === true && "importPath" in sj && sj.importPath === path.join(REPO, "figma-plugin", "manifest.json"));
+  // import touches the clipboard and opens Figma unless --print-only: the children here never do either.
+  const imp = dtwin(["import", "--print-only"]);
+  const repoManifest = path.join(REPO, "figma-plugin", "manifest.json");
+  t("import --print-only from a checkout: the checkout's manifest, four numbered steps, no clipboard/Figma lines", () =>
+    imp.code === 0 && imp.err.includes(repoManifest) && imp.err.includes("  1. ") && imp.err.includes("  4. ") &&
+    !imp.err.includes("clipboard —") && !imp.err.includes("opened Figma") && !imp.err.includes("could not open"));
+  const ij = dtwin(["import", "--print-only", "--json"]);
+  const ijv: unknown = (() => { try { const v: unknown = JSON.parse(ij.out); return v; } catch { return null; } })();
+  t("import --print-only --json: manifest, from, copied/figmaOpened false, steps", () =>
+    ij.code === 0 && typeof ijv === "object" && ijv !== null && "manifest" in ijv && ijv.manifest === repoManifest && "from" in ijv && ijv.from === "checkout" &&
+    "copied" in ijv && ijv.copied === false && "figmaOpened" in ijv && ijv.figmaOpened === false && "steps" in ijv && Array.isArray(ijv.steps) && ijv.steps.length === 4);
+  const po = dtwin(["install", "--print-only"]);
+  t("--print-only on another subcommand is exit 1", () => po.code === 1 && po.err.includes("--print-only is for"));
   const un = dtwin(["uninstall"]);
   t("uninstall removes it and says to remove it in Figma too", () => un.code === 0 && !fs.existsSync(home) && un.err.includes("Manage plugins"));
 }

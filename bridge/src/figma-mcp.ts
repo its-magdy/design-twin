@@ -68,6 +68,7 @@ import { exitFlushed, installQueuedConsole } from "./stdio.ts";
 import { clientPresence, processIO } from "./client-presence.ts";
 import { presence as pluginPresence } from "./presence.ts";
 import { pickClient, runPlugin, sentence, whoHolds } from "./hints.ts";
+import { pluginSetup } from "./plugin-install.ts";
 // The holder, made on first use from the settings this process was started with (startServer reads them first and
 // exits on a bad port; a suite that loads this module in process has set its environment before the first call).
 let holder: Holder | null = null;
@@ -369,7 +370,7 @@ function registerTool<I extends undefined | ZodRawShapeCompat | AnySchema = unde
 registerTool(
   "figma_status",
   {
-    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the export on disk, if any, as `snapshot`: the newest stamp's exportedAt/ageMs/sourceFile, `stale` (older than `staleAfterMs`), `sources` (the screens of each Figma file, and the design system, each with its own age) and `problems` (files there but unusable) — so an agent can tell whether it's about to read a stale or mixed snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the export on disk, if any, as `snapshot`: the newest stamp's exportedAt/ageMs/sourceFile, `stale` (older than `staleAfterMs`), `sources` (the screens of each Figma file, and the design system, each with its own age) and `problems` (files there but unusable) — so an agent can tell whether it's about to read a stale or mixed snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill). When nothing is connected it also returns `setup`: whether the plugin's files are installed, the manifest to import, and the one-time import steps to walk the user through (the import itself is a click in Figma desktop that no tool can make; `dtwin plugin import` in a terminal does the rest).",
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
@@ -382,7 +383,9 @@ registerTool(
     if (!(a && a.client)) {
       const clients = await route.listClients();
       const p = pluginPresence(clients);
-      if (p.kind === "none") return textResult({ connected: false, hint: sentence(runPlugin), snapshot, ...ledger });
+      // Nothing connected may mean the plugin was never imported — a one-time click only the user can make, so
+      // the agent gets the steps to walk them through (pluginSetup has no side effects: no clipboard, no app).
+      if (p.kind === "none") return textResult({ connected: false, hint: sentence(runPlugin), setup: pluginSetup(), snapshot, ...ledger });
       // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
       // failing. "Which files can I talk to?" is exactly what this tool is for.
       if (p.kind === "ambiguous") {

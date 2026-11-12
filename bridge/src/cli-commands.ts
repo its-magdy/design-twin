@@ -430,7 +430,7 @@ export const VERB_ROWS = [
   { word: "init", to: "routed", usage: "  dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help" },
   { word: "seed", to: "routed", usage: "  dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help", help: SEED_HELP },
   { word: "outline", to: "routed", usage: "  dtwin outline <screen.json> [--budget N]  # one line per node of a screen already on disk. See outline --help", help: OUTLINE_HELP },
-  { word: "plugin", to: "routed", usage: "  dtwin plugin [install|update|status|path|uninstall]  # the Figma plugin's per-user copy, to import once. See plugin --help" },
+  { word: "plugin", to: "routed", usage: "  dtwin plugin [import|install|update|status|path|uninstall]  # the Figma plugin: `import` walks you through the one-time import. See plugin --help" },
   { word: "mcp", to: "routed", usage: "  dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help", help: MCP_HELP },
   { word: "help", to: "--help", usage: "  dtwin help                               = --help" },
   {

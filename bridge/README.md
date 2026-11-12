@@ -16,7 +16,7 @@ and these processes are the **server** (`127.0.0.1:8787`). Nothing touches the i
 
 ```
 dtwin init --mcp   # design/, the bridge token, the Figma plugin's copy, a .mcp.json entry
-dtwin plugin path  # import this manifest once: Figma desktop → Plugins → Development → Import plugin from manifest…
+dtwin plugin import  # once: path on the clipboard, Figma opened, then Plugins → Development → Import plugin from manifest…
 dtwin token show   # paste into the plugin: Connect to Claude Code (optional) → Bridge token → Save
 dtwin doctor       # checks everything and names the next step
 dtwin list         # then: dtwin pull --node <id>
@@ -245,6 +245,7 @@ deletes it). So the package's plugin is copied to one per-user folder, beside th
 once:
 
 ```
+dtwin plugin import      # install, put the manifest's path on the clipboard, open Figma desktop, print the clicks left
 dtwin plugin install     # copy it to <config dir>/figma-plugin and print the one-time import step (--open shows it)
 dtwin plugin update      # the same, then says to reopen the plugin (and when the manifest changed too)
 dtwin plugin status      # (default) installed where, and is it this dtwin's? (--json)
@@ -256,6 +257,15 @@ dtwin plugin uninstall   # remove the copied files (then remove the plugin in Fi
 on Windows, `DESIGNTWIN_CONFIG_DIR` overriding both. The folder is hidden in a file picker: on macOS press ⌘⇧G and paste
 the path; on Windows paste it into the File name box. `dtwin init` installs (or refreshes) the copy and prints the same
 step. Install writes only the files that differ, each one atomically, under a lock, and is safe to run any number of times.
+
+Figma has no API, command line or link that adds a development plugin, so the import itself is always a click in
+Figma's menu. `dtwin plugin import` does everything around it: it installs the copy as above (from a repo checkout it
+uses the checkout's own manifest and installs nothing), puts the manifest's path on the clipboard (`pbcopy`;
+PowerShell's `Set-Clipboard` on Windows; `wl-copy`, `xclip` or `xsel` on Linux), opens Figma desktop (`open -a Figma`;
+`%LOCALAPPDATA%\Figma\Figma.exe` on Windows; Figma has no Linux app), and prints the four clicks left, numbered.
+A missing clipboard tool or Figma app is reported, never an error. `--print-only` prints the steps alone, and `--json`
+returns `{manifest, from, install, copied, figmaOpened, steps}`. The MCP server's `figma_status` returns the same
+steps as `setup` when nothing is connected, with no side effects.
 
 **Updates need no command.** Once a copy is installed, every `dtwin` that starts a bridge (a command, `dtwin serve`, the
 MCP server) first brings it up to its own package's files, so after `bun add -g @design-twin/dtwin@latest` (or
@@ -929,7 +939,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 
 | Tool | Required | Optional | Returns |
 |---|---|---|---|
-| `figma_status` | — | — | connected files (`clients`), the export on disk (`snapshot`), the last export and write |
+| `figma_status` | — | — | connected files (`clients`), the export on disk (`snapshot`), the last export and write; with nothing connected, `setup` (the one-time plugin import steps) |
 | `figma_list_clients` | — | — | one row per connected file: `connId`, name, `fileKey`, open page |
 | `figma_whoami` | — | — | one plugin's identity: `instanceId`, file and page, `editsAllowed` |
 | `figma_get_selection` | — | — | what is selected in Figma right now |

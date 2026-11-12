@@ -1,4 +1,4 @@
-// plugin-install.ts — the Figma plugin's per-user copy, and `dtwin plugin install|update|status|path|uninstall`.
+// plugin-install.ts — the Figma plugin's per-user copy, and `dtwin plugin import|install|update|status|path|uninstall`.
 //
 // The plugin cannot be listed on Figma Community, so it is imported as a development plugin: Plugins → Development →
 // Import plugin from manifest…. Figma remembers the manifest's PATH, so the folder it was imported from must not move —
@@ -24,7 +24,7 @@
 // never sees half a file.
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { errMsg } from "./errmsg.ts";
 import { withFileLock } from "./file-lock.ts";
@@ -33,7 +33,7 @@ import { BRIDGE_VERSION } from "./staleness.ts";
 import { exitCli } from "./stdio.ts";
 import { configDir } from "./token-store.ts";
 import { installOf, PLUGIN_FILES, type PluginSource } from "./install-layout.ts";
-import { PLUGIN_MENU } from "./hints.ts";
+import { PLUGIN_MENU, pasteToken } from "./hints.ts";
 
 export { PLUGIN_FILES };
 export type { PluginSource };
@@ -196,6 +196,86 @@ export function describeState(s: PluginState): { ok: boolean; detail: string; ne
   return { ok: true, detail: `${v}installed at ${s.home} — import ${s.importPath}` };
 }
 
+// ---- `dtwin plugin import`: the one-time import, made as short as Figma allows ----
+// Figma has no API, command line or link that adds a development plugin: the import is its menu and a file picker,
+// clicked by the person. So `import` does every step around that click — installs the copy, puts the manifest's path
+// on the clipboard, opens Figma desktop — and prints the clicks that are left, numbered. The MCP server's
+// figma_status hands an agent the same steps (pluginSetup) when nothing is connected, so it can walk the user through.
+
+/** The clicks left in Figma, for `manifest` on `platform`. `copied`: the path is on the clipboard already. */
+export function importGuide(manifest: string, copied: boolean, platform: NodeJS.Platform = process.platform): string[] {
+  const onClip = copied ? ", the path is on your clipboard" : "";
+  const pick = platform === "darwin" ? `in the file picker press ⌘⇧G, paste the path (⌘V${onClip}), press Return, then Open: ${manifest}`
+    : platform === "win32" ? `paste the path into the file picker's File name box (Ctrl+V${onClip}), then Open: ${manifest}`
+    : `pick this file in the file picker${copied ? " (its path is on your clipboard)" : ""}, then Open: ${manifest}`;
+  return [
+    "in Figma DESKTOP (the browser cannot import plugins): Plugins → Development → Import plugin from manifest…",
+    pick,
+    `run it: ${PLUGIN_MENU} — it stays in that menu from now on, no re-import after updates`,
+    `once, ${pasteToken}`,
+  ];
+}
+
+/** Runs `cmd` to completion (stdin: `input`); true when it exited 0. Never throws. */
+export type RunSync = (cmd: string, args: string[], input?: string) => boolean;
+/** Starts `cmd` detached, not waiting for it to exit; true once it has started, false if it could not. Never rejects. */
+export type Launch = (cmd: string, args: string[]) => Promise<boolean>;
+export interface Desktop { run: RunSync; launch: Launch; exists: (p: string) => boolean; env: NodeJS.ProcessEnv; platform: NodeJS.Platform }
+
+/** The real RunSync. A helper that outlives `timeoutMs` is killed with SIGKILL (one that ignores SIGTERM would
+ *  otherwise hold the command), and a timed-out run is a failure even when it then exits 0. */
+export function runSync(cmd: string, args: string[], input?: string, timeoutMs = 10_000): boolean {
+  try {
+    const r = spawnSync(cmd, args, { input, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "ignore"], timeout: timeoutMs, killSignal: "SIGKILL", windowsHide: true });
+    return !r.error && r.status === 0;
+  } catch { return false; }
+}
+/** The real Launch: settles on the child's `spawn` (started) or `error` (ENOENT, EACCES, …) event, so a program
+ *  that cannot start is reported as not opened rather than claimed. */
+export function launchDetached(cmd: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const p = spawn(cmd, args, { stdio: "ignore", detached: true });
+      p.once("spawn", () => { p.unref(); resolve(true); });
+      p.once("error", () => { resolve(false); });
+    } catch { resolve(false); }
+  });
+}
+const realDesktop = (): Desktop => ({ run: runSync, launch: launchDetached, exists: (p) => fs.existsSync(p), env: process.env, platform: process.platform });
+
+/** Put `text` on the system clipboard; false when no clipboard tool worked (the caller prints the text anyway). */
+export function copyToClipboard(text: string, d: Desktop = realDesktop()): boolean {
+  if (d.platform === "darwin") return d.run("pbcopy", [], text);
+  // clip.exe reads stdin in the console's code page and garbles a non-ASCII user name; Set-Clipboard takes the
+  // string as an argument instead (a single-quoted PowerShell literal: only ' needs escaping, by doubling it).
+  if (d.platform === "win32") return d.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `Set-Clipboard -Value '${text.replaceAll("'", "''")}'`]);
+  return d.run("wl-copy", [], text) || d.run("xclip", ["-selection", "clipboard"], text) || d.run("xsel", ["--clipboard", "--input"], text);
+}
+
+/** Open (or bring forward) the Figma desktop app; false when it could not be found. Figma ships no Linux app. */
+export async function openFigmaDesktop(d: Desktop = realDesktop()): Promise<boolean> {
+  if (d.platform === "darwin") return d.run("open", ["-a", "Figma"]);
+  if (d.platform === "win32") {
+    if (d.env.LOCALAPPDATA === undefined) return false;
+    const exe = path.join(d.env.LOCALAPPDATA, "Figma", "Figma.exe");
+    return d.exists(exe) && await d.launch(exe, []);
+  }
+  return false;
+}
+
+/** For the MCP server's figma_status when no plugin is connected: whether the copy is there, what to import, and
+ *  the clicks — no side effects (an MCP call must not touch the user's clipboard or open apps by itself). */
+export function pluginSetup(s: PluginState = pluginState()): { installed: boolean; importPath: string; note: string; steps: string[] } {
+  return {
+    installed: s.installed || s.source?.kind === "checkout",
+    importPath: s.importPath,
+    note: "If Design Twin is not in Figma's Plugins → Development menu yet, it was never imported: a one-time step only the user can " +
+      "click, in Figma desktop. `dtwin plugin import` (in a terminal) installs the copy, puts its path on the clipboard and opens Figma; " +
+      "then walk the user through `steps`. Already imported? Only the run step is needed.",
+    steps: importGuide(s.importPath, false),
+  };
+}
+
 function reveal(manifest: string): void {
   const [cmd, args] = process.platform === "darwin" ? ["open", ["-R", manifest]]
     : process.platform === "win32" ? ["explorer", ["/select," + manifest]]
@@ -208,8 +288,11 @@ function reveal(manifest: string): void {
 }
 
 export const PLUGIN_HELP =
-  "dtwin plugin [install|update|status|path|uninstall] [--json] [--open]\n\n" +
+  "dtwin plugin [import|install|update|status|path|uninstall] [--json] [--open] [--print-only]\n\n" +
   "  The Figma plugin is imported into Figma DESKTOP as a development plugin, from a folder that must not move.\n" +
+  "  import     the one-time setup, walked through: install (as below), put the manifest's path on the clipboard, open\n" +
+  "             Figma desktop, and print the clicks left (Figma lets no program do the import itself).\n" +
+  "             --print-only: print the steps, touch neither the clipboard nor Figma\n" +
   "  install    copy this dtwin's plugin to a per-user folder (" + path.join("<config dir>", "figma-plugin") + ", beside the bridge\n" +
   "             token; DESIGNTWIN_CONFIG_DIR moves it) and print the one-time import step. Writes only what differs.\n" +
   "  update     the same, then says to reopen the plugin (with Plugins → Development → Hot reload plugin on)\n" +
@@ -217,22 +300,59 @@ export const PLUGIN_HELP =
   "  path       print the manifest to import (stdout): a checkout's own figma-plugin/manifest.json, else the copy's\n" +
   "  uninstall  remove the copied files (then remove the plugin in Figma: Plugins → Manage plugins)\n\n" +
   "  --json     machine output on stdout\n" +
-  "  --open     show the manifest in Finder / Explorer (install, update, path)\n\n" +
+  "  --open     show the manifest in Finder / Explorer (import, install, update, path)\n\n" +
   "  Once installed, the copy is kept current by itself: every dtwin that starts a bridge refreshes it from its own\n" +
   "  package, so after upgrading @design-twin/dtwin you only reopen the plugin (hot reload on). Never from a checkout.\n" +
   "  Needs no bridge, no plugin and no token; never touches the network.";
 
-const SUBS = ["install", "update", "status", "path", "uninstall"] as const;
+const SUBS = ["import", "install", "update", "status", "path", "uninstall"] as const;
 type Sub = (typeof SUBS)[number];
 const isSub = (s: string | undefined): s is Sub => SUBS.some((x) => x === s);
 
-export function main(argv: string[]): void {
+/** `dtwin plugin import`. A checkout imports its own figma-plugin/ (nothing is installed); a package installs (or
+ *  refreshes) the per-user copy first, exactly as `install` does. */
+async function importCmd(source: PluginSource, o: { json: boolean; open: boolean; printOnly: boolean; log: (m: string) => void }): Promise<void> {
+  let r: InstallResult | null = null;
+  if (source.kind === "package") {
+    try { r = installPlugin(source); } catch (e) {
+      o.log(`error: could not install the Figma plugin into ${pluginHome()}: ${errMsg(e)}`);
+      exitCli(1);
+    }
+  }
+  const manifest = r ? r.manifest : path.join(source.dir, "manifest.json");
+  const copied = !o.printOnly && copyToClipboard(manifest);
+  const figmaOpened = !o.printOnly && await openFigmaDesktop();
+  const steps = importGuide(manifest, copied);
+  if (o.json) console.log(JSON.stringify({ manifest, from: source.kind, install: r, copied, figmaOpened, steps }, null, 2));
+  else {
+    o.log(r ? `✓ Figma plugin v${r.version ?? "?"} ${r.status === "current" ? "already up to date" : r.status} at ${r.home}`
+      : `✓ this dtwin runs from a repo checkout — import its own ${manifest}`);
+    if (!o.printOnly) {
+      o.log(copied ? "✓ the manifest's path is on your clipboard" : "! could not reach the clipboard — copy the path from step 2");
+      o.log(figmaOpened ? "✓ opened Figma desktop" : "! could not open Figma desktop — open it yourself");
+    }
+    if (r && r.status !== "installed") {
+      for (const s of nextSteps(r)) o.log("  → " + s);
+      o.log("  imported it before? Then skip to step 3: Figma remembers it, and updates need no re-import");
+    }
+    o.log("Now, in Figma:");
+    steps.forEach((s, i) => { o.log(`  ${i + 1}. ${s}`); });
+    if (r?.status === "installed") o.log("  imported the plugin from somewhere else before (a clone, the package folder)? Remove that one: Plugins → Manage plugins");
+  }
+  if (o.open) reveal(manifest);
+}
+
+export async function main(argv: string[]): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(PLUGIN_HELP); exitCli(0); }
-  const json = argv.includes("--json"), open = argv.includes("--open");
-  const rest = argv.filter((a) => a !== "--json" && a !== "--open");
+  const json = argv.includes("--json"), open = argv.includes("--open"), printOnly = argv.includes("--print-only");
+  const rest = argv.filter((a) => a !== "--json" && a !== "--open" && a !== "--print-only");
   const word = rest[0] ?? "status";
   if (!isSub(word) || rest.length > 1) {
-    console.error(`[dtwin plugin] error: unknown \`dtwin plugin ${rest.join(" ")}\` — use: dtwin plugin [${SUBS.join("|")}] [--json] [--open]`);
+    console.error(`[dtwin plugin] error: unknown \`dtwin plugin ${rest.join(" ")}\` — use: dtwin plugin [${SUBS.join("|")}] [--json] [--open] [--print-only]`);
+    exitCli(1);
+  }
+  if (printOnly && word !== "import") {
+    console.error("[dtwin plugin] error: --print-only is for `dtwin plugin import`");
     exitCli(1);
   }
   const log = (m: string): void => console.error("[dtwin plugin] " + m);
@@ -266,6 +386,7 @@ export function main(argv: string[]): void {
     log("error: this dtwin carries no Figma plugin files to install — reinstall it: bun add -g @design-twin/dtwin");
     exitCli(1);
   }
+  if (word === "import") { await importCmd(source, { json, open, printOnly, log }); return; }
   let r: InstallResult;
   try { r = installPlugin(source); } catch (e) {
     log(`error: could not install the Figma plugin into ${pluginHome()}: ${errMsg(e)}`);
@@ -277,6 +398,7 @@ export function main(argv: string[]): void {
     const what = r.status === "current" ? "already up to date" : r.status;
     log(`✓ Figma plugin v${r.version ?? "?"} ${what} at ${r.home}`);
     for (const s of steps) log("  → " + s);
+    if (r.status === "installed") log("  tip: `dtwin plugin import` puts that path on your clipboard and opens Figma for you");
     if (source.kind === "checkout") log("  note: this dtwin runs from a repo checkout — you can import figma-plugin/manifest.json there directly");
   }
   if (open) reveal(r.manifest);

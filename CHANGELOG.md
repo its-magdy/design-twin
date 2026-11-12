@@ -24,6 +24,11 @@ list of merged PRs.
 
 ### Added
 
+- `dtwin plugin import` walks you through the one-time import of the Figma plugin: it installs the plugin's copy, puts
+  the manifest's path on your clipboard, opens Figma desktop and prints the clicks left. Figma lets no program do the
+  import itself. `--print-only` prints the steps without touching the clipboard or Figma.
+- When no plugin is connected, the MCP tool `figma_status` now returns `setup`: whether the plugin's files are
+  installed, the manifest to import, and the import steps, so an agent can walk you through it.
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map
