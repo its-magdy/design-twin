@@ -173,6 +173,44 @@ export const fourOp: Route = {
   },
 };
 
+// ---- the tree spec (#164): a new screen is one createTree op, so a screen of any depth is one write
+/** `want` as a tree spec node (bridge/src/tree-spec.ts): the read export's field names. Colours are raw hex, as in the
+ *  four-op route (binding a variable comes with design-system references). */
+function treeOf(w: Want): Record<string, unknown> {
+  const fills = w.fill !== undefined ? { fills: [{ type: "solid", color: rawHex(w.fill) }] } : {};
+  if (!isFrame(w)) return { text: w.text, ...(w.name !== undefined ? { name: w.name } : {}), ...(w.size !== undefined ? { font: { size: w.size } } : {}), ...fills };
+  const layout = w.layout ? {
+    layout: { display: "flex", flexDirection: w.layout === "VERTICAL" ? "column" : "row", ...(w.gap !== undefined ? { gap: w.gap } : {}), ...(w.padding ? { padding: [...w.padding] } : {}) },
+  } : {};
+  return {
+    name: w.frame, ...(w.w !== undefined && w.h !== undefined ? { box: { w: w.w, h: w.h } } : {}), ...layout, ...fills,
+    ...(w.children?.length ? { children: w.children.map(treeOf) } : {}),
+  };
+}
+/** Every screen in one figma_write (one createTree op each, at most 50 per call); the roots' ids, in order. */
+async function buildTrees(s: Session, wants: readonly Want[]): Promise<string[]> {
+  const ids: string[] = [];
+  for (const chunk of chunks(wants, MAX_OPS)) {
+    ids.push(...appliedIds(must(await s.call("figma_write", { ops: chunk.map((w) => ({ op: "createTree", tree: treeOf(w) })) }, "write"), "figma_write")));
+  }
+  return ids;
+}
+
+export const treeSpec: Route = {
+  name: "tree-spec",
+  ticket: "#164",
+  jobs: {
+    "new-screen": async (s, b) => {
+      const [root] = await buildTrees(s, [b.want]);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+    "similar-screens": async (s, b) => {
+      await readOutline(s, b.sourceId, "find");
+      for (const id of await buildTrees(s, b.want)) await readOutline(s, id, "verify");
+    },
+  },
+};
+
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec];
 export const BASELINE = fourOp.name;

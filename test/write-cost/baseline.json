@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 848,
+  "toolDefinition": 1122,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -44,6 +44,22 @@
         "out": 52,
         "in": 739,
         "total": 791
+      }
+    },
+    "tree-spec": {
+      "new-screen": {
+        "calls": 2,
+        "ops": 1,
+        "out": 638,
+        "in": 727,
+        "total": 1365
+      },
+      "similar-screens": {
+        "calls": 4,
+        "ops": 2,
+        "out": 862,
+        "in": 1584,
+        "total": 2446
       }
     }
   }
