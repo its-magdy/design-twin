@@ -1,6 +1,7 @@
 # Write plane — agreed design (ADR)
 
-Status: **accepted, not built** (the four ops `figma_write` has today are the baseline this replaces)
+Status: **accepted, partly built** (the four ops `figma_write` started with are the baseline this replaces; setting a
+node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -9,7 +10,7 @@ Where the two disagree once a step below lands, that step updates `ARCHITECTURE.
 
 ## Problem
 
-`figma_write` has four ops (`createFrame`, `createText`, `setFill`, `setText`). Every node is one op
+`figma_write` started with four ops (`createFrame`, `createText`, `setFill`, `setText`; the baseline). Every node is one op
 carrying a `parentId`, so a tree is built by create, read the id back, create the children. A screen costs
 a round trip per level and an op per node, colours are raw hex, and nothing can use a component, a
 variable or a style. The cost grows with the node count in both directions: ops out, ids back.

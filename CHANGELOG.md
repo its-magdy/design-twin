@@ -21,9 +21,17 @@ list of merged PRs.
   300-node screen fits in one Read. MCP results are compact too. The first pull after upgrading rewrites every export
   file, so a committed `design/export/` shows one large diff. The inline limit now counts compact JSON's token density:
   the default stays 48,000 characters, and a lowered `MAX_MCP_OUTPUT_TOKENS` allows fewer characters per token.
+- Each `figma_write` call is now its own Cmd-Z step in Figma. Before, one Cmd-Z undid every write since the plugin
+  started. A failed write no longer ends with an empty "0 earlier op(s) ... NOT rolled back" list, and one whose mode
+  changes were put back lists them.
 
 ### Added
 
+- `figma_write` can set a node's variable mode: `setVariableMode` (`nodeId`, `collection`, `mode`) makes a dark or
+  brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
+  mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several
+  things refuses the whole batch before anything runs, with up to three candidates. If a later op in the batch
+  fails, the mode changes are put back. A library collection the file doesn't use yet is refused by name.
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map

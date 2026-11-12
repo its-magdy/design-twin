@@ -825,12 +825,15 @@
   }
 
   // ../bridge/src/commands.ts
-  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText"];
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode"];
+  var INHERITED = "inherited";
   var WRITE_OPS = {
     createFrame: { effect: "creates", required: [], shows: {} },
     createText: { effect: "creates", required: ["text"], shows: { newText: "text" } },
     setFill: { effect: "overwrites", required: ["nodeId", "color"], shows: { newFill: "color" } },
-    setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } }
+    setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } },
+    setVariableMode: { effect: "overwrites", required: ["nodeId", "collection", "mode"], shows: { collection: "collection", newMode: "mode" } },
+    clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } }
   };
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
@@ -877,7 +880,7 @@
   var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
   var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
   var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum);
-  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color"];
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   function writeOpError(o, i) {
     const at = `ops[${i}]`;
@@ -1176,8 +1179,8 @@
       if (c) collById.set(c.id, c);
     }
     const allCollections = [...collById.values()];
-    const modeName = {};
-    for (const c of allCollections) for (const m of c.modes) if (!(m.modeId in modeName)) modeName[m.modeId] = m.name;
+    const modeName2 = {};
+    for (const c of allCollections) for (const m of c.modes) if (!(m.modeId in modeName2)) modeName2[m.modeId] = m.name;
     const resolvedIds = new Set(localIds);
     for (const v of remoteVars) resolvedIds.add(v.id);
     if (remoteVars.length) {
@@ -1210,7 +1213,7 @@
       for (const { modeId, raw, value } of modes) {
         if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
         reportBrokenAliases(v, isVariableAlias(raw) ? [raw.id] : aliasIds(raw));
-        values[modeName[modeId] || modeId] = value;
+        values[modeName2[modeId] || modeId] = value;
       }
       const coll = collOf(v.variableCollectionId);
       const collKey = coll ? coll.key : void 0;
@@ -1264,7 +1267,7 @@
         name: c.name,
         modes: c.modes.map((m) => m.name),
         // Which mode is the base/`:root` default (vs. the override theme) — codegen otherwise guesses.
-        ...ifDefined("default", modeName[c.defaultModeId] || void 0),
+        ...ifDefined("default", modeName2[c.defaultModeId] || void 0),
         theming: c.modes.length > 1,
         // Extended collection (its modes inherit from a parent collection via parentModeId) — codegen
         // should treat it as an override layer, not a standalone theme. Its values are on each inherited
@@ -4016,6 +4019,165 @@
     return allowed;
   }
 
+  // ../bridge/src/name-match.ts
+  function distance(a, b) {
+    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    let last2 = b.length;
+    for (let i = 1; i <= a.length; i++) {
+      const next = [i];
+      let diag = i - 1;
+      let left = i;
+      for (const [k, up] of row.slice(1).entries()) {
+        const cur = Math.min(up + 1, left + 1, diag + (a[i - 1] === b[k] ? 0 : 1));
+        next.push(cur);
+        diag = up;
+        left = cur;
+      }
+      row = next;
+      last2 = left;
+    }
+    return last2;
+  }
+  var MAX_CANDIDATES = 3;
+  function nearestNames(ref, names, max = MAX_CANDIDATES) {
+    const r = ref.toLowerCase();
+    const scored = [...new Set(names)].map((n, i) => {
+      const l = n.toLowerCase();
+      return { n, i, contains: l.includes(r) || r.includes(l) ? 0 : 1, d: distance(r, l) };
+    });
+    scored.sort((a, b) => a.contains - b.contains || a.d - b.d || a.i - b.i);
+    return scored.slice(0, max).map((s) => s.n);
+  }
+  function matchByName(ref, items, name, exact = () => []) {
+    const byId = items.filter((t) => exact(t).includes(ref));
+    if (byId.length === 1 && byId[0] !== void 0) return { kind: "one", item: byId[0] };
+    const byName = items.filter((t) => name(t) === ref);
+    if (byName.length === 1 && byName[0] !== void 0) return { kind: "one", item: byName[0] };
+    if (byName.length > 1) return { kind: "many", matches: byName };
+    return { kind: "none", candidates: nearestNames(ref, items.map(name)) };
+  }
+  function quoteList(names) {
+    return names.map((n) => "'" + n + "'").join(", ");
+  }
+
+  // src/variable-modes.ts
+  var isModeOp = (op) => op.op === "setVariableMode" || op.op === "clearVariableMode";
+  async function resolveModeOps(ops) {
+    const targets = /* @__PURE__ */ new Map();
+    const problems = [];
+    let locals = null;
+    let library = null;
+    const localCollections = async () => {
+      if (!locals) locals = await figma.variables.getLocalVariableCollectionsAsync();
+      return locals;
+    };
+    const libraryCollections = async () => {
+      if (library) return library;
+      try {
+        library = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+      } catch {
+        library = [];
+      }
+      return library;
+    };
+    for (const [index, op] of ops.entries()) {
+      if (!isModeOp(op)) continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const nodeId = op.nodeId || "";
+      const ref = op.collection || "";
+      const nd = await figma.getNodeByIdAsync(nodeId);
+      let node = null;
+      if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
+      else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");
+      else node = nd;
+      const coll = await resolveCollection(ref, localCollections, libraryCollections);
+      if ("error" in coll) {
+        bad(coll.error);
+        continue;
+      }
+      const collection = coll.ok;
+      let modeId = null;
+      if (op.op === "setVariableMode") {
+        const mode = resolveMode(op.mode || "", collection);
+        if ("error" in mode) {
+          bad(mode.error);
+          continue;
+        }
+        modeId = mode.ok;
+      }
+      if (node) targets.set(index, { node, collection, modeId });
+    }
+    return { targets, problems };
+  }
+  async function resolveCollection(ref, localCollections, libraryCollections) {
+    let byId = null;
+    try {
+      byId = ref ? await figma.variables.getVariableCollectionByIdAsync(ref) : null;
+    } catch {
+      byId = null;
+    }
+    if (byId) return { ok: byId };
+    const locals = await localCollections();
+    const m = matchByName(ref, locals, (c) => c.name, (c) => [c.id, c.key]);
+    if (m.kind === "one") return { ok: m.item };
+    if (m.kind === "many") {
+      return { error: "collection '" + ref + "' matches " + m.matches.length + " local collections \u2014 pass one's id: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + ")").join(", ") };
+    }
+    const lib = (await libraryCollections()).filter((c) => c.name === ref || c.key === ref);
+    if (lib.length) {
+      const from = [...new Set(lib.map((c) => c.libraryName))];
+      return { error: "collection '" + ref + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) \u2014 use a local collection, or bind one of its variables in this file first" };
+    }
+    return { error: "collection '" + ref + "' matches no local variable collection" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "; this file has none") };
+  }
+  function resolveMode(ref, collection) {
+    const m = matchByName(ref, collection.modes, (md) => md.name, (md) => [md.modeId]);
+    if (m.kind === "one") return { ok: m.item.modeId };
+    if (m.kind === "many") {
+      return { error: "mode '" + ref + "' appears " + m.matches.length + " times in collection '" + collection.name + "' \u2014 pass its modeId: " + m.matches.slice(0, 3).map((md) => "'" + md.name + "' (" + md.modeId + ")").join(", ") };
+    }
+    return { error: "mode '" + ref + "' is not in collection '" + collection.name + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+  }
+  function modeRefusal(problems) {
+    const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
+    const first2 = problems[0];
+    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
+    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
+  }
+  function modeName(collection, modeId) {
+    if (modeId === void 0 || modeId === null) return INHERITED;
+    const m = collection.modes.find((md) => md.modeId === modeId);
+    return m ? m.name : modeId;
+  }
+  function applyMode(t) {
+    const { node, collection, modeId } = t;
+    const prev = (node.explicitVariableModes || {})[collection.id];
+    if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
+    else node.setExplicitVariableModeForCollection(collection, modeId);
+    return {
+      applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
+      restore() {
+        if (prev === void 0) node.clearExplicitVariableModeForCollection(collection);
+        else node.setExplicitVariableModeForCollection(collection, prev);
+      }
+    };
+  }
+  function restoreModes(changes) {
+    const restored = [];
+    const failed = [];
+    for (const c of [...changes].reverse()) {
+      try {
+        c.restore();
+        restored.push(c);
+      } catch (e) {
+        failed.push("could not put back the '" + (c.applied.collection || "?") + "' mode on node " + (c.applied.id || "?") + " (" + errMsg(e) + ")");
+      }
+    }
+    return { restored, failed };
+  }
+
   // src/writes.ts
   function solidPaint(hex, what) {
     const c = parseHexColor(hex);
@@ -4042,7 +4204,7 @@
   function consent() {
     if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch \u2014 the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
   }
-  async function applyWrite(op) {
+  async function applyWrite(op, mode, changes) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
@@ -4101,14 +4263,33 @@
         nd.characters = op.text || "";
         return ifDefined("id", op.nodeId);
       }
+      // Resolved up front with the rest of the batch: here the target is known to exist and the names to match.
+      case "setVariableMode":
+      case "clearVariableMode": {
+        if (!mode) throw new Error(op.op + ": the op was not resolved before the batch ran");
+        consent();
+        const change = applyMode(mode);
+        changes.push(change);
+        return change.applied;
+      }
       default:
         throw new Error("unknown write op: " + op.op);
     }
   }
   async function applyWrites(ops) {
-    const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+    const list = Array.isArray(ops) ? ops : [];
+    if (list.length) commitUndo();
+    const r = await gatedWrites(list);
+    if (list.length) commitUndo();
     announce(r);
     return r;
+  }
+  function commitUndo() {
+    try {
+      figma.commitUndo();
+    } catch (e) {
+      console.error("[export] figma.commitUndo failed:", e);
+    }
   }
   function announce(r) {
     const n = r.applied.length;
@@ -4117,6 +4298,7 @@
     if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin put back " + r.restored.length + " variable mode change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
     if (text === null) return;
     try {
       figma.notify(text, r.ok ? void 0 : { error: true });
@@ -4145,17 +4327,27 @@
       const bad = writeOpError(op, i);
       if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
     }
+    const { targets, problems } = await resolveModeOps(list);
+    const firstProblem = problems[0];
+    if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: modeRefusal(problems) };
+    const changes = [];
     for (const [i, op] of list.entries()) {
       try {
-        applied.push(await applyWrite(op));
+        applied.push(await applyWrite(op, targets.get(i), changes));
       } catch (e) {
+        const revoked = e instanceof EditsRevoked;
+        const off = revoked || !editsAllowedNow();
+        const { restored, failed } = off ? { restored: [], failed: [] } : restoreModes(changes);
+        const back = new Set(restored.map((c) => c.applied));
+        const kept = !revoked && off && changes.length ? "; 'Allow edits' was turned off before the batch could put back its " + changes.length + " earlier variable mode change" + (changes.length === 1 ? "" : "s") + ", so they stay applied" : "";
         return {
           ok: false,
-          applied,
+          applied: applied.filter((a) => !back.has(a)),
           failedAt: i,
           failedOp: op && op.op,
-          error: errMsg(e),
-          ...e instanceof EditsRevoked ? { refused: "edits-off" } : {}
+          error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
+          ...revoked ? { refused: "edits-off" } : {},
+          ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
         };
       }
     }
