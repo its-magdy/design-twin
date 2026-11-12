@@ -238,11 +238,12 @@ function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly
     const v = typeof given === "string" ? given : from[k];
     if (v !== undefined) want[k] = v;
   }
-  for (const c of set.children) {
-    if (c.type !== "COMPONENT") continue;
-    const vp = c.variantProperties || {};
-    if (Object.keys(want).every((k) => vp[k] === want[k])) return c;
-  }
+  // No variant value given, or the start already shows them: the instance stays on `start` (two variants can share
+  // their values, so the first match need not be the one that is built).
+  const given = Object.keys(want).some((k) => typeof props[k] === "string");
+  const matches = (c: ComponentNode): boolean => { const vp = c.variantProperties || {}; return Object.keys(want).every((k) => vp[k] === want[k]); };
+  if (!given || matches(start)) return start;
+  for (const c of set.children) if (c.type === "COMPONENT" && matches(c)) return c;
   return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };
 }
 

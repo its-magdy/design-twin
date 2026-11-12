@@ -4884,15 +4884,17 @@
     for (const k of Object.keys(defs)) {
       const d = defs[k];
       if (!d || d.type !== "VARIANT") continue;
-      const given = props[k];
-      const v = typeof given === "string" ? given : from[k];
+      const given2 = props[k];
+      const v = typeof given2 === "string" ? given2 : from[k];
       if (v !== void 0) want[k] = v;
     }
-    for (const c of set.children) {
-      if (c.type !== "COMPONENT") continue;
+    const given = Object.keys(want).some((k) => typeof props[k] === "string");
+    const matches = (c) => {
       const vp = c.variantProperties || {};
-      if (Object.keys(want).every((k) => vp[k] === want[k])) return c;
-    }
+      return Object.keys(want).every((k) => vp[k] === want[k]);
+    };
+    if (!given || matches(start)) return start;
+    for (const c of set.children) if (c.type === "COMPONENT" && matches(c)) return c;
     return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };
   }
   function mapProps(given, defs, component) {

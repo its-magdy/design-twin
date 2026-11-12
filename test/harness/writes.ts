@@ -285,8 +285,16 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   chip.defaultVariant = chipSmall;
   chip.children = [chipSmall, chipLarge];
   const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
-  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike];
-  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike], loadAsync: async () => {},
+  // A conflicting set (Figma allows it): two variants with the same values, the first without auto-layout.
+  const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, componentPropertyDefinitions: {
+    Kind: { type: "VARIANT", defaultValue: "A", variantOptions: ["A"] },
+  } };
+  const twinFlat = comp("7:2", "Kind=A", { parent: twin, layoutMode: "NONE", variantProperties: { Kind: "A" } });
+  const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
+  twin.defaultVariant = twinFlat;
+  twin.children = [twinFlat, twinFlex];
+  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, twin, twinFlat, twinFlex];
+  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, twin], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
   const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
   const library = {
@@ -964,6 +972,9 @@ export const cases: Case[] = [{
     const sparse = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: "Chip", props: { Size: "Large" } }] } }]);
     ok("[REFS] a variant combination the set lacks is refused, with the variants it has",
       sparse.ok === false && /tree\.children\[0\]\.component: component 'Chip' has no variant Size=Large, Tone=Off; closest: /.test(sparse.error ?? ""));
+    // A variant picked by id, with no variant values given, is the one checked (not a twin with the same values).
+    const picked = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "7:3", widthMode: "hug" }] } }]);
+    ok("[REFS] a variant picked by id and given no variant values is checked as itself", picked.ok === true);
     // A styled text's own font axes set nothing, so a family the file lacks is not checked for them.
     const axes = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "Hello", styles: { text: "Body" }, font: { family: "Ignored Font", variationSettings: { wght: 600 } } }] } }]);
     ok("[REFS] a styled text's font axes are not checked (the style sets the font)", axes.ok === true);
@@ -991,7 +1002,7 @@ export const cases: Case[] = [{
     const has = (line: string): boolean => err.split("\n").includes(line);
     ok("[REFS-REFUSE] refused whole, nothing made, nothing imported (a library item waits for the whole batch)",
       r.ok === false && r.failedAt === 0 && alive().length === before && w.imports.length === 0);
-    ok("[REFS-REFUSE] a component that matches nothing: the nearest names", has("ops[0] (createTree): tree.children[0].component: component 'Buton' matches no component in this file (a library component is named by its key); closest: 'Button', 'Badge', 'Card'"));
+    ok("[REFS-REFUSE] a component that matches nothing: the nearest names", has("ops[0] (createTree): tree.children[0].component: component 'Buton' matches no component in this file (a library component is named by its key); closest: 'Button', 'Badge', 'Twin'"));
     ok("[REFS-REFUSE] a component that matches two: pass a key or id", has("ops[0] (createTree): tree.children[1].component: component 'Card' matches 2 components — pass one's key or id: 'Card' (5:4), 'Card' (5:5)"));
     ok("[REFS-REFUSE] property names and values checked against the component, every one at once",
       has("ops[0] (createTree): tree.children[2].component: component 'Button' has no property 'Sise'; closest: 'Size', 'Label', 'Icon'; property 'Size' of 'Button' has no value \"Huge\"; closest: 'Large', 'Small', 'Medium'; "
