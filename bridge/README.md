@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops; with `dryRun`, a preview and `editsAllowed` |
+| `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts and the ids of nodes with a `handle`), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -956,6 +956,7 @@ the current page):
 | `setText` | `nodeId`, `text` | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
+| `createTree` | `tree` (one nested node spec, below) | `page` (a page's exact name or id; the current page when absent) |
 
 `setVariableMode` sets a node's explicit mode for one variable collection, so a dark or brand version of a screen is
 the same frame with one op; `clearVariableMode` puts the node back on the mode it inherits from its parent.
@@ -968,6 +969,44 @@ which a write cannot do yet); one the file already uses works by its exact id. T
 the mode before and after (`inherited` when none was set), and the dry run says the same change in words (it does
 not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes made earlier
 in it are put back and listed as `restored`; other ops are not rolled back.
+
+`createTree` creates a whole screen in one op. `tree` is the root frame, written the way the read export writes a
+node: the same field names and values, defaults left out, no ids and no parent references. A node is a `FRAME`, or a
+`TEXT` when it has `text` (`type` may say so). The fields a write sets so far:
+
+| Field | Value |
+|---|---|
+| `type` | `FRAME` \| `TEXT` (default: `TEXT` when the node has `text`, else `FRAME`; the root is a frame) |
+| `name`, `hidden` | as read; `hidden: true` creates the node hidden |
+| `handle` | a name of your own; the reply maps each handle to the created node's id (unique in the spec; not `__proto__`, which Figma's message passing drops) |
+| `box` | `{w, h}`: the node's size (the read's page-coordinate `x`/`y` in it are accepted and set nothing) |
+| `layout` | `{display: "flex", flexDirection: "row" \| "column", gap, padding: [t, r, b, l], justifyContent, alignItems, flexWrap: "wrap", rowGap, columnGap, alignContent: "space-between", reverseZ}`, or `{mode: "absolute", width, height}` for none (an auto-layout field beside `mode: "absolute"` is refused) |
+| `widthMode`, `heightMode` | `fill` (in an auto-layout parent) \| `hug` (an auto-layout frame, or text); fixed when left out |
+| `grow`, `alignSelf`, `absolute` | a child's role in its auto-layout parent; an `absolute` child is out of the flow, so it cannot `fill`, `grow: 1` or `alignSelf: "stretch"` |
+| `x`, `y` | the root: page coordinates; a child: its place in a parent without auto-layout, or an `absolute` one |
+| `sizeLimits` | `{minWidth, maxWidth, minHeight, maxHeight}`, each above 0 (leave one out for no limit) |
+| `strokesInLayout` | `true`: the strokes count toward the auto-layout size; on a frame without auto-layout it has no effect (a warning) |
+| `fills` | `[{type: "solid", color: "#hex", opacity?}]`; a frame without `fills` has none (not Figma's white) |
+| `strokes` | `{colors: ["#hex"], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}`; the read's default `variableWidth: {profile: "uniform"}` is accepted |
+| `radius` | a number, or `{tl, tr, br, bl}` |
+| `opacity`, `clip` | as read; a frame without `clip: true` does not clip |
+| `text` | the characters (a TEXT node only) |
+| `font` | `{family, weight (the style name, e.g. "Semi Bold"), size, color, align, valign, lineHeight: {unit, value} or {unit: "auto"}, letterSpacing: {unit, value}, case, decoration, variationSettings: {wght: 560, …}}`; Inter Regular when left out. A `variationSettings` axis the family lacks is refused before the build; the read's `weightValue` is accepted and follows `weight` |
+| `autoResize`, `truncate`, `maxLines` | as read; a text with `box` and no `autoResize` keeps a fixed box, one with neither grows with its text; `maxLines` needs `truncate: true` (else a warning) |
+| `renderBox`, `reference` | the read's render bounds and its reference-image path: accepted, and they set nothing |
+| `children` | the child nodes, in order |
+
+Every other field of the read export (`effects`, `tokens`, `styles`, `props`, `runs`, …) is refused by name, saying
+why; a key the read export does not have is refused with the closest field names. Everything is checked before the file
+is touched: the spec itself (by the dry run, the bridge and the plugin alike), then the `page` name and every font
+against the file, with up to three candidates for each miss — and a bad spec, page or font refuses the whole batch.
+The tree is built hidden, then moved to its page and shown only when every node is in place, so it lands whole or not
+at all; if a later op of the batch fails, the tree is removed and listed as `restored`. Without `x`/`y` on the root,
+the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
+The reply is small: `{id, created: {frames, texts}, handles}` for the tree, plus `warnings` for anything that had no
+effect (an `x`/`y` inside auto-layout, `strokesInLayout` without auto-layout, `maxLines` without `truncate`). So a
+read node can be fed back in: what the read writes on an ordinary frame or text is accepted. The dry run says the change in one sentence: the frame, its size and layout,
+the node counts, where it lands, the handles and the fonts. A spec holds at most 500 nodes.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

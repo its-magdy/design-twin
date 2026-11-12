@@ -16,9 +16,9 @@
 //     a name and a key but no modes. Importing is itself a write that cannot be put back, and its modes are not
 //     readable until it runs, so a library collection is refused by name here; one the file already uses is
 //     reachable by its exact id (getVariableCollectionByIdAsync answers for it) and works like a local one.
-import { INHERITED, type AppliedWrite, type WriteOp } from "../../bridge/src/commands.ts";
+import { INHERITED, type WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
-import { errMsg } from "./util";
+import type { Change, OpProblem } from "./write-batch";
 
 type ModeNode = BaseNode & ExplicitVariableModesMixin;
 
@@ -27,13 +27,6 @@ export interface ModeTarget {
   node: ModeNode;
   collection: VariableCollection;
   modeId: string | null;
-}
-
-/** One reason a mode op cannot run, against its op index. */
-export interface ModeProblem {
-  index: number;
-  op: string;
-  message: string;
 }
 
 const isModeOp = (op: WriteOp): boolean => op.op === "setVariableMode" || op.op === "clearVariableMode";
@@ -45,9 +38,9 @@ type Resolved<T> = { ok: T } | { error: string };
  * Resolve every variable-mode op of a batch against the file. Every op is looked at, so the refusal lists every
  * bad name at once. The file's collections and the library list are read once per batch, and only when needed.
  */
-export async function resolveModeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, ModeTarget>; problems: ModeProblem[] }> {
+export async function resolveModeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, ModeTarget>; problems: OpProblem[] }> {
   const targets = new Map<number, ModeTarget>();
-  const problems: ModeProblem[] = [];
+  const problems: OpProblem[] = [];
   let locals: VariableCollection[] | null = null;
   let library: LibraryVariableCollection[] | null = null;
   const localCollections = async (): Promise<VariableCollection[]> => {
@@ -118,14 +111,6 @@ function resolveMode(ref: string, collection: VariableCollection): Resolved<stri
   return { error: "mode '" + ref + "' is not in collection '" + collection.name + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
 }
 
-/** The refusal for a batch whose mode ops did not all resolve: every problem, one per line. */
-export function modeRefusal(problems: readonly ModeProblem[]): string {
-  const line = (p: ModeProblem): string => "ops[" + p.index + "] (" + p.op + "): " + p.message;
-  const first = problems[0];
-  if (problems.length === 1 && first) return line(first) + ". Nothing was changed.";
-  return problems.length + " problems — nothing was changed:\n" + problems.map(line).join("\n");
-}
-
 /** A mode name for a reply: the mode's name in `collection`, INHERITED for none, the raw id if it is not there. */
 function modeName(collection: VariableCollection, modeId: string | undefined | null): string {
   if (modeId === undefined || modeId === null) return INHERITED;
@@ -133,35 +118,19 @@ function modeName(collection: VariableCollection, modeId: string | undefined | n
   return m ? m.name : modeId;
 }
 
-/** An applied mode change, and how to put the node back as it was. */
-export interface ModeChange {
-  applied: AppliedWrite;
-  restore(): void;
-}
-
 /** Apply a resolved mode op, keeping the mode it replaces. */
-export function applyMode(t: ModeTarget): ModeChange {
+export function applyMode(t: ModeTarget): Change {
   const { node, collection, modeId } = t;
   const prev: string | undefined = (node.explicitVariableModes || {})[collection.id];
   if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
   else node.setExplicitVariableModeForCollection(collection, modeId);
   return {
     applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
+    kind: "variable mode change",
+    what: "the '" + collection.name + "' mode on node " + node.id,
     restore() {
       if (prev === undefined) node.clearExplicitVariableModeForCollection(collection);
       else node.setExplicitVariableModeForCollection(collection, prev);
     },
   };
-}
-
-/** Put back `changes`, newest first. Returns the ones put back and a sentence for each that could not be. */
-export function restoreModes(changes: readonly ModeChange[]): { restored: ModeChange[]; failed: string[] } {
-  const restored: ModeChange[] = [];
-  const failed: string[] = [];
-  for (const c of [...changes].reverse()) {
-    try { c.restore(); restored.push(c); } catch (e) {
-      failed.push("could not put back the '" + (c.applied.collection || "?") + "' mode on node " + (c.applied.id || "?") + " (" + errMsg(e) + ")");
-    }
-  }
-  return { restored, failed };
 }

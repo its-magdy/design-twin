@@ -27,6 +27,13 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can create a whole screen in one op: `createTree` takes one nested spec of frames, auto-layout and text,
+  written with the read export's field names and no ids, and an optional `page`. Everything is checked before the
+  file is touched (the spec, the page name and the fonts, each miss listed with candidates), and the tree lands whole
+  or not at all, beside the existing frames unless it has coordinates. The reply is the root id, the counts and the
+  ids of the nodes the spec gave a `handle`; a read field a write cannot set yet is refused by name. What the read
+  writes on an ordinary frame or text (variable-font axes, `strokesInLayout`, the derived `weightValue` and
+  `renderBox`) is accepted, so a read node can be fed back in. The dry run describes the screen in one sentence.
 - A write-cost suite (`bun test/write-cost.test.ts`) measures what an agent spends to write to Figma: estimated tokens
   out and in, and round trips, for the six jobs of the write-plane design (new screen, several similar screens, fix
   one node, the same change on many screens, a colour update, a fault in a repeated part). It runs the real MCP server

@@ -1,7 +1,8 @@
 # Write plane — agreed design (ADR)
 
 Status: **accepted, partly built** (the four ops `figma_write` started with are the baseline this replaces; setting a
-node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built)
+node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built; the tree spec, `createTree` — frames,
+auto-layout and text with raw values, placement, all or nothing — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
