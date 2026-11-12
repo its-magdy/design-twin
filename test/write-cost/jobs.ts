@@ -5,7 +5,9 @@
 // every route of every job on a fresh copy of the job's file. The check reads the file the plugin wrote, not the
 // replies: `problems` (the job is not done; the route fails) and `gaps` (done, but not the way a designer would have
 // it — a raw colour where the file has a variable, a text layer left with its content as its name; reported, not failed).
-import { canvas, fillHex, fillVariable, rgb, type Canvas, type CNode, type Fill } from "./canvas.ts";
+import { canvas, fillHex, fillVariable, hexOf, rgb, type Canvas, type CNode, type Fill, type Rgb } from "./canvas.ts";
+
+const isRgb = (v: unknown): v is Rgb => typeof v === "object" && v !== null && "r" in v && "g" in v && "b" in v;
 
 export type Hex = `#${string}`;
 /** A colour: raw, or a colour variable of the file by name (the fixture binds it; a check wants it bound). */
@@ -60,7 +62,7 @@ const row = (label: string, value: string): Want => ({ frame: "Row", layout: "HO
 const section = (title: string, rows: ReadonlyArray<readonly [string, string]>): Want =>
   ({ frame: title, layout: "VERTICAL", gap: 8, children: [{ text: title.toUpperCase(), name: "Section title", size: 13, fill: MUTED }, ...rows.map(([l, v]) => row(l, v))] });
 const button = (name: string, label: string): Want =>
-  ({ frame: name, layout: "HORIZONTAL", h: 48, padding: [12, 16, 12, 16], fill: { variable: BRAND.name }, children: [{ text: label, name: "Label", fill: WHITE }] });
+  ({ frame: name, layout: "HORIZONTAL", w: 358, h: 48, padding: [12, 16, 12, 16], fill: { variable: BRAND.name }, children: [{ text: label, name: "Label", fill: WHITE }] });
 const screen = (name: string, children: readonly Want[]): Want =>
   ({ frame: name, layout: "VERTICAL", w: 390, h: 844, gap: 16, padding: [16, 16, 16, 16], fill: WHITE, children });
 const header = (title: string, action?: string): Want =>
@@ -103,7 +105,8 @@ function compare(n: CNode, want: Want, f: AppFile, at: string, out: string[], ta
   if ((want.layout ?? "NONE") !== n.layoutMode) out.push(`${at}: layout ${String(n.layoutMode)}, wanted ${want.layout ?? "NONE"}`);
   if (want.gap !== undefined && n.itemSpacing !== want.gap) out.push(`${at}: gap ${String(n.itemSpacing)}, wanted ${want.gap}`);
   if (want.padding && [n.paddingTop, n.paddingRight, n.paddingBottom, n.paddingLeft].join() !== want.padding.join()) out.push(`${at}: padding wrong`);
-  if (want.w !== undefined && want.h !== undefined && (n.width !== want.w || n.height !== want.h)) out.push(`${at}: ${String(n.width)}x${String(n.height)}, wanted ${want.w}x${want.h}`);
+  if (want.w !== undefined && n.width !== want.w) out.push(`${at}: width ${String(n.width)}, wanted ${want.w}`);
+  if (want.h !== undefined && n.height !== want.h) out.push(`${at}: height ${String(n.height)}, wanted ${want.h}`);
   fillCheck(want.fill);
   const kids = n.children ?? [];
   const wantKids = want.children ?? [];
@@ -229,13 +232,19 @@ const sameChangeMany: Job<"same-change-many"> = {
         if (last) footers.push(last);
       }
     }
+    const footerScreens = footers.map((n) => n.parent);
+    // every other text, with what it read: the change must leave them alone
+    const others = Object.values(f.c.nodes).filter((n) => n.type === "TEXT" && !footers.includes(n)).map((n) => [n, n.characters] as const);
     return {
       c: f.c, brief,
       check() {
         const all = Object.values(f.c.nodes).filter((n) => n.type === "TEXT");
+        const touched = others.filter(([n, text]) => n.characters !== text);
         const problems = [
           ...footers.filter((n) => n.characters !== brief.to).map((n) => `footer ${n.id} reads "${String(n.characters)}"`),
+          ...footers.filter((n, i) => n.parent !== footerScreens[i]).map((n) => `footer ${n.id} is no longer on its screen`),
           ...(all.some((n) => n.characters === brief.from) ? [`"${brief.from}" is still in the file`] : []),
+          ...(touched.length ? [`${touched.length} other text(s) changed too (first: ${touched[0]?.[0].id} "${String(touched[0]?.[0].characters)}")`] : []),
         ];
         return { problems, gaps: [] };
       },
@@ -263,16 +272,24 @@ const colourUpdate: Job<"colour-update"> = {
     }
     const varId = f.vars[BRAND.name] ?? "";
     const bound = Object.values(f.c.nodes).filter((n) => fillVariable(n) === varId);
+    // every other node's fill: the update must leave them alone
+    const others = Object.values(f.c.nodes).filter((n) => !bound.includes(n)).map((n) => [n, fillHex(n)] as const);
     return {
       c: f.c, brief,
       check() {
         const wrong = bound.filter((n) => fillHex(n) !== brief.to);
         const unbound = bound.filter((n) => fillVariable(n) !== varId).length;
+        const touched = others.filter(([n, hex]) => fillHex(n) !== hex);
+        const value = f.c.variables[varId]?.valuesByMode["1:0"];
+        const held = isRgb(value) ? hexOf(value) : null;
         return {
-          problems: wrong.map((n) => `${n.name} ${n.id} shows ${String(fillHex(n))}`),
+          problems: [
+            ...wrong.map((n) => `${n.name} ${n.id} shows ${String(fillHex(n))}`),
+            ...(touched.length ? [`${touched.length} other fill(s) changed too (first: ${touched[0]?.[0].name} ${touched[0]?.[0].id})`] : []),
+          ],
           gaps: [
             ...(unbound ? [`${unbound} of ${bound.length} fills were overwritten with a raw colour and are no longer bound to ${BRAND.name}`] : []),
-            `the variable ${BRAND.name} still holds ${BRAND.hex}: the four ops cannot change a variable, so anything else bound to it stays old`,
+            ...(held !== brief.to ? [`the variable ${BRAND.name} still holds ${String(held)}, so anything else bound to it stays old`] : []),
           ],
         };
       },

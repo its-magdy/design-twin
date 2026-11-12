@@ -55,6 +55,8 @@ export interface Canvas {
   instance(parent: CNode, main: CNode, spec: { name?: string }): CNode;
   /** a colour variable of this file; returns its id */
   variable(name: string, hex: string): string;
+  /** the file's variables by id (a write that changes one changes it here) */
+  readonly variables: Record<string, FakeVariable>;
   /** every node by id, made by a fixture or by a write */
   readonly nodes: Record<string, CNode>;
   readonly pages: CPage[];
@@ -73,7 +75,8 @@ export function canvas(): Canvas {
     if ("variable" in f) {
       const v = variables[f.variable];
       if (!v) throw new Error(`canvas: no variable ${f.variable}`);
-      return { type: "SOLID", visible: true, color: v.valuesByMode["1:0"] as Rgb, opacity: 1, boundVariables: { color: { type: "VARIABLE_ALIAS", id: v.id } } };
+      // A bound paint shows the variable's value NOW, as Figma's does: change the variable and every paint bound to it follows.
+      return { type: "SOLID", visible: true, get color() { return v.valuesByMode["1:0"] as Rgb; }, opacity: 1, boundVariables: { color: { type: "VARIABLE_ALIAS", id: v.id } } };
     }
     return { type: "SOLID", visible: true, color: f, opacity: 1 };
   };
@@ -104,18 +107,27 @@ export function canvas(): Canvas {
     nodes[id] = n;
     return n;
   };
+  // A text layer's name follows its content until it is renamed (Figma's autoRename): figma.createText() then setting
+  // `characters` names the layer after its text; a fixture's named text keeps its name. Accessors on `this`, so an
+  // instance sublayer that sets its own text (an override) keeps its own copy.
   const textNode = (spec: TextSpec): CNode => {
     const id = nextId();
-    const n: CNode = {
-      ...common, id, type: "TEXT", name: spec.name ?? spec.text, parent: null,
-      characters: spec.text, width: 100, height: 20,
+    const named = {
+      _text: spec.text, _name: spec.name ?? spec.text, autoRename: spec.name === undefined,
+      get characters(): string { return this._text; },
+      set characters(v: string) { this._text = v; if (this.autoRename) this._name = v; },
+      get name(): string { return this._name; },
+      set name(v: string) { this._name = v; this.autoRename = false; },
+    };
+    const n: CNode = Object.assign(named, {
+      ...common, id, type: "TEXT", parent: null, width: 100, height: 20,
       fontSize: spec.size ?? 16, fontName: FONT, fills: [paintOf(spec.fill ?? { r: 0, g: 0, b: 0 })],
       textAutoResize: "WIDTH_AND_HEIGHT", textAlignHorizontal: "LEFT", textAlignVertical: "TOP",
       lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE",
       getRangeAllFontNames: () => [FONT],
-      get absoluteBoundingBox() { return box(n); },
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
-    };
+    });
+    Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter
     nodes[id] = n;
     return n;
   };
@@ -135,7 +147,7 @@ export function canvas(): Canvas {
   };
 
   const c: Canvas = {
-    nodes, pages,
+    nodes, pages, variables,
     page(name) {
       const id = nextId();
       const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, loadAsync: async () => {} };
@@ -179,9 +191,12 @@ export function canvas(): Canvas {
 /** The hex of a node's first solid fill, lower case (`null` when it has none). */
 export function fillHex(n: CNode): string | null {
   const p = n.fills?.[0];
-  if (!p) return null;
+  return p ? hexOf(p.color) : null;
+}
+/** A colour as lower-case `#rrggbb`. */
+export function hexOf(c: Rgb): string {
   const h = (v: number): string => Math.round(v * 255).toString(16).padStart(2, "0");
-  return `#${h(p.color.r)}${h(p.color.g)}${h(p.color.b)}`;
+  return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
 }
 /** The variable id a node's first fill is bound to (`null` when it is a raw colour). */
 export const fillVariable = (n: CNode): string | null => n.fills?.[0]?.boundVariables?.color?.id ?? null;

@@ -6,16 +6,16 @@
       "new-screen": {
         "calls": 5,
         "ops": 28,
-        "out": 678,
+        "out": 684,
         "in": 812,
-        "total": 1490
+        "total": 1496
       },
       "similar-screens": {
         "calls": 7,
         "ops": 36,
-        "out": 900,
+        "out": 912,
         "in": 1692,
-        "total": 2592
+        "total": 2604
       },
       "fix-one-node": {
         "calls": 2,
