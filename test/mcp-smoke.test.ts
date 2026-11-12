@@ -51,7 +51,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string; newMode?: string; change?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -92,6 +92,34 @@ void (async () => {
     ok("dryRun previews without a plugin connected, and applies nothing", !dry.isError && preview.dryRun === true && preview.applied === false);
     ok("…and with no plugin connected it cannot tell whether edits are allowed (editsAllowed:null), without waiting for one", preview.editsAllowed === null && preview.wouldRefuse === undefined);
     ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1]?.target === "1:2" && /missing text/.test(preview.steps[2]?.invalid ?? ""));
+    const dryModes = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "setVariableMode", nodeId: "1:2", collection: "Theme", mode: "Dark" }, { op: "clearVariableMode", nodeId: "1:2", collection: "Theme" }, { op: "setVariableMode", nodeId: "1:2", collection: "Theme" }] } });
+    const modes = JSON.parse(firstText(dryModes)) as WritePreview;
+    ok("dryRun previews variable-mode ops as overwrites saying what changes, and flags one without a mode",
+      !dryModes.isError && modes.overwrites === 3 && modes.invalid === 1 && modes.steps[0]?.newMode === "Dark" && modes.steps[1]?.newMode === "inherited"
+      && /the 'Theme' variable mode goes from its current mode to 'Dark'/.test(modes.steps[0]?.change ?? "") && /missing mode/.test(modes.steps[2]?.invalid ?? ""));
+
+    // createTree: one op for a whole screen. The dry run describes it, and refuses a read field by name, through the tool.
+    const tree = { name: "Screen", box: { w: 390, h: 844 }, layout: { display: "flex", flexDirection: "column", gap: 8 }, children: [{ text: "Title", handle: "title" }, { name: "Body", widthMode: "fill" }] };
+    const dryTree = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree }, { op: "createTree", page: "Screens", tree: { effects: [] } }] } }))) as WritePreview;
+    ok("dryRun previews a createTree as one create with a plain description, and flags a read field it cannot set by name",
+      dryTree.creates === 2 && dryTree.invalid === 1 && dryTree.steps[0]?.target === "new frame on the current page"
+      && /^creates frame 'Screen' 390×844, vertical auto-layout with 3 nodes \(2 frames, 1 text\) on the current page, placed beside the existing frames; ids come back for 'title'/.test(dryTree.steps[0]?.change ?? "")
+      && dryTree.steps[1]?.target === "new frame on page 'Screens'" && dryTree.steps[1]?.invalid === "tree.effects: a read field a write cannot set yet");
+    // Design-system references: named in the dry run (it does not read the file); a misplaced one refused by path.
+    const refsTree = { layout: { display: "flex" }, tokens: { itemSpacing: "space/md" }, children: [{ component: "Button", props: { Size: "Large" } }, { text: "Hi", styles: { text: "Body" } }] };
+    const dryRefs = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: refsTree }, { op: "createTree", tree: { children: [{ text: "x", props: { a: "b" } }] } }] } }))) as WritePreview;
+    ok("dryRun names a spec's components, variables and text styles, and refuses `props` off an instance, through the tool",
+      dryRefs.creates === 2 && dryRefs.invalid === 1
+      && /with 3 nodes \(1 frame, 1 text, 1 instance\)/.test(dryRefs.steps[0]?.change ?? "")
+      && /components 'Button'; variables 'space\/md'; text styles 'Body'/.test(dryRefs.steps[0]?.change ?? "")
+      && dryRefs.steps[1]?.invalid === "tree.children[0]: `props` is only on an INSTANCE node");
+    const dryProto = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: { handle: "__proto__" } }] } }))) as WritePreview;
+    ok("dryRun refuses a '__proto__' handle (the plugin's reply could not carry it back), through the tool",
+      dryProto.invalid === 1 && /^tree\.handle '__proto__' cannot be a handle/.test(dryProto.steps[0]?.invalid ?? ""));
+    ok("figma_write's published schema stays short: the tree is an open object, not the grammar", (() => {
+      const item = JSON.stringify(write.inputSchema.properties?.ops);
+      return /"tree":\{"type":"object"/.test(item) && !/"children"/.test(item);
+    })());
 
     const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
     ok("an op outside the four implemented ones is rejected at the schema boundary", bad.isError === true);
@@ -338,9 +366,10 @@ void (async () => {
     // ---- "Allow edits" (figma-plugin/src/edits.ts), as figma_write sees it. The fake plugin answers whoami with the
     // checkbox's state and refuses a write the way writes.ts does while it is off.
     let editsOn = false;
+    let failWith: WriteResult | null = null; // set to make the next writes fail the way writes.ts reports it
     const editsPlugin = fakePlugin(8789, { token: "smoke-test-token", hello: { instanceId: "fig-edits", file: "Edits File" }, unhandled: HANG, on: {
       whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn }),
-      write: (): WriteResult => editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE },
+      write: (): WriteResult => failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }),
     } });
     await editsPlugin.opened;
     const card = [{ op: "createFrame", name: "Card" }];
@@ -356,6 +385,37 @@ void (async () => {
     ok("[EDITS] dryRun with edits on reports editsAllowed:true and no refusal", dryOn.editsAllowed === true && dryOn.wouldRefuse === undefined);
     const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
     ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
+    // A createTree reply through the real bridge path (plugin socket → bridge → tool text): handles named after
+    // Object.prototype members arrive as own keys with their ids.
+    const handles: Record<string, string> = Object.fromEntries([["constructor", "1:9"], ["toString", "1:10"], ["hasOwnProperty", "1:11"]]);
+    failWith = { ok: true, applied: [{ id: "1:9", created: { frames: 2, texts: 1 }, handles }] };
+    const treeReply = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "createTree", tree: { handle: "constructor", children: [{ text: "a", handle: "toString" }, { handle: "hasOwnProperty" }] } }] } });
+    failWith = null;
+    const gotHandles = (JSON.parse(firstText(treeReply)) as WriteResult).applied[0]?.handles ?? {};
+    ok(`[WRITE] a createTree reply's handles survive the bridge as own keys (got ${JSON.stringify(gotHandles)})`,
+      !treeReply.isError && JSON.stringify(Object.keys(gotHandles)) === JSON.stringify(["constructor", "toString", "hasOwnProperty"])
+      && Object.getOwnPropertyDescriptor(gotHandles, "toString")?.value === "1:10");
+
+    // A failed write's text has a section only for what is in it: a refusal that changed nothing has no empty
+    // "0 earlier op(s) ... NOT rolled back: []" tail, a put-back lists the modes it restored, and ops that stay
+    // applied are still listed with their ids.
+    const failText = async (r: WriteResult): Promise<string> => {
+      failWith = r;
+      const res = await client.callTool({ name: "figma_write", arguments: { ops: card } });
+      failWith = null;
+      return res.isError === true ? firstText(res) : "(not an error)";
+    };
+    const refusedText = await failText({ ok: false, applied: [], failedAt: 0, failedOp: "setVariableMode", error: "ops[0] (setVariableMode): mode 'Darkk' is not in collection 'Theme'. Nothing was changed." });
+    ok(`[WRITE-FAIL] a refusal that changed nothing has no empty applied/put-back section (got ${JSON.stringify(refusedText)})`,
+      refusedText === "Write failed at op 0 (setVariableMode): ops[0] (setVariableMode): mode 'Darkk' is not in collection 'Theme'. Nothing was changed.");
+    const putBack = { id: "1:2", collection: "Theme", from: "Light", to: "Dark" };
+    const putBackText = await failText({ ok: false, applied: [], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)", restored: [putBack] });
+    ok(`[WRITE-FAIL] a put-back lists the restored mode changes and no empty applied section (got ${JSON.stringify(putBackText)})`,
+      /^Write failed at op 1 \(setFill\): .*\n1 earlier change\(s\) were undone \(variable modes put back, created trees removed\):\n/.test(putBackText)
+      && putBackText.includes('"to": "Dark"') && !/NOT rolled back/.test(putBackText));
+    const partialText = await failText({ ok: false, applied: [{ id: "1:9" }], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)" });
+    ok(`[WRITE-FAIL] ops that stay applied are still listed with their ids (got ${JSON.stringify(partialText)})`,
+      /\n1 earlier op\(s\) were applied and NOT rolled back:\n/.test(partialText) && partialText.includes('"id": "1:9"') && !/put back/.test(partialText));
     editsPlugin.close();
     await sleep(200);
 

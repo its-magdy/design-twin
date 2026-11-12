@@ -21,9 +21,37 @@ list of merged PRs.
   300-node screen fits in one Read. MCP results are compact too. The first pull after upgrading rewrites every export
   file, so a committed `design/export/` shows one large diff. The inline limit now counts compact JSON's token density:
   the default stays 48,000 characters, and a lowered `MAX_MCP_OUTPUT_TOKENS` allows fewer characters per token.
+- Each `figma_write` call is now its own Cmd-Z step in Figma. Before, one Cmd-Z undid every write since the plugin
+  started. A failed write no longer ends with an empty "0 earlier op(s) ... NOT rolled back" list, and one whose mode
+  changes were put back lists them.
 
 ### Added
 
+- A `createTree` spec can name the file's design system instead of raw values: an `INSTANCE` node names a component
+  (by exact name, key or id) with its property values, a paint or a spacing, radius or stroke field names a variable,
+  and a text names a text style. Every name is resolved before anything runs; one that matches nothing or several
+  things, a variable of the wrong type, or a property or variant value the component lacks refuses the whole batch,
+  listing every problem with up to three candidates. A library variable is found by name and a library component or
+  text style by key; importing it is a write, so it runs only once the whole batch resolved and "Allow edits" is on.
+  Raw values still work and the reply counts them as `unbound`. On the write-cost suite's new-screen job this sends
+  412 tokens of spec instead of 638.
+- `figma_write` can create a whole screen in one op: `createTree` takes one nested spec of frames, auto-layout and text,
+  written with the read export's field names and no ids, and an optional `page`. Everything is checked before the
+  file is touched (the spec, the page name and the fonts, each miss listed with candidates), and the tree lands whole
+  or not at all, beside the existing frames unless it has coordinates. The reply is the root id, the counts and the
+  ids of the nodes the spec gave a `handle`; a read field a write cannot set yet is refused by name. What the read
+  writes on an ordinary frame or text (variable-font axes, `strokesInLayout`, the derived `weightValue` and
+  `renderBox`) is accepted, so a read node can be fed back in. The dry run describes the screen in one sentence.
+- A write-cost suite (`bun test/write-cost.test.ts`) measures what an agent spends to write to Figma: estimated tokens
+  out and in, and round trips, for the six jobs of the write-plane design (new screen, several similar screens, fix
+  one node, the same change on many screens, a colour update, a fault in a repeated part). It runs the real MCP server
+  against a fake file, with no live Figma, and records today's four-op route as the baseline later routes are
+  compared with.
+- `figma_write` can set a node's variable mode: `setVariableMode` (`nodeId`, `collection`, `mode`) makes a dark or
+  brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
+  mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several
+  things refuses the whole batch before anything runs, with up to three candidates. If a later op in the batch
+  fails, the mode changes are put back. A library collection the file doesn't use yet is refused by name.
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map

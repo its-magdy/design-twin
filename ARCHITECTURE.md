@@ -49,7 +49,7 @@ is the calling convention, spelled out under the diagram.
                          MCP front-end: interactive reads + the only WRITE path  — optional
   Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js
           same reads as the CLI (inline, or to disk via writeToDisk:true) · figma_write (code → design,
-          4 safe ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
+          6 typed ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
 ```
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
@@ -472,6 +472,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   window's checkbox can set it: the relay (`relay.ts`) turns every socket frame into a `bridge` command or a
   bridge cancel, never a settings message. Every applied or refused batch is announced (a Figma toast and the
   window's status line). The harness ticks the box the way the window does (a `set-allow-edits` message).
+  Importing a library component, variable or text style a `createTree` spec names is a write too: it runs only once
+  every op of the batch resolved, with the box re-checked right before (`figma-plugin/src/tree-refs.ts`).
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).

@@ -1,0 +1,75 @@
+{
+  "estimator": "ceil(characters / 4)",
+  "toolDefinition": 1184,
+  "routes": {
+    "four-op": {
+      "new-screen": {
+        "calls": 5,
+        "ops": 28,
+        "out": 684,
+        "in": 812,
+        "total": 1496
+      },
+      "similar-screens": {
+        "calls": 7,
+        "ops": 36,
+        "out": 912,
+        "in": 1692,
+        "total": 2604
+      },
+      "fix-one-node": {
+        "calls": 2,
+        "ops": 1,
+        "out": 40,
+        "in": 735,
+        "total": 775
+      },
+      "same-change-many": {
+        "calls": 14,
+        "ops": 12,
+        "out": 348,
+        "in": 5546,
+        "total": 5894
+      },
+      "colour-update": {
+        "calls": 10,
+        "ops": 24,
+        "out": 447,
+        "in": 4170,
+        "total": 4617
+      },
+      "repeated-part": {
+        "calls": 3,
+        "ops": 1,
+        "out": 52,
+        "in": 741,
+        "total": 793
+      }
+    },
+    "tree-spec": {
+      "new-screen": {
+        "calls": 2,
+        "ops": 1,
+        "out": 638,
+        "in": 730,
+        "total": 1368
+      },
+      "similar-screens": {
+        "calls": 4,
+        "ops": 2,
+        "out": 862,
+        "in": 1590,
+        "total": 2452
+      }
+    },
+    "ds-refs": {
+      "new-screen": {
+        "calls": 2,
+        "ops": 1,
+        "out": 412,
+        "in": 919,
+        "total": 1331
+      }
+    }
+  }
+}

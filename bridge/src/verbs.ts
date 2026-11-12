@@ -18,6 +18,7 @@
 
 import { COMMAND_ROWS, VERB_DEFS } from "./cli-commands.ts";
 import type { CommandRow } from "./cli-commands.ts";
+import { distance } from "./name-match.ts";
 
 export class VerbError extends Error {}
 
@@ -105,26 +106,8 @@ export function verbHelp(argv: unknown): string | null {
   return (typeof verb === "string" && verb && HELP[verb]) || null;
 }
 
-export function distance(a: string, b: string): number {
-  // Levenshtein, one row at a time. `row` is the previous row (row[j] = distance(a[0..i-1), b[0..j)));
-  // `diag`/`left` carry row[j-1] and the new row's [j-1] so no cell is read by index.
-  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-  let last = b.length; // the bottom-right cell: row[b.length]
-  for (let i = 1; i <= a.length; i++) {
-    const next = [i];
-    let diag = i - 1; // row[0] of the previous row
-    let left = i;     // next[0]
-    for (const [k, up] of row.slice(1).entries()) { // k = j - 1, up = row[j]
-      const cur = Math.min(up + 1, left + 1, diag + (a[i - 1] === b[k] ? 0 : 1));
-      next.push(cur);
-      diag = up;
-      left = cur;
-    }
-    row = next;
-    last = left;
-  }
-  return last;
-}
+// The edit distance is the shared name matcher's (name-match.ts); re-exported for figma-pull.ts.
+export { distance };
 
 // Two edits for the longer verbs. A short verb ("pull", "list", "stop", "mcp" …) is one edit from real
 // folder names ("dist" ↔ "list"), so there only a dropped or extra LAST letter counts ("lis", "lists").

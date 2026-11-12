@@ -25,6 +25,19 @@ export const cases: Case[] = [{
       ["write", { ops: [{ op: "createFrame", name: "F", width: 10, height: 10, layoutMode: "VERTICAL", itemSpacing: 4, padding: [1, 2, 3, 4], fill: "#fff" }, { op: "setText", nodeId: "1:2", text: "hi" }] },
         { ops: [{ op: "createFrame", padding: [1, 2, 3] }] }, "bad write args: `ops[0].padding` is not four numbers"],
       ["write", { ops: [] }, {}, "bad write args: `ops` is missing"],
+      ["write", { ops: [{ op: "setVariableMode", nodeId: "1:2", collection: "Theme", mode: "Dark" }, { op: "clearVariableMode", nodeId: "1:2", collection: "Theme" }] },
+        { ops: [{ op: "setVariableMode", nodeId: "1:2", collection: 7, mode: "Dark" }] }, "bad write args: `ops[0].collection` is not a string"],
+      ["write", { ops: [{ op: "setVariableMode", nodeId: "1:2", collection: "Theme", mode: "Dark" }] },
+        { ops: [{ op: "setVariableMode", nodeId: "1:2", collection: "Theme" }] }, "bad write args: `ops[0]` (setVariableMode): missing mode"],
+      ["write", { ops: [{ op: "clearVariableMode", nodeId: "1:2", collection: "Theme" }] },
+        { ops: [{ op: "clearVariableMode", nodeId: "1:2", collection: "Theme", mode: null }] }, "bad write args: `ops[0].mode` is not a string"],
+      ["write", { ops: [{ op: "createTree", page: "Screens", tree: { name: "S", children: [{ text: "Hi" }] } }] },
+        { ops: [{ op: "createTree", page: 2, tree: { name: "S" } }] }, "bad write args: `ops[0].page` is not a string"],
+      ["write", { ops: [{ op: "createTree", tree: { name: "S" } }] },
+        { ops: [{ op: "createTree" }] }, "bad write args: `ops[0]` (createTree): missing tree"],
+      ["write", { ops: [{ op: "createTree", tree: { name: "S", children: [{ text: "Hi" }] } }] },
+        { ops: [{ op: "createTree", tree: { name: "S", children: [{ text: "Hi", runs: [] }] } }] },
+        "bad write args: ops[0].tree.children[0].runs: a read field a write cannot set yet — mixed-format text comes in a later write step; give one `font`. Nothing was changed."],
     ];
     for (const [cmd, good, bad, want] of cases) {
       const gotGood = argsShapeError(cmd, good), gotBad = argsShapeError(cmd, bad);

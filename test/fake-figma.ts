@@ -21,7 +21,7 @@ import { CODE_JS, pluginBuildOptions } from "../figma-plugin/build-options.ts";
 import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc, Asset,
 } from "../bridge/src/doc-types.ts";
-import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply } from "../bridge/src/commands.ts";
+import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, WriteResult } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
@@ -66,7 +66,7 @@ export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
   getVariablesInLibraryCollectionAsync(key: string): Promise<Array<{ name: string; key: string; resolvedType: string }>>;
 }
-type FakePage = FakeNode & { selection: FakeNode[]; appendChild?: () => void };
+type FakePage = FakeNode & { selection: FakeNode[]; appendChild?: (node: FakeNode) => void; loadAsync?: () => Promise<void> };
 export interface FakeFigma {
   mixed: symbol;
   showUI(): void;
@@ -77,6 +77,8 @@ export interface FakeFigma {
   clientStorage: { getAsync(key: string): Promise<unknown>; setAsync(key: string, value: unknown): Promise<void> };
   /** Figma's toast; the fake records each message in `World.notified`. */
   notify(message: string, options?: { error?: boolean }): void;
+  /** Figma's undo checkpoint; the fake counts calls in `World.undo.commits`. */
+  commitUndo(): void;
   currentPage: FakePage;
   fileKey: string;
   root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData?: (key: string) => string };
@@ -85,6 +87,8 @@ export interface FakeFigma {
   getNodeByIdAsync(id: string): Promise<FakeNode | null>;
   getStyleByIdAsync(id: string): Promise<FakeNode | null>;
   importStyleByKeyAsync?(key: string): Promise<FakeNode>;
+  importComponentByKeyAsync?(key: string): Promise<FakeNode>;
+  importComponentSetByKeyAsync?(key: string): Promise<FakeNode>;
   getLocalPaintStylesAsync(): Promise<FakeNode[]>;
   getLocalTextStylesAsync(): Promise<FakeNode[]>;
   getLocalEffectStylesAsync(): Promise<FakeNode[]>;
@@ -96,6 +100,7 @@ export interface FakeFigma {
     getVariableByIdAsync(id: string): Promise<FakeVariable | null>;
     getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
     importVariableByKeyAsync?(key: string): Promise<FakeVariable>;
+    setBoundVariableForPaint?(paint: FakeNode, field: string, variable: FakeVariable | null): FakeNode;
   };
   annotations?: { getAnnotationCategoriesAsync(): Promise<Array<{ id: string; label: string }>> };
   editorType?: string;
@@ -103,7 +108,9 @@ export interface FakeFigma {
   skipInvisibleInstanceChildren?: boolean;
   createFrame?: () => FakeNode;
   createText?: () => FakeNode;
-  loadFontAsync?: () => Promise<void>;
+  loadFontAsync?: (font: { family: string; style: string }) => Promise<void>;
+  listAvailableFontsAsync?: () => Promise<Array<{ fontName: { family: string; style: string } }>>;
+  getFontFamilyVariationAxes?: (family: string) => string[] | null;
 }
 
 // ---- what code.js's `__designExport` hands back, typed by the producer contract the bridge consumes
@@ -147,8 +154,9 @@ export interface ListChildrenResult {
   /** never emitted (asserted) */
   assets?: undefined;
 }
-/** writes.ts WriteResult (applied rows are `{ id }`) */
-export interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string; refused?: "edits-off" }
+/** writes.ts WriteResult (applied rows are `{ id }`; a variable-mode row adds collection/from/to) */
+/** writes.ts applyWrites' reply: the bridge's wire contract (commands.ts), which the plugin builds. */
+export type { WriteResult } from "../bridge/src/commands.ts";
 interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
 export interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }
@@ -228,6 +236,9 @@ export interface World {
   send(msg: unknown): Promise<PostedMessage[]>;
   /** every figma.notify message, in order */
   notified: string[];
+  /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each). A box, not a number or a
+   *  getter, so it stays live through the `{ ...world }` spreads the harness helpers make. */
+  undo: { commits: number };
   /** what clientStorage holds (seed it with Scene.clientStorage) */
   storage: Map<string, unknown>;
   /** Tick "Allow edits" the way the plugin window does (a set-allow-edits message) — what a write case needs. */
@@ -315,6 +326,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   if (selection) currentPage.selection = selection;
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
+  const undo = { commits: 0 };
   const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
   const teamLibrary = delta.teamLibrary ?? base.teamLibrary;
@@ -325,6 +337,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     ui: { onmessage: null, postMessage: (m) => { posted.push(m); } },
     clientStorage: { getAsync: async (k) => storage.get(k), setAsync: async (k, v) => { storage.set(k, v); } },
     notify: (m) => { notified.push(m); },
+    commitUndo: () => { undo.commits++; },
     currentPage,
     fileKey: file.fileKey ?? "",
     root: {
@@ -377,6 +390,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   };
   return {
     figma, api, scene, posted, send, notified, storage,
+    undo,
     async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
   };
 }

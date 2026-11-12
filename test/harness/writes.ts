@@ -1,8 +1,9 @@
 // The WRITE plane (writes.ts) and parentId.
 import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
+import { MAX_TREE_NODES } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import type { FakeNode } from "../fake-figma.ts";
+import type { FakeCollection, FakeNode, FakeVariable, Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -11,20 +12,63 @@ const targetsOf = () => {
   const textTarget: FakeNode = { id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => [{ family: "Inter", style: "Regular" }] };
   const rectTarget: FakeNode & { fills: Array<{ color: { g: number } }> } = { id: "r:1", type: "RECTANGLE", name: "Box", fills: [] };
   const groupTarget: FakeNode = { id: "g:1", type: "GROUP", name: "Wrap" }; // no `fills`
-  return { textTarget, rectTarget, groupTarget };
+  const screenTarget = modeNode("f:1", "Screen");
+  return { textTarget, rectTarget, groupTarget, screenTarget };
 };
+
+/** A node with ExplicitVariableModesMixin: `explicitVariableModes` keyed by collection id, set and cleared with the
+ *  collection OBJECT. The deprecated id-string form throws, as it does under the manifest's documentAccess
+ *  "dynamic-page"; a modeId the collection does not have throws, as Figma's does. */
+function modeNode(id: string, name: string, start: Record<string, string> = {}): FakeNode & { explicitVariableModes: Record<string, string> } {
+  const n = {
+    id, type: "FRAME", name, explicitVariableModes: { ...start },
+    setExplicitVariableModeForCollection(c: unknown, modeId: string) {
+      if (typeof c !== "object" || c === null) throw new Error("setExplicitVariableModeForCollection: pass the collection object (the id string throws under dynamic-page)");
+      const coll = c as FakeCollection;
+      if (!coll.modes.some((m) => m.modeId === modeId)) throw new Error("invalid mode " + modeId);
+      n.explicitVariableModes = { ...n.explicitVariableModes, [coll.id]: modeId };
+    },
+    clearExplicitVariableModeForCollection(c: unknown) {
+      if (typeof c !== "object" || c === null) throw new Error("clearExplicitVariableModeForCollection: pass the collection object");
+      const { [(c as FakeCollection).id]: _gone, ...rest } = n.explicitVariableModes;
+      n.explicitVariableModes = rest;
+    },
+  };
+  return n;
+}
+
+/** The file's variable collections for the mode cases, on top of the base file's ("Primitives", "Semantic"): a Theme
+ *  with Light/Dark, two collections both named "Spacing", one whose modes share a name, a library collection the
+ *  file already uses (reachable by id only), and one the team library offers but the file does not use. */
+const THEME: FakeCollection = { id: "VariableCollectionId:7:1", key: "theme-key", name: "Theme", modes: [{ modeId: "7:0", name: "Light" }, { modeId: "7:1", name: "Dark" }], defaultModeId: "7:0" };
+const modeScene = (): Scene => ({
+  collections: {
+    [THEME.id]: THEME,
+    "VariableCollectionId:8:1": { id: "VariableCollectionId:8:1", name: "Spacing", modes: [{ modeId: "8:0", name: "Compact" }], defaultModeId: "8:0" },
+    "VariableCollectionId:9:1": { id: "VariableCollectionId:9:1", name: "Spacing", modes: [{ modeId: "9:0", name: "Roomy" }], defaultModeId: "9:0" },
+    "VariableCollectionId:10:1": { id: "VariableCollectionId:10:1", name: "Density", modes: [{ modeId: "10:0", name: "Same" }, { modeId: "10:1", name: "Same" }], defaultModeId: "10:0" },
+  },
+  remote: { collections: { "VariableCollectionId:abc/1:1": { id: "VariableCollectionId:abc/1:1", name: "Shared Theme", modes: [{ modeId: "1:0", name: "Day" }, { modeId: "1:1", name: "Night" }], defaultModeId: "1:0" } } },
+  teamLibrary: {
+    getAvailableLibraryVariableCollectionsAsync: async () => [{ name: "Brand Colors", key: "lib-brand", libraryName: "Core Library" }],
+    getVariablesInLibraryCollectionAsync: async () => [],
+  },
+});
 
 /** A file the plugin can write to: createFrame/createText record what they made in `created`, fonts load, and the
  *  open page accepts children. `editorType`, when given, is the editor the file is open in. "Allow edits" is
  *  still OFF (its default): a case that applies writes ticks it, the way the window does (`writableOn`). */
-function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>) {
+function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>, extra: Scene = modeScene()) {
   const created: FakeNode[] = [];
-  const w = world({ nodes, ...(editorType !== undefined ? { file: { editorType } } : {}), ...(clientStorage ? { clientStorage } : {}) }, {
+  const w = world({ ...extra, nodes, ...(editorType !== undefined ? { file: { editorType } } : {}), ...(clientStorage ? { clientStorage } : {}) }, {
     createFrame: () => { const f = { id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} }; created.push(f); return f; },
     createText: () => { const t = { id: "new:text", type: "TEXT", characters: "", fills: [], fontName: { family: "Inter", style: "Regular" } }; created.push(t); return t; },
     loadFontAsync: async () => {},
   });
   w.figma.currentPage.appendChild = () => {};
+  w.figma.currentPage.loadAsync = async () => {};
+  w.figma.currentPage.children = [];
+  w.figma.root.children = [w.figma.currentPage];
   return { ...w, created };
 }
 /** writableWorld with "Allow edits" ticked. */
@@ -33,6 +77,264 @@ async function writableOn(nodes: Record<string, FakeNode>, editorType?: string) 
   await w.allowEdits();
   return w;
 }
+
+// ---- tree specs (createTree): a file whose nodes behave like Figma's where a tree build leans on it.
+
+const AVAILABLE_FONTS = [["Inter", "Regular"], ["Inter", "Bold"], ["Inter", "Semi Bold"], ["Roboto", "Regular"]] as const;
+/** Inter is a variable family here, Roboto a static one (getFontFamilyVariationAxes: null); any other family throws. */
+const fontAxes = (family: string): string[] | null => {
+  if (family === "Inter") return ["wght", "opsz"];
+  if (family === "Roboto") return null;
+  throw new Error("in Figma: unknown font family " + family);
+};
+const isNode = (v: unknown): v is FakeNode => typeof v === "object" && v !== null;
+/** A fake node's field, read back as what tree.ts set. */
+const num = (n: FakeNode | undefined, k: string): number => { const v = n?.[k]; return typeof v === "number" ? v : NaN; };
+const parentOf = (n: FakeNode | undefined): FakeNode | null => { const p = n?.parent; return isNode(p) ? p : null; };
+const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? [];
+
+/**
+ * A writable file for tree specs: "Page 1" (current, with two frames), "Screens" (empty), and two pages both named
+ * "Archive". createFrame/createText make nodes that land on the current page like Figma's, move on appendChild, go on
+ * remove(), and refuse what Figma refuses: FILL on a node whose parent has no auto-layout, HUG on a frame without one,
+ * a text change before its font is loaded. A property named in `trap` throws when set (a value Figma refuses partway
+ * through a build). "Allow edits" is ticked.
+ *
+ * With `kit`, the file also has a design system (KIT below): a "Components" page, variables, text styles, and a team
+ * library to import from. Every node can bind a variable (setBoundVariable), a text can take a text style
+ * (setTextStyleIdAsync, which needs the style's font loaded), and a component's createInstance makes an INSTANCE that
+ * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
+ * setTextStyleIdAsync (to untick "Allow edits" there).
+ */
+async function treeWorld(opts: { kit?: boolean } = {}) {
+  let seq = 0;
+  const made: FakeNode[] = [];
+  const imports: string[] = [];
+  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
+  const loadedFonts = new Set<string>();
+  const trap = new Set<string>();
+  const pageLoads: string[] = [];
+  const fontKey = (f: unknown): string => (isNode(f) ? String(f.family) + "|" + String(f.style) : "?");
+
+  const appendTo = (n: FakeNode) => (c: FakeNode): void => {
+    const old = parentOf(c);
+    if (old) old.children = kids(old).filter((k) => k !== c);
+    n.children = [...kids(n), c];
+    c.parent = n;
+  };
+  const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
+    const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], loadAsync: async () => { pageLoads.push(id); } };
+    pg.appendChild = appendTo(pg);
+    for (const k of existing) appendTo(pg)(k);
+    return pg;
+  };
+  const current = page("0:1", "Page 1", [
+    { id: "1:1", type: "FRAME", name: "Existing A", x: 0, y: 40, width: 390, height: 844 },
+    { id: "1:2", type: "FRAME", name: "Existing B", x: 500, y: -20, width: 390, height: 844 },
+  ]);
+  const screens = page("0:2", "Screens");
+  const node = (type: "FRAME" | "TEXT" | "INSTANCE", main?: FakeNode): FakeNode => {
+    const fields: FakeNode = {
+      id: "t:" + ++seq, type, name: type === "FRAME" ? "Frame" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
+      x: 0, y: 0, width: 100, height: 100, layoutMode: main ? main.layoutMode : "NONE", clipsContent: true, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
+      characters: "", fontName: { family: "Inter", style: "Regular" },
+      fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
+      boundVariables: {},
+    };
+    fields.setBoundVariable = (field: string, v: unknown) => {
+      if (!isNode(v) || typeof v.id !== "string") throw new Error("in Figma: setBoundVariable takes a Variable object");
+      fields.boundVariables = { ...(isNode(fields.boundVariables) ? fields.boundVariables : {}), [field]: { type: "VARIABLE_ALIAS", id: v.id } };
+    };
+    if (main) {
+      fields.mainComponent = main;
+      fields.props = {};
+      fields.setProperties = (p: Record<string, unknown>) => {
+        fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
+        // A variant value switches the instance to that variant, and to its layout (as Figma's does).
+        const set = parentOf(main);
+        const was = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
+        if (set?.type === "COMPONENT_SET") {
+          const want = { ...was, ...Object.fromEntries(Object.entries(p).filter(([k]) => !k.includes("#"))) };
+          const v = kids(set).find((c) => isNode(c.variantProperties) && Object.entries(want).every(([k, x]) => isNode(c.variantProperties) && c.variantProperties[k] === x));
+          if (v) { fields.mainComponent = v; fields.layoutMode = v.layoutMode; }
+        }
+      };
+    }
+    if (type === "TEXT") {
+      fields.setTextStyleIdAsync = async (id: string) => {
+        const st = KIT_STYLES.find((x) => x.id === id) ?? imported.find((x) => x.id === id);
+        if (!st) throw new Error("in Figma: no style " + id);
+        if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");
+        fields.textStyleId = id;
+        fields.fontName = st.fontName;
+        if (hooks.onStyle) await hooks.onStyle();
+      };
+    }
+    const quiet = new Set(["parent", "removed", "x", "y", "visible", "name", "children"]);
+    const n = new Proxy<FakeNode>(fields, {
+      set(t, k, v) {
+        const key = String(k);
+        if (trap.has(key)) throw new Error("in Figma: cannot set " + key + " to " + JSON.stringify(v));
+        if (type === "TEXT" && !quiet.has(key) && !loadedFonts.has(fontKey(key === "fontName" ? v : t.fontName))) {
+          throw new Error("in Figma: font " + fontKey(key === "fontName" ? v : t.fontName) + " is not loaded (setting " + key + ")");
+        }
+        if (key === "fontName" && isNode(v) && isNode(v.variationSettings)) {
+          const axes = fontAxes(String(v.family));
+          for (const tag of Object.keys(v.variationSettings)) if (!axes || !axes.includes(tag)) throw new Error("in Figma: '" + String(v.family) + "' has no axis " + tag);
+        }
+        if (key === "layoutSizingHorizontal" || key === "layoutSizingVertical") {
+          const parent = parentOf(t);
+          if (v === "FILL" && (!parent || parent.layoutMode === "NONE" || parent.layoutMode === undefined)) throw new Error("in Figma: FILL can only be set on children of auto-layout frames");
+          if (v === "HUG" && type !== "TEXT" && t.layoutMode === "NONE") throw new Error("in Figma: HUG can only be set on auto-layout frames and text");
+        }
+        t[key] = v;
+        return true;
+      },
+    });
+    fields.resize = (w: number, h: number) => { fields.width = w; fields.height = h; };
+    fields.remove = () => {
+      const parent = parentOf(fields);
+      if (parent) parent.children = kids(parent).filter((k) => k !== n);
+      fields.parent = null;
+      fields.removed = true;
+    };
+    if (type === "FRAME") fields.appendChild = appendTo(n);
+    made.push(n);
+    appendTo(current)(n); // Figma puts a new node on the current page
+    return n;
+  };
+  // ---- the design system (opts.kit)
+  const imported: FakeNode[] = [];
+  const kit = opts.kit ? designKit((m) => node("INSTANCE", m)) : null;
+  const pages = [current, screens, page("0:3", "Archive"), page("0:4", "Archive"), ...(kit ? [kit.page] : [])];
+  const w = world({ pages, currentPage: current, ...(kit ? kit.scene : {}) }, {
+    createFrame: () => node("FRAME"),
+    createText: () => node("TEXT"),
+    loadFontAsync: async (f) => {
+      if (!AVAILABLE_FONTS.some(([fam, st]) => fam === f.family && st === f.style)) throw new Error("font not found");
+      loadedFonts.add(fontKey(f));
+    },
+    listAvailableFontsAsync: async () => AVAILABLE_FONTS.map(([family, style]) => ({ fontName: { family, style } })),
+    getFontFamilyVariationAxes: fontAxes,
+    ...(kit ? {
+      importComponentByKeyAsync: async (key: string) => { imports.push("component " + key); if (hooks.onImport) await hooks.onImport(); const c = kit.library.components[key]; if (!c) throw new Error("not published"); return c; },
+      importComponentSetByKeyAsync: async (key: string) => { imports.push("component set " + key); throw new Error("not published"); },
+      importStyleByKeyAsync: async (key: string) => { imports.push("style " + key); const st = kit.library.styles[key]; if (!st) throw new Error("not published"); imported.push(st); return st; },
+      variables: {
+        importVariableByKeyAsync: async (key: string) => { imports.push("variable " + key); if (hooks.onImport) await hooks.onImport(); const v = kit.library.variables[key]; if (!v) throw new Error("not published"); return v; },
+        setBoundVariableForPaint: (paint: FakeNode, field: string, v: FakeVariable | null) => ({ ...paint, boundVariables: v ? { [field]: { type: "VARIABLE_ALIAS", id: v.id } } : {} }),
+      },
+    } : {}),
+  });
+  await w.allowEdits();
+  /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
+   *  parent is null, so everything below it is gone with it, as in Figma) */
+  const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
+  const alive = (): FakeNode[] => made.filter((n) => onPage(n));
+  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens } };
+}
+
+// ---- the design system a kit world has: components, variables, text styles, and a library
+
+const KEY = (c: string): string => c.repeat(40); // a key as Figma writes one: 40 hex digits
+const variable = (id: string, name: string, resolvedType: string, key: string): FakeVariable =>
+  ({ id, name, key, resolvedType, variableCollectionId: "VariableCollectionId:30:1", scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false, valuesByMode: { "30:0": resolvedType === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : 8 } });
+const KIT_VARS: Record<string, FakeVariable> = {
+  "VariableID:30:1": variable("VariableID:30:1", "color/brand", "COLOR", "local-brand"),
+  "VariableID:30:2": variable("VariableID:30:2", "space/md", "FLOAT", "local-space-md"),
+  "VariableID:30:3": variable("VariableID:30:3", "radius/md", "FLOAT", "local-radius-md"),
+  "VariableID:30:4": variable("VariableID:30:4", "color/text", "COLOR", "local-text-a"),
+  "VariableID:31:4": variable("VariableID:31:4", "color/text", "COLOR", "local-text-b"),
+};
+const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight } });
+const KIT_STYLES: FakeNode[] = [
+  style("S:h1,", "Heading/H1", "local-h1", "Inter", "Bold"),
+  style("S:body,", "Body", "local-body", "Inter", "Regular"),
+  style("S:fancy,", "Fancy", "local-fancy", "Papyrus", "Regular"),
+];
+/** The kit: a "Components" page with a Button set (variants by Size; Label text, Icon boolean, Glyph swap), a Badge
+ *  without auto-layout, two components both named Card; and a library with a colour and a number variable (listed by
+ *  name), an Avatar component and a Caption text style (by key only). */
+function designKit(instanceOf: (main: FakeNode) => FakeNode) {
+  const comp = (id: string, name: string, extra: FakeNode): FakeNode => {
+    const c: FakeNode = { id, type: "COMPONENT", name, key: "local-" + id, layoutMode: "HORIZONTAL", parent: null, ...extra };
+    c.createInstance = () => instanceOf(c);
+    return c;
+  };
+  const set: FakeNode = { id: "5:1", type: "COMPONENT_SET", name: "Button", key: "local-button", parent: null, componentPropertyDefinitions: {
+    Size: { type: "VARIANT", defaultValue: "Medium", variantOptions: ["Small", "Medium", "Large"] },
+    "Label#1:0": { type: "TEXT", defaultValue: "Button" },
+    "Icon#1:1": { type: "BOOLEAN", defaultValue: false },
+    "Glyph#1:2": { type: "INSTANCE_SWAP", defaultValue: "9:9" },
+  } };
+  const medium = comp("5:2", "Size=Medium", { parent: set, variantProperties: { Size: "Medium" } });
+  Object.defineProperty(medium, "componentPropertyDefinitions", { get() { throw new Error("in Figma: componentPropertyDefinitions can only be read on a component set or a non-variant component"); } });
+  const large = comp("5:6", "Size=Large", { parent: set, variantProperties: { Size: "Large" } });
+  set.defaultVariant = medium;
+  set.children = [medium, large];
+  const badge = comp("5:3", "Badge", { layoutMode: "NONE", componentPropertyDefinitions: {} });
+  const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
+  // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
+  // Its two variants are Small/Off and Large/On: a sparse set, so Large/Off does not exist.
+  const chip: FakeNode = { id: "6:1", type: "COMPONENT_SET", name: "Chip", key: "local-chip", parent: null, componentPropertyDefinitions: {
+    Size: { type: "VARIANT", defaultValue: "Small", variantOptions: ["Small", "Large"] },
+    Tone: { type: "VARIANT", defaultValue: "Off", variantOptions: ["Off", "On"] },
+  } };
+  const chipSmall = comp("6:2", "Size=Small, Tone=Off", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small", Tone: "Off" } });
+  const chipLarge = comp("6:3", "Size=Large, Tone=On", { parent: chip, variantProperties: { Size: "Large", Tone: "On" } });
+  chip.defaultVariant = chipSmall;
+  chip.children = [chipSmall, chipLarge];
+  const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
+  // A conflicting set (Figma allows it): two variants with the same values, the first without auto-layout.
+  const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, componentPropertyDefinitions: {
+    Kind: { type: "VARIANT", defaultValue: "A", variantOptions: ["A"] },
+  } };
+  const twinFlat = comp("7:2", "Kind=A", { parent: twin, layoutMode: "NONE", variantProperties: { Kind: "A" } });
+  const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
+  twin.defaultVariant = twinFlat;
+  twin.children = [twinFlat, twinFlex];
+  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, twin, twinFlat, twinFlex];
+  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, twin], loadAsync: async () => {},
+    findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
+  const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
+  const library = {
+    components: { [KEY("e")]: avatar } as Record<string, FakeNode>,
+    styles: { [KEY("f")]: style("S:caption,", "Caption", KEY("f"), "Inter", "Regular") } as Record<string, FakeNode>,
+    variables: {
+      [KEY("c")]: variable("VariableID:lib/1:1", "color/accent", "COLOR", KEY("c")),
+      [KEY("d")]: variable("VariableID:lib/1:2", "space/lg", "FLOAT", KEY("d")),
+    } as Record<string, FakeVariable>,
+  };
+  const scene: Scene = {
+    variables: KIT_VARS,
+    localStyles: { text: KIT_STYLES },
+    teamLibrary: {
+      getAvailableLibraryVariableCollectionsAsync: async () => [{ name: "Core tokens", key: "lib-core", libraryName: "Core Library" }],
+      getVariablesInLibraryCollectionAsync: async () => Object.values(library.variables).map((v) => ({ name: v.name, key: String(v.key), resolvedType: v.resolvedType })),
+    },
+  };
+  return { page, scene, library };
+}
+
+/** A sign-in screen: a column of a title, a form of two fields and a button; three handles. */
+const signIn = (): Record<string, unknown> => ({
+  name: "Sign in", handle: "screen", box: { w: 390, h: 844 }, fills: [{ type: "solid", color: "#ffffff" }],
+  layout: { display: "flex", flexDirection: "column", gap: 24, padding: [48, 24, 48, 24] },
+  children: [
+    { text: "Welcome back", handle: "title", font: { family: "Inter", weight: "Bold", size: 28, color: "#111111" }, widthMode: "fill" },
+    { name: "Form", widthMode: "fill", heightMode: "hug", layout: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+      { name: "Email", widthMode: "fill", box: { w: 342, h: 48 }, radius: 8, strokes: { colors: ["#d0d0d0"], weight: 1, align: "inside" },
+        layout: { display: "flex", flexDirection: "row", padding: [0, 16, 0, 16], alignItems: "center" },
+        children: [{ text: "you@example.com", font: { size: 16, color: "#888888" } }] },
+      { name: "Password", widthMode: "fill", box: { w: 342, h: 48 }, radius: 8, layout: { display: "flex", padding: [0, 16, 0, 16], alignItems: "center" },
+        children: [{ text: "Password", font: { size: 16 } }] },
+    ] },
+    { name: "Submit", handle: "submit", widthMode: "fill", box: { w: 342, h: 52 }, radius: { tl: 12, tr: 12, br: 12, bl: 12 }, fills: [{ type: "solid", color: "#3355ff" }],
+      layout: { display: "flex", justifyContent: "center", alignItems: "center" },
+      children: [{ text: "Sign in", font: { family: "Inter", weight: "Semi Bold", size: 16, color: "#ffffff", align: "center" } }] },
+  ],
+});
+const byName = (n: FakeNode | undefined, name: string): FakeNode | undefined => kids(n).find((c) => c.name === name);
 
 export const cases: Case[] = [{
   name: "WRITE plane (writes.ts)",
@@ -99,8 +401,19 @@ export const cases: Case[] = [{
     ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming the four", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree");
     ok("write: empty/omitted batch is a no-op success", (await api.applyWrites(undefined)).ok === true);
+
+    // One batch is one Cmd-Z step: an undo checkpoint before and after every non-empty batch (a failed one included,
+    // since its applied prefix stays in the file), none for an empty one. Without them Figma keeps every plugin
+    // action in one undo step, and the designer's first Cmd-Z undid every batch since the plugin started.
+    const commitsBefore = w.undo.commits;
+    await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#00f" }]);
+    ok("write: a batch ends its own undo step (checkpoint before and after)", w.undo.commits === commitsBefore + 2);
+    await api.applyWrites([{ op: "createFrame", name: "C" }, { op: "setFill", nodeId: "missing:9", color: "#fff" }]);
+    ok("write: a failed batch is its own undo step too", w.undo.commits === commitsBefore + 4);
+    await api.applyWrites([]);
+    ok("write: an empty batch sets no undo checkpoint", w.undo.commits === commitsBefore + 4);
 
     // A dry run refuses a createText with no `text` ("missing text"), so applying it must refuse it too — not
     // create an empty text node the preview said would never be made.
@@ -116,13 +429,16 @@ export const cases: Case[] = [{
     // Every op, complete and then short of each field it sets, through all three readers of commands.ts WRITE_OPS:
     // figma_write's dry-run step (writeOpPreview), the wire check (argsShapeError) and the plugin's applyWrites in the
     // VM. A dry run that refuses what applying accepts (or the reverse) is the drift this table exists to stop.
-    const { textTarget, rectTarget, groupTarget } = targetsOf();
-    const { api, created } = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
+    const { textTarget, rectTarget, groupTarget, screenTarget } = targetsOf();
+    const { api, created } = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "f:1": screenTarget });
     const complete: { [K in WriteOpName]: WriteOp } = {
       createFrame: { op: "createFrame", name: "F", width: 10, height: 10, fill: "#fff" },
       createText: { op: "createText", text: "T", fontSize: 12, fill: "#000" },
+      createTree: { op: "createTree", tree: { name: "S", children: [{ text: "Hi" }] }, page: "Page 1" },
       setFill: { op: "setFill", nodeId: "r:1", color: "#00f" },
       setText: { op: "setText", nodeId: "t:1", text: "x" },
+      setVariableMode: { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      clearVariableMode: { op: "clearVariableMode", nodeId: "f:1", collection: "Theme" },
     };
     for (const name of WRITE_OP_NAMES) {
       const full = complete[name];
@@ -143,6 +459,131 @@ export const cases: Case[] = [{
       }
       ok(`[WRITE-OPS] ${name}: some variant is refused exactly when the row requires a field`, refusedSome === WRITE_OPS[name].required.length > 0);
     }
+  },
+}, {
+  name: "variable modes (setVariableMode / clearVariableMode): names resolved up front, never guessed, put back on failure",
+  async run() {
+    const { rectTarget, textTarget } = targetsOf();
+    const screen = modeNode("f:1", "Screen");
+    const card = modeNode("f:2", "Card", { [THEME.id]: "7:0" });
+    const doc: FakeNode = { id: "0:0", type: "DOCUMENT", name: "Document" }; // no ExplicitVariableModesMixin
+    const w = await writableOn({ "f:1": screen, "f:2": card, "r:1": rectTarget, "t:1": textTarget, "0:0": doc });
+    const { api, created } = w;
+    const theme = (): string | undefined => screen.explicitVariableModes[THEME.id];
+
+    // Set by names: the mode lands on the node, and the reply names the mode it replaced.
+    const byName = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }]);
+    ok("[MODES] set by names: the explicit mode is set and the reply says inherited -> Dark",
+      byName.ok === true && theme() === "7:1" && JSON.stringify(byName.applied) === JSON.stringify([{ id: "f:1", collection: "Theme", from: "inherited", to: "Dark" }]));
+    // Exact identifiers: the collection's id or key, the mode's modeId.
+    const byId = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: THEME.id, mode: "7:0" }]);
+    ok("[MODES] set by exact collection id + modeId: Dark -> Light", byId.ok === true && theme() === "7:0" && byId.applied[0]?.from === "Dark" && byId.applied[0]?.to === "Light");
+    const byKey = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "theme-key", mode: "Dark" }]);
+    ok("[MODES] set by the collection's key", byKey.ok === true && theme() === "7:1");
+    // Clear: back to inherited (the collection leaves explicitVariableModes).
+    const cleared = await api.applyWrites([{ op: "clearVariableMode", nodeId: "f:1", collection: "Theme" }]);
+    ok("[MODES] clear: the explicit mode is gone, the reply says Dark -> inherited",
+      cleared.ok === true && !(THEME.id in screen.explicitVariableModes) && cleared.applied[0]?.from === "Dark" && cleared.applied[0]?.to === "inherited");
+    // A library collection the file already uses is a VariableCollection, reachable by its exact id.
+    const remote = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "VariableCollectionId:abc/1:1", mode: "Night" }]);
+    ok("[MODES] a library collection already in the file works by its exact id", remote.ok === true && screen.explicitVariableModes["VariableCollectionId:abc/1:1"] === "1:1");
+
+    // Names that do not resolve refuse the whole batch before anything runs.
+    const refused = async (ops: Array<Record<string, unknown>>, label: string, re: RegExp, failedAt = 0): Promise<void> => {
+      const before = { ...screen.explicitVariableModes }, made = created.length;
+      const r = await api.applyWrites(ops.map((o) => ({ op: "setVariableMode", nodeId: "f:1", ...o })));
+      const err = r.error ?? "";
+      ok(`[MODES] ${label}: refused whole, nothing changed (${err.split("\n")[0]})`,
+        r.ok === false && re.test(err) && r.failedAt === failedAt && r.applied.length === 0 && created.length === made
+        && JSON.stringify(screen.explicitVariableModes) === JSON.stringify(before) && /nothing was changed/i.test(err));
+    };
+    await refused([{ collection: "Them", mode: "Dark" }], "unknown collection, with candidates", /collection 'Them' matches no local variable collection; closest: 'Theme'/);
+    const unknownErr = must((await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "Zzzzzzzz", mode: "x" }])).error, "unknown");
+    ok("[MODES] candidates are at most three", (unknownErr.match(/closest: (.*?)\. Nothing/)?.[1] ?? "").split(", ").length === 3);
+    await refused([{ collection: "Spacing", mode: "Compact" }], "ambiguous collection name, listing each with its id",
+      /collection 'Spacing' matches 2 local collections — pass one's id: 'Spacing' \(VariableCollectionId:8:1\), 'Spacing' \(VariableCollectionId:9:1\)/);
+    await refused([{ collection: "Theme", mode: "Darkk" }], "unknown mode, with candidates", /mode 'Darkk' is not in collection 'Theme'; closest: 'Dark'/);
+    await refused([{ collection: "Density", mode: "Same" }], "ambiguous mode name", /mode 'Same' appears 2 times in collection 'Density' — pass its modeId: 'Same' \(10:0\), 'Same' \(10:1\)/);
+    await refused([{ collection: "theme", mode: "dark" }], "a case-only match is not taken", /collection 'theme' matches no local variable collection; closest: 'Theme'/);
+    await refused([{ collection: "Brand Colors", mode: "Default" }], "a library collection not in the file is refused by name, naming its library",
+      /collection 'Brand Colors' is in the library 'Core Library'.*a write cannot import one yet.*bind one of its variables in this file first/);
+    await refused([{ nodeId: "gone:1", collection: "Theme", mode: "Dark" }], "missing node", /no node with id 'gone:1'/);
+    await refused([{ nodeId: "0:0", collection: "Theme", mode: "Dark" }], "a node type without variable modes, named", /node 'Document' is a DOCUMENT, which cannot carry a variable mode/);
+    // Every bad name in the batch, at once; ops before the first bad one are not run either.
+    const many = await api.applyWrites([
+      { op: "createFrame", name: "never" },
+      { op: "setVariableMode", nodeId: "f:1", collection: "Them", mode: "Dark" },
+      { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      { op: "clearVariableMode", nodeId: "gone:2", collection: "Spacing" },
+      { op: "setVariableMode", nodeId: "f:2", collection: "Theme", mode: "Dusk" },
+    ]);
+    const manyErr = must(many.error, "many.error");
+    ok("[MODES] every bad name is listed at once and nothing runs, not even the createFrame before them",
+      many.ok === false && many.failedAt === 1 && many.failedOp === "setVariableMode" && /^4 problems — nothing was changed:/.test(manyErr)
+      && /ops\[1\] \(setVariableMode\): collection 'Them'/.test(manyErr) && /ops\[3\] \(clearVariableMode\): no node with id 'gone:2'/.test(manyErr)
+      && /ops\[3\] \(clearVariableMode\): collection 'Spacing' matches 2/.test(manyErr) && /ops\[4\] \(setVariableMode\): mode 'Dusk'/.test(manyErr)
+      && !/ops\[2\]/.test(manyErr) && created.every((n) => n.name !== "never") && theme() === undefined);
+
+    // All or nothing: a later op failing puts the mode changes back — to an explicit mode and to inherited alike.
+    const madeBefore = created.length;
+    const failing = await api.applyWrites([
+      { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      { op: "createFrame", name: "Kept" },
+      { op: "setVariableMode", nodeId: "f:2", collection: "Theme", mode: "Dark" },
+      { op: "setVariableMode", nodeId: "f:2", collection: "Theme", mode: "Light" },
+      { op: "clearVariableMode", nodeId: "f:2", collection: "Theme" },
+      { op: "setFill", nodeId: "missing:9", color: "#fff" },
+    ]);
+    ok("[MODES] a later op failing: every mode change in the batch is put back (inherited stays inherited, Light stays Light)",
+      failing.ok === false && failing.failedAt === 5 && theme() === undefined && card.explicitVariableModes[THEME.id] === "7:0");
+    ok("[MODES] …the reply lists them as restored, in batch order, and keeps only the createFrame as applied",
+      JSON.stringify(failing.applied) === JSON.stringify([{ id: "new:frame" }]) && created.length === madeBefore + 1
+      && JSON.stringify((failing.restored ?? []).map((r) => [r.id, r.from, r.to])) === JSON.stringify([["f:1", "inherited", "Dark"], ["f:2", "Light", "Dark"], ["f:2", "Dark", "Light"], ["f:2", "Light", "inherited"]]));
+    ok("[MODES] …and the toast says what happened", w.notified.some((t) => /applied 1 edit, then one failed/.test(t)));
+
+    // The same gates as every overwrite: Dev Mode refuses the batch whole, and so does Allow edits off.
+    w.figma.editorType = "dev";
+    const dev = await api.applyWrites([{ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }]);
+    ok("[MODES] Dev Mode: refused whole, mode unchanged", dev.ok === false && /Dev Mode/.test(dev.error ?? "") && theme() === undefined);
+    w.figma.editorType = "figma";
+    await w.allowEdits(false);
+    const off = await api.applyWrites([{ op: "clearVariableMode", nodeId: "f:2", collection: "Theme" }]);
+    ok("[MODES] Allow edits off: refused as edits-off, mode unchanged", off.refused === "edits-off" && off.error === EDITS_OFF_MESSAGE && card.explicitVariableModes[THEME.id] === "7:0");
+
+    // Unticked mid-batch, then a later op fails for its own reason (a font load that rejects after the box was
+    // unticked): the put-back is a write too, so it does not run — the mode change stays and the reply says so.
+    await w.allowEdits(true);
+    let reject: (e: Error) => void = () => {};
+    w.figma.loadFontAsync = () => new Promise<void>((_res, rej) => { reject = rej; });
+    const racing = api.applyWrites([
+      { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      { op: "setText", nodeId: "t:1", text: "late" },
+    ]);
+    await new Promise((r) => setTimeout(r, 0)); // setText is now waiting on its font
+    await w.allowEdits(false);
+    const writesBefore = JSON.stringify(screen.explicitVariableModes);
+    reject(new Error("font failed to load"));
+    const raced = await racing;
+    ok("[MODES] unticked, then a later op fails: no put-back runs after consent is off (the mode change stays)",
+      raced.ok === false && raced.failedAt === 1 && theme() === "7:1" && JSON.stringify(screen.explicitVariableModes) === writesBefore
+      && raced.restored === undefined && raced.applied.length === 1 && raced.applied[0]?.to === "Dark");
+    ok("[MODES] …and the error says the earlier mode change stays applied because Allow edits was turned off",
+      /font failed to load/.test(raced.error ?? "") && /'Allow edits' was turned off before the batch could put back its 1 earlier variable mode change, so they stay applied/.test(raced.error ?? ""));
+    w.figma.loadFontAsync = async () => {};
+
+    // The dry run (built offline by figma_write) says plainly what changes.
+    const setStep = writeOpPreview({ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" }, 0);
+    const clearStep = writeOpPreview({ op: "clearVariableMode", nodeId: "f:1", collection: "Theme" }, 1);
+    ok("[MODES] dry-run row for a set: an overwrite of the node, collection, new mode and the change in words",
+      setStep.effect === "overwrites" && setStep.target === "f:1" && setStep.collection === "Theme" && setStep.newMode === "Dark"
+      && /^node f:1: the 'Theme' variable mode goes from its current mode to 'Dark' — the reply names the mode it replaced/.test(setStep.change ?? ""));
+    ok("[MODES] dry-run row for a clear: the new mode is 'inherited'",
+      clearStep.effect === "overwrites" && clearStep.newMode === "inherited" && /goes from its current mode to inherited/.test(clearStep.change ?? ""));
+    // A mode can itself be named "inherited": a set to it is still a set, never described as a clear.
+    const namedInherited = writeOpPreview({ op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "inherited" }, 0);
+    ok("[MODES] dry-run row for a set to a mode NAMED 'inherited' describes a set, not a clear",
+      /goes from its current mode to 'inherited' — /.test(namedInherited.change ?? "") && !/whatever its parent uses/.test(namedInherited.change ?? ""));
+    ok("[MODES] the other ops' rows carry no mode fields", !("change" in writeOpPreview({ op: "setFill", nodeId: "r:1", color: "#fff" }, 0)));
   },
 }, {
   name: "parentId (a silent reparent must not slip through)",
@@ -248,5 +689,424 @@ export const cases: Case[] = [{
     // Anything but a stored `true` reads as off.
     const odd = writableWorld(nodes, undefined, { allowEdits: "true" });
     ok("[EDITS] a stored non-boolean reads as off", (await odd.api.applyWrites(batch)).refused === "edits-off");
+  },
+}, {
+  name: "tree spec (createTree): one call creates a whole screen, beside the existing frames, all or nothing",
+  async run() {
+    const w = await treeWorld();
+    const { api, alive, pages } = w;
+    const commits = w.undo.commits;
+
+    // ---- one call, the whole tree
+    const r = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
+    const a = r.applied[0];
+    ok("[TREE] one createTree op lands the whole screen: ok, one applied entry", r.ok === true && r.applied.length === 1 && r.error === undefined);
+    ok("[TREE] the reply is the root id, the counts, the handles and the unbound count only (no tree)",
+      JSON.stringify(Object.keys(a ?? {}).sort()) === JSON.stringify(["created", "handles", "id", "unbound"])
+      && JSON.stringify(a?.created) === JSON.stringify({ frames: 5, texts: 4 }) && a?.unbound === 31 && r.warnings === undefined);
+    const root = alive().find((n) => n.id === a?.id);
+    ok("[TREE] ids come back only for the nodes the spec gave a handle",
+      JSON.stringify(Object.keys(a?.handles ?? {})) === JSON.stringify(["screen", "title", "submit"]) && a?.handles?.screen === a?.id
+      && a?.handles?.title === kids(root)[0]?.id && a?.handles?.submit === byName(root, "Submit")?.id);
+    ok("[TREE] one batch is one Cmd-Z step", w.undo.commits === commits + 2);
+    ok("[TREE] the root is on the current page, shown, named, sized", parentOf(root) === pages.current && root?.visible === true
+      && root?.name === "Sign in" && num(root, "width") === 390 && num(root, "height") === 844);
+    ok("[TREE] placed right of the rightmost frame (500+390+100), top-aligned with the topmost (-20)", num(root, "x") === 990 && num(root, "y") === -20);
+    ok("[TREE] the auto-layout reads back as written (column, gap, padding, fixed size)",
+      root?.layoutMode === "VERTICAL" && num(root, "itemSpacing") === 24 && num(root, "paddingTop") === 48 && num(root, "paddingLeft") === 24
+      && root.layoutSizingHorizontal === "FIXED" && root.clipsContent === false);
+    const form = byName(root, "Form"), email = byName(form, "Email"), submit = byName(root, "Submit");
+    ok("[TREE] children nest in spec order, and fill / hug land on them",
+      JSON.stringify(kids(root).map((c) => c.type + ":" + String(c.name))) === JSON.stringify(["TEXT:", "FRAME:Form", "FRAME:Submit"])
+      && form?.layoutSizingHorizontal === "FILL" && form.layoutSizingVertical === "HUG" && email?.layoutSizingHorizontal === "FILL");
+    ok("[TREE] a frame without fills has none (not Figma's white default); a solid fill is parsed",
+      JSON.stringify(form?.fills) === "[]" && JSON.stringify(submit?.fills) === JSON.stringify([{ type: "SOLID", color: { r: 0.2, g: 1 / 3, b: 1 } }]));
+    ok("[TREE] radius, per-corner radius and strokes land",
+      num(email, "cornerRadius") === 8 && num(submit, "topLeftRadius") === 12 && num(email, "strokeWeight") === 1 && email?.strokeAlign === "INSIDE"
+      && JSON.stringify(email.strokes) === JSON.stringify([{ type: "SOLID", color: { r: 208 / 255, g: 208 / 255, b: 208 / 255 } }]));
+    ok("[TREE] justify / align read back as Figma's enums", submit?.primaryAxisAlignItems === "CENTER" && submit.counterAxisAlignItems === "CENTER" && email?.layoutMode === "HORIZONTAL");
+    const title = kids(root)[0], label = kids(submit)[0];
+    ok("[TREE] text: characters, font, size, colour, fill width",
+      title?.characters === "Welcome back" && JSON.stringify(title.fontName) === JSON.stringify({ family: "Inter", style: "Bold" }) && num(title, "fontSize") === 28
+      && title.layoutSizingHorizontal === "FILL" && label?.textAlignHorizontal === "CENTER" && JSON.stringify(label.fontName) === JSON.stringify({ family: "Inter", style: "Semi Bold" }));
+    ok("[TREE] a text with no font gets Inter Regular", JSON.stringify(kids(byName(form, "Password"))[0]?.fontName) === JSON.stringify({ family: "Inter", style: "Regular" }));
+    ok("[TREE] nothing else was left on the page (every node is inside the root)", alive().filter((n) => parentOf(n) === pages.current).length === 1);
+    ok("[TREE] and announced", w.notified.some((t) => /applied 1 edit to this file/.test(t)));
+
+    // ---- placement: a named page, explicit coordinates
+    const onScreens = await api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "Empty state", box: { w: 200, h: 100 } } }]);
+    const second = alive().find((n) => n.id === onScreens.applied[0]?.id);
+    ok("[TREE] page by name: lands on 'Screens' (loaded first), at 0,0 on an empty page, and no handles key without handles",
+      onScreens.ok === true && parentOf(second) === pages.screens && w.pageLoads.includes("0:2") && num(second, "x") === 0 && num(second, "y") === 0
+      && onScreens.applied[0]?.handles === undefined);
+    const byId = await api.applyWrites([{ op: "createTree", page: "0:2", tree: { name: "At", x: -400, y: 1200 } }]);
+    const third = alive().find((n) => n.id === byId.applied[0]?.id);
+    ok("[TREE] page by id, with explicit x/y", byId.ok === true && parentOf(third) === pages.screens && num(third, "x") === -400 && num(third, "y") === 1200);
+    const xOnly = await api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "X only", x: 5 } }]);
+    const fourth = alive().find((n) => n.id === xOnly.applied[0]?.id);
+    ok("[TREE] only x given: y still comes from placement (the topmost frame on 'Screens' is at 0)", xOnly.ok === true && num(fourth, "x") === 5 && num(fourth, "y") === 0);
+
+    // ---- warnings: accepted, no effect
+    const warned = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ name: "Pinned", x: 10, y: 10 }] } }]);
+    ok("[TREE] x/y inside auto-layout: applied, with a warning naming the node", warned.ok === true
+      && JSON.stringify(warned.warnings) === JSON.stringify(["ops[0].tree.children[0]: `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)"]));
+  },
+}, {
+  name: "tree spec (createTree): everything is checked before the file is touched; every problem listed",
+  async run() {
+    const w = await treeWorld();
+    const { api, alive, made } = w;
+    const refused = async (label: string, ops: WriteOp[], re: RegExp, failedAt = 0): Promise<string> => {
+      const before = made.length, commits = w.undo.commits;
+      const r = await api.applyWrites(ops.map((o) => ({ ...o })));
+      const err = r.error ?? "";
+      ok(`[TREE-REFUSE] ${label}: refused whole, nothing made (${err.split("\n")[0]})`,
+        r.ok === false && re.test(err) && r.failedAt === failedAt && r.applied.length === 0 && made.length === before && w.undo.commits === commits + 2);
+      return err;
+    };
+    // Spec problems (the shared check): read fields refused by name, unknown keys with candidates, rules of the tree.
+    const many = await refused("read fields refused by name, unknown keys with candidates, every problem at once", [{ op: "createTree", tree: {
+      name: "S", effects: [], children: [
+        { text: "Hi", font: { size: 14, colour: "#000" } },
+        { type: "RECTANGLE" },
+        { name: "Pill", widthMode: "hug", mainComponent: { name: "Pill" } },
+        { text: "Mixed", runs: [] },
+      ] } }], /^6 problems in the tree spec — nothing was changed:\n/);
+    ok("[TREE-REFUSE] …each named by its path, read fields with the reason",
+      many.includes("ops[0].tree.effects: a read field a write cannot set yet")
+      && many.includes("ops[0].tree.children[0].font.colour: not a field the write accepts; closest: 'color'")
+      && many.includes("ops[0].tree.children[1].type: 'RECTANGLE' cannot be written yet (FRAME, TEXT and INSTANCE can)")
+      && many.includes("ops[0].tree.children[2].mainComponent: a read field a write cannot set yet — name the component in `component`")
+      && many.includes("ops[0].tree.children[2]: `widthMode: \"hug\"` needs the node itself to have auto-layout")
+      && many.includes("ops[0].tree.children[3].runs: a read field a write cannot set yet — mixed-format text comes in a later write step"));
+    await refused("a fill on the root (no auto-layout parent)", [{ op: "createTree", tree: { widthMode: "fill" } }], /`widthMode: "fill"` needs a parent with auto-layout \(this is the root\)/);
+    await refused("a TEXT root", [{ op: "createTree", tree: { text: "Lonely" } }], /the root must be a FRAME/);
+    await refused("a handle used twice", [{ op: "createTree", tree: { handle: "a", children: [{ handle: "a" }] } }], /handle 'a' is used twice/);
+    await refused("an id in the spec", [{ op: "createTree", tree: { id: "1:2" } }], /tree\.id: a read field a write cannot set yet — a new node gets its id from Figma; give it a `handle`/);
+    await refused("a grid layout", [{ op: "createTree", tree: { layout: { display: "grid", columns: 2 } } }], /layout\.display 'grid' cannot be written yet/);
+    await refused("a bad colour", [{ op: "createTree", tree: { fills: [{ type: "solid", color: "red" }] } }], /tree\.fills\[0\]\.color is not a hex colour/);
+    const big = { name: "Big", children: Array.from({ length: MAX_TREE_NODES }, () => ({ name: "n" })) };
+    await refused("more nodes than the cap", [{ op: "createTree", tree: big }], new RegExp("more than " + MAX_TREE_NODES + " nodes"));
+    // Values Figma refuses only once it is building: refused up front, with an earlier op in the batch, so nothing lands.
+    const tooSmall = await refused("a box under Figma's 0.01 minimum, a column baseline, a half-made letterSpacing, a text's per-side stroke, an empty font name, a min above its max", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", tree: { name: "S", box: { w: 0.001, h: 100 }, layout: { display: "flex", flexDirection: "column", alignItems: "baseline" }, children: [
+        { text: "a", font: { letterSpacing: {} } },
+        { text: "b", strokes: { colors: ["#000"], weights: { top: 4 } } },
+        { text: "c", font: { family: "" } },
+        { name: "L", sizeLimits: { minWidth: 200, maxWidth: 100 } },
+        { name: "W", layout: { display: "flex", rowGap: 4 } },
+      ] } },
+    ], /^bad|problems in the tree spec/, 1);
+    ok("[TREE-REFUSE] …each by path",
+      tooSmall.includes("ops[1].tree.box.w must be a number ≥ 0.01") && tooSmall.includes("`layout.alignItems: \"baseline\"` works only in a row")
+      && tooSmall.includes("ops[1].tree.children[0].font.letterSpacing is missing unit") && tooSmall.includes("ops[1].tree.children[1]: `strokes.weights` (per side) is not on a TEXT node")
+      && tooSmall.includes("ops[1].tree.children[2].font.family must be a non-empty string") && tooSmall.includes("`sizeLimits.minWidth` is above `maxWidth`")
+      && tooSmall.includes("ops[1].tree.children[4]: `layout.rowGap` needs `flexWrap: \"wrap\"`"));
+    // The live check's gaps: values the pre-check passed that Figma then refused mid-build (an earlier createFrame stayed).
+    const outOfFlow = await refused("an absolute child that fills, grows or stretches, a 0 size limit", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", tree: { name: "S", layout: { display: "flex" }, children: [
+        { name: "Badge", absolute: true, widthMode: "fill", heightMode: "fill" },
+        { name: "Grow", absolute: true, grow: 1, alignSelf: "stretch" },
+        { name: "Min", sizeLimits: { minWidth: 0 } },
+        { name: "Max", sizeLimits: { maxHeight: 0 } },
+      ] } },
+    ], /problems in the tree spec/, 1);
+    ok("[TREE-REFUSE] …an absolute child cannot fill, grow or stretch, and a size limit must be above 0",
+      outOfFlow.includes("ops[1].tree.children[0]: `widthMode: \"fill\"` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[0]: `heightMode: \"fill\"` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[1]: `grow: 1` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[1]: `alignSelf: \"stretch\"` is not on an `absolute` child")
+      && outOfFlow.includes("ops[1].tree.children[2].sizeLimits.minWidth must be a number > 0")
+      && outOfFlow.includes("ops[1].tree.children[3].sizeLimits.maxHeight must be a number > 0"));
+    // Inputs that would be dropped are refused instead: auto-layout fields with no auto-layout, extras on an auto line height.
+    const dropped = await refused("auto-layout fields under mode absolute, extra keys on an auto line height", [{ op: "createTree", tree: {
+      name: "S", layout: { mode: "absolute", width: 200, gap: 8, padding: [1, 2, 3, 4] }, children: [{ text: "x", font: { lineHeight: { unit: "auto", value: 20 } } }],
+    } }], /problems in the tree spec/);
+    ok("[TREE-REFUSE] …each named",
+      dropped.includes("ops[0].tree: `layout.gap` is an auto-layout field; `mode: \"absolute\"` has none")
+      && dropped.includes("ops[0].tree: `layout.padding` is an auto-layout field") && !dropped.includes("layout.width")
+      && dropped.includes("ops[0].tree.children[0].font.lineHeight.value: not a field of an `auto` line height"));
+    await refused("a handle named __proto__ (Figma's message passing would drop it from the reply)", [{ op: "createTree", tree: { handle: "__proto__" } }],
+      /tree\.handle '__proto__' cannot be a handle/);
+    await refused("a tapered stroke (only the default uniform width)", [{ op: "createTree", tree: { strokes: { colors: ["#000"], variableWidth: { profile: "taper" } } } }],
+      /tree\.strokes\.variableWidth only the default \{profile:"uniform"\} can be written yet/);
+    // A variable-font axis is checked against the family before the build (Figma throws on one it lacks).
+    const axes = await refused("an axis the family lacks, axes on a static family", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", tree: { children: [
+        { text: "a", font: { variationSettings: { wght: 600, slnt: -10 } } },
+        { text: "b", font: { family: "Roboto", variationSettings: { wght: 600 } } },
+      ] } },
+    ], /^2 problems — nothing was changed:/, 1);
+    ok("[TREE-REFUSE] …with the axes the family has", axes.includes("ops[1] (createTree): tree.children[0].font.variationSettings: 'Inter' has no axis 'slnt'; its axes are 'wght', 'opsz'")
+      && axes.includes("tree.children[1].font.variationSettings: 'Roboto' is not a variable font"));
+    // File problems (resolved before the first op): page names and fonts, with candidates, together.
+    const fileErr = await refused("an unknown page and a missing font, both listed, with candidates", [
+      { op: "createFrame", name: "never" },
+      { op: "createTree", page: "Screen", tree: { children: [{ text: "x", font: { family: "Inter", weight: "Semibold" } }] } },
+    ], /^2 problems — nothing was changed:/, 1);
+    ok("[TREE-REFUSE] …the page with its closest names, the font with the file's nearest",
+      /ops\[1\] \(createTree\): page 'Screen' matches no page in this file; closest: 'Screens'/.test(fileErr)
+      && /ops\[1\] \(createTree\): font 'Inter Semibold' is not available in this file; closest: 'Inter Semi Bold'/.test(fileErr));
+    await refused("an ambiguous page name", [{ op: "createTree", page: "Archive", tree: {} }], /page 'Archive' matches 2 pages — pass one's id: 'Archive' \(0:3\), 'Archive' \(0:4\)/);
+
+    // A value Figma refuses partway through the build: the root (and so every node under it) is removed.
+    w.trap.add("textCase");
+    const partway = await api.applyWrites([{ op: "createTree", tree: signIn() }, { op: "createTree", tree: { name: "Never", children: [{ text: "x", font: { case: "upper" } }] } }]);
+    ok("[TREE-ATOMIC] Figma refusing a value deep in the tree: ok:false at that op, the first tree removed too, nothing alive",
+      partway.ok === false && partway.failedAt === 1 && /cannot set textCase/.test(partway.error ?? "") && partway.applied.length === 0
+      && alive().length === 0 && (partway.restored ?? []).length === 1 && partway.restored?.[0]?.created?.frames === 5);
+    ok("[TREE-ATOMIC] …and the toast says the earlier change was undone", w.notified.some((t) => /undid 1 earlier change after an edit failed/.test(t)));
+    w.trap.clear();
+    // A later op of the batch failing takes the tree back; an older-style createFrame stays (it always has).
+    const later = await api.applyWrites([{ op: "createTree", tree: signIn() }, { op: "createFrame", name: "Kept" }, { op: "setFill", nodeId: "gone:1", color: "#fff" }]);
+    ok("[TREE-ATOMIC] a later op failing removes the tree and lists it as restored; the createFrame stays applied",
+      later.ok === false && later.failedAt === 2 && alive().length === 1 && alive()[0]?.name === "Kept"
+      && later.applied.length === 1 && later.restored?.[0]?.handles?.title !== undefined);
+
+    // A handle is the agent's own string: names on Object.prototype come back as own keys like any other.
+    const proto = await api.applyWrites([{ op: "createTree", tree: { handle: "constructor", children: [{ handle: "toString" }] } }]);
+    const handles = proto.applied[0]?.handles ?? {};
+    ok("[TREE] the handles 'constructor' and 'toString' come back as own keys with their ids",
+      proto.ok === true && JSON.stringify(Object.keys(handles)) === JSON.stringify(["constructor", "toString"]) && Object.getOwnPropertyDescriptor(handles, "constructor")?.value === proto.applied[0]?.id);
+    // A read node fed back in: what the read writes on an ordinary frame and text is accepted (and set where it means something).
+    const roundTrip = await api.applyWrites([{ op: "createTree", page: "0:3", tree: {
+      name: "Read", reference: "assets/3_2_ref.png", x: 3000, y: 0, box: { w: 390, h: 844, x: 3000, y: 0 }, layout: { display: "flex", flexDirection: "column" }, strokesInLayout: true,
+      strokes: { colors: ["#e5e5e5"], weight: 1, align: "inside", variableWidth: { profile: "uniform" } },
+      children: [
+        { text: "Title", font: { size: 24, family: "Inter", weight: "Bold", weightValue: 5000, variationSettings: { wght: 5000, opsz: 32 }, lineHeight: { unit: "auto" } }, renderBox: { x: 3000, y: 2, w: 50, h: 20 } },
+        { name: "Plain", strokesInLayout: true },
+        { text: "Clamp", maxLines: 2 },
+      ],
+    } }]);
+    const rtRoot = alive().find((n) => n.id === roundTrip.applied[0]?.id);
+    const rtTitle = kids(rtRoot)[0];
+    ok("[TREE] a read frame and text round-trip (reference, a wght past 1000 as Figma takes it): accepted, strokesInLayout set, the axes on the font",
+      roundTrip.ok === true && rtRoot?.strokesIncludedInLayout === true
+      && JSON.stringify(rtTitle?.fontName) === JSON.stringify({ family: "Inter", style: "Bold", variationSettings: { wght: 5000, opsz: 32 } }));
+    ok("[TREE] …and what has no effect is not set, with a warning naming the node",
+      kids(rtRoot)[1]?.strokesIncludedInLayout === undefined && kids(rtRoot)[2]?.maxLines === undefined
+      && JSON.stringify(roundTrip.warnings) === JSON.stringify([
+        "ops[0].tree.children[1]: `strokesInLayout` has no effect without auto-layout on the frame, so it is not set",
+        "ops[0].tree.children[2]: `maxLines` has no effect without `truncate: true`, so it is not set",
+      ]));
+    // Placement reads what a frame occupies on the page, rotation included (its bounding box), not its x + width.
+    const rotated: FakeNode = { id: "1:9", type: "FRAME", name: "Rotated", x: 2000, y: 0, width: 100, height: 1000, absoluteBoundingBox: { x: 1300, y: 0, width: 1400, height: 1000 } };
+    (w.pages.current.appendChild as (c: FakeNode) => void)(rotated);
+    const beside = await api.applyWrites([{ op: "createTree", tree: { name: "Beside" } }]);
+    ok("[TREE] a rotated frame's bounding box is what the new frame is placed beside (1300+1400+100)",
+      num(alive().find((n) => n.id === beside.applied[0]?.id), "x") === 2800);
+
+    // The same gates as every write: Allow edits off, Dev Mode.
+    const before = made.length;
+    w.figma.editorType = "dev";
+    const dev = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
+    w.figma.editorType = "figma";
+    await w.allowEdits(false);
+    const off = await api.applyWrites([{ op: "createTree", tree: signIn() }]);
+    ok("[TREE-GATES] Dev Mode and Allow edits off refuse a tree whole, nothing made",
+      dev.ok === false && /Dev Mode/.test(dev.error ?? "") && off.refused === "edits-off" && made.length === before);
+  },
+}, {
+  name: "tree spec (createTree): the dry run describes the change, and agrees with the wire check and the plugin",
+  async run() {
+    const step = writeOpPreview({ op: "createTree", tree: signIn() }, 0);
+    ok("[TREE-DRY] a plain description: the frame, its size and layout, the counts, where, the handles, the fonts",
+      step.effect === "creates" && step.target === "new frame on the current page" && step.invalid === undefined
+      && step.change === "creates frame 'Sign in' 390×844, vertical auto-layout with 9 nodes (5 frames, 4 texts) on the current page, placed beside the existing frames; "
+        + "ids come back for 'screen', 'title', 'submit'; fonts 'Inter Bold', 'Inter Regular', 'Inter Semi Bold'; 31 raw values left unbound — the page and fonts are checked against the file when applied, and nothing lands unless all of it does");
+    const onPage = writeOpPreview({ op: "createTree", page: "Screens", tree: { name: "A", x: 0, y: 0, layout: { display: "flex" }, children: [{ name: "B", x: 1 }] } }, 3);
+    ok("[TREE-DRY] a named page and explicit coordinates are said; warnings are carried",
+      onPage.target === "new frame on page 'Screens'" && /on page 'Screens' at 0,0/.test(onPage.change ?? "") && onPage.warnings?.length === 1);
+    const bad = writeOpPreview({ op: "createTree", tree: { effects: [] } }, 0);
+    ok("[TREE-DRY] an invalid spec: the same problem the plugin refuses with", bad.invalid === "tree.effects: a read field a write cannot set yet" && bad.change === undefined);
+    // The wire check (handleBridge's gate) refuses what the dry run calls invalid, with the op's path.
+    ok("[TREE-DRY] the wire check refuses the same spec, by path", argsShapeError("write", { ops: [{ op: "createTree", tree: { effects: [] } }] })
+      === "bad write args: ops[0].tree.effects: a read field a write cannot set yet. Nothing was changed.");
+    ok("[TREE-DRY] …and passes a valid one", argsShapeError("write", { ops: [{ op: "createTree", tree: signIn() }] }) === null);
+    ok("[TREE-DRY] a non-object tree is refused", /tree: must be a node object/.test(argsShapeError("write", { ops: [{ op: "createTree", tree: "screen" }] }) ?? ""));
+  },
+}, {
+  name: "design-system references (createTree): instances, variables and text styles by name, bound in one call",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const { api, alive } = w;
+    const r = await api.applyWrites([{ op: "createTree", tree: {
+      name: "Checkout", handle: "root", layout: { display: "flex", flexDirection: "column", padding: [16, 16, 16, 16] },
+      fills: [{ type: "solid", tokens: { color: "color/brand" } }],
+      tokens: { itemSpacing: "space/md", paddingTop: "space/md", paddingRight: "space/md", paddingBottom: "space/md", paddingLeft: "space/md" },
+      children: [
+        { text: "Order summary", handle: "title", styles: { text: "Heading/H1" }, font: { size: 40, family: "Inter", align: "center" } },
+        { text: "Free delivery", tokens: { fills: "color/brand" } },
+        { name: "Card", radius: 4, tokens: { topLeftRadius: "radius/md" }, strokes: { colors: ["#cccccc"], weight: 1 } },
+        { component: "Button", handle: "pay", props: { Size: "Large", Label: "Pay now", Icon: true }, widthMode: "fill" },
+        { type: "INSTANCE", component: "local-5:3", name: "New" },
+      ] } }]);
+    const a = r.applied[0];
+    const root = alive().find((n) => n.id === a?.id);
+    const [title, note, card, pay, badge] = kids(root);
+    ok("[REFS] one call: ok, instances counted, handles back, nothing imported", r.ok === true
+      && JSON.stringify(a?.created) === JSON.stringify({ frames: 2, texts: 2, instances: 2 }) && a?.handles?.pay === pay?.id && w.imports.length === 0);
+    ok("[REFS] a paint names a variable: bound, with no raw colour given",
+      JSON.stringify(root?.fills) === JSON.stringify([{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, boundVariables: { color: { type: "VARIABLE_ALIAS", id: "VariableID:30:1" } } }]));
+    ok("[REFS] spacing fields name a number variable: bound after the raw values",
+      JSON.stringify(root?.boundVariables) === JSON.stringify(Object.fromEntries(["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].map((k) => [k, { type: "VARIABLE_ALIAS", id: "VariableID:30:2" }]))));
+    ok("[REFS] a text names a text style: set, in the style's font; the font fields it sets are not set, the rest are",
+      title?.textStyleId === "S:h1," && JSON.stringify(title.fontName) === JSON.stringify({ family: "Inter", style: "Bold" }) && title.fontSize === undefined && title.textAlignHorizontal === "CENTER");
+    ok("[REFS] …and the reply warns that the style sets them", JSON.stringify(r.warnings) === JSON.stringify(["ops[0].tree.children[0]: `font.family`, `font.size` are set by the text style, so they are not set"]));
+    ok("[REFS] `tokens.fills` on a text with no fills: one bound paint", JSON.stringify((note?.fills as unknown[] | undefined)?.map((p) => isNode(p) ? p.boundVariables : null)) === JSON.stringify([{ color: { type: "VARIABLE_ALIAS", id: "VariableID:30:1" } }]));
+    ok("[REFS] a corner names a variable; the raw radius stays on the others", num(card, "cornerRadius") === 4 && JSON.stringify(card?.boundVariables) === JSON.stringify({ topLeftRadius: { type: "VARIABLE_ALIAS", id: "VariableID:30:3" } }));
+    ok("[REFS] an instance of a component set: made from its default variant, switched to the variant its props pick, properties keyed as Figma takes them",
+      pay?.type === "INSTANCE" && isNode(pay.mainComponent) && pay.mainComponent.id === "5:6" && pay.layoutSizingHorizontal === "FILL"
+      && JSON.stringify(pay.props) === JSON.stringify({ Size: "Large", "Label#1:0": "Pay now", "Icon#1:1": true }));
+    ok("[REFS] a component by its key, renamed", badge?.type === "INSTANCE" && isNode(badge.mainComponent) && badge.mainComponent.id === "5:3" && badge.name === "New" && badge.props !== undefined);
+    ok("[REFS] raw values are counted as unbound (the card's stroke colour, weight and the note's raw font)", a?.unbound === 4);
+    // Hug follows the variant the props pick: the default Chip has no auto-layout, the Large one has.
+    const chips = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", props: { Size: "Large", Tone: "On" }, widthMode: "hug" }] } }]);
+    const flat = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "Chip", widthMode: "hug" }] } }]);
+    ok("[REFS] an instance may hug when the variant its props pick has auto-layout, not when the default it stays on has none",
+      chips.ok === true && flat.ok === false && /component 'Chip' has no auto-layout, so its instance cannot `widthMode: "hug"`/.test(flat.error ?? ""));
+    // A combination of variant values the set does not have is refused (Figma would leave the instance on another one).
+    const sparse = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: "Chip", props: { Size: "Large" } }] } }]);
+    ok("[REFS] a variant combination the set lacks is refused, with the variants it has",
+      sparse.ok === false && /tree\.children\[0\]\.component: component 'Chip' has no variant Size=Large, Tone=Off; closest: /.test(sparse.error ?? ""));
+    // A variant picked by id, with no variant values given, is the one checked (not a twin with the same values).
+    const picked = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ component: "7:3", widthMode: "hug" }] } }]);
+    ok("[REFS] a variant picked by id and given no variant values is checked as itself", picked.ok === true);
+    // A styled text's own font axes set nothing, so a family the file lacks is not checked for them.
+    const axes = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "Hello", styles: { text: "Body" }, font: { family: "Ignored Font", variationSettings: { wght: 600 } } }] } }]);
+    ok("[REFS] a styled text's font axes are not checked (the style sets the font)", axes.ok === true);
+  },
+}, {
+  name: "design-system references (createTree): every bad name refused in one reply, with candidates; nothing imported",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const { api, alive } = w;
+    const before = alive().length;
+    const r = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [
+      { component: "Buton" },
+      { component: "Card" },
+      { component: "Button", props: { Sise: "Large", Size: "Huge", Icon: "yes", Glyph: "9:9" } },
+      { component: "Badge", widthMode: "hug" },
+      { fills: [{ type: "solid", tokens: { color: "color/brnd" } }] },
+      { fills: [{ type: "solid", tokens: { color: "color/text" } }] },
+      { fills: [{ type: "solid", tokens: { color: "space/md" } }] },
+      { text: "a", styles: { text: "Heading/H2" } },
+      { text: "b", styles: { text: "Fancy" } },
+      { component: KEY("e") },
+      { fills: [{ type: "solid", tokens: { color: "color/brnd" } }] },
+    ] } }]);
+    const err = r.error ?? "";
+    const has = (line: string): boolean => err.split("\n").includes(line);
+    ok("[REFS-REFUSE] refused whole, nothing made, nothing imported (a library item waits for the whole batch)",
+      r.ok === false && r.failedAt === 0 && alive().length === before && w.imports.length === 0);
+    ok("[REFS-REFUSE] a component that matches nothing: the nearest names", has("ops[0] (createTree): tree.children[0].component: component 'Buton' matches no component in this file (a library component is named by its key); closest: 'Button', 'Badge', 'Twin'"));
+    ok("[REFS-REFUSE] a component that matches two: pass a key or id", has("ops[0] (createTree): tree.children[1].component: component 'Card' matches 2 components — pass one's key or id: 'Card' (5:4), 'Card' (5:5)"));
+    ok("[REFS-REFUSE] property names and values checked against the component, every one at once",
+      has("ops[0] (createTree): tree.children[2].component: component 'Button' has no property 'Sise'; closest: 'Size', 'Label', 'Icon'; property 'Size' of 'Button' has no value \"Huge\"; closest: 'Large', 'Small', 'Medium'; "
+        + "property 'Icon' of 'Button' is a boolean: give true or false; property 'Glyph' of 'Button' swaps a nested instance, which a write cannot set yet"));
+    ok("[REFS-REFUSE] an instance cannot hug when its component has no auto-layout", has("ops[0] (createTree): tree.children[3].component: component 'Badge' has no auto-layout, so its instance cannot `widthMode: \"hug\"`"));
+    ok("[REFS-REFUSE] a variable that matches nothing: candidates from the file and the library, reported once with how many more places",
+      has("ops[0] (createTree): tree.children[4].fills[0].tokens.color: variable 'color/brnd' matches no variable in this file or an enabled library; closest: 'color/brand', 'color/text', 'color/accent' (and 1 more place in this spec)"));
+    ok("[REFS-REFUSE] a variable that matches two", has("ops[0] (createTree): tree.children[5].fills[0].tokens.color: variable 'color/text' matches 2 variables — pass one's key or id: 'color/text' (VariableID:30:4), 'color/text' (VariableID:31:4)"));
+    ok("[REFS-REFUSE] a number variable on a paint", has("ops[0] (createTree): tree.children[6].fills[0].tokens.color: variable 'space/md' holds a float, and this field takes a color variable"));
+    ok("[REFS-REFUSE] a text style that matches nothing, and one whose font the file lacks",
+      has("ops[0] (createTree): tree.children[7].styles.text: text style 'Heading/H2' matches no text style in this file (a library style is named by its key); closest: 'Heading/H1', 'Fancy', 'Body'")
+      && has("ops[0] (createTree): tree.children[8].styles.text: text style 'Fancy': its font 'Papyrus Regular' is not available in this file; closest: 'Inter Regular', 'Roboto Regular', 'Inter Bold'"));
+    ok("[REFS-REFUSE] one refusal lists them all", /^9 problems — nothing was changed:\n/.test(err));
+  },
+}, {
+  name: "design-system references (createTree): library items import only once the batch resolved, under Allow edits",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const { api, alive } = w;
+    const spec = { layout: { display: "flex" }, tokens: { itemSpacing: "space/lg" }, fills: [{ type: "solid", tokens: { color: "color/accent" } }], children: [
+      { component: KEY("e"), props: { Initials: "JD" } },
+      { text: "Hi", styles: { text: KEY("f") } },
+      { text: "Again", styles: { text: KEY("f") } },
+    ] };
+    const r = await api.applyWrites([{ op: "createTree", tree: spec }]);
+    const root = alive().find((n) => n.id === r.applied[0]?.id);
+    const [avatar, hi] = kids(root);
+    ok("[REFS-LIB] library variables by name and a component and style by key: each imported once, then used", r.ok === true
+      && JSON.stringify(w.imports) === JSON.stringify(["variable " + KEY("c"), "variable " + KEY("d"), "component " + KEY("e"), "style " + KEY("f")])
+      && isNode(avatar?.mainComponent) && avatar.mainComponent.id === "9:1" && JSON.stringify(avatar.props) === JSON.stringify({ "Initials#2:0": "JD" })
+      && hi?.textStyleId === "S:caption," && JSON.stringify(root?.boundVariables) === JSON.stringify({ itemSpacing: { type: "VARIABLE_ALIAS", id: "VariableID:lib/1:2" } }));
+    // A key no library publishes: tried (it may be a library's), and the refusal says so — nothing built.
+    const before = alive().length;
+    const missing = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: KEY("a") }] } }]);
+    ok("[REFS-LIB] a key no library has: refused after the import is tried, nothing built",
+      missing.ok === false && alive().length === before && w.imports.includes("component " + KEY("a")) && w.imports.includes("component set " + KEY("a"))
+      && /tree\.children\[0\]\.component: no component in this file or an enabled library has the key 'a{40}'/.test(missing.error ?? ""));
+    // A batch with any other problem imports nothing (a bad page here), and Allow edits off imports nothing either.
+    const n = w.imports.length;
+    const badPage = await api.applyWrites([{ op: "createTree", page: "Nowhere", tree: spec }]);
+    ok("[REFS-LIB] another problem in the batch: nothing is imported", badPage.ok === false && w.imports.length === n);
+    // Unticked while a text style is being set: the build stops and the hidden root is removed.
+    w.hooks.onStyle = async () => { await w.allowEdits(false); };
+    const mid = await api.applyWrites([{ op: "createTree", tree: { children: [{ text: "x", styles: { text: "Body" } }] } }]);
+    w.hooks.onStyle = undefined;
+    ok("[REFS-LIB] Allow edits turned off while a text style is set: refused as edits-off, the half-built tree removed",
+      mid.ok === false && mid.refused === "edits-off" && alive().length === before);
+    // Unticked during the first of two imports: the second never runs.
+    await w.allowEdits(true);
+    w.hooks.onImport = async () => { await w.allowEdits(false); };
+    const m = w.imports.length;
+    const raced = await api.applyWrites([{ op: "createTree", tree: { fills: [{ type: "solid", tokens: { color: KEY("c") } }], tokens: { itemSpacing: KEY("d") }, layout: { display: "flex" } } }]);
+    w.hooks.onImport = undefined;
+    ok("[REFS-LIB] unticked during an import: no further import runs, refused as edits-off, nothing built",
+      raced.ok === false && raced.refused === "edits-off" && w.imports.length === m + 1 && alive().length === before);
+    await w.allowEdits(true);
+    // A key is exact: it imports the keyed component even though a local one is named exactly like the key.
+    const k = w.imports.length;
+    const keyed = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: KEY("e") }] } }]);
+    const keyedInst = kids(alive().find((n) => n.id === keyed.applied[0]?.id))[0];
+    ok("[REFS-LIB] a key beats a local component named like it", keyed.ok === true && w.imports.length === k + 1
+      && isNode(keyedInst?.mainComponent) && keyedInst.mainComponent.id === "9:1");
+    // An unpublished key used twice: one problem, with how many more places.
+    const twice = await api.applyWrites([{ op: "createTree", tree: { children: [{ fills: [{ type: "solid", tokens: { color: KEY("b") } }] }, { fills: [{ type: "solid", tokens: { color: KEY("b") } }] }] } }]);
+    ok("[REFS-LIB] a failed import is reported once per name, with the other places counted",
+      twice.ok === false && /^ops\[0\] \(createTree\): tree\.children\[0\]\.fills\[0\]\.tokens\.color: no variable in this file or an enabled library has the key 'b{40}'.* \(and 1 more place in this spec\)\. Nothing was changed\.$/.test(twice.error ?? ""));
+  },
+}, {
+  name: "design-system references (createTree): the shape is checked by the dry run, the wire check and the plugin alike",
+  async run() {
+    const bad = { layout: { display: "flex" }, tokens: { counterAxisSpacing: "space/md", cornerRadius: "radius/md" }, styles: { text: "Body", fill: "Brand" }, children: [
+      { component: "Button", children: [{ text: "x" }], fills: [] },
+      { name: "Box", props: { a: "b" }, tokens: { itemSpacing: "space/md", fills: "color/brand" }, fills: [{ type: "solid", color: "#fff" }] },
+      { text: "t", tokens: { itemSpacing: "space/md" }, strokes: { colors: ["#000", "#111"] }, styles: {} },
+      { text: "u", tokens: { strokes: ["a"] }, strokes: { colors: ["#000", "#111"] } },
+      { fills: [{ type: "solid" }] },
+      { type: "INSTANCE" },
+    ] };
+    const step = writeOpPreview({ op: "createTree", tree: bad }, 0);
+    const lines = (step.invalid ?? "").split("\n");
+    const want = [
+      "tree.tokens.cornerRadius: a read field a write cannot set yet — bind each corner: topLeftRadius, topRightRadius, bottomRightRadius, bottomLeftRadius",
+      "tree.styles.fill: a read field a write cannot set yet — bind the paint to a colour variable instead: `fills[].tokens.color`",
+      "tree: `styles.text` is only on a TEXT node",
+      "tree: `tokens.counterAxisSpacing` is the gap between wrapped tracks: it needs `layout.flexWrap: \"wrap\"`",
+      "tree.children[0]: `children` is not on an INSTANCE node (its content comes from its component; set its `props`)",
+      "tree.children[0]: `fills` is not on an INSTANCE node (its content comes from its component; set its `props`)",
+      "tree.children[1]: `props` is only on an INSTANCE node",
+      "tree.children[1]: `tokens.itemSpacing` needs auto-layout on the node (layout.display \"flex\")",
+      "tree.children[1]: `tokens.fills` names 'color/brand', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`",
+      "tree.children[2]: `tokens.itemSpacing` is not on a TEXT node",
+      "tree.children[3]: `tokens.strokes` names 1 variable for 2 stroke colours; give one per colour, in order (or leave `strokes.colors` out)",
+      "tree.children[4].fills[0] is missing color (a hex colour, or a colour variable in `tokens.color`)",
+      "tree.children[5]: an INSTANCE node needs `component` (a component's name, key or id)",
+    ];
+    const missing = want.filter((l) => !lines.includes(l));
+    ok("[REFS-SHAPE] every shape problem, by path" + (missing.length ? " (missing: " + missing.join(" | ") + "; got: " + lines.join(" | ") + ")" : ""), missing.length === 0 && lines.length === want.length);
+    ok("[REFS-SHAPE] the wire check refuses the same spec", (argsShapeError("write", { ops: [{ op: "createTree", tree: bad }] }) ?? "").includes(want[0] ?? "?"));
+    const good = writeOpPreview({ op: "createTree", tree: { name: "Pay", layout: { display: "flex" }, tokens: { itemSpacing: "space/md" }, fills: [{ type: "solid", tokens: { color: "color/brand" } }], children: [
+      { component: "Button", props: { Size: "Large" } }, { component: "Button" }, { text: "Hi", styles: { text: "Body" } }, { text: "Raw", font: { color: "#000000" } },
+    ] } }, 0);
+    ok("[REFS-SHAPE] the dry run names every component, variable and text style, and the unbound count",
+      good.invalid === undefined && good.change === "creates frame 'Pay', horizontal auto-layout with 5 nodes (1 frame, 2 texts, 2 instances) on the current page, placed beside the existing frames; "
+        + "fonts 'Inter Regular'; components 'Button'; variables 'color/brand', 'space/md'; text styles 'Body'; 2 raw values left unbound — "
+        + "the page, fonts and names are checked against the file when applied (a library item is imported only then), and nothing lands unless all of it does");
   },
 }];
