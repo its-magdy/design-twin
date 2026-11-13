@@ -5633,12 +5633,10 @@
       } else {
         const size2 = kind === "FRAME" ? sizeOf(b) : b.box;
         const box = {};
-        if (size2 && size2.w !== void 0 && b.widthMode === void 0 && (has2("box") || has2("widthMode"))) box.w = size2.w;
-        if (size2 && size2.h !== void 0 && b.heightMode === void 0 && (has2("box") || has2("heightMode"))) box.h = size2.h;
-        if (has2("box") && !size2 && b.widthMode === void 0 && b.heightMode === void 0) {
-          box.w = 100;
-          box.h = 100;
-        }
+        const w = size2 && size2.w !== void 0 ? size2.w : 100;
+        const h = size2 && size2.h !== void 0 ? size2.h : 100;
+        if (b.widthMode === void 0 && (has2("box") || has2("widthMode"))) box.w = w;
+        if (b.heightMode === void 0 && (has2("box") || has2("heightMode"))) box.h = h;
         if (box.w !== void 0 || box.h !== void 0) {
           set.box = box;
           touch("box");
@@ -7038,6 +7036,15 @@
     const f = foreignIn(n, u.key);
     if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
   }
+  function touchedBy(u) {
+    const out = /* @__PURE__ */ new Set([u.root.id]);
+    for (const x of u.plan.updates) out.add(x.ref.id);
+    for (const b of u.plan.builds) out.add(b.parent.id);
+    for (const o of u.plan.orders) out.add(o.parent.id);
+    for (const st of u.plan.stamps) out.add(st.ref.id);
+    for (const h of u.plan.handles) out.add(h.ref.id);
+    return out;
+  }
   function removalsOf(u) {
     const out = u.plan.removals.slice();
     for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
@@ -7191,7 +7198,12 @@
     const applied = { id: u.root.id, key };
     if (changed.length) applied.changed = changed;
     if (plan.builds.length) applied.created = createdCount(made);
-    const removed = removalsOf(u).length;
+    let removed = 0;
+    const count2 = (n) => {
+      if (n.getPluginData(KEY_DATA) === u.key) removed++;
+      if (n.type === "FRAME") for (const c of n.children) count2(c);
+    };
+    for (const n of removalsOf(u)) count2(n);
     if (removed) applied.removed = removed;
     const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
     if (reordered) applied.reordered = reordered;
@@ -7587,7 +7599,8 @@
         ...patches2.problems,
         ...structure2.problems,
         ...deleteConflicts(list, structure2.deletes, structure2.moves),
-        ...removalConflicts(list, trees2.targets, structure2.moves)
+        ...removalConflicts(list, trees2.targets, structure2.moves),
+        ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
       return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, problems: problems2 };
     };
@@ -7693,6 +7706,21 @@
     if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...o.reason !== void 0 ? { reason: o.reason } : {} };
     if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
     return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
+  }
+  function keyedDeleteConflicts(targets, deletes, moves) {
+    const out = [];
+    for (const [i, t] of targets) {
+      if (!t.update) continue;
+      const touched = touchedBy(t.update);
+      for (const [d, del] of deletes) {
+        for (const id of idsDeletedWith(del.node, moves)) {
+          if (!touched.has(id)) continue;
+          out.push({ index: d, op: "delete", message: "it deletes '" + id + "', part of the result the keyed re-send in ops[" + i + "] updates (deletes run after every other op); drop one of the two" });
+          break;
+        }
+      }
+    }
+    return out;
   }
   function removalConflicts(list, targets, moves) {
     const gone = /* @__PURE__ */ new Map();

@@ -178,6 +178,17 @@ export function checkRemoval(u: KeyedUpdate, n: SceneNode): void {
   if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
 }
 
+/** The ids of every node of the file an update changes, builds in or reorders (its root included). */
+export function touchedBy(u: KeyedUpdate): Set<string> {
+  const out = new Set<string>([u.root.id]);
+  for (const x of u.plan.updates) out.add(x.ref.id);
+  for (const b of u.plan.builds) out.add(b.parent.id);
+  for (const o of u.plan.orders) out.add(o.parent.id);
+  for (const st of u.plan.stamps) out.add(st.ref.id);
+  for (const h of u.plan.handles) out.add(h.ref.id);
+  return out;
+}
+
 /** The nodes an update removes once its batch has landed: the ones the new spec dropped, and the ones built anew. */
 export function removalsOf(u: KeyedUpdate): SceneNode[] {
   const out = u.plan.removals.slice();
@@ -340,7 +351,13 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const applied: AppliedWrite = { id: u.root.id, key };
   if (changed.length) applied.changed = changed;
   if (plan.builds.length) applied.created = createdCount(made);
-  const removed = removalsOf(u).length;
+  // Every node of the result that goes: the removed ones and what this key built below them (an instance is one node).
+  let removed = 0;
+  const count = (n: SceneNode): void => {
+    if (n.getPluginData(KEY_DATA) === u.key) removed++;
+    if (n.type === "FRAME") for (const c of n.children) count(c);
+  };
+  for (const n of removalsOf(u)) count(n);
   if (removed) applied.removed = removed;
   const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
   if (reordered) applied.reordered = reordered;

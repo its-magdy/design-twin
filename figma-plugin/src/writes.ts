@@ -8,7 +8,7 @@ import { editsAllowed, editsAllowedNow } from "./edits";
 import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
-import { applyUpdate, checkRemoval, removalsOf, resolveKeyed } from "./keyed";
+import { applyUpdate, checkRemoval, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
@@ -309,7 +309,7 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     const patches = await resolvePatchOps(list);
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
     const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
-      ...removalConflicts(list, trees.targets, structure.moves)].sort((a, b) => a.index - b.index);
+      ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     return { modes, trees, patches, structure, problems };
   };
   let { modes, trees, patches, structure, problems } = await resolveBatch();
@@ -433,6 +433,24 @@ function reviewRefusal(o: ReviewOutcome): WriteResult {
   if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...(o.reason !== undefined ? { reason: o.reason } : {}) };
   if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
   return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
+}
+
+/** A delete that takes a node a keyed re-send of the same batch changes, builds in or reorders (its result's root
+ *  included): deletes run last, so the re-send's reply would name what is about to go. Refused up front. */
+function keyedDeleteConflicts(targets: ReadonlyMap<number, TreeTarget>, deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+  const out: OpProblem[] = [];
+  for (const [i, t] of targets) {
+    if (!t.update) continue;
+    const touched = touchedBy(t.update);
+    for (const [d, del] of deletes) {
+      for (const id of idsDeletedWith(del.node, moves)) {
+        if (!touched.has(id)) continue;
+        out.push({ index: d, op: "delete", message: "it deletes '" + id + "', part of the result the keyed re-send in ops[" + i + "] updates (deletes run after every other op); drop one of the two" });
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /** An op that names a node a keyed re-send of the same batch removes (it, or anything below it), as a parent or a target:

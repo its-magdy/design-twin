@@ -178,10 +178,11 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
       const box: { w?: number; h?: number } = {};
       // An axis is sized when its size changed, or when a sizing mode that decided it was dropped (the spec's size
       // then applies again, as in a fresh build).
-      if (size && size.w !== undefined && b.widthMode === undefined && (has("box") || has("widthMode"))) box.w = size.w;
-      if (size && size.h !== undefined && b.heightMode === undefined && (has("box") || has("heightMode"))) box.h = size.h;
-      // No size at all, and no sizing mode: a new frame's own (100 × 100).
-      if (has("box") && !size && b.widthMode === undefined && b.heightMode === undefined) { box.w = 100; box.h = 100; }
+      // An axis the spec leaves without a size is a new frame's own (100), as in a fresh build.
+      const w = size && size.w !== undefined ? size.w : 100;
+      const h = size && size.h !== undefined ? size.h : 100;
+      if (b.widthMode === undefined && (has("box") || has("widthMode"))) box.w = w;
+      if (b.heightMode === undefined && (has("box") || has("heightMode"))) box.h = h;
       if (box.w !== undefined || box.h !== undefined) { set.box = box; touch("box"); }
     }
   }

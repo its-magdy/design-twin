@@ -205,6 +205,9 @@ console.log("\nthe plan of a re-send:");
   const fixed = clone(hug);
   delete fixed.widthMode;
   const pf = planUpdate(old(hug), fixed).updates[0];
+  const tall: TreeNodeSpec = { key: "s", layout: { mode: "absolute", width: 300, height: 400 } };
+  const narrow: TreeNodeSpec = { key: "s", layout: { mode: "absolute", width: 200 } };
+  check("a dropped size axis goes back to a new frame's 100 (the other takes its new size)", JSON.stringify(planUpdate(old(tall), narrow).updates[0]?.set) === JSON.stringify({ box: { w: 200, h: 100 } }));
   check("a dropped `hug` sizes the axis to the spec's box again", JSON.stringify(pf?.set) === JSON.stringify({ box: { w: 300 }, widthMode: "fixed" }) && pf?.fields.join() === "box,widthMode");
 }
 

@@ -1872,6 +1872,17 @@ export const cases: Case[] = [{
     ok("[KEYED-SAFE] a removal refused after the build: the batch fails and the explicit delete never ran",
       late.ok === false && /now holds 'Dropped in'/.test(late.error ?? "") && spareNode?.removed === false && byName(rootNode(), "S") === undefined);
 
+    // A delete of a result the same batch re-sends: refused up front (the reply would name nodes about to go).
+    const boxId = rootNode()?.id ?? "";
+    const both = await w.api.applyWrites([{ op: "createTree", tree: base([{ text: "A", name: "A", handle: "a" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, sizeLimits: { maxWidth: 900 } }, { name: "New", handle: "new" }]) }, { op: "delete", nodeId: boxId }]);
+    ok("[KEYED-SAFE] deleting the result a keyed re-send in the same batch updates: refused up front, nothing changed",
+      both.ok === false && both.failedAt === 1 && /part of the result the keyed re-send in ops\[0\] updates/.test(both.error ?? "") && byName(rootNode(), "New") === undefined && rootNode()?.removed === false);
+
+    // `removed` counts every node of the result that goes, not only the top of what was dropped.
+    await w.api.applyWrites([{ op: "createTree", tree: { key: "nest", name: "Nest", children: [{ name: "Outer", children: [{ name: "Inner" }, { text: "T" }] }] } }]);
+    const dropped = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest", name: "Nest" } }]);
+    ok("[KEYED-SAFE] dropping a frame with two nodes inside reports removed: 3", dropped.ok === true && dropped.applied[0]?.removed === 3);
+
     // A spec whose own fields cannot be stored on a node: refused before anything is built.
     const before = w.alive().length;
     const huge = await w.api.applyWrites([{ op: "createTree", tree: { key: "huge", name: "Huge", children: [{ text: "x".repeat(120000) }] } }]);
