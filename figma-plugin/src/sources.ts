@@ -243,6 +243,21 @@ async function reaches(graph: AliasGraph, from: Variable, to: string): Promise<b
   return false;
 }
 
+/** Every string value `v` holds, across its modes and through its aliases (a few levels). */
+async function stringValues(v: Variable, depth = 0): Promise<string[]> {
+  const out: string[] = [];
+  for (const k of Object.keys(v.valuesByMode)) {
+    const x = v.valuesByMode[k];
+    if (typeof x === "string") { if (out.indexOf(x) < 0) out.push(x); continue; }
+    const id = aliasOf(x);
+    if (!id || depth > 4) continue;
+    let next: Variable | null = null;
+    try { next = await figma.variables.getVariableByIdAsync(id); } catch { next = null; }
+    if (next) for (const y of await stringValues(next, depth + 1)) if (out.indexOf(y) < 0) out.push(y);
+  }
+  return out;
+}
+
 /** The font a style's fields name, defaulting to `now` (what it has once the batch's earlier edits landed). */
 function fontAfter(now: FontName, set: StyleSet): FontName {
   return { family: set.font !== undefined ? set.font : now.family, style: set.weight !== undefined ? set.weight : now.style };
@@ -341,6 +356,9 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
           font = after;
           fontNow.set(st.id, after);
         }
+        // A font field bound to a variable makes the font this edit leaves depend on the variable's value: later edits of
+        // the style check their fonts when they apply.
+        if (tok.fontFamily !== undefined || tok.fontStyle !== undefined || tok.fontWeight !== undefined) fontUnknown.add(st.id);
         for (const field of Object.keys(bv) as VariableBindableTextField[]) {
           const a = bv[field];
           if (!a) continue;
@@ -513,6 +531,17 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
       if (set.paragraphSpacing !== undefined) st.paragraphSpacing = set.paragraphSpacing;
       if (set.paragraphIndent !== undefined) st.paragraphIndent = set.paragraphIndent;
       const tok = set.tokens || {};
+      // Binding the family or the style to a variable switches the style to the font its values name: those fonts are
+      // loaded first (every mode's, crossed with the other half), best effort — Figma refuses the binding if the one it
+      // needs is missing, and the batch is put back.
+      const fam = tok.fontFamily ? t.refs.variables.get(tok.fontFamily) : undefined;
+      const sty = tok.fontStyle ? t.refs.variables.get(tok.fontStyle) : undefined;
+      if (fam || sty) {
+        const families = fam ? await stringValues(fam) : [st.fontName.family];
+        const styles = sty ? await stringValues(sty) : [st.fontName.style];
+        if (fam && !sty) styles.push(st.fontName.style);
+        for (const family of families) for (const style of styles) { try { await figma.loadFontAsync({ family, style }); } catch { /* not this one */ } }
+      }
       for (const k of Object.keys(tok) as TextStyleTokenField[]) {
         const ref = tok[k];
         if (ref === undefined) continue;

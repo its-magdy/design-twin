@@ -46,6 +46,7 @@ function sourceWorld() {
   const beta = variable("VariableID:51:4", "flag/beta", "BOOLEAN", spacing, { "51:0": false });
   // A string variable the text style's font family is bound to: changing it changes the style's font (see textFields).
   const family = variable("VariableID:51:5", "font/family", "STRING", spacing, { "51:0": "Inter" });
+  const fontStyle = variable("VariableID:51:7", "font/style", "STRING", spacing, { "51:0": "Bold" });
   const libVar = variable("VariableID:lib/9:1", "color/core", "COLOR", core, { "9:0": rgba(0, 1, 0) }, { remote: true, key: KEY("c") });
   // A library number the file uses (a local variable aliases it); its library lists it by no name a plugin can read.
   const libSize = variable("VariableID:lib/9:2", "size/core", "FLOAT", core, { "9:0": 20 }, { remote: true, key: KEY("b") });
@@ -80,6 +81,14 @@ function sourceWorld() {
     getStyleConsumersAsync: async () => [{ node: styled, fields: ["textStyleId"] }] };
   textFields.setBoundVariable = (field: string, v: FakeVariable | null) => {
     const b = isObj(textFields.boundVariables) ? { ...textFields.boundVariables } : {};
+    // Binding the family or the style switches the font to the variable's value, which must be loaded (as in Figma).
+    if (v !== null && (field === "fontFamily" || field === "fontStyle")) {
+      const now = isObj(textFields.fontName) ? textFields.fontName : {};
+      const value = String(Object.values(v.valuesByMode)[0]);
+      const next = field === "fontFamily" ? { family: value, style: String(now.style) } : { family: String(now.family), style: value };
+      if (!loaded.has(fontKey(next))) throw new Error("in Figma: font " + fontKey(next) + " is not loaded (binding " + field + ")");
+      textFields.fontName = next;
+    }
     if (v === null) delete b[field]; else b[field] = alias(v.id);
     textFields.boundVariables = b;
   };
@@ -121,7 +130,7 @@ function sourceWorld() {
   const components = page("0:11", "Components", [row]);
   row.parent = components;
   const nodes = Object.fromEntries([...screenLayers, divider, row, avatar, avatarDot, screens, components].map((x) => [String(x.id), x]));
-  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family, [spare.id]: spare, [bodySize.id]: bodySize };
+  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family, [spare.id]: spare, [bodySize.id]: bodySize, [fontStyle.id]: fontStyle };
   // The text style's family follows the variable it is bound to, as Figma's does.
   const setFamily = family.setValueForMode;
   family.setValueForMode = (m: string, x: unknown) => { setFamily(m, x); caption.fontName = { family: String(x), style: "Regular" }; textFields.fontName = { family: String(x), style: isObj(textFields.fontName) ? String(textFields.fontName.style) : "Regular" }; };
@@ -136,7 +145,7 @@ function sourceWorld() {
       getVariablesInLibraryCollectionAsync: async () => [{ name: "color/core", key: KEY("c"), resolvedType: "COLOR" }],
     },
   }, {
-    loadFontAsync: async (f: { family: string; style: string }) => { if (!["Inter", "Inter Display"].includes(f.family) || !["Regular", "Bold", "Semi Bold"].includes(f.style)) throw new Error("font not found"); loaded.add(fontKey(f)); },
+    loadFontAsync: async (f: { family: string; style: string }) => { if (!(f.family === "Inter" ? ["Regular", "Bold", "Semi Bold"] : f.family === "Inter Display" ? ["Regular", "Semi Bold"] : []).includes(f.style)) throw new Error("font not found"); loaded.add(fontKey(f)); },
     variables: {
       createVariableAlias: (v: FakeVariable) => alias(v.id),
       setBoundVariableForPaint: (p: FakeNode, field: string, v: FakeVariable | null) => ({ ...p, boundVariables: v ? { [field]: alias(v.id) } : {} }),
@@ -332,6 +341,14 @@ export const cases: Case[] = [{
     ok("[SOURCE] `tokens` binds a field to a variable and `null` unbinds one", bind.ok && same(w.textStyle.boundVariables, { lineHeight: alias(w.gap.id) }));
     const rebind = await write(w, [{ op: "setStyle", style: "Body", set: { size: 16, tokens: { fontSize: "space/gap" } } }]);
     ok("[SOURCE] a raw value and a binding of the same field in one edit: the binding wins (it is set after)", rebind.ok && same(w.textStyle.boundVariables, { lineHeight: alias(w.gap.id), fontSize: alias(w.gap.id) }));
+    const styleBound = await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { fontStyle: "font/style" } } }]);
+    ok("[SOURCE] binding a style's font style to a variable loads the font its value names first", styleBound.ok && same(w.textStyle.fontName, { family: "Inter", style: "Bold" }));
+    // On a family whose Bold the file lacks, bind the family to one that has it, then set the weight: the second edit is
+    // checked against the font the binding leaves, when it applies.
+    await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { fontStyle: null } } }]);
+    Object.defineProperty(w.textStyle, "fontName", { value: { family: "Inter Display", style: "Regular" }, writable: true, enumerable: true, configurable: true });
+    const chain = await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { fontFamily: "font/family" } } }, { op: "setStyle", style: "Body", set: { weight: "Bold" } }]);
+    ok("[SOURCE] a weight set after a family binding in the same batch is checked against the bound family", chain.ok && same(w.textStyle.fontName, { family: "Inter", style: "Bold" }));
     const wrong = await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { fontFamily: "space/gap" } } }]);
     ok("[SOURCE] a field bound to a variable of the wrong type is refused", !wrong.ok && /holds a float, and this field takes a string/.test(wrong.error ?? ""));
     ok("[SOURCE] the wire refuses an unknown token field, with candidates, and tokens on a paint style's edit as another kind",

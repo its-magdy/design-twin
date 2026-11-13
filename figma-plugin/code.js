@@ -7735,6 +7735,28 @@
     }
     return false;
   }
+  async function stringValues(v, depth = 0) {
+    const out = [];
+    for (const k of Object.keys(v.valuesByMode)) {
+      const x = v.valuesByMode[k];
+      if (typeof x === "string") {
+        if (out.indexOf(x) < 0) out.push(x);
+        continue;
+      }
+      const id = aliasOf(x);
+      if (!id || depth > 4) continue;
+      let next = null;
+      try {
+        next = await figma.variables.getVariableByIdAsync(id);
+      } catch {
+        next = null;
+      }
+      if (next) {
+        for (const y of await stringValues(next, depth + 1)) if (out.indexOf(y) < 0) out.push(y);
+      }
+    }
+    return out;
+  }
   function fontAfter(now, set) {
     return { family: set.font !== void 0 ? set.font : now.family, style: set.weight !== void 0 ? set.weight : now.style };
   }
@@ -7863,6 +7885,7 @@
             font = after;
             fontNow.set(st.id, after);
           }
+          if (tok.fontFamily !== void 0 || tok.fontStyle !== void 0 || tok.fontWeight !== void 0) fontUnknown.add(st.id);
           for (const field of Object.keys(bv)) {
             const a = bv[field];
             if (!a) continue;
@@ -8027,6 +8050,19 @@
         if (set.paragraphSpacing !== void 0) st.paragraphSpacing = set.paragraphSpacing;
         if (set.paragraphIndent !== void 0) st.paragraphIndent = set.paragraphIndent;
         const tok = set.tokens || {};
+        const fam = tok.fontFamily ? t.refs.variables.get(tok.fontFamily) : void 0;
+        const sty = tok.fontStyle ? t.refs.variables.get(tok.fontStyle) : void 0;
+        if (fam || sty) {
+          const families = fam ? await stringValues(fam) : [st.fontName.family];
+          const styles = sty ? await stringValues(sty) : [st.fontName.style];
+          if (fam && !sty) styles.push(st.fontName.style);
+          for (const family of families) for (const style of styles) {
+            try {
+              await figma.loadFontAsync({ family, style });
+            } catch {
+            }
+          }
+        }
         for (const k of Object.keys(tok)) {
           const ref2 = tok[k];
           if (ref2 === void 0) continue;
