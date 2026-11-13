@@ -381,8 +381,8 @@ var DesignTwinRelay = (() => {
         lastSelCount = m.count;
         var rs = $("run-sel");
         if (rs && !busy) rs.disabled = m.count === 0;
-        // Figma fires selectionchange freely while an export runs (and collectNode selects the node it
-        // exported), so without this guard a selection event wipes the progress line mid-walk.
+        // Figma fires selectionchange freely while an export runs (the designer may click around mid-walk),
+        // so without this guard a selection event wipes the progress line mid-walk.
         if (running) return;
         setStatus(
           m.count === 0

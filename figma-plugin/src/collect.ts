@@ -533,7 +533,7 @@ async function collectSelectionTree(opts?: CollectOpts): Promise<ScreenResult> {
   return screenResult(r, sel.length === 1 ? first.name : "selection", first.name, nodes, { page: figma.currentPage, nodeId: first.id });
 }
 
-// Walk up to the owning PAGE node (needed to switch pages before selecting a linked node).
+// Walk up to the owning PAGE node (a read by id files its screen, and reads its measurements, under it).
 function pageOf(node: BaseNode): PageNode | null {
   let n: BaseNode | null = node;
   while (n && n.type !== "PAGE") n = n.parent;
