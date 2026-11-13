@@ -6590,7 +6590,8 @@
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
       }
-      const target = await resolvePatchNode(nd, set, later, loadFont, bad);
+      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+      const target = await resolvePatchNode(nd, set, later, loadFont, bad, fontsLater);
       if (target) targets.set(index, target);
     }
     const r = await resolveRefs(uses, loadFont);
@@ -6598,7 +6599,7 @@
     for (const t of targets.values()) t.refs = r.refs;
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
-  async function resolvePatchNode(nd, set, later, loadFont, bad) {
+  async function resolvePatchNode(nd, set, later, loadFont, bad, fontsLater = false) {
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
       bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page");
       return null;
@@ -6607,7 +6608,7 @@
     const fit = unfit(node, set);
     const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
     for (const m of misfits) bad(m);
-    if (node.type === "TEXT") {
+    if (node.type === "TEXT" && !fontsLater) {
       for (const f of await fontsToKeep(node)) {
         const err = await loadFont(f);
         if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
@@ -7602,14 +7603,6 @@
     const id = getF2(x, "id");
     return typeof id === "string" ? id : null;
   }
-  function aliasIds2(v) {
-    const out = [];
-    for (const k of Object.keys(v.valuesByMode)) {
-      const id = aliasOf(v.valuesByMode[k]);
-      if (id) out.push(id);
-    }
-    return out;
-  }
   function aliasesIn(graph, v) {
     let modes = graph.get(v.id);
     if (!modes) {
@@ -7987,12 +7980,16 @@
       warn("the layers using the style '" + style.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
     }
   }
-  async function variableImpact(v, lookups, warn) {
+  async function variableImpact(v, lookups, graph, warn) {
     const ids = /* @__PURE__ */ new Set([v.id]);
     const locals = await lookups.localVariables();
+    const aliasesNow = (x) => {
+      const modes = aliasesIn(graph, x);
+      return Object.keys(modes).map((k) => modes[k]).filter((id) => !!id);
+    };
     for (let grew = true; grew; ) {
       grew = false;
-      for (const x of locals) if (!ids.has(x.id) && aliasIds2(x).some((id) => ids.has(id))) {
+      for (const x of locals) if (!ids.has(x.id) && aliasesNow(x).some((id) => ids.has(id))) {
         ids.add(x.id);
         grew = true;
       }
@@ -8023,6 +8020,26 @@
     for (const st of styles) await consumersOf(st, nodes, warn);
     return { nodes: nodes.size, styles: styles.length, variables: ids.size - 1 };
   }
+  async function projectAliases(op, v, lookups, graph) {
+    let coll = null;
+    try {
+      coll = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
+    } catch {
+      coll = null;
+    }
+    if (!coll) return;
+    const m = modesOf(op, coll, v);
+    if ("errors" in m) return;
+    const modes = aliasesIn(graph, v);
+    for (const x of m.modes) {
+      if (typeof x.value !== "object") {
+        modes[x.modeId] = null;
+        continue;
+      }
+      const target = await lookups.variable(x.value.aliasOf);
+      modes[x.modeId] = "ok" in target ? target.ok.id : null;
+    }
+  }
   async function instancesOf(c, warn) {
     const mains = c.type === "COMPONENT_SET" ? c.children.filter((k) => k.type === "COMPONENT") : [c];
     let n = 0;
@@ -8042,6 +8059,7 @@
     };
     const lookups = sourceLookups();
     const steps = [];
+    const graph = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
       try {
         if (op.op === "patch") {
@@ -8059,7 +8077,12 @@
         }
         if (op.op === "setVariable" && op.variable) {
           const found = await lookups.variable(op.variable);
-          steps.push("error" in found ? { index, op: op.op, problem: found.error } : { index, op: op.op, affects: await variableImpact(found.ok, lookups, warn) });
+          if ("error" in found) {
+            steps.push({ index, op: op.op, problem: found.error });
+            continue;
+          }
+          steps.push({ index, op: op.op, affects: await variableImpact(found.ok, lookups, graph, warn) });
+          await projectAliases(op, found.ok, lookups, graph);
           continue;
         }
         if (op.op === "setStyle" && op.style) {

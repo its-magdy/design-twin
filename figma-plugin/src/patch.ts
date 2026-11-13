@@ -202,7 +202,10 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     uses.push(...patchUses(index, set));
     const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
-    const target = await resolvePatchNode(nd, set, later, loadFont, bad);
+    // A text's fonts can be bound to variables, so after a variable edit of the batch (sources.ts) the fonts it has when
+    // the patch runs are not known yet: keepText loads them then, and a missing one fails the op (the batch is put back).
+    const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+    const target = await resolvePatchNode(nd, set, later, loadFont, bad, fontsLater);
     if (target) targets.set(index, target);
   }
   const r = await resolveRefs(uses, loadFont);
@@ -217,14 +220,15 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
  * problem goes to `bad`; null when there was one. The target's `refs` are empty: the caller fills them from its own
  * resolution of the patch's names (patchUses → resolveRefs).
  */
-export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void): Promise<PatchTarget | null> {
+export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void, fontsLater = false): Promise<PatchTarget | null> {
   if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); return null; }
   const node = nd;
   const fit = unfit(node, set);
   const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
   for (const m of misfits) bad(m);
-  // A text change keeps the text as it was, run by run, to put back: its fonts must load either way.
-  if (node.type === "TEXT") {
+  // A text change keeps the text as it was, run by run, to put back: its fonts must load either way (`fontsLater`: checked
+  // when it applies, by keepText).
+  if (node.type === "TEXT" && !fontsLater) {
     for (const f of await fontsToKeep(node)) {
       const err = await loadFont(f);
       if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");

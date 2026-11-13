@@ -207,12 +207,6 @@ function aliasOf(x: unknown): string | null {
   const id = getF(x, "id");
   return typeof id === "string" ? id : null;
 }
-/** The variables `v`'s values alias, by id (one level). */
-function aliasIds(v: Variable): string[] {
-  const out: string[] = [];
-  for (const k of Object.keys(v.valuesByMode)) { const id = aliasOf(v.valuesByMode[k]); if (id) out.push(id); }
-  return out;
-}
 /** Each variable's alias per mode as the batch's earlier edits leave it: what a loop check follows. */
 type AliasGraph = Map<string, Record<string, string | null>>;
 /** `v`'s aliases by mode in `graph`, read from the file the first time. */
@@ -543,12 +537,14 @@ async function consumersOf(style: BaseStyle, nodes: Set<string>, warn: (m: strin
 
 /** What follows a change of the variable `v`: the variables that alias it (through any chain), the local styles bound to
  *  any of those, and every layer bound to one of them or using such a style. `warn` gets pages that could not be read. */
-async function variableImpact(v: Variable, lookups: Lookups, warn: (m: string) => void): Promise<WriteImpactCounts> {
+async function variableImpact(v: Variable, lookups: Lookups, graph: AliasGraph, warn: (m: string) => void): Promise<WriteImpactCounts> {
   const ids = new Set<string>([v.id]);
   const locals = await lookups.localVariables();
+  // The aliases as the batch's earlier variable edits leave them (`graph`), else as the file has them.
+  const aliasesNow = (x: Variable): string[] => { const modes = aliasesIn(graph, x); return Object.keys(modes).map((k) => modes[k]).filter((id): id is string => !!id); };
   for (let grew = true; grew;) {
     grew = false;
-    for (const x of locals) if (!ids.has(x.id) && aliasIds(x).some((id) => ids.has(id))) { ids.add(x.id); grew = true; }
+    for (const x of locals) if (!ids.has(x.id) && aliasesNow(x).some((id) => ids.has(id))) { ids.add(x.id); grew = true; }
   }
   const styles: BaseStyle[] = [];
   const local: BaseStyle[] = [...(await figma.getLocalPaintStylesAsync()), ...(await figma.getLocalTextStylesAsync()), ...(await figma.getLocalEffectStylesAsync()), ...(await figma.getLocalGridStylesAsync())];
@@ -567,6 +563,21 @@ async function variableImpact(v: Variable, lookups: Lookups, warn: (m: string) =
   }
   for (const st of styles) await consumersOf(st, nodes, warn);
   return { nodes: nodes.size, styles: styles.length, variables: ids.size - 1 };
+}
+
+/** Record in `graph` the aliases a setVariable op leaves on `v` (a mode it sets to a value aliases nothing). */
+async function projectAliases(op: WriteOp, v: Variable, lookups: Lookups, graph: AliasGraph): Promise<void> {
+  let coll: VariableCollection | null = null;
+  try { coll = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId); } catch { coll = null; }
+  if (!coll) return;
+  const m = modesOf(op, coll, v);
+  if ("errors" in m) return;
+  const modes = aliasesIn(graph, v);
+  for (const x of m.modes) {
+    if (typeof x.value !== "object") { modes[x.modeId] = null; continue; }
+    const target = await lookups.variable(x.value.aliasOf);
+    modes[x.modeId] = "ok" in target ? target.ok.id : null;
+  }
 }
 
 /** The instances that follow a change of `c` (every variant's, for a component set). */
@@ -588,6 +599,9 @@ export async function writeImpact(ops: readonly WriteOp[]): Promise<WriteImpactR
   const warn = (m: string): void => { if (warnings.indexOf(m) < 0) warnings.push(m); };
   const lookups = sourceLookups();
   const steps: WriteImpactStep[] = [];
+  // Each count reads the aliases the batch's earlier variable edits leave (an edit that makes B alias A carries A's
+  // later change to B's layers); bindings other ops add or remove are not projected.
+  const graph: AliasGraph = new Map();
   for (const [index, op] of ops.entries()) {
     try {
       if (op.op === "patch") {
@@ -601,7 +615,9 @@ export async function writeImpact(ops: readonly WriteOp[]): Promise<WriteImpactR
       }
       if (op.op === "setVariable" && op.variable) {
         const found = await lookups.variable(op.variable);
-        steps.push("error" in found ? { index, op: op.op, problem: found.error } : { index, op: op.op, affects: await variableImpact(found.ok, lookups, warn) });
+        if ("error" in found) { steps.push({ index, op: op.op, problem: found.error }); continue; }
+        steps.push({ index, op: op.op, affects: await variableImpact(found.ok, lookups, graph, warn) });
+        await projectAliases(op, found.ok, lookups, graph);
         continue;
       }
       if (op.op === "setStyle" && op.style) {

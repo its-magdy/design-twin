@@ -3,7 +3,7 @@
 // The dry run's file-side half (writeImpact) counts what follows.
 import { argsShapeError, writeOpPreview, type WriteImpactReply, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
-import type { FakeCollection, FakeNode, FakeVariable } from "../fake-figma.ts";
+import { textRuns, type FakeCollection, type FakeNode, type FakeVariable } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -39,6 +39,8 @@ function sourceWorld() {
   const core: FakeCollection = { id: "VariableCollectionId:lib/9:0", key: "core-coll", name: "Core", modes: [{ modeId: "9:0", name: "Value" }], defaultModeId: "9:0" };
   const primary = variable("VariableID:50:2", "brand/primary", "COLOR", brand, { "50:0": rgba(1, 0, 0), "50:1": rgba(0, 0, 1) });
   const accent = variable("VariableID:50:3", "brand/accent", "COLOR", brand, { "50:0": alias(primary.id), "50:1": alias(primary.id) });
+  // A colour no layer uses yet.
+  const spare = variable("VariableID:50:4", "brand/spare", "COLOR", brand, { "50:0": rgba(0.5, 0.5, 0.5), "50:1": rgba(0.5, 0.5, 0.5) });
   const gap = variable("VariableID:51:2", "space/gap", "FLOAT", spacing, { "51:0": 8 });
   const cta = variable("VariableID:51:3", "label/cta", "STRING", spacing, { "51:0": "Go" });
   const beta = variable("VariableID:51:4", "flag/beta", "BOOLEAN", spacing, { "51:0": false });
@@ -56,7 +58,10 @@ function sourceWorld() {
   // A layer whose fills Figma refuses to change: the batch that patches it fails while applying.
   const stuck: FakeNode = { id: "2:6", type: "RECTANGLE", name: "Stuck", boundVariables: {} };
   Object.defineProperty(stuck, "fills", { enumerable: true, get: () => [], set: () => { throw new Error("in Figma: cannot set fills"); } });
-  const screenLayers = [usesPrimary, usesAccent, usesGap, plain, styled, stuck];
+  // A text whose family is bound to font/family, on a family the file cannot load until that variable changes.
+  const caption: FakeNode = textRuns({ id: "2:8", type: "TEXT", name: "Caption", characters: "Hi", fontName: { family: "Times", style: "Regular" }, boundVariables: {} });
+  caption.getRangeAllFontNames = () => Object.freeze([caption.fontName]);
+  const screenLayers = [usesPrimary, usesAccent, usesGap, plain, styled, stuck, caption];
 
   // ---- styles
   const paintStyle: FakeNode = { id: "S:primary,", key: "key-primary-style", type: "PAINT", name: "Brand/Primary", description: "", remote: false,
@@ -112,10 +117,10 @@ function sourceWorld() {
   const components = page("0:11", "Components", [row]);
   row.parent = components;
   const nodes = Object.fromEntries([...screenLayers, divider, row, avatar, avatarDot, screens, components].map((x) => [String(x.id), x]));
-  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family };
+  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family, [spare.id]: spare };
   // The text style's family follows the variable it is bound to, as Figma's does.
   const setFamily = family.setValueForMode;
-  family.setValueForMode = (m: string, x: unknown) => { setFamily(m, x); textFields.fontName = { family: String(x), style: isObj(textFields.fontName) ? String(textFields.fontName.style) : "Regular" }; };
+  family.setValueForMode = (m: string, x: unknown) => { setFamily(m, x); caption.fontName = { family: String(x), style: "Regular" }; textFields.fontName = { family: String(x), style: isObj(textFields.fontName) ? String(textFields.fontName.style) : "Regular" }; };
   const w = world({
     pages: [screens, components], currentPage: screens, nodes,
     variables: vars, collections: { [brand.id]: brand, [spacing.id]: spacing },
@@ -133,7 +138,7 @@ function sourceWorld() {
       setBoundVariableForPaint: (p: FakeNode, field: string, v: FakeVariable | null) => ({ ...p, boundVariables: v ? { [field]: alias(v.id) } : {} }),
     },
   });
-  return { ...w, primary, accent, gap, cta, beta, paintStyle, textStyle, effectStyle, divider, row, avatarDot, stuck, brand };
+  return { ...w, caption, spare, primary, accent, gap, cta, beta, paintStyle, textStyle, effectStyle, divider, row, avatarDot, stuck, brand };
 }
 type SourceWorld = ReturnType<typeof sourceWorld>;
 
@@ -278,6 +283,17 @@ export const cases: Case[] = [{
       !bad.ok && bad.failedAt === 1 && /font 'Comic Regular' is not available/.test(bad.error ?? "") && w.textStyle.fontSize === 16);
   },
 }, {
+  name: "a text patch after a variable edit: its fonts are checked when it applies (the variable may change them)",
+  async run() {
+    const w = sourceWorld();
+    await w.allowEdits();
+    const r = await write(w, [{ op: "setVariable", variable: "font/family", value: "Inter" }, { op: "patch", nodeId: "2:8", set: { text: "Hello" } }]);
+    ok("[SOURCE] a text on a font the file lacks, switched by the variable to one it has, is patched", r.ok && w.caption.characters === "Hello");
+    const alone = await write(w, [{ op: "patch", nodeId: "2:8", set: { text: "Hey" } }, { op: "setVariable", variable: "font/family", value: "Times" }]);
+    ok("[SOURCE] …and the same text on a missing font with no variable edit before it is still refused up front", alone.ok
+      && (await write(w, [{ op: "patch", nodeId: "2:8", set: { text: "x" } }])).error?.includes("Times Regular") === true && w.caption.characters === "Hey");
+  },
+}, {
   name: "a source edit that a later op's failure takes back is put back exactly (values, aliases, a text style's bindings)",
   async run() {
     const w = sourceWorld();
@@ -324,6 +340,9 @@ export const cases: Case[] = [{
     ok("[SOURCE] gap: its bound layer, and the layers using the text and grid styles bound to it", same(s[1], { index: 1, op: "setVariable", affects: { nodes: 3, styles: 2, variables: 0 } }));
     ok("[SOURCE] a paint style: its consumers", same(s[2], { index: 2, op: "setStyle", affects: { nodes: 2 } }));
     ok("[SOURCE] a library variable: the refusal, naming the library; a create has no step", /Core Library/.test(s[3]?.problem ?? "") && s.length === 4);
+    const chained = await impact(w, [{ op: "setVariable", variable: "brand/primary", values: { Light: { aliasOf: "brand/spare" } } }, { op: "setVariable", variable: "brand/spare", value: "#000" }]);
+    ok("[SOURCE] a count reads the aliases the batch's earlier edits make: spare then carries to primary's layers",
+      same(chained?.steps[1]?.affects, { nodes: 2, styles: 0, variables: 2 }));
     w.paintStyle.getStyleConsumersAsync = async () => { throw new Error("in Figma: not readable"); };
     const failed = await impact(w, [{ op: "setStyle", style: "Brand/Primary", set: { paints: [] } }]);
     ok("[SOURCE] a consumer lookup Figma refuses is a warning, not a quiet zero", (failed?.warnings ?? []).some((m) => /layers using the style 'Brand\/Primary' could not be read/.test(m)));
