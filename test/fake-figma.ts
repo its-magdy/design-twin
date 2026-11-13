@@ -394,3 +394,65 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
   };
 }
+
+/** The text-run API on a fake TEXT node whose formatting is one run (its own fields): getStyledTextSegments answers one
+ *  segment with the fields asked for, each getRange* reads the node's own field and each setRange* sets it, and range
+ *  variable bindings live in `rangeBound` — what the plugin's write path uses to keep a text as it was and put it back
+ *  (figma-plugin/src/patch.ts keepText). Returns the same node. A text with several runs: test/harness/writes.ts runText. */
+/** What a text's range properties read when nothing set them (Figma's defaults). */
+export const TEXT_RANGE_DEFAULTS: Readonly<Record<string, unknown>> = {
+  textDecorationStyle: null, textDecorationOffset: null, textDecorationThickness: null, textDecorationColor: null, textDecorationSkipInk: null,
+  paragraphSpacing: 0, paragraphIndent: 0, listOptions: { type: "NONE" }, listSpacing: 0, indentation: 0, hyperlink: null, textWrapStyle: "NONE",
+};
+/** The suffixes of the getRange* / setRange* methods a fake text answers. */
+export const TEXT_RANGE_METHODS = ["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "TextDecorationStyle", "TextDecorationOffset",
+  "TextDecorationThickness", "TextDecorationColor", "TextDecorationSkipInk", "ParagraphSpacing", "ParagraphIndent", "ListOptions", "ListSpacing", "Indentation",
+  "Hyperlink", "TextWrapStyle", "Fills"];
+export function textRuns<T extends FakeNode>(node: T): T {
+  const n: FakeNode = node;
+  const styleField = (k: string): boolean => k === "textStyleId" || k === "fillStyleId";
+  const bound = (): Record<string, unknown> => (typeof n.rangeBound === "object" && n.rangeBound !== null ? { ...(n.rangeBound as Record<string, unknown>) } : {});
+  const RANGE = TEXT_RANGE_METHODS;
+  const field = (f: string): string => f.charAt(0).toLowerCase() + f.slice(1);
+  const read = (f: string): unknown => (n[f] !== undefined ? n[f] : styleField(f) ? "" : TEXT_RANGE_DEFAULTS[f]);
+  Object.assign(n, {
+    getStyledTextSegments: (fields: readonly string[]) => {
+      const chars = String(n.characters ?? "");
+      if (!chars.length) return [];
+      const seg: Record<string, unknown> = { start: 0, end: chars.length, characters: chars };
+      for (const f of fields) seg[f] = f === "boundVariables" ? bound() : read(f);
+      return Object.freeze([Object.freeze(seg)]); // Figma's arrays and segments are frozen
+    },
+    getRangeTextStyleId: () => n.textStyleId ?? "",
+    getRangeFillStyleId: () => n.fillStyleId ?? "",
+    setRangeTextStyleIdAsync: async (_s: number, _e: number, id: string) => {
+      if (typeof n.setTextStyleIdAsync === "function" && id) await (n.setTextStyleIdAsync as (id: string) => Promise<void>)(id);
+      else n.textStyleId = id;
+      // Set through the RANGE setter, a style's link shows up as an override of it (seen live in Figma); the node's own
+      // setTextStyleIdAsync starts with none.
+      n.textStyleOverrides = id ? ["hyperlink"] : [];
+    },
+    setRangeFillStyleIdAsync: async (_s: number, _e: number, id: string) => { n.fillStyleId = id; },
+    getRangeBoundVariable: (_s: number, _e: number, f: string) => bound()[f] ?? null,
+    setRangeBoundVariable: (_s: number, _e: number, f: string, v: { id: string } | null) => {
+      const b = bound();
+      if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
+      n.rangeBound = b;
+    },
+    // The range reads can differ in form from the segment reads (seen live: a link that is none, and float noise): a
+    // getRange* answers undefined for a link that is none, and a letter spacing a hair off.
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => {
+      const v = read(field(f));
+      if (f === "Hyperlink" && v === null) return undefined;
+      if (f === "LetterSpacing" && typeof v === "object" && v !== null && typeof (v as { value?: unknown }).value === "number") return { ...v, value: (v as { value: number }).value + 1e-7 };
+      return v;
+    }])),
+    // Setting a property on styled text makes it an override of the style, even to the value it had (as in Figma).
+    ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, (_s: number, _e: number, v: unknown) => {
+      n[field(f)] = v;
+      if (n.textStyleId) n.textStyleOverrides = [...new Set([...(Array.isArray(n.textStyleOverrides) ? n.textStyleOverrides as string[] : []), field(f)])];
+    }])),
+  });
+  if (n.textStyleId === undefined) n.textStyleId = "";
+  return node;
+}

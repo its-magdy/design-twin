@@ -51,7 +51,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string; newMode?: string; change?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }> }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -113,6 +113,15 @@ void (async () => {
       && /with 3 nodes \(1 frame, 1 text, 1 instance\)/.test(dryRefs.steps[0]?.change ?? "")
       && /components 'Button'; variables 'space\/md'; text styles 'Body'/.test(dryRefs.steps[0]?.change ?? "")
       && dryRefs.steps[1]?.invalid === "tree.children[0]: `props` is only on an INSTANCE node");
+    // patch / move / delete: one row per patched field; a move and a delete counted apart; a bad patch refused by path.
+    const dryPatch = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [
+      { op: "patch", nodeId: "1:2", set: { text: "Hi", tokens: { opacity: "alpha/md" } } }, { op: "patch", nodeId: "1:3", set: { font: {} } },
+      { op: "move", nodeId: "1:4", parentId: "1:5" }, { op: "delete", nodeId: "1:6" },
+    ] } }))) as WritePreview;
+    ok("dryRun previews a patch as an overwrite with one row per field, counts a move and a delete, and refuses a field a patch cannot set, through the tool",
+      dryPatch.overwrites === 2 && dryPatch.moves === 1 && dryPatch.deletes === 1 && dryPatch.invalid === 1
+      && JSON.stringify(dryPatch.steps[0]?.fields) === JSON.stringify([{ field: "text", to: '"Hi"' }, { field: "tokens", to: '{"opacity":"alpha/md"}' }])
+      && /^set\.font: a patch cannot set it/.test(dryPatch.steps[1]?.invalid ?? "") && dryPatch.steps[3]?.effect === "deletes");
     const dryProto = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: { handle: "__proto__" } }] } }))) as WritePreview;
     ok("dryRun refuses a '__proto__' handle (the plugin's reply could not carry it back), through the tool",
       dryProto.invalid === 1 && /^tree\.handle '__proto__' cannot be a handle/.test(dryProto.steps[0]?.invalid ?? ""));
@@ -397,7 +406,7 @@ void (async () => {
       && Object.getOwnPropertyDescriptor(gotHandles, "toString")?.value === "1:10");
 
     // A failed write's text has a section only for what is in it: a refusal that changed nothing has no empty
-    // "0 earlier op(s) ... NOT rolled back: []" tail, a put-back lists the modes it restored, and ops that stay
+    // "0 earlier op(s) ... stay applied: []" tail, a put-back lists the modes it restored, and ops that stay
     // applied are still listed with their ids.
     const failText = async (r: WriteResult): Promise<string> => {
       failWith = r;
@@ -411,11 +420,11 @@ void (async () => {
     const putBack = { id: "1:2", collection: "Theme", from: "Light", to: "Dark" };
     const putBackText = await failText({ ok: false, applied: [], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)", restored: [putBack] });
     ok(`[WRITE-FAIL] a put-back lists the restored mode changes and no empty applied section (got ${JSON.stringify(putBackText)})`,
-      /^Write failed at op 1 \(setFill\): .*\n1 earlier change\(s\) were undone \(variable modes put back, created trees removed\):\n/.test(putBackText)
-      && putBackText.includes('"to": "Dark"') && !/NOT rolled back/.test(putBackText));
+      /^Write failed at op 1 \(setFill\): .*\n1 earlier change\(s\) were undone \(values put back, created nodes removed, moved nodes returned\):\n/.test(putBackText)
+      && putBackText.includes('"to": "Dark"') && !/stay applied/.test(putBackText));
     const partialText = await failText({ ok: false, applied: [{ id: "1:9" }], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)" });
     ok(`[WRITE-FAIL] ops that stay applied are still listed with their ids (got ${JSON.stringify(partialText)})`,
-      /\n1 earlier op\(s\) were applied and NOT rolled back:\n/.test(partialText) && partialText.includes('"id": "1:9"') && !/put back/.test(partialText));
+      /\n1 earlier op\(s\) stay applied \(not undone\):\n/.test(partialText) && partialText.includes('"id": "1:9"') && !/were undone/.test(partialText));
     editsPlugin.close();
     await sleep(200);
 

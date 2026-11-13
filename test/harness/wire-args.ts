@@ -46,7 +46,7 @@ export const cases: Case[] = [{
       badScale.ok === false && badScale.error === "bad screenshot args: `scale` is not a number" && !badScale.queued);
     const badOp = await wire("write", { ops: [{ op: "bogus" }] });
     ok("[WIRE-ARGS] write with an unknown op -> refused before the batch starts",
-      badOp.ok === false && badOp.error === "bad write args: `ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree" && !badOp.queued);
+      badOp.ok === false && badOp.error === "bad write args: `ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | move | delete" && !badOp.queued);
 
     // Tolerance kept: an undeclared key is ignored, and non-object args read as {} — paired with a
     // refusal on the same command so the pair fails if the check were dropped.

@@ -908,12 +908,12 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op) / patch (change an existing node by id) / move / delete / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
-create or overwrite without touching the file — there is no undo from the MCP side, so preview anything
-that overwrites; refused outright when the file is in read-only Dev Mode — and **refused unless the designer has
+create, overwrite, move or delete without touching the file — a batch that fails partway is put back whole, but one
+that landed is undone only by the designer's Cmd-Z, so preview anything that overwrites; refused outright when the file is in read-only Dev Mode — and **refused unless the designer has
 ticked "Allow edits"** in the plugin window, see below), and two that read the export already on disk and
 need no Figma connection — `design_get_component` (one component's variant node trees) and
 `design_drift_lint` (the component map vs the export; see below). The frame-walking export tools accept opt-in read flags
@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
+| `figma_write` | `ops` (at most 50, applied in order, all or nothing) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -957,6 +957,22 @@ the current page):
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
 | `createTree` | `tree` (one nested node spec, below) | `page` (a page's exact name or id; the current page when absent) |
+| `patch` | `nodeId`, `set` (the fields to change, below) | — |
+| `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
+| `delete` | `nodeId` (a node this plugin session created) | — |
+
+**A batch is all or nothing.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
+node has), and a batch with any problem is refused whole, every problem listed. Then each op keeps what it replaces:
+if one fails partway, everything the batch already did is put back — values restored, nodes it created removed, moved
+nodes returned to their parent and place — and listed as `restored`. Deletes run last, once everything else has landed,
+because a deleted node cannot be brought back. The batch is one Cmd-Z step for the designer.
+A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
+sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
+runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's
+auto-layout on and then fills a child is accepted, and one that cannot work fails there and is put back whole. Names
+(components, variables, text styles, pages, collections) always resolve against the file as it is before the batch:
+renaming a component and naming it by its new name, or changing a component and relying on that change in a
+`createTree` instance, takes two calls.
 
 `setVariableMode` sets a node's explicit mode for one variable collection, so a dark or brand version of a screen is
 the same frame with one op; `clearVariableMode` puts the node back on the mode it inherits from its parent.
@@ -967,8 +983,8 @@ type that cannot carry a mode) refuses the whole batch, listing every problem wi
 library collection the file does not use yet is refused by name (using it means importing one of its variables,
 which a write cannot do yet); one the file already uses works by its exact id. The reply names the collection and
 the mode before and after (`inherited` when none was set), and the dry run says the same change in words (it does
-not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes made earlier
-in it are put back and listed as `restored`; other ops are not rolled back.
+not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes are put back
+with the rest of the batch.
 
 `createTree` creates a whole screen in one op. `tree` is the root frame, written the way the read export writes a
 node: the same field names and values, defaults left out, no ids and no parent references. A node is a `FRAME`, a
@@ -1024,6 +1040,38 @@ and `unbound` only when there are any), plus `warnings` for anything that had no
 read node can be fed back in: what the read writes on an ordinary frame or text is accepted. The dry run says the change in one sentence: the frame, its size and layout,
 the node counts, where it lands, the handles, the fonts, the components, variables and text styles it names, and how
 many raw values stay unbound (it does not read the file, so the names are checked when applied). A spec holds at most 500 nodes.
+
+`patch` changes an existing node by id. `set` names the node's fields the way the read export (and a `createTree` spec)
+names them, and only the fields given change; each is checked with the rule the tree spec uses for the same field:
+
+| Field | Value |
+|---|---|
+| `name`, `hidden` | the layer name; `hidden: true` hides it, `false` shows it |
+| `opacity` | 0 to 1 |
+| `text`, `styles` | a TEXT's characters; `{text: style}` sets its text style (by exact name, key or id) |
+| `autoResize` | a TEXT: `width_and_height` \| `height` \| `truncate` \| `none` |
+| `fills` | `[{type: "solid", color, opacity?, tokens?: {color: variable}}]`, replacing the paints (`[]` for none) |
+| `strokes` | any of `{colors, weight, weights: {top, right, bottom, left}, align}`; only the parts given change (`colors: []` removes them) |
+| `radius` | a number, or any of `{tl, tr, br, bl}` |
+| `layout` | any of the tree spec's `layout` fields, only those given change (`display: "flex"` turns auto-layout on; on a frame that has it, `{gap: 12}` alone is enough); `flexWrap: "nowrap"`, `alignContent: "auto"` and `reverseZ: false` turn those off; `{mode: "absolute"}` removes auto-layout |
+| `box` | `{w, h}` or either one: a fixed size (a TEXT's box is fixed: its `autoResize` becomes `none`, or `height` when only `w` is given) |
+| `widthMode`, `heightMode` | `fill` (in an auto-layout parent) \| `hug` (with auto-layout, or a TEXT) \| `fixed` |
+| `tokens` | as in a tree spec, a field → a variable; `null` unbinds the field and keeps its value |
+| `props` | an INSTANCE's property values by name, as in a tree spec (a variant's value, a text, a boolean) |
+
+Before anything runs, the plugin checks that the node exists and has each field (a `text` on a frame, `props` on a
+frame, a gap on a frame without auto-layout, `fill` in a parent without auto-layout are refused by name), that every
+variable, text style, property and variant value resolves exactly as in a tree spec (a library variable named in a
+patch is imported only once the whole batch resolved), and that the fonts a text change needs load. Any other field
+(`font`, `x`, `children`, …) is refused by name. The reply is `{id}` per patch (with `unbound` when raw colours,
+spacing, radii or stroke weights were set where a variable could stand). The dry run shows one row per field
+(`fields: [{field, to}]`) and the change in one sentence.
+
+`move` and `delete` work only on nodes this plugin session created — since the plugin window was opened, by
+`createFrame`, `createText` or `createTree` (with everything below them). A delete takes everything below the node,
+so it is refused when anything there was not created this session; a move is refused into the node itself, into an
+instance, or past the end of the new parent's children. An op that names a node a delete of the same batch removes is
+refused up front. The reply is `{id, parentId}` for a move and `{id, deleted: true}` for a delete.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

@@ -39,7 +39,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
-import { EDITS_OFF_MESSAGE, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteOp } from "./commands.ts";
+import { EDITS_OFF_MESSAGE, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteOp } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -703,8 +703,8 @@ registerTool(
   })
 );
 
-// What a figma_write batch WOULD do, without doing it. creates = additive; overwrites = replaces a
-// property on a node the user already has (the irreversible half).
+// What a figma_write batch WOULD do, without doing it. creates = additive; overwrites = replaces a property on a node
+// the user already has; moves / deletes = reparents / removes a node this plugin session created.
 // The op schema is the wire contract (commands.ts WriteOp) spelled in Zod: `op` is constrained to the
 // ops the plugin implements — rejected at the boundary rather than round-tripped — and the fields
 // each op reads are typed. `.passthrough()` keeps a stray extra field flowing (the plugin ignores it).
@@ -733,6 +733,9 @@ const writeOpShape = z.object({
   // not spelled out here — a recursive schema would cost every tool listing its size (spec decision 19).
   tree: z.record(z.string(), z.unknown()).optional(),
   page: z.string().optional(),
+  // patch: the fields to change, checked by patch-spec.ts checkPatch at the same three places as a tree spec.
+  set: z.record(z.string(), z.unknown()).optional(),
+  index: z.number().int().min(0).optional(),
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
@@ -746,17 +749,25 @@ function previewWrites(ops: WriteOp[], editsAllowed: boolean | null) {
     applied: false,
     creates: steps.filter((s) => s.effect === "creates").length,
     overwrites: steps.filter((s) => s.effect === "overwrites").length,
+    ...counted(steps, "moves"),
+    ...counted(steps, "deletes"),
     invalid: steps.filter((s) => "invalid" in s).length,
     steps,
     editsAllowed,
     ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
-    note: "Nothing was changed. Overwrites cannot be undone from here (only Cmd-Z in Figma). " +
+    note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch). " +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
         : editsAllowed === null
           ? "Could not read the plugin's 'Allow edits' setting (no single plugin reachable); a real write is refused while it is off. Re-call without dryRun to apply."
           : "Re-call without dryRun to apply."),
   };
+}
+
+/** `{moves: n}` / `{deletes: n}` when n > 0 (left out otherwise: most batches move and delete nothing). */
+function counted(steps: ReadonlyArray<{ effect: WriteEffect }>, effect: "moves" | "deletes"): Partial<Record<"moves" | "deletes", number>> {
+  const n = steps.filter((s) => s.effect === effect).length;
+  return n ? { [effect]: n } : {};
 }
 
 // The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
@@ -788,13 +799,14 @@ registerTool(
       "widthMode?/heightMode?('fill'|'hug'), grow?, alignSelf?, absolute?, x?, y?, fills?[{type:'solid', color:#hex}], strokes?{colors,weight,align}, radius?, opacity?, clip?, hidden?, " +
       "text?, font?{family, weight(style name), size, color, align, lineHeight{unit,value}}, autoResize?, children?[...]}. " +
       "Prefer the design system: {component, props?} is an instance; paint tokens:{color: variable}; tokens?{itemSpacing|padding*|*Radius|…: variable}; styles?{text}. Exact name, key or id; library items are imported. " +
-      "It lands whole or not at all, on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
+      "It lands on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
       "the reply is the root id, counts, and ids only for nodes given a `handle`. A read field a write cannot set is refused by name. " +
-      "A name (collection, mode, page, component, variable, style) that matches nothing or several things, or a font the file lacks, refuses the whole batch before anything runs, with candidates. " +
-      "Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied " +
-      "and their node ids are reported alongside the error so you can continue or clean up — except variable-mode changes, which are put back, and createTree trees, which are removed. " +
-      "There is no undo from here (only the designer's own Cmd-Z) — so for anything that OVERWRITES " +
-      "(setFill/setText/setVariableMode/clearVariableMode), call once with dryRun:true, show the user the preview, and only then apply. " +
+      "{op:'patch', nodeId, set} changes an existing node: `set` takes the same field names, only those given change — name, hidden(bool), opacity, text, styles{text}, fills, strokes, radius, " +
+      "layout (partial; {mode:'absolute'} removes auto-layout), box{w?,h?}, widthMode/heightMode('fill'|'hug'|'fixed'), autoResize, tokens (null unbinds), props (an instance's). " +
+      "{op:'move', nodeId, parentId, index?} | {op:'delete', nodeId} — only nodes this plugin session created; deletes run last. " +
+      "A name (collection, mode, page, component, variable, style) that matches nothing or several things, a font the file lacks, or a node that lacks a field refuses the whole batch before anything runs, with candidates. " +
+      "A batch lands whole: if an op fails, every change the batch made is put back (listed as `restored`) — and the designer's one Cmd-Z undoes a whole batch. " +
+      "For anything that OVERWRITES (setFill/setText/patch/setVariableMode/clearVariableMode), call once with dryRun:true, show the user the preview, and only then apply. " +
       "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
       "while it is off a write is refused with that instruction, and a dry run reports editsAllowed:false — " +
       "ask the designer to tick it, then retry.",
@@ -810,8 +822,8 @@ registerTool(
       dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection; when one is connected it also reports editsAllowed — false means a real write would be refused)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
-    // performs only additive updates" — but setFill/setText/setVariableMode OVERWRITE properties on nodes the user
-    // already has, and (as the description says) nothing here is transactional or rollback-able.
+    // performs only additive updates" — but setFill/setText/patch/setVariableMode OVERWRITE properties on nodes the
+    // user already has, delete removes nodes, and once a batch has landed nothing here can take it back.
     // Clients use these hints to decide whether to put a human in the loop, so declaring `false`
     // suppressed the confirmation prompt on the one tool that irreversibly mutates a design file.
     // idempotentHint is likewise false: re-running a batch creates a SECOND set of frames/text.
@@ -834,8 +846,8 @@ registerTool(
       const applied = r.applied;
       const restored = r.restored ?? [];
       const lines = [`Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}`];
-      if (restored.length) lines.push(`${restored.length} earlier change(s) were undone (variable modes put back, created trees removed):\n` + JSON.stringify(restored, null, 2));
-      if (applied.length) lines.push(`${applied.length} earlier op(s) were applied and NOT rolled back:\n` + JSON.stringify(applied, null, 2));
+      if (restored.length) lines.push(`${restored.length} earlier change(s) were undone (values put back, created nodes removed, moved nodes returned):\n` + JSON.stringify(restored, null, 2));
+      if (applied.length) lines.push(`${applied.length} earlier op(s) stay applied (not undone):\n` + JSON.stringify(applied, null, 2));
       return errorResult(lines.join("\n"));
     }
     return textResult(r);

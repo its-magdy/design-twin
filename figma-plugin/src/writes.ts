@@ -6,7 +6,10 @@ import { EDITS_OFF_MESSAGE, writeOpError, type AppliedWrite, type WriteOp, type 
 import { editsAllowed, editsAllowedNow } from "./edits";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
-import { batchRefusal, countChanges, restoreChanges, type Change } from "./write-batch";
+import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
+import { markCreated } from "./session";
+import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
+import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
@@ -43,6 +46,9 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
   const p = await figma.getNodeByIdAsync(parentId);
   if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
   if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
+  for (let a: BaseNode | null = p; a; a = a.parent) {
+    if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
+  }
   // manifest documentAccess is "dynamic-page": appendChild on a PageNode requires the page to be
   // loaded first, or it throws. The read plane already does this (collect.ts / components.ts).
   if (p.type === "PAGE") await p.loadAsync();
@@ -63,17 +69,28 @@ function consent(): void {
 }
 
 // What an op resolved to before the batch ran: a variable-mode op's node/collection/mode (variable-modes.ts
-// resolveModeOps), a createTree op's page and fonts (tree.ts resolveTreeOps).
-interface Resolved { mode?: ModeTarget | undefined; tree?: TreeTarget | undefined }
+// resolveModeOps), a createTree op's page and fonts (tree.ts resolveTreeOps), a patch's node and names (patch.ts
+// resolvePatchOps), a move's node and new parent (structure.ts).
+interface Resolved { mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined }
 
-// `changes` collects each change that can be undone (a mode set, a tree created), so a later failure can undo them.
-async function applyWrite(op: WriteOp, { mode, tree }: Resolved, changes: Change[]): Promise<AppliedWrite> {
+/** A node an op just created, as a Change whose undo removes it. */
+function createdNode(n: SceneNode): Change {
+  markCreated(n);
+  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", restore() { n.remove(); } };
+}
+
+// Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
+// set, a tree built, a node moved), so a later failure can undo all of them.
+async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, changes: Change[]): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
       const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null; // likewise: a bad colour leaves no node
       consent();
       const f = figma.createFrame();
+      // On the list before anything else can throw: a failure below removes the node with the rest of the batch.
+      const change = createdNode(f);
+      changes.push(change);
       if (op.name) f.name = op.name;
       if (op.width && op.height) f.resize(op.width, op.height);
       if (op.layoutMode) f.layoutMode = op.layoutMode; // HORIZONTAL | VERTICAL
@@ -86,21 +103,27 @@ async function applyWrite(op: WriteOp, { mode, tree }: Resolved, changes: Change
       }
       if (fill) f.fills = [fill];
       parent.appendChild(f);
-      return { id: f.id };
+      return change.applied;
     }
     case "createText": {
       const parent = await resolveParent(op.parentId); // before createText — no orphan on a bad parent
       const fill = op.fill ? solidPaint(op.fill, "createText fill") : null; // likewise: a bad colour leaves no node
       consent();
       const t = figma.createText();
-      await figma.loadFontAsync(t.fontName as FontName);
+      const change = createdNode(t);
+      changes.push(change);
+      try { await figma.loadFontAsync(t.fontName as FontName); } catch (e) {
+        // The font did not load: take back the empty node (unless edits are off by now: then it stays, and is reported).
+        if (editsAllowedNow()) { t.remove(); changes.pop(); }
+        throw e;
+      }
       // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
-      if (!editsAllowedNow()) { t.remove(); consent(); }
+      if (!editsAllowedNow()) { t.remove(); changes.pop(); consent(); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
       parent.appendChild(t);
-      return { id: t.id };
+      return change.applied;
     }
     // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or
     // removed id (and for invisible instance children when skipInvisibleInstanceChildren is on), and
@@ -112,8 +135,33 @@ async function applyWrite(op: WriteOp, { mode, tree }: Resolved, changes: Change
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
       const paint = solidPaint(op.color, "setFill color");
       consent();
-      (nd as GeometryMixin).fills = [paint];
-      return ifDefined("id", op.nodeId);
+      // A text's paints and paint-style links can differ from run to run even when the paints look the same: kept run by
+      // run (keepText loads the fonts that needs).
+      if (nd.type === "TEXT") {
+        const restore = await keepText(nd);
+        consent();
+        nd.fills = [paint];
+        const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+        changes.push(change);
+        return change.applied;
+      }
+      const target = nd as SceneNode & MinimalFillsMixin;
+      const old = target.fills;
+      const oldStyle = target.fillStyleId;
+      target.fills = [paint];
+      const change: Change = {
+        applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+        // The paints, then the paint style they came from (setting paints detaches it).
+        async restore(allowed) {
+          target.fills = old;
+          if (typeof oldStyle === "string" && oldStyle && target.fillStyleId !== oldStyle) {
+            await target.setFillStyleIdAsync(oldStyle);
+            if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off");
+          }
+        },
+      };
+      changes.push(change);
+      return change.applied;
     }
     case "setText": {
       const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
@@ -121,8 +169,12 @@ async function applyWrite(op: WriteOp, { mode, tree }: Resolved, changes: Change
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
       consent();
+      const restore = await keepText(nd);
+      consent();
       nd.characters = op.text || "";
-      return ifDefined("id", op.nodeId);
+      const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
+      changes.push(change);
+      return change.applied;
     }
     // Resolved up front with the rest of the batch: here the target is known to exist and the names to match.
     case "setVariableMode":
@@ -143,17 +195,34 @@ async function applyWrite(op: WriteOp, { mode, tree }: Resolved, changes: Change
       changes.push(change);
       return change.applied;
     }
+    // Resolved up front: the node exists and has every field, the names resolved and the fonts loaded. The values it
+    // replaces are kept; it puts itself back if it throws partway (patch.ts).
+    case "patch": {
+      if (!patch) throw new Error("patch: the op was not resolved before the batch ran");
+      consent();
+      return (await applyPatch(patch, consent, editsAllowedNow, changes)).applied;
+    }
+    case "move": {
+      if (!move) throw new Error("move: the op was not resolved before the batch ran");
+      consent();
+      const change = applyMove(move);
+      changes.push(change);
+      return change.applied;
+    }
+    // Deletes are not run here: gatedWrites runs them after every other op (a deleted node cannot be brought back).
+    case "delete":
+      throw new Error("delete: deletes run after the rest of the batch");
     default:
       throw new Error("unknown write op: " + op.op);
   }
 }
 
-// Apply a batch, reporting partial progress instead of throwing it away. Ops mutate the document one
-// at a time and Figma gives us no transaction to roll back, so when op N fails the first N-1 are
-// ALREADY committed — except variable-mode changes, which keep the mode they replaced and are put back, and trees
-// createTree made, which are removed (both move to `restored`), so a theme switch or a screen never half-sticks. Throwing here discarded the ids of
-// everything just created, leaving orphan nodes the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
-// lists what landed, and ok:false carries the failure point so the caller can report both.
+// Apply a batch whole or not at all (docs/write-plane-spec.md decisions 14, 16). Everything is resolved before the
+// first op runs; then each op keeps what it replaces, and when op N fails the changes of ops 0..N-1 are put back, newest
+// first — values restored, nodes the batch created removed, moved nodes returned — and listed as `restored`. Deletes run
+// last, once everything else has landed, since a deleted node cannot be brought back. `applied` lists only what stays:
+// all of it on success; on a failure, whatever could not be put back (the designer turned "Allow edits" off, or a
+// restore failed), so the caller can always find what is in the file.
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   const list = Array.isArray(ops) ? ops : [];
   // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
@@ -182,7 +251,7 @@ function announce(r: WriteResult): void {
     ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
     : "Design Twin refused an edit request — 'Allow edits' is off.";
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
-  else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+  else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
   if (text === null) return;
   try { figma.notify(text, r.ok ? undefined : { error: true }); } catch (e) { console.error("[export] figma.notify failed:", e); }
@@ -221,19 +290,23 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
   }
   // Every name an op carries is resolved against the file before the first op runs (spec decisions 14, 15): a
-  // collection, mode or page that matches nothing or several things, a missing node, a node that cannot carry a mode,
-  // a font that does not load — the batch is refused whole, every problem listed in op order.
+  // collection, mode, page, component, variable or style that matches nothing or several things, a missing node, a node
+  // that cannot take a field, a font that does not load, a node this session did not create — the batch is refused
+  // whole, every problem listed in op order.
   const modes = await resolveModeOps(list);
   const trees = await resolveTreeOps(list);
-  const problems = [...modes.problems, ...trees.problems].sort((a, b) => a.index - b.index);
+  const patches = await resolvePatchOps(list);
+  const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
+  const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
-  // A library item a spec names by key (or a library variable it names) is imported only now: the whole batch
+  // A library item a spec or patch names by key (or a library variable it names) is imported only now: the whole batch
   // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
   // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
-  if (trees.importCount) {
+  for (const step of [trees, patches]) {
+    if (!step.importCount) continue;
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const { problems: late, revoked } = await trees.imports(editsAllowedNow);
+    const { problems: late, revoked } = await step.imports(editsAllowedNow);
     // Unticked between imports: the ones before stay (an import cannot be put back, and it only makes the item
     // available), nothing else runs.
     if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
@@ -244,31 +317,75 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   }
   const warnings = [...trees.targets].reduce<string[]>((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
   const changes: Change[] = [];
+  // In op order: each op's applied row, filled as it lands (the deletes last).
+  const rows: Array<AppliedWrite | undefined> = list.map(() => undefined);
+  const fail = async (i: number, op: WriteOp, e: unknown): Promise<WriteResult> => {
+    const revoked = e instanceof EditsRevoked;
+    // Undo the changes this batch made (newest first). Not when the designer has turned edits off — whether that is
+    // what stopped the batch or the op failed for its own reason after the box was unticked (a font load that rejects
+    // late): after that the plugin changes nothing, not even to undo its own work, and the reply says what stayed.
+    const off = revoked || !editsAllowedNow();
+    const { restored, failed } = off ? { restored: [], failed: [] } : await restoreChanges(changes, editsAllowedNow);
+    const back = new Set(restored);
+    const kept = !revoked && off && changes.length
+      ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied"
+      : "";
+    return {
+      ok: false,
+      // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
+      applied: [...changes.filter((c) => !back.has(c)).map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
+      failedAt: i,
+      failedOp: op && op.op,
+      error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
+      ...(revoked ? { refused: "edits-off" as const } : {}),
+      ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
+    };
+  };
   for (const [i, op] of list.entries()) {
+    if (op.op === "delete") continue;
     try {
-      applied.push(await applyWrite(op, { mode: modes.targets.get(i), tree: trees.targets.get(i) }, changes));
+      rows[i] = await applyWrite(op, { mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i) }, changes);
     } catch (e) {
-      const revoked = e instanceof EditsRevoked;
-      // Undo the changes this batch made (newest first): modes put back, trees removed. Not when the designer has turned edits off —
-      // whether that is what stopped the batch or the op failed for its own reason after the box was unticked (a
-      // font load that rejects late): after that the plugin changes nothing, not even to undo its own work, and
-      // the reply says what stayed.
-      const off = revoked || !editsAllowedNow();
-      const { restored, failed } = off ? { restored: [], failed: [] } : restoreChanges(changes);
-      const back = new Set(restored.map((c) => c.applied));
-      const kept = !revoked && off && changes.length
-        ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied"
-        : "";
-      return {
-        ok: false,
-        applied: applied.filter((a) => !back.has(a)),
-        failedAt: i,
-        failedOp: op && op.op,
-        error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
-        ...(revoked ? { refused: "edits-off" as const } : {}),
-        ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
-      };
+      return fail(i, op, e);
     }
   }
-  return { ok: true, applied, ...(warnings.length ? { warnings } : {}) };
+  // Every delete is checked before the first one runs: a deleted node cannot be brought back, so a check that fails
+  // must fail while the batch can still be put back whole.
+  for (const [i, t] of structure.deletes) {
+    const op = list[i];
+    if (!op) continue;
+    try { checkDelete(t); } catch (e) { return fail(i, op, e); }
+  }
+  for (const [i, t] of structure.deletes) {
+    const op = list[i];
+    if (!op) continue;
+    try {
+      consent();
+      rows[i] = applyDelete(t);
+    } catch (e) {
+      const r = await fail(i, op, e);
+      const gone = rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true).length;
+      return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
+    }
+  }
+  const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
+  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}) };
+}
+
+/** An op that names a node a delete of the same batch removes (it, or anything below it), as a parent or a target:
+ *  deletes run last, so the op would act on a node about to go. Refused up front, like any other problem. */
+function deleteConflicts(list: readonly WriteOp[], deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+  const gone = new Map<string, number>();
+  for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
+  const out: OpProblem[] = [];
+  for (const [index, op] of list.entries()) {
+    for (const k of ["nodeId", "parentId"] as const) {
+      const id = op[k];
+      const by = id === undefined ? undefined : gone.get(id);
+      if (by === undefined || by === index) continue;
+      out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is deleted by ops[" + by + "] of this batch (deletes run after every other op); drop one of the two" });
+      break;
+    }
+  }
+  return out;
 }

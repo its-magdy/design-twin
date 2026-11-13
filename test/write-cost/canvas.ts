@@ -18,7 +18,7 @@
 // A component made with TEXT properties (`textProps`) drives its sublayers' text from them: the plugin's
 // main.createInstance() + setProperties sets the sublayer's characters on that instance only. A paint the plugin binds
 // (figma.variables.setBoundVariableForPaint) shows the variable's value, as one a fixture binds does.
-import { fakeWorld, type FakeCollection, type FakeNode, type FakeVariable, type Scene, type World } from "../fake-figma.ts";
+import { fakeWorld, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene, type World } from "../fake-figma.ts";
 
 export interface Rgb { r: number; g: number; b: number }
 interface Alias { type: "VARIABLE_ALIAS"; id: string }
@@ -134,10 +134,11 @@ export function canvas(): Canvas {
       fontSize: spec.size ?? 16, fontName: FONT, fills: [paintOf(spec.fill ?? { r: 0, g: 0, b: 0 })],
       textAutoResize: "WIDTH_AND_HEIGHT", textAlignHorizontal: "LEFT", textAlignVertical: "TOP",
       lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE",
-      getRangeAllFontNames: () => [FONT],
+      getRangeAllFontNames: () => Object.freeze([FONT]), // frozen, as Figma's
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
     });
     Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter
+    textRuns(n); // the run API a write keeps a text with, to put it back if its batch fails
     nodes[id] = n;
     return n;
   };

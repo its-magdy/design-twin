@@ -30,7 +30,8 @@ import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
 import { checkTree, fontOf, isTreeSpec, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
-import { resolveRefs, type RefResolution, type ResolvedRefs } from "./tree-refs";
+import { resolveRefs, treeUses, type RefResolution, type ResolvedRefs } from "./tree-refs";
+import { markCreated } from "./session";
 import type { Change, OpProblem } from "./write-batch";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
@@ -92,7 +93,7 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     targets.set(index, { spec, page: page.ok, summary, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() } });
   }
   // Every op's references, resolved together (one lookup per name across the batch), into one shared map.
-  const r = await resolveRefs(specs, (f) => load(f.family, f.style));
+  const r = await resolveRefs(treeUses(specs), (f) => load(f.family, f.style));
   problems.push(...r.problems);
   for (const t of targets.values()) t.refs = r.refs;
   return { targets, problems, imports: r.imports, importCount: r.importCount };
@@ -152,6 +153,7 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     root.x = x;
     root.y = y;
     root.visible = t.spec.hidden !== true;
+    markCreated(root);
   } catch (e) {
     try { root.remove(); } catch { /* already gone */ }
     throw e;
@@ -239,7 +241,7 @@ function bindNumbers(n: Built, s: TreeNodeSpec, made: Made): void {
     if (ref !== undefined) n.setBoundVariable(k, variable(ref, made));
   }
 }
-function solid(color: string, opacity?: number): SolidPaint {
+export function solid(color: string, opacity?: number): SolidPaint {
   const c = parseHexColor(color);
   if (!c) throw new Error("'" + color + "' is not a hex colour"); // checkTree refused it already
   const alpha = (c.a === undefined ? 1 : c.a) * (opacity === undefined ? 1 : opacity);

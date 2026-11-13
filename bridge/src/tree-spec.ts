@@ -625,3 +625,9 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
     : "the page and fonts are checked against the file when applied";
   return parts.join("; ") + " — " + checked + ", and nothing lands unless all of it does";
 }
+
+// ---------------------------------------------------------------- shared with patch-spec.ts
+// A patch (patch-spec.ts) sets the same fields on an existing node: it checks each value with the rule the tree spec
+// uses for that field, so a value one accepts the other accepts too.
+export type { Check, Rule };
+export { LAYOUT_RULES, NODE_RULES, STROKE_RULES, STYLE_RULES, SIDES, fillsCheck, hex, isObj, isRefuse, nonNeg, objOf, objectProblems, oneOf, propsCheck, ref, refs, refuse, size, str, unit };

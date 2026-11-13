@@ -1,15 +1,16 @@
 // The WRITE plane (writes.ts) and parentId.
-import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
-import { MAX_TREE_NODES } from "../../bridge/src/tree-spec.ts";
+import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName, type WriteResult } from "../../bridge/src/commands.ts";
+import { checkPatch } from "../../bridge/src/patch-spec.ts";
+import { MAX_TREE_NODES, NUMBER_TOKEN_FIELDS } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import type { FakeCollection, FakeNode, FakeVariable, Scene } from "../fake-figma.ts";
+import { MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
 // The write targets the plane edits.
 const targetsOf = () => {
-  const textTarget: FakeNode = { id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => [{ family: "Inter", style: "Regular" }] };
+  const textTarget: FakeNode = textRuns({ id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
   const rectTarget: FakeNode & { fills: Array<{ color: { g: number } }> } = { id: "r:1", type: "RECTANGLE", name: "Box", fills: [] };
   const groupTarget: FakeNode = { id: "g:1", type: "GROUP", name: "Wrap" }; // no `fills`
   const screenTarget = modeNode("f:1", "Screen");
@@ -55,14 +56,20 @@ const modeScene = (): Scene => ({
   },
 });
 
-/** A file the plugin can write to: createFrame/createText record what they made in `created`, fonts load, and the
- *  open page accepts children. `editorType`, when given, is the editor the file is open in. "Allow edits" is
- *  still OFF (its default): a case that applies writes ticks it, the way the window does (`writableOn`). */
+/** A file the plugin can write to: createFrame/createText record what they made in `created` (a node a failed batch
+ *  removes again leaves it), fonts load, and the open page accepts children. `editorType`, when given, is the editor
+ *  the file is open in. "Allow edits" is still OFF (its default): a case that applies writes ticks it, the way the
+ *  window does (`writableOn`). */
 function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>, extra: Scene = modeScene()) {
   const created: FakeNode[] = [];
+  const made = (n: FakeNode): FakeNode => {
+    n.remove = () => { const i = created.indexOf(n); if (i >= 0) created.splice(i, 1); n.removed = true; };
+    created.push(n);
+    return n;
+  };
   const w = world({ ...extra, nodes, ...(editorType !== undefined ? { file: { editorType } } : {}), ...(clientStorage ? { clientStorage } : {}) }, {
-    createFrame: () => { const f = { id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} }; created.push(f); return f; },
-    createText: () => { const t = { id: "new:text", type: "TEXT", characters: "", fills: [], fontName: { family: "Inter", style: "Regular" } }; created.push(t); return t; },
+    createFrame: () => made({ id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} }),
+    createText: () => made(textRuns({ id: "new:text", type: "TEXT", characters: "", fills: [], fontName: { family: "Inter", style: "Regular" } })),
     loadFontAsync: async () => {},
   });
   w.figma.currentPage.appendChild = () => {};
@@ -106,8 +113,12 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
  * setTextStyleIdAsync (to untick "Allow edits" there).
  */
-async function treeWorld(opts: { kit?: boolean } = {}) {
+async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
   let seq = 0;
+  // getNodeByIdAsync's live table (the world's own): every node made here is found by id until it is removed.
+  const reg: { nodes: Record<string, FakeNode> | null } = { nodes: null };
+  const register = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") reg.nodes[n.id] = n; };
+  const unregister = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") delete reg.nodes[n.id]; for (const c of kids(n)) unregister(c); };
   const made: FakeNode[] = [];
   const imports: string[] = [];
   const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
@@ -116,15 +127,29 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
   const pageLoads: string[] = [];
   const fontKey = (f: unknown): string => (isNode(f) ? String(f.family) + "|" + String(f.style) : "?");
 
+  const insertInto = (n: FakeNode) => (at: number, c: FakeNode): void => {
+    if (n.type === "INSTANCE" || String(n.id).startsWith("I")) throw new Error("in Figma: cannot add a child to an instance");
+    const old = parentOf(c);
+    if (old) old.children = kids(old).filter((k) => k !== c);
+    const list = [...kids(n)];
+    list.splice(Math.min(at, list.length), 0, c);
+    n.children = list;
+    c.parent = n;
+    // Out of auto-layout, a FILL child becomes fixed (as in Figma).
+    if (n.layoutMode === undefined || n.layoutMode === "NONE") for (const k of ["layoutSizingHorizontal", "layoutSizingVertical"]) if (c[k] === "FILL") c[k] = "FIXED";
+  };
   const appendTo = (n: FakeNode) => (c: FakeNode): void => {
     const old = parentOf(c);
     if (old) old.children = kids(old).filter((k) => k !== c);
     n.children = [...kids(n), c];
     c.parent = n;
+    // Out of auto-layout, a FILL child becomes fixed (as in Figma).
+    if (old && (n.layoutMode === undefined || n.layoutMode === "NONE")) for (const k of ["layoutSizingHorizontal", "layoutSizingVertical"]) if (c[k] === "FILL") c[k] = "FIXED";
   };
   const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
     const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], loadAsync: async () => { pageLoads.push(id); } };
     pg.appendChild = appendTo(pg);
+    pg.insertChild = insertInto(pg);
     for (const k of existing) appendTo(pg)(k);
     return pg;
   };
@@ -134,21 +159,68 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
   ]);
   const screens = page("0:2", "Screens");
   const node = (type: "FRAME" | "TEXT" | "INSTANCE", main?: FakeNode): FakeNode => {
+    // What each kind has (a text has no auto-layout or corner radius, as in Figma), so a write that names a field
+    // the node lacks is caught as it would be there.
+    const box: FakeNode = type === "TEXT"
+      ? { characters: "", fontName: { family: "Inter", style: "Regular" }, fontSize: 12, textAutoResize: "WIDTH_AND_HEIGHT", lineHeight: { unit: "AUTO" },
+          letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", textStyleId: "", fillStyleId: "",
+          leadingTrim: "NONE", hangingPunctuation: false, hangingList: false }
+      : { layoutMode: main ? main.layoutMode : "NONE", clipsContent: true, itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+          primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", layoutWrap: "NO_WRAP", counterAxisSpacing: 0, counterAxisAlignContent: "AUTO", itemReverseZIndex: false,
+          minWidth: null, maxWidth: null, minHeight: null, maxHeight: null,
+          cornerRadius: 0, topLeftRadius: 0, topRightRadius: 0, bottomRightRadius: 0, bottomLeftRadius: 0,
+          strokeTopWeight: 1, strokeRightWeight: 1, strokeBottomWeight: 1, strokeLeftWeight: 1 };
     const fields: FakeNode = {
-      id: "t:" + ++seq, type, name: type === "FRAME" ? "Frame" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
-      x: 0, y: 0, width: 100, height: 100, layoutMode: main ? main.layoutMode : "NONE", clipsContent: true, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
-      characters: "", fontName: { family: "Inter", style: "Regular" },
+      id: "n:" + ++seq, type, name: type === "FRAME" ? "Frame" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
+      x: 0, y: 0, width: 100, height: 100, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
+      layoutPositioning: "AUTO", layoutGrow: 0, layoutAlign: "INHERIT", opacity: 1, strokes: [], strokeWeight: 1, strokeAlign: "INSIDE", ...box,
       fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
       boundVariables: {},
     };
+    // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {
+      const bound = isNode(fields.boundVariables) ? { ...fields.boundVariables } : {};
+      if (v === null) { delete bound[field]; fields.boundVariables = bound; return; }
       if (!isNode(v) || typeof v.id !== "string") throw new Error("in Figma: setBoundVariable takes a Variable object");
-      fields.boundVariables = { ...(isNode(fields.boundVariables) ? fields.boundVariables : {}), [field]: { type: "VARIABLE_ALIAS", id: v.id } };
+      fields.boundVariables = { ...bound, [field]: { type: "VARIABLE_ALIAS", id: v.id } };
+      // A bound size limit takes the variable's value, and the node grows or shrinks to meet it (as Figma's layout does).
+      const value = isNode(v.valuesByMode) ? Object.values(v.valuesByMode)[0] : undefined;
+      if (typeof value === "number" && (field === "minWidth" || field === "maxWidth")) {
+        fields[field] = value;
+        const width = num(fields, "width");
+        if ((field === "minWidth" && width < value) || (field === "maxWidth" && width > value)) fields.width = value;
+      }
     };
+    if (type === "TEXT") {
+      textRuns(fields);
+      fields.getRangeAllFontNames = () => Object.freeze([fields.fontName]); // frozen, as Figma's
+    }
     if (main) {
       fields.mainComponent = main;
+      fields.getMainComponentAsync = async () => fields.mainComponent;
+      // Each property's current value under the key setProperties takes: a set or plain component's definitions, the
+      // variant's own value for a VARIANT property, else what was set (or the default).
+      Object.defineProperty(fields, "componentProperties", {
+        enumerable: true,
+        get() {
+          const owner = parentOf(main)?.type === "COMPONENT_SET" ? parentOf(main) : main;
+          const defs = (owner?.componentPropertyDefinitions ?? {}) as Record<string, { type: string; defaultValue: unknown }>;
+          const set = isNode(fields.props) ? fields.props : {};
+          const vp = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
+          const bound = isNode(fields.propBound) ? fields.propBound : {};
+          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? vp[k] : k in set ? set[k] : d.defaultValue,
+            ...(isNode(bound[k]) ? { boundVariables: { value: bound[k] } } : {}) }]));
+        },
+      });
       fields.props = {};
-      fields.setProperties = (p: Record<string, unknown>) => {
+      fields.setProperties = (given: Record<string, unknown>) => {
+        // A VariableAlias binds the property (it shows the variable's value); a plain value unbinds it.
+        const bound: Record<string, unknown> = isNode(fields.propBound) ? { ...fields.propBound } : {};
+        const p: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(given)) {
+          if (isNode(v) && v.type === "VARIABLE_ALIAS") { bound[k] = v; p[k] = "(" + String(v.id) + ")"; } else { delete bound[k]; p[k] = v; }
+        }
+        fields.propBound = bound;
         fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
         // A variant value switches the instance to that variant, and to its layout (as Figma's does).
         const set = parentOf(main);
@@ -162,19 +234,28 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
     }
     if (type === "TEXT") {
       fields.setTextStyleIdAsync = async (id: string) => {
+        fields.textStyleOverrides = []; // the node's own setter leaves no override (as in Figma)
+        if (id === "") { fields.textStyleId = ""; return; } // "" detaches the style, keeping the formatting
         const st = KIT_STYLES.find((x) => x.id === id) ?? imported.find((x) => x.id === id);
         if (!st) throw new Error("in Figma: no style " + id);
         if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");
         fields.textStyleId = id;
         fields.fontName = st.fontName;
+        fields.lineHeight = { unit: "AUTO" }; // a style replaces the formatting it sets, per node ones included
+        Object.assign(fields, { leadingTrim: "CAP_HEIGHT", hangingPunctuation: true, hangingList: true });
         if (hooks.onStyle) await hooks.onStyle();
       };
     }
-    const quiet = new Set(["parent", "removed", "x", "y", "visible", "name", "children"]);
+    const quiet = new Set(["parent", "removed", "x", "y", "visible", "name", "children", "boundVariables"]);
+    const numberFields: readonly string[] = NUMBER_TOKEN_FIELDS;
     const n = new Proxy<FakeNode>(fields, {
       set(t, k, v) {
         const key = String(k);
         if (trap.has(key)) throw new Error("in Figma: cannot set " + key + " to " + JSON.stringify(v));
+        // Every corner follows cornerRadius (as Figma's do).
+        if (key === "cornerRadius" && typeof v === "number") for (const c of ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"]) t[c] = v;
+        // A raw value unbinds the variable bound to the field (as Figma's does).
+        if (numberFields.includes(key) && isNode(t.boundVariables) && key in t.boundVariables) { const b = { ...t.boundVariables }; delete b[key]; t.boundVariables = b; }
         if (type === "TEXT" && !quiet.has(key) && !loadedFonts.has(fontKey(key === "fontName" ? v : t.fontName))) {
           throw new Error("in Figma: font " + fontKey(key === "fontName" ? v : t.fontName) + " is not loaded (setting " + key + ")");
         }
@@ -191,15 +272,22 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
         return true;
       },
     });
-    fields.resize = (w: number, h: number) => { fields.width = w; fields.height = h; };
+    fields.resize = (w: number, h: number) => {
+      if (trap.has("resize")) throw new Error("in Figma: cannot resize to " + w + "×" + h);
+      fields.width = w; fields.height = h;
+      if (isNode(fields.boundVariables)) { const b = { ...fields.boundVariables }; delete b.width; delete b.height; fields.boundVariables = b; }
+    };
     fields.remove = () => {
       const parent = parentOf(fields);
       if (parent) parent.children = kids(parent).filter((k) => k !== n);
       fields.parent = null;
       fields.removed = true;
+      unregister(n);
     };
-    if (type === "FRAME") fields.appendChild = appendTo(n);
+    // An instance has the children API too, and refuses a new child (insertInto), as Figma's does.
+    if (type !== "TEXT") { fields.children = []; fields.appendChild = type === "FRAME" ? appendTo(n) : (c: FakeNode) => insertInto(n)(0, c); fields.insertChild = insertInto(n); }
     made.push(n);
+    register(n);
     appendTo(current)(n); // Figma puts a new node on the current page
     return n;
   };
@@ -207,7 +295,7 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
   const imported: FakeNode[] = [];
   const kit = opts.kit ? designKit((m) => node("INSTANCE", m)) : null;
   const pages = [current, screens, page("0:3", "Archive"), page("0:4", "Archive"), ...(kit ? [kit.page] : [])];
-  const w = world({ pages, currentPage: current, ...(kit ? kit.scene : {}) }, {
+  const w = world({ ...opts.extra, pages, currentPage: current, ...(kit ? kit.scene : {}), ...(opts.extra?.nodes ? { nodes: opts.extra.nodes } : {}) }, {
     createFrame: () => node("FRAME"),
     createText: () => node("TEXT"),
     loadFontAsync: async (f) => {
@@ -226,12 +314,14 @@ async function treeWorld(opts: { kit?: boolean } = {}) {
       },
     } : {}),
   });
+  reg.nodes = w.scene.nodes;
+  for (const pg of pages) { register(pg); for (const k of kids(pg)) register(k); }
   await w.allowEdits();
   /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
    *  parent is null, so everything below it is gone with it, as in Figma) */
   const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
-  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens } };
+  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
 }
 
 // ---- the design system a kit world has: components, variables, text styles, and a library
@@ -245,8 +335,9 @@ const KIT_VARS: Record<string, FakeVariable> = {
   "VariableID:30:3": variable("VariableID:30:3", "radius/md", "FLOAT", "local-radius-md"),
   "VariableID:30:4": variable("VariableID:30:4", "color/text", "COLOR", "local-text-a"),
   "VariableID:31:4": variable("VariableID:31:4", "color/text", "COLOR", "local-text-b"),
+  "VariableID:30:5": { ...variable("VariableID:30:5", "size/min", "FLOAT", "local-size-min"), valuesByMode: { "30:0": 300 } },
 };
-const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight } });
+const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight }, fontSize: 24 });
 const KIT_STYLES: FakeNode[] = [
   style("S:h1,", "Heading/H1", "local-h1", "Inter", "Bold"),
   style("S:body,", "Body", "local-body", "Inter", "Regular"),
@@ -308,6 +399,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const scene: Scene = {
     variables: KIT_VARS,
     localStyles: { text: KIT_STYLES },
+    styles: Object.fromEntries(KIT_STYLES.map((st) => [String(st.id), st])), // getStyleByIdAsync finds them too
+
     teamLibrary: {
       getAvailableLibraryVariableCollectionsAsync: async () => [{ name: "Core tokens", key: "lib-core", libraryName: "Core Library" }],
       getVariablesInLibraryCollectionAsync: async () => Object.values(library.variables).map((v) => ({ name: v.name, key: String(v.key), resolvedType: v.resolvedType })),
@@ -398,10 +491,16 @@ export const cases: Case[] = [{
       { op: "createFrame", name: "never" },
     ]);
     ok("write: partial failure reports ok:false", wPartial.ok === false);
-    ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
+    ok("write: partial failure puts the batch back: the two nodes it made are removed and listed as restored, nothing stays applied",
+      wPartial.applied.length === 0 && (wPartial.restored ?? []).length === 2 && created.every((n) => n.name !== "A" && n.name !== "B"));
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | move | delete");
+    // setFill and setText keep what they replace too: a later failure puts the fill and the text back.
+    const fillsBefore = rectTarget.fills, textBefore = textTarget.characters;
+    const wBack = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#123456" }, { op: "setText", nodeId: "t:1", text: "temporary" }, { op: "setFill", nodeId: "nope:2", color: "#fff" }]);
+    ok("write: a failed batch puts setFill's fill and setText's text back, and lists both as restored",
+      wBack.ok === false && rectTarget.fills === fillsBefore && textTarget.characters === textBefore && (wBack.restored ?? []).length === 2 && wBack.applied.length === 0);
     ok("write: empty/omitted batch is a no-op success", (await api.applyWrites(undefined)).ok === true);
 
     // One batch is one Cmd-Z step: an undo checkpoint before and after every non-empty batch (a failed one included,
@@ -430,7 +529,12 @@ export const cases: Case[] = [{
     // figma_write's dry-run step (writeOpPreview), the wire check (argsShapeError) and the plugin's applyWrites in the
     // VM. A dry run that refuses what applying accepts (or the reverse) is the drift this table exists to stop.
     const { textTarget, rectTarget, groupTarget, screenTarget } = targetsOf();
-    const { api, created } = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "f:1": screenTarget });
+    const w = await treeWorld({ extra: { ...modeScene(), nodes: { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "f:1": screenTarget } } });
+    const { api } = w;
+    const created = { get length() { return w.alive().length; } };
+    // A move and a delete need nodes this session created: a frame holding two.
+    const made = await api.applyWrites([{ op: "createTree", tree: { handle: "a", children: [{ handle: "b" }, { handle: "c" }] } }]);
+    const h = made.applied[0]?.handles ?? {};
     const complete: { [K in WriteOpName]: WriteOp } = {
       createFrame: { op: "createFrame", name: "F", width: 10, height: 10, fill: "#fff" },
       createText: { op: "createText", text: "T", fontSize: 12, fill: "#000" },
@@ -439,6 +543,9 @@ export const cases: Case[] = [{
       setText: { op: "setText", nodeId: "t:1", text: "x" },
       setVariableMode: { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
       clearVariableMode: { op: "clearVariableMode", nodeId: "f:1", collection: "Theme" },
+      patch: { op: "patch", nodeId: "r:1", set: { fills: [{ type: "solid", color: "#00ff00" }] } },
+      move: { op: "move", nodeId: h.c ?? "", parentId: h.b ?? "", index: 0 },
+      delete: { op: "delete", nodeId: h.b ?? "" },
     };
     for (const name of WRITE_OP_NAMES) {
       const full = complete[name];
@@ -536,10 +643,10 @@ export const cases: Case[] = [{
     ]);
     ok("[MODES] a later op failing: every mode change in the batch is put back (inherited stays inherited, Light stays Light)",
       failing.ok === false && failing.failedAt === 5 && theme() === undefined && card.explicitVariableModes[THEME.id] === "7:0");
-    ok("[MODES] …the reply lists them as restored, in batch order, and keeps only the createFrame as applied",
-      JSON.stringify(failing.applied) === JSON.stringify([{ id: "new:frame" }]) && created.length === madeBefore + 1
-      && JSON.stringify((failing.restored ?? []).map((r) => [r.id, r.from, r.to])) === JSON.stringify([["f:1", "inherited", "Dark"], ["f:2", "Light", "Dark"], ["f:2", "Dark", "Light"], ["f:2", "Light", "inherited"]]));
-    ok("[MODES] …and the toast says what happened", w.notified.some((t) => /applied 1 edit, then one failed/.test(t)));
+    ok("[MODES] …the reply lists them as restored, in batch order, with the createFrame removed too; nothing stays applied",
+      failing.applied.length === 0 && created.length === madeBefore
+      && JSON.stringify((failing.restored ?? []).map((r) => [r.id, r.from, r.to])) === JSON.stringify([["f:1", "inherited", "Dark"], ["new:frame", undefined, undefined], ["f:2", "Light", "Dark"], ["f:2", "Dark", "Light"], ["f:2", "Light", "inherited"]]));
+    ok("[MODES] …and the toast says what happened", w.notified.some((t) => /undid 5 earlier changes after an edit failed/.test(t)));
 
     // The same gates as every overwrite: Dev Mode refuses the batch whole, and so does Allow edits off.
     w.figma.editorType = "dev";
@@ -860,11 +967,11 @@ export const cases: Case[] = [{
       && alive().length === 0 && (partway.restored ?? []).length === 1 && partway.restored?.[0]?.created?.frames === 5);
     ok("[TREE-ATOMIC] …and the toast says the earlier change was undone", w.notified.some((t) => /undid 1 earlier change after an edit failed/.test(t)));
     w.trap.clear();
-    // A later op of the batch failing takes the tree back; an older-style createFrame stays (it always has).
+    // A later op of the batch failing takes the tree back, and the createFrame after it.
     const later = await api.applyWrites([{ op: "createTree", tree: signIn() }, { op: "createFrame", name: "Kept" }, { op: "setFill", nodeId: "gone:1", color: "#fff" }]);
-    ok("[TREE-ATOMIC] a later op failing removes the tree and lists it as restored; the createFrame stays applied",
-      later.ok === false && later.failedAt === 2 && alive().length === 1 && alive()[0]?.name === "Kept"
-      && later.applied.length === 1 && later.restored?.[0]?.handles?.title !== undefined);
+    ok("[TREE-ATOMIC] a later op failing removes the tree and the frame, and lists both as restored",
+      later.ok === false && later.failedAt === 2 && alive().length === 0
+      && later.applied.length === 0 && later.restored?.[0]?.handles?.title !== undefined && later.restored.length === 2);
 
     // A handle is the agent's own string: names on Object.prototype come back as own keys like any other.
     const proto = await api.applyWrites([{ op: "createTree", tree: { handle: "constructor", children: [{ handle: "toString" }] } }]);
@@ -954,7 +1061,7 @@ export const cases: Case[] = [{
     ok("[REFS] spacing fields name a number variable: bound after the raw values",
       JSON.stringify(root?.boundVariables) === JSON.stringify(Object.fromEntries(["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].map((k) => [k, { type: "VARIABLE_ALIAS", id: "VariableID:30:2" }]))));
     ok("[REFS] a text names a text style: set, in the style's font; the font fields it sets are not set, the rest are",
-      title?.textStyleId === "S:h1," && JSON.stringify(title.fontName) === JSON.stringify({ family: "Inter", style: "Bold" }) && title.fontSize === undefined && title.textAlignHorizontal === "CENTER");
+      title?.textStyleId === "S:h1," && JSON.stringify(title.fontName) === JSON.stringify({ family: "Inter", style: "Bold" }) && title.fontSize === 12 && title.textAlignHorizontal === "CENTER");
     ok("[REFS] …and the reply warns that the style sets them", JSON.stringify(r.warnings) === JSON.stringify(["ops[0].tree.children[0]: `font.family`, `font.size` are set by the text style, so they are not set"]));
     ok("[REFS] `tokens.fills` on a text with no fills: one bound paint", JSON.stringify((note?.fills as unknown[] | undefined)?.map((p) => isNode(p) ? p.boundVariables : null)) === JSON.stringify([{ color: { type: "VARIABLE_ALIAS", id: "VariableID:30:1" } }]));
     ok("[REFS] a corner names a variable; the raw radius stays on the others", num(card, "cornerRadius") === 4 && JSON.stringify(card?.boundVariables) === JSON.stringify({ topLeftRadius: { type: "VARIABLE_ALIAS", id: "VariableID:30:3" } }));
@@ -1109,4 +1216,549 @@ export const cases: Case[] = [{
         + "fonts 'Inter Regular'; components 'Button'; variables 'color/brand', 'space/md'; text styles 'Body'; 2 raw values left unbound — "
         + "the page, fonts and names are checked against the file when applied (a library item is imported only then), and nothing lands unless all of it does");
   },
+}, {
+  name: "patch by id: every field set on an existing node, design-system names resolved, one undo step",
+  async run() {
+    const p = await patchWorld();
+    const { w, h, node } = p;
+    const commits = w.undo.commits;
+    const r = await w.api.applyWrites([
+      { op: "patch", nodeId: h.email, set: { text: "jane@example.com", fills: [{ type: "solid", tokens: { color: "color/brand" } }], styles: { text: "Body" } } },
+      { op: "patch", nodeId: h.card, set: { name: "Card 2", opacity: 0.5, radius: { tl: 2 }, layout: { gap: 6, justifyContent: "center" }, box: { w: 300 },
+        strokes: { colors: ["#000000"], weight: 2, align: "outside" }, tokens: { paddingTop: "space/md" } } },
+      { op: "patch", nodeId: h.btn, set: { props: { Size: "Large", Label: "Pay" } } },
+      { op: "patch", nodeId: h.spare, set: { hidden: true, widthMode: "fill" } },
+      { op: "patch", nodeId: h.screen, set: { layout: { gap: 24 } } },
+    ]);
+    const email = node("email"), card = node("card"), btn = node("btn"), spare = node("spare"), screen = node("screen");
+    ok("[PATCH] one batch: ok, one row per op with the node's id, and the raw values counted as unbound",
+      r.ok === true && JSON.stringify(r.applied) === JSON.stringify([{ id: h.email }, { id: h.card, unbound: 4 }, { id: h.btn }, { id: h.spare }, { id: h.screen, unbound: 1 }]));
+    ok("[PATCH] text: the characters, a paint bound to a colour variable, the text style (in its font)",
+      email?.characters === "jane@example.com" && email.textStyleId === "S:body," && boundColor(email) === "VariableID:30:1");
+    ok("[PATCH] frame: name, opacity, one corner, gap and alignment (the padding untouched), width fixed, strokes",
+      card?.name === "Card 2" && card.opacity === 0.5 && card.topLeftRadius === 2 && card.topRightRadius === 8 && card.itemSpacing === 6
+      && card.primaryAxisAlignItems === "CENTER" && card.paddingLeft === 8 && card.width === 300 && card.height === 80 && card.strokeWeight === 2 && card.strokeAlign === "OUTSIDE"
+      && JSON.stringify(card.strokes) === JSON.stringify([{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }]));
+    ok("[PATCH] a number field bound to a variable by name", JSON.stringify(card?.boundVariables) === JSON.stringify({ paddingTop: { type: "VARIABLE_ALIAS", id: "VariableID:30:2" } }));
+    ok("[PATCH] instance: a variant value and a text property, keyed as Figma takes them",
+      isNode(btn?.mainComponent) && btn.mainComponent.id === "5:6" && isNode(btn.props) && btn.props.Size === "Large" && btn.props["Label#1:0"] === "Pay" && Object.keys(btn.props).length === 2);
+    ok("[PATCH] visibility and sizing", spare?.visible === false && spare.layoutSizingHorizontal === "FILL");
+    ok("[PATCH] a raw value where a variable was bound replaces it (the binding goes, as in Figma)",
+      screen?.itemSpacing === 24 && JSON.stringify(screen.boundVariables) === "{}");
+    ok("[PATCH] the batch is one undo step", w.undo.commits === commits + 2);
+
+    // `null` in tokens unbinds and keeps the value; a library variable named in a patch is imported only once the
+    // batch resolved, and then bound.
+    const lib = await w.api.applyWrites([
+      { op: "patch", nodeId: h.card, set: { tokens: { paddingTop: null, itemSpacing: "space/lg" } } },
+      { op: "patch", nodeId: h.email, set: { tokens: { fills: null } } },
+    ]);
+    ok("[PATCH] tokens: null unbinds (the value stays), a library variable by name is imported and bound",
+      lib.ok === true && JSON.stringify(node("card")?.boundVariables) === JSON.stringify({ itemSpacing: { type: "VARIABLE_ALIAS", id: "VariableID:lib/1:2" } })
+      && node("card")?.paddingTop === 8 && JSON.stringify(w.imports) === JSON.stringify(["variable " + KEY("d")]) && boundColor(node("email")) === null);
+    // Turning auto-layout off and back on, and fixing a size the other way round.
+    const off = await w.api.applyWrites([{ op: "patch", nodeId: h.card, set: { layout: { mode: "absolute" } } }]);
+    ok("[PATCH] layout {mode: absolute} removes auto-layout", off.ok === true && node("card")?.layoutMode === "NONE");
+    const on = await w.api.applyWrites([{ op: "patch", nodeId: h.card, set: { layout: { display: "flex", flexDirection: "column" }, heightMode: "hug" } }]);
+    ok("[PATCH] layout display flex turns it on in the given direction; hug then applies", on.ok === true && node("card")?.layoutMode === "VERTICAL" && node("card")?.layoutSizingVertical === "HUG");
+  },
+}, {
+  name: "patch by id: a failing op puts back every value the batch changed (patches, fills, texts, created and moved nodes)",
+  async run() {
+    const p = await patchWorld();
+    const { w, h, state } = p;
+    const before = state();
+    const commits = w.undo.commits;
+    w.trap.add("cornerRadius"); // Figma refuses this value partway through the last op
+    const r = await w.api.applyWrites([
+      { op: "patch", nodeId: h.email, set: { text: "changed", fills: [{ type: "solid", color: "#ff0000" }], styles: { text: "Heading/H1" } } },
+      { op: "patch", nodeId: h.card, set: { name: "Renamed", opacity: 0.2, layout: { mode: "absolute" }, box: { w: 10, h: 10 }, radius: { tl: 1, br: 3 }, strokes: { colors: ["#00ff00"], weight: 4 } } },
+      { op: "patch", nodeId: h.btn, set: { props: { Size: "Large", Label: "Pay" } } },
+      { op: "patch", nodeId: h.screen, set: { layout: { gap: 40, padding: [1, 2, 3, 4] }, hidden: true } },
+      { op: "setFill", nodeId: h.card, color: "#123456" },
+      { op: "setText", nodeId: h.inside, text: "moved text" },
+      { op: "createFrame", name: "Temp", parentId: h.screen },
+      { op: "move", nodeId: h.spare, parentId: h.card, index: 0 },
+      { op: "patch", nodeId: h.spare, set: { name: "Never", radius: 3 } },
+    ]);
+    w.trap.clear();
+    const after = state();
+    const diff = Object.keys(before).filter((k) => before[k] !== after[k]);
+    ok("[ROLLBACK] the batch fails at the op Figma refused, nothing stays applied, the eight earlier changes are listed as restored",
+      r.ok === false && r.failedAt === 8 && r.failedOp === "patch" && /cannot set cornerRadius/.test(r.error ?? "") && r.applied.length === 0 && (r.restored ?? []).length === 8);
+    ok(`[ROLLBACK] every node is exactly as it was: text, style, fills, layout, size, corners, strokes, variant, binding, parent and place (differs: ${diff.join(", ") || "none"})`, diff.length === 0);
+    ok("[ROLLBACK] the frame the batch created is gone", !w.alive().some((n) => n.name === "Temp"));
+    ok("[ROLLBACK] a failed batch is still one undo step", w.undo.commits === commits + 2);
+    ok("[ROLLBACK] the toast says the changes were undone", w.notified.some((t) => /undid 8 earlier changes after an edit failed/.test(t)));
+  },
+}, {
+  name: "patch by id: every problem refused up front, names resolved like the tree spec, nothing changed or imported",
+  async run() {
+    const p = await patchWorld();
+    const { w, h, state } = p;
+    const before = state();
+    const r = await w.api.applyWrites([
+      { op: "patch", nodeId: h.email, set: { fills: [{ type: "solid", tokens: { color: "color/brnad" } }], styles: { text: "Bdy" } } },
+      { op: "patch", nodeId: h.email, set: { tokens: { itemSpacing: "space/md" } } },
+      { op: "patch", nodeId: h.card, set: { text: "x", props: { a: "b" } } },
+      { op: "patch", nodeId: h.spare, set: { layout: { gap: 4 }, heightMode: "hug" } },
+      { op: "patch", nodeId: h.btn, set: { props: { Size: "Huge", Labl: "x" } } },
+      { op: "patch", nodeId: "gone:1", set: { name: "x" } },
+      { op: "patch", nodeId: h.card, set: { fills: [{ type: "solid", tokens: { color: "space/md" } }, { type: "solid", tokens: { color: "color/text" } }], tokens: { itemSpacing: "space/lg" } } },
+      { op: "createFrame", name: "never" },
+    ]);
+    const err = r.error ?? "";
+    const has = (re: RegExp, what: string): void => { ok("[PATCH-REFUSE] " + what, re.test(err)); };
+    ok("[PATCH-REFUSE] refused whole before anything ran: nothing changed, nothing made, nothing imported",
+      r.ok === false && r.failedAt === 0 && r.applied.length === 0 && /nothing was changed/i.test(err) && JSON.stringify(state()) === JSON.stringify(before)
+      && !w.alive().some((n) => n.name === "never") && w.imports.length === 0);
+    has(/ops\[0\] \(patch\): set\.fills\[0\]\.tokens\.color: variable 'color\/brnad' matches no variable in this file or an enabled library; closest: 'color\/brand'/, "a variable that matches nothing, with candidates");
+    has(/ops\[0\] \(patch\): set\.styles\.text: text style 'Bdy' matches no text style in this file .*closest: 'Body'/, "a text style that matches nothing, with candidates");
+    has(/ops\[1\] \(patch\): set\.tokens\.itemSpacing: 'email' is a TEXT, which has no `itemSpacing` to bind/, "a field the node does not have");
+    has(/ops\[2\] \(patch\): set\.text: only on a TEXT node; 'Card' is a FRAME/, "a text field on a frame");
+    has(/ops\[2\] \(patch\): set\.props: only on an INSTANCE node/, "props on a frame");
+    // A check that reads the file's state (auto-layout here) runs up front for the first op that could see it; after an
+    // op that could change it, right before the op applies (below).
+    ok("[PATCH-REFUSE] after other ops, a state check is not made up front", !/ops\[3\]/.test(err));
+    const alone = (await w.api.applyWrites([{ op: "patch", nodeId: h.spare, set: { layout: { gap: 4 }, heightMode: "hug" } }])).error ?? "";
+    ok("[PATCH-REFUSE] a gap on a frame without auto-layout", /ops\[0\] \(patch\): set\.layout: 'Spare' has no auto-layout, so `layout\.gap` would do nothing; add `display: "flex"`/.test(alone));
+    ok("[PATCH-REFUSE] hug without auto-layout", /ops\[0\] \(patch\): set\.heightMode: "hug" needs auto-layout on the node/.test(alone));
+    const late = await w.api.applyWrites([{ op: "patch", nodeId: h.card, set: { name: "First" } }, { op: "patch", nodeId: h.spare, set: { layout: { gap: 4 } } }]);
+    ok("[PATCH-REFUSE] …and after another op, the same check right before the op runs: the batch fails there and is put back",
+      late.ok === false && late.failedAt === 1 && /has no auto-layout/.test(late.error ?? "") && /checked right before this op ran/.test(late.error ?? "")
+      && (late.restored ?? []).length === 1 && p.node("card")?.name === "Card");
+    has(/ops\[4\] \(patch\): set\.props: property 'Size' of 'Button' has no value "Huge"/, "a variant value the component lacks");
+    has(/ops\[4\] \(patch\): set\.props: component 'Button' has no property 'Labl'; closest: 'Label'/, "a property the component lacks");
+    has(/ops\[5\] \(patch\): no node with id 'gone:1'/, "a missing node");
+    has(/ops\[6\] \(patch\): set\.fills\[0\]\.tokens\.color: variable 'space\/md' holds a float, and this field takes a color variable/, "a number variable on a paint");
+    has(/ops\[6\] \(patch\): set\.fills\[1\]\.tokens\.color: variable 'color\/text' matches 2 variables/, "a variable name that matches two");
+    ok("[PATCH-REFUSE] the library variable a refused batch names is not imported", w.imports.length === 0 && !/ops\[7\]/.test(err));
+
+    // The shape: checked the same by the dry run, the wire and the plugin.
+    const shape = checkPatch({ font: { size: 3 }, fills: "red", box: { w: 10 }, widthMode: "fill", colour: "#fff", x: 4 });
+    ok("[PATCH-SHAPE] read fields refused by name, bad values and unknown keys with the nearest names",
+      shape.problems.some((m) => /^set\.font: a patch cannot set it — a text's font cannot be patched yet/.test(m))
+      && shape.problems.some((m) => /^set\.x: a patch cannot set it/.test(m))
+      && shape.problems.some((m) => /^set\.colour: not a field a patch sets/.test(m))
+      && shape.problems.some((m) => /^set\.fills must be a list of paints/.test(m)));
+    ok("[PATCH-SHAPE] contradicting fields refused", checkPatch({ box: { w: 10 }, widthMode: "fill" }).problems.some((m) => /`box\.w` gives a fixed width, which `widthMode: "fill"` contradicts/.test(m)));
+    ok("[PATCH-SHAPE] an empty patch sets nothing", checkPatch({}).problems.some((m) => /sets nothing/.test(m)));
+    const bad = { op: "patch" as const, nodeId: "1:2", set: { box: { w: 10 }, widthMode: "fill" } };
+    const step = writeOpPreview(bad, 0);
+    const applied = await w.api.applyWrites([{ ...bad }]);
+    ok("[PATCH-SHAPE] the dry run, the wire check and the plugin refuse the same patch",
+      step.invalid !== undefined && argsShapeError("write", { ops: [bad] }) !== null && applied.ok === false && /contradicts/.test(applied.error ?? ""));
+    const good = writeOpPreview({ op: "patch", nodeId: "1:2", set: { text: "Hi", fills: [{ type: "solid", tokens: { color: "color/brand" } }], radius: 4 } }, 2);
+    ok("[PATCH-PREVIEW] the dry run: an overwrite of the node, one row per field (in the order applied), the change in words",
+      good.effect === "overwrites" && good.target === "1:2" && good.invalid === undefined
+      && JSON.stringify(good.fields) === JSON.stringify([{ field: "radius", to: "4" }, { field: "fills", to: '[{"type":"solid","tokens":{"color":"color/brand"}}]' }, { field: "text", to: '"Hi"' }])
+      && good.change === "node 1:2: sets radius, fills, text; variables 'color/brand'; 1 raw value left unbound — the node, its kind and the names are checked against the file when applied; the values it replaces are kept, and put back if a later op of the batch fails");
+  },
+}, {
+  name: "move and delete: only nodes this session created; deletes run last; a move is put back on failure",
+  async run() {
+    const p = await patchWorld();
+    const { w, h, node } = p;
+    const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Box", handle: "box", layout: { display: "flex" }, children: [
+      { name: "A", handle: "a", children: [{ text: "a1", handle: "a1" }] }, { name: "B", handle: "b" }, { component: "Badge", handle: "badge" },
+    ] } }]);
+    const m = made.applied[0]?.handles ?? {};
+    const id = (k: string): string => m[k] ?? "?";
+    const refused = async (ops: Array<{ op: string } & Record<string, unknown>>, re: RegExp, what: string): Promise<void> => {
+      const r = await w.api.applyWrites(ops);
+      ok("[STRUCTURE] " + what + " (" + (r.error ?? "").split("\n")[0] + ")", r.ok === false && r.applied.length === 0 && re.test(r.error ?? ""));
+    };
+    await refused([{ op: "delete", nodeId: "1:1" }], /node 'Existing A' \(1:1\): this plugin session did not create it/, "a node the session did not create cannot be deleted");
+    await refused([{ op: "move", nodeId: "1:1", parentId: id("box") }], /node 'Existing A' \(1:1\): this plugin session did not create it/, "…or moved");
+    await refused([{ op: "move", nodeId: id("a"), parentId: id("a") }], /is the node itself/, "a node cannot move into itself");
+    await refused([{ op: "move", nodeId: id("box"), parentId: id("a") }], /is inside the node/, "…or below itself");
+    await refused([{ op: "move", nodeId: id("b"), parentId: id("a1") }], /is a TEXT, which cannot have children/, "a text cannot take children");
+    await refused([{ op: "move", nodeId: id("b"), parentId: id("badge") }], /is an instance, which cannot take new children/, "an instance cannot take children");
+    await refused([{ op: "move", nodeId: id("b"), parentId: id("a"), index: 5 }], /index 5 is past the end/, "an index past the end");
+    await refused([{ op: "patch", nodeId: id("a1"), set: { text: "x" } }, { op: "delete", nodeId: id("a") }], /ops\[0\] \(patch\): `nodeId` '.*' is deleted by ops\[1\]/, "an op on a node a delete in the same batch removes");
+    await refused([{ op: "delete", nodeId: id("a") }, { op: "createFrame", parentId: id("a") }], /ops\[1\] \(createFrame\): `parentId` '.*' is deleted by ops\[0\]/, "a create into a node the batch deletes");
+
+    // Valid: deletes run after the rest, and the reply keeps op order.
+    const ok1 = await w.api.applyWrites([{ op: "delete", nodeId: id("a1") }, { op: "move", nodeId: id("b"), parentId: id("a"), index: 0 }]);
+    ok("[STRUCTURE] delete and move a session's nodes: ok, rows in op order", ok1.ok === true
+      && JSON.stringify(ok1.applied) === JSON.stringify([{ id: id("a1"), deleted: true }, { id: id("b"), parentId: id("a") }]));
+    ok("[STRUCTURE] …the text is gone and B is A's first child", (await w.figma.getNodeByIdAsync(id("a1"))) === null && kids(node("a", m)).map((k) => k.id).join() === id("b"));
+    // A move is put back when a later op fails.
+    w.trap.add("cornerRadius");
+    const back = await w.api.applyWrites([{ op: "move", nodeId: id("b"), parentId: id("box"), index: 0 }, { op: "patch", nodeId: id("b"), set: { radius: 2 } }]);
+    w.trap.clear();
+    ok("[STRUCTURE] a failed batch returns a moved node to its parent and place", back.ok === false && back.restored?.[0]?.parentId === id("box")
+      && parentOf(node("b", m))?.id === id("a") && kids(node("a", m))[0]?.id === id("b"));
+    // A node the designer put inside one the session created: the delete would take it too, so it is refused.
+    const existing = w.alive().length;
+    const foreign = await w.figma.getNodeByIdAsync("1:2");
+    const a = node("a", m);
+    if (foreign && a && typeof a.appendChild === "function") (a.appendChild as (c: FakeNode) => void)(foreign);
+    await refused([{ op: "delete", nodeId: id("a") }], /holds 'Existing B' \(1:2\), which this plugin session did not create/, "a delete that would take a node the session did not create");
+    // A frame created into a node the same batch deletes would conflict; a frame created earlier is the session's own.
+    const late = await w.api.applyWrites([{ op: "delete", nodeId: id("badge") }]);
+    ok("[STRUCTURE] an instance the session created is deleted whole", late.ok === true && (await w.figma.getNodeByIdAsync(id("badge"))) === null && w.alive().length === existing - 1);
+    ok("[STRUCTURE] the dry run says what a move and a delete do",
+      writeOpPreview({ op: "delete", nodeId: "1:2" }, 0).effect === "deletes" && /only a node this plugin session created/.test(writeOpPreview({ op: "delete", nodeId: "1:2" }, 0).change ?? "")
+      && writeOpPreview({ op: "move", nodeId: "1:2", parentId: "1:3" }, 0).effect === "moves" && writeOpPreview({ op: "move", nodeId: "1:2" }, 0).invalid === "missing parentId");
+    void h;
+  },
+}, {
+  name: "patch rollback: shapes with one radius, mixed and styled text with overrides and bindings, paint styles, empty styled text",
+  async run() {
+    const RED = [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], STYLE_PAINTS = [{ type: "SOLID", color: { r: 0, g: 0, b: 1 } }];
+    // A rectangle linked to a fill and a stroke style: setting paints detaches the style, as in Figma.
+    const swatch: FakeNode = {
+      id: "sw:1", type: "RECTANGLE", name: "Swatch", _fills: STYLE_PAINTS, fillStyleId: "S:paint", _strokes: STYLE_PAINTS, strokeStyleId: "S:line", strokeWeight: 1, strokeAlign: "INSIDE",
+      get fills() { return swatch._fills; }, set fills(v: unknown) { swatch._fills = v; swatch.fillStyleId = ""; },
+      get strokes() { return swatch._strokes; }, set strokes(v: unknown) { swatch._strokes = v; swatch.strokeStyleId = ""; },
+      setFillStyleIdAsync: async (id: string) => { swatch.fillStyleId = id; swatch._fills = STYLE_PAINTS; },
+      setStrokeStyleIdAsync: async (id: string) => { swatch.strokeStyleId = id; swatch._strokes = STYLE_PAINTS; },
+    };
+    const hex: FakeNode = { id: "pl:1", type: "POLYGON", name: "Hex", cornerRadius: 3 };
+    const path: FakeNode = { id: "vc:1", type: "VECTOR", name: "Path", cornerRadius: 0 };
+    const rich = runText("rx:1", [
+      { text: "Hello ", fontSize: 22, fills: RED, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "VariableID:30:2" } } },
+      { text: "World", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Semi Bold" }, fontSize: 24, fills: STYLE_PAINTS, textDecoration: "UNDERLINE",
+        textDecorationStyle: "WAVY", hyperlink: { type: "URL", value: "https://example.com" }, listOptions: { type: "UNORDERED" }, indentation: 1,
+        textStyleOverrides: ["SEMANTIC_WEIGHT", "TEXT_DECORATION", "HYPERLINK"] },
+    ]);
+    // Two runs with the same paints from two different paint styles: the links are kept run by run.
+    const twins = runText("rx:3", [{ text: "ab", fills: STYLE_PAINTS, fillStyleId: "S:a" }, { text: "cd", fills: STYLE_PAINTS, fillStyleId: "S:b" }]);
+    // A run whose text style uses one font while the run overrides it with another: putting the style back needs the
+    // style's font, which nothing else in the batch loads.
+    const font = { loaded: (_f: unknown): boolean => true };
+    const overridden = runText("rx:4", [{ text: "Title", textStyleId: "S:h1,", fontName: { family: "Roboto", style: "Regular" }, fontSize: 24, textStyleOverrides: ["SEMANTIC_WEIGHT"] }], async () => {}, (f) => font.loaded(f));
+    const p = await patchWorld({ "sw:1": swatch, "pl:1": hex, "vc:1": path, "rx:1": rich, "rx:3": twins, "rx:4": overridden });
+    font.loaded = p.w.fontLoaded;
+    const { w, h } = p;
+    const fail = { op: "patch", nodeId: h.card, set: { radius: 1 } };
+    const richBefore = runsOf(rich), twinsBefore = runsOf(twins), overriddenBefore = runsOf(overridden);
+    const cardWidth = p.node("card")?.width;
+    w.trap.add("cornerRadius");
+    const r = await w.api.applyWrites([
+      { op: "patch", nodeId: "pl:1", set: { radius: 9 } },
+      { op: "patch", nodeId: "sw:1", set: { fills: [{ type: "solid", color: "#00ff00" }], strokes: { colors: ["#00ff00"] } } },
+      { op: "setFill", nodeId: "sw:1", color: "#ffff00" },
+      { op: "patch", nodeId: "rx:1", set: { text: "Bye", styles: { text: "Body" } } },
+      { op: "patch", nodeId: "rx:3", set: { fills: [{ type: "solid", color: "#ff0000" }] } },
+      { op: "patch", nodeId: "rx:4", set: { styles: { text: "Body" } } },
+      { op: "patch", nodeId: h.card, set: { tokens: { minWidth: "size/min" } } },
+      fail,
+    ]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] the batch fails and puts back all seven earlier changes (" + (r.error ?? "") + ")", r.ok === false && r.failedAt === 7 && (r.restored ?? []).length === 7 && r.applied.length === 0);
+    ok("[ROLLBACK-2] runs with the same paints from two paint styles: each run's style link is put back", runsOf(twins) === twinsBefore);
+    const legacy = await w.api.applyWrites([{ op: "setFill", nodeId: "rx:3", color: "#00ff00" }, { op: "setFill", nodeId: "gone:5", color: "#fff" }]);
+    ok("[ROLLBACK-2] …and so does setFill on that text", legacy.ok === false && (legacy.restored ?? []).length === 1 && runsOf(twins) === twinsBefore);
+    // An unstyled text given a style: the per-node properties the style replaced (leading trim, hanging punctuation and
+    // list) go back with the rest.
+    const email = p.node("email");
+    const node3 = (): string => JSON.stringify([email?.leadingTrim, email?.hangingPunctuation, email?.hangingList, email?.textStyleId]);
+    const was = node3();
+    w.trap.add("cornerRadius");
+    const styled = await w.api.applyWrites([{ op: "patch", nodeId: h.email, set: { styles: { text: "Heading/H1" } } }, fail]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] a text style's per-node properties are put back too (" + node3() + ")", styled.ok === false && node3() === was);
+    ok("[ROLLBACK-2] a style whose font a run overrides: the style's font was loaded up front, so the style and the override both go back", runsOf(overridden) === overriddenBefore);
+    ok("[ROLLBACK-2] a size limit bound to a variable that grew the frame: the limit, the binding and the width go back",
+      p.node("card")?.width === cardWidth && p.node("card")?.minWidth === null && !(isNode(p.node("card")?.boundVariables) && "minWidth" in (p.node("card")?.boundVariables as object)));
+    ok("[ROLLBACK-2] a polygon's single corner radius is put back", hex.cornerRadius === 3);
+    ok("[ROLLBACK-2] paints linked to a fill and a stroke style: the paints and the style links are put back",
+      swatch.fillStyleId === "S:paint" && swatch.strokeStyleId === "S:line" && swatch.fills === STYLE_PAINTS && swatch.strokes === STYLE_PAINTS);
+    ok("[ROLLBACK-2] a text of two runs (one unstyled with its size bound to a variable, one styled with overrides, a link, a list and a wavy underline) is put back run by run, bindings included",
+      runsOf(rich) === richBefore);
+    const vec = await w.api.applyWrites([{ op: "patch", nodeId: "vc:1", set: { radius: 4 } }]);
+    ok("[ROLLBACK-2] a vector's per-vertex radius is refused (it could not be put back)", vec.ok === false && /a vector's corner radius is set per vertex/.test(vec.error ?? "") && path.cornerRadius === 0);
+
+    // A styled text given another style and text, put back: no property becomes an override of its style (seen live: a
+    // link that was none was set to none again, which made it one).
+    const styledMade = await w.api.applyWrites([{ op: "createTree", tree: { name: "Styled", children: [{ text: "Styled text", handle: "st", styles: { text: "Body" } }] } }]);
+    const st = styledMade.applied[0]?.handles?.st ?? "";
+    const stNode = w.alive().find((n) => n.id === st);
+    const overridesBefore = JSON.stringify(stNode?.textStyleOverrides ?? []);
+    w.trap.add("cornerRadius");
+    const restyled = await w.api.applyWrites([{ op: "patch", nodeId: st, set: { text: "Other", styles: { text: "Heading/H1" } } }, fail]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] a styled text put back gains no style override (" + JSON.stringify(stNode?.textStyleOverrides) + ")",
+      restyled.ok === false && stNode?.textStyleId === "S:body," && JSON.stringify(stNode.textStyleOverrides ?? []) === overridesBefore);
+    // An empty text with a text style: its style stays when the batch puts the text back.
+    const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Holder", children: [{ text: "", handle: "empty", styles: { text: "Body" } }] } }]);
+    const empty = made.applied[0]?.handles?.empty ?? "";
+    const emptyNode = w.alive().find((n) => n.id === empty);
+    if (emptyNode) emptyNode.lineHeight = { unit: "PIXELS", value: 30 }; // an override on top of its style
+    w.trap.add("cornerRadius");
+    const e = await w.api.applyWrites([{ op: "patch", nodeId: empty, set: { text: "now full", styles: { text: "Heading/H1" } } }, fail]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] an empty styled text gets its style back, and the override on top of it",
+      e.ok === false && emptyNode?.characters === "" && emptyNode.textStyleId === "S:body," && JSON.stringify(emptyNode.lineHeight) === JSON.stringify({ unit: "PIXELS", value: 30 }));
+  },
+}, {
+  name: "patch: bound instance properties, creates that fail partway, and a patch that depends on an earlier one",
+  async run() {
+    const p = await patchWorld();
+    const { w, h, node } = p;
+    const fail = { op: "patch", nodeId: h.card, set: { radius: 1 } };
+    // An instance's text property bound to a variable: the binding goes back, not only the text it showed.
+    const btn = node("btn");
+    if (btn && typeof btn.setProperties === "function") (btn.setProperties as (p: Record<string, unknown>) => void)({ "Label#1:0": { type: "VARIABLE_ALIAS", id: "VariableID:30:9" } });
+    const propsBefore = JSON.stringify(btn?.componentProperties);
+    w.trap.add("cornerRadius");
+    const r = await w.api.applyWrites([{ op: "patch", nodeId: h.btn, set: { props: { Label: "Pay" } } }, fail]);
+    w.trap.clear();
+    ok("[PATCH-MORE] a text property bound to a variable is bound again when the batch is put back",
+      r.ok === false && JSON.stringify(btn?.componentProperties) === propsBefore && /VariableID:30:9/.test(propsBefore));
+
+    // A create that fails after its node exists leaves no node behind, and nothing is reported as applied.
+    const alive = w.alive().length;
+    const intoInstance = await w.api.applyWrites([{ op: "createFrame", name: "Orphan", parentId: h.btn }]);
+    ok("[PATCH-MORE] a parent that is an instance is refused before anything is made",
+      intoInstance.ok === false && /is an instance, which cannot take new children/.test(intoInstance.error ?? "") && w.alive().length === alive);
+    w.trap.add("layoutMode");
+    const midway = await w.api.applyWrites([{ op: "createFrame", name: "Half", layoutMode: "VERTICAL", parentId: h.screen }]);
+    w.trap.clear();
+    ok("[PATCH-MORE] Figma refusing a value on a frame just made: the frame is removed, nothing applied",
+      midway.ok === false && midway.applied.length === 0 && !w.made.some((n) => n.name === "Half" && !n.removed));
+    const load = w.figma.loadFontAsync;
+    w.figma.loadFontAsync = async () => { throw new Error("font failed to load"); };
+    const noFont = await w.api.applyWrites([{ op: "createText", text: "x", parentId: h.screen }]);
+    if (load) w.figma.loadFontAsync = load;
+    ok("[PATCH-MORE] a text whose font fails to load: the empty text is removed, nothing applied", noFont.ok === false && noFont.applied.length === 0 && w.alive().length === alive);
+
+    // A patch checked against what an earlier op of the batch leaves: auto-layout turned on, then a child fills it.
+    const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Outer", handle: "outer", children: [{ name: "Inner", handle: "inner" }] } }]);
+    const m = made.applied[0]?.handles ?? {};
+    const dep = await w.api.applyWrites([{ op: "patch", nodeId: m.outer ?? "", set: { layout: { display: "flex" } } }, { op: "patch", nodeId: m.inner ?? "", set: { widthMode: "fill" } }]);
+    ok("[PATCH-MORE] auto-layout turned on, then a child set to fill in the same batch: accepted and applied (" + (dep.error ?? "") + ")",
+      dep.ok === true && node("inner", m)?.layoutSizingHorizontal === "FILL");
+    const reversed = await w.api.applyWrites([{ op: "patch", nodeId: m.outer ?? "", set: { layout: { mode: "absolute" } } }, { op: "patch", nodeId: m.inner ?? "", set: { heightMode: "fill" } }]);
+    // A move earlier in the batch gives the node its parent for the checks: moved into an auto-layout frame, then fill.
+    const pair = await w.api.applyWrites([{ op: "createTree", tree: { name: "Flex", handle: "flex", layout: { display: "flex" } } }, { op: "createTree", tree: { name: "Loose", handle: "loose" } }]);
+    const flexId = pair.applied[0]?.handles?.flex ?? "", looseId = pair.applied[1]?.handles?.loose ?? "";
+    const moveFill = await w.api.applyWrites([{ op: "move", nodeId: looseId, parentId: flexId }, { op: "patch", nodeId: looseId, set: { widthMode: "fill" } }]);
+    const loose = w.alive().find((n) => n.id === looseId);
+    ok("[PATCH-MORE] moved into an auto-layout frame, then set to fill, in one batch: accepted (" + (moveFill.error ?? "") + ")",
+      moveFill.ok === true && loose?.layoutSizingHorizontal === "FILL" && parentOf(loose)?.id === flexId);
+    // Two moves into one empty parent in a batch: the second sees the first there.
+    const trio = await w.api.applyWrites([{ op: "createTree", tree: { name: "Dest", handle: "d" } }, { op: "createTree", tree: { name: "A", handle: "a" } }, { op: "createTree", tree: { name: "B", handle: "b" } }]);
+    const dId = trio.applied[0]?.handles?.d ?? "", aId = trio.applied[1]?.handles?.a ?? "", bId = trio.applied[2]?.handles?.b ?? "";
+    const two = await w.api.applyWrites([{ op: "move", nodeId: aId, parentId: dId, index: 0 }, { op: "move", nodeId: bId, parentId: dId, index: 1 }]);
+    ok("[PATCH-MORE] two moves into one empty parent: the second's index counts the first (" + (two.error ?? "") + ")",
+      two.ok === true && kids(w.alive().find((n) => n.id === dId)).map((k) => k.id).join() === aId + "," + bId);
+    // A child moved out of its parent, then the parent moved into it: valid in that order.
+    const nest = await w.api.applyWrites([{ op: "createTree", tree: { name: "Outer2", handle: "o", children: [{ name: "Inner2", handle: "i" }] } }]);
+    const oId = nest.applied[0]?.handles?.o ?? "", iId = nest.applied[0]?.handles?.i ?? "";
+    const swap = await w.api.applyWrites([{ op: "move", nodeId: iId, parentId: w.pages.current.id ?? "" }, { op: "move", nodeId: oId, parentId: iId }]);
+    ok("[PATCH-MORE] a child moved out, then its old parent moved into it, in one batch: accepted (" + (swap.error ?? "") + ")",
+      swap.ok === true && parentOf(w.alive().find((n) => n.id === oId))?.id === iId);
+    // A child moved out of a frame, then the frame deleted: the child is not deleted with it, so nothing conflicts.
+    const keepKid = await w.api.applyWrites([{ op: "createTree", tree: { name: "Box3", handle: "x", children: [{ name: "Kid3", handle: "k" }] } }]);
+    const xId = keepKid.applied[0]?.handles?.x ?? "", kId = keepKid.applied[0]?.handles?.k ?? "";
+    const saved = await w.api.applyWrites([{ op: "move", nodeId: kId, parentId: w.pages.current.id ?? "" }, { op: "delete", nodeId: xId }, { op: "patch", nodeId: kId, set: { name: "Kept" } }]);
+    ok("[PATCH-MORE] a child moved out, then its old parent deleted (and the child patched): accepted, the child survives (" + (saved.error ?? "") + ")",
+      saved.ok === true && (await w.figma.getNodeByIdAsync(xId)) === null && w.alive().find((n) => n.id === kId)?.name === "Kept");
+    // Moved back out (a later op fails): its parent, size and sizing go back as they were.
+    const sizeBefore = JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]);
+    w.trap.add("cornerRadius");
+    const out = await w.api.applyWrites([{ op: "move", nodeId: looseId, parentId: h.spare }, fail]);
+    w.trap.clear();
+    ok("[PATCH-MORE] a move put back restores the node's parent, size and sizing (" + JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]) + ")",
+      out.ok === false && JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]) === sizeBefore);
+    ok("[PATCH-MORE] …and auto-layout turned off, then a child set to fill: refused up front", reversed.ok === false && /"fill" needs a parent with auto-layout/.test(reversed.error ?? "") && reversed.failedAt === 1);
+  },
+}, {
+  name: "a batch is checked as it runs: an op that depends on an earlier one is checked against what that op left",
+  async run() {
+    const RED = [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], BLUE = [{ type: "SOLID", color: { r: 0, g: 0, b: 1 } }];
+    const mixed = runText("mx:1", [{ text: "ab", fills: RED }, { text: "cd", fills: BLUE }]);
+    const p = await patchWorld({ "mx:1": mixed });
+    const { w, h } = p;
+    const made = await w.api.applyWrites([
+      { op: "createTree", tree: { name: "Empty", handle: "empty" } },
+      { op: "createTree", tree: { name: "Mover", handle: "mover" } },
+      { op: "createTree", tree: { name: "A", handle: "a", children: [{ name: "B", handle: "b" }] } },
+      { op: "createTree", tree: { name: "Chips", handle: "chips", layout: { display: "flex" }, children: [{ component: "Chip", handle: "chip" }] } },
+      { op: "createTree", tree: { name: "Wrapper", handle: "wrap", layout: { display: "flex" } } },
+    ]);
+    const id = (i: number, k: string): string => made.applied[i]?.handles?.[k] ?? "?";
+    const step = async (what: string, ops: Array<{ op: string } & Record<string, unknown>>): Promise<WriteResult> => {
+      const r = await w.api.applyWrites(ops);
+      ok("[SEQUENCE] " + what + " (" + (r.error ?? "ok") + ")", r.ok === true);
+      return r;
+    };
+    await step("a create into an empty frame, then a move to index 1 of it", [{ op: "createFrame", name: "First", parentId: id(0, "empty") }, { op: "move", nodeId: id(1, "mover"), parentId: id(0, "empty"), index: 1 }]);
+    // B, which holds a node the session did not make, moved out of A; then A deleted (nothing foreign is below it then).
+    const foreign = await w.figma.getNodeByIdAsync("1:2");
+    const b = w.alive().find((n) => n.id === id(2, "b"));
+    if (foreign && b && typeof b.appendChild === "function") (b.appendChild as (c: FakeNode) => void)(foreign);
+    await step("a child holding a foreign node moved out, then its old parent deleted", [{ op: "move", nodeId: id(2, "b"), parentId: w.pages.current.id ?? "" }, { op: "delete", nodeId: id(2, "a") }]);
+    await step("a text's mixed paints replaced, then unbound", [{ op: "patch", nodeId: "mx:1", set: { fills: [{ type: "solid", color: "#00ff00" }] } }, { op: "patch", nodeId: "mx:1", set: { tokens: { fills: null } } }]);
+    await step("a sparse variant set: Large/On, then Size Large again (checked from Large/On, not the file's Small/Off)",
+      [{ op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Large", Tone: "On" } } }, { op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Large" } } }]);
+    await step("a variant with auto-layout picked, then hug", [{ op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Large", Tone: "On" } } }, { op: "patch", nodeId: id(3, "chip"), set: { widthMode: "hug" } }]);
+    const back = await w.api.applyWrites([{ op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Small", Tone: "Off" } } }, { op: "patch", nodeId: id(3, "chip"), set: { widthMode: "hug" } }]);
+    ok("[SEQUENCE] …and the flat variant picked, then hug: refused right before it runs, the variant put back",
+      back.ok === false && back.failedAt === 1 && /"hug" needs auto-layout/.test(back.error ?? "") && (back.restored ?? []).length === 1);
+    await step("wrapping turned on, then a row gap given with display", [{ op: "patch", nodeId: id(4, "wrap"), set: { layout: { flexWrap: "wrap" } } }, { op: "patch", nodeId: id(4, "wrap"), set: { layout: { display: "flex", rowGap: 10 } } }]);
+    const single = await w.api.applyWrites([{ op: "patch", nodeId: id(4, "wrap"), set: { layout: { display: "flex", columnGap: 4 } } }]);
+    ok("[SEQUENCE] a wrapping row given display and a cross-axis gap alone: the wrap it has counts", single.ok === false && /columnGap: is the main-axis gap in a wrapping row/.test(single.error ?? ""));
+    // Two moves that nest nodes in each other, beside a delete: the second move is refused when it runs, the first put back.
+    const loop = await w.api.applyWrites([{ op: "createTree", tree: { name: "LA", handle: "la" } }, { op: "createTree", tree: { name: "LB", handle: "lb" } }, { op: "createTree", tree: { name: "LD", handle: "ld" } }]);
+    const la = loop.applied[0]?.handles?.la ?? "", lb = loop.applied[1]?.handles?.lb ?? "", ld = loop.applied[2]?.handles?.ld ?? "";
+    const cyc = await w.api.applyWrites([{ op: "move", nodeId: la, parentId: lb }, { op: "move", nodeId: lb, parentId: la }, { op: "delete", nodeId: ld }]);
+    ok("[SEQUENCE] two moves nesting nodes in each other: refused at the second, the first put back, nothing deleted (" + (cyc.error ?? "") + ")",
+      cyc.ok === false && cyc.failedAt === 1 && /inside the node/.test(cyc.error ?? "") && parentOf(w.alive().find((n) => n.id === la))?.id === w.pages.current.id
+      && (await w.figma.getNodeByIdAsync(ld)) !== null);
+    void h;
+  },
+}, {
+  name: "patch: 'Allow edits' turned off partway — a stopped patch is still reported, and a put-back stops where it was",
+  async run() {
+    // Unticked during the patch's own text-style await: it stops there, nothing is put back, and the reply still lists it.
+    const p = await patchWorld();
+    const { w, h, node } = p;
+    w.hooks.onStyle = async () => { await w.allowEdits(false); };
+    const r = await w.api.applyWrites([{ op: "patch", nodeId: h.email, set: { name: "Renamed", styles: { text: "Heading/H1" } } }]);
+    w.hooks.onStyle = undefined;
+    ok("[PATCH-CONSENT] stopped mid-patch: refused as edits-off, and the patch's row stays in `applied` (its name did change)",
+      r.ok === false && r.refused === "edits-off" && JSON.stringify(r.applied) === JSON.stringify([{ id: h.email }]) && node("email")?.name === "Renamed");
+
+    // Unticked while the batch is being put back: the restore stops before its next mutation and says what stayed.
+    let calls = 0;
+    let q: Awaited<ReturnType<typeof patchWorld>> | null = null;
+    const rich = runText("rx:2", [{ text: "Hi ", fontSize: 20 }, { text: "there", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Bold" } }], async () => {
+      if (++calls === 2 && q) await q.w.allowEdits(false); // the first call is the patch's own; the second is the put-back's
+    });
+    q = await patchWorld({ "rx:2": rich });
+    q.w.trap.add("cornerRadius");
+    const stopped = await q.w.api.applyWrites([{ op: "patch", nodeId: "rx:2", set: { styles: { text: "Body" } } }, { op: "patch", nodeId: q.h.card, set: { radius: 1 } }]);
+    q.w.trap.clear();
+    ok("[PATCH-CONSENT] unticked during the put-back: it stops there, the error says what stayed, and the patch is still in `applied`",
+      stopped.ok === false && /'Allow edits' was turned off while the batch was being put back/.test(stopped.error ?? "")
+      && JSON.stringify(stopped.applied) === JSON.stringify([{ id: "rx:2" }]) && stopped.restored === undefined);
+  },
 }];
+
+/** A tree world with a screen to patch: a column (its gap bound to space/md) holding an email text, a card frame with
+ *  auto-layout and a text, a Button instance and a spare frame. `h` maps each handle to its id; `node` reads a node by
+ *  handle; `state` is every patchable field of every node, by id, to compare before and after a batch. */
+async function patchWorld(extra: Record<string, FakeNode> = {}) {
+  const w = await treeWorld({ kit: true, extra: { nodes: extra } });
+  const r: WriteResult = await w.api.applyWrites([{ op: "createTree", tree: {
+    name: "Profile", handle: "screen", box: { w: 390, h: 844 }, layout: { display: "flex", flexDirection: "column", gap: 16 }, tokens: { itemSpacing: "space/md" },
+    fills: [{ type: "solid", color: "#ffffff" }],
+    children: [
+      { text: "jane@exmaple.com", name: "email", handle: "email", font: { size: 16 } },
+      { name: "Card", handle: "card", box: { w: 200, h: 80 }, radius: 8, layout: { display: "flex", padding: [8, 8, 8, 8] }, children: [{ text: "Inside", handle: "inside" }] },
+      { component: "Button", handle: "btn", props: { Label: "Go" } },
+      { name: "Spare", handle: "spare" },
+    ],
+  } }]);
+  if (!r.ok) throw new Error("patchWorld: the screen did not build: " + String(r.error));
+  const h: Record<string, string> = r.applied[0]?.handles ?? {};
+  const node = (handle: string, map: Record<string, string> = h): FakeNode | undefined => w.alive().find((n) => n.id === map[handle]);
+  const FIELDS = ["name", "visible", "opacity", "fills", "strokes", "strokeWeight", "strokeAlign", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius",
+    "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "primaryAxisAlignItems", "width", "height", "layoutSizingHorizontal", "layoutSizingVertical",
+    "characters", "textStyleId", "fontName", "fontSize", "boundVariables", "componentProperties", "textAutoResize"];
+  const state = (): Record<string, string> => Object.fromEntries(w.alive().flatMap((n) => [
+    ...FIELDS.map((f): [string, string] => [n.id + "." + f, JSON.stringify(n[f])]),
+    [n.id + ".parent", String(parentOf(n)?.id) + "@" + kids(parentOf(n) ?? undefined).indexOf(n)],
+    [n.id + ".main", isNode(n.mainComponent) ? String(n.mainComponent.id) : ""],
+  ]));
+  return { w, h, node, state };
+}
+/** The variable a node's first paint is bound to, or null. */
+function boundColor(n: FakeNode | undefined): string | null {
+  const p = Array.isArray(n?.fills) ? (n.fills as unknown[])[0] : undefined;
+  const bv = isNode(p) && isNode(p.boundVariables) && isNode(p.boundVariables.color) ? p.boundVariables.color.id : null;
+  return typeof bv === "string" ? bv : null;
+}
+
+/** A TEXT with several runs, formatted per character the way Figma keeps it: getStyledTextSegments groups equal
+ *  characters, getRange* answers one value or figma.mixed, setRange* sets (a raw size, height, spacing or font unbinds
+ *  its variable on those characters), a text style replaces the formatting and bindings of its range (overrides set
+ *  after it stay), and setting `characters` gives the new text the first character's formatting. `onStyle` runs inside
+ *  each style call (to untick "Allow edits" there). */
+function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<string, unknown>>, onStyle: () => Promise<void> = async () => {},
+  fontLoaded: (f: unknown) => boolean = () => true): FakeNode {
+  const base = { ...TEXT_RANGE_DEFAULTS, fontName: { family: "Inter", style: "Regular" }, fontSize: 16, textStyleId: "", fills: [], fillStyleId: "", lineHeight: { unit: "AUTO" },
+    letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {}, textStyleOverrides: [] };
+  // On styled text, the override (TextStyleOverrideType) a raw property set records, as Figma's does.
+  const OVERRIDE: Record<string, string> = { fontName: "SEMANTIC_WEIGHT", textDecoration: "TEXT_DECORATION", textDecorationStyle: "TEXT_DECORATION", hyperlink: "HYPERLINK" };
+  let chars: Array<Record<string, unknown>> = runs.flatMap((r) => { const { text, ...f } = r; return Array.from(text, () => ({ ...base, ...f })); });
+  let text = runs.map((r) => r.text).join("");
+  const UNBINDS: Record<string, readonly string[]> = { fontSize: ["fontSize"], lineHeight: ["lineHeight"], letterSpacing: ["letterSpacing"], paragraphSpacing: ["paragraphSpacing"],
+    paragraphIndent: ["paragraphIndent"], fontName: ["fontFamily", "fontStyle", "fontWeight"] };
+  const uniform = (f: string, s = 0, e = chars.length): unknown => {
+    const vals = chars.slice(s, e).map((c) => JSON.stringify(c[f]));
+    return vals.every((v) => v === vals[0]) ? chars[s]?.[f] : MIXED;
+  };
+  const setRange = (f: string) => (s: number, e: number, v: unknown): void => {
+    for (const c of chars.slice(s, e)) {
+      c[f] = v;
+      if (f === "fills") c.fillStyleId = ""; // new paints detach the paint style, as in Figma
+      const kind = OVERRIDE[f];
+      if (c.textStyleId && kind) c.textStyleOverrides = [...new Set([...(Array.isArray(c.textStyleOverrides) ? c.textStyleOverrides as string[] : []), kind])];
+      const b = isNode(c.boundVariables) ? { ...c.boundVariables } : {};
+      for (const k of UNBINDS[f] ?? []) delete b[k];
+      c.boundVariables = b;
+    }
+  };
+  const styleRange = async (s: number, e: number, sid: string): Promise<void> => {
+    await onStyle();
+    const st = KIT_STYLES.find((x) => x.id === sid);
+    if (st && !fontLoaded(st.fontName)) throw new Error("in Figma: the style's font " + JSON.stringify(st.fontName) + " is not loaded");
+    for (const c of chars.slice(s, e)) {
+      c.textStyleId = sid;
+      if (st) Object.assign(c, { fontName: st.fontName, fontSize: typeof st.fontSize === "number" ? st.fontSize : 16, lineHeight: base.lineHeight, letterSpacing: base.letterSpacing, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {} });
+      c.textStyleOverrides = []; // a style (re)applied starts with no overrides
+    }
+  };
+  const RANGE = TEXT_RANGE_METHODS;
+  const lower = (f: string): string => f.charAt(0).toLowerCase() + f.slice(1);
+  const n: FakeNode = {
+    id, type: "TEXT", name: "Rich", visible: true, width: 100, height: 20, textAutoResize: "WIDTH_AND_HEIGHT",
+    get characters() { return text; },
+    set characters(v: string) { const first = { ...(chars[0] ?? base) }; text = v; chars = Array.from(v, () => ({ ...first, boundVariables: { ...(isNode(first.boundVariables) ? first.boundVariables : {}) } })); },
+    get fontName() { return uniform("fontName"); },
+    get fontSize() { return uniform("fontSize"); },
+    get textStyleId() { return uniform("textStyleId"); },
+    get fillStyleId() { return uniform("fillStyleId"); },
+    get fills() { return uniform("fills"); },
+    set fills(v: unknown) { setRange("fills")(0, chars.length, v); },
+    getRangeAllFontNames: (s: number, e: number) => Object.freeze([...new Set(chars.slice(s, e).map((c) => JSON.stringify(c.fontName)))].map((f) => JSON.parse(f) as unknown)),
+    getStyledTextSegments: (fields: readonly string[]) => {
+      const out: Array<Record<string, unknown>> = [];
+      chars.forEach((c, i) => {
+        const pick = Object.fromEntries(fields.map((f) => [f, c[f]]));
+        const last = out.at(-1);
+        if (last && fields.every((f) => JSON.stringify(last[f]) === JSON.stringify(pick[f]))) { last.end = i + 1; last.characters = text.slice(Number(last.start), i + 1); }
+        else out.push({ characters: text[i], start: i, end: i + 1, ...pick });
+      });
+      return Object.freeze(out.map((o) => Object.freeze(o))); // frozen, as Figma's
+    },
+    getRangeTextStyleId: (s: number, e: number) => uniform("textStyleId", s, e),
+    getRangeFillStyleId: (s: number, e: number) => uniform("fillStyleId", s, e),
+    setRangeTextStyleIdAsync: styleRange,
+    setTextStyleIdAsync: (sid: string) => styleRange(0, chars.length, sid),
+    setRangeFillStyleIdAsync: async (s: number, e: number, sid: string) => { setRange("fillStyleId")(s, e, sid); },
+    getRangeBoundVariable: (s: number, e: number, f: string) => {
+      const vals = chars.slice(s, e).map((c) => (isNode(c.boundVariables) ? c.boundVariables[f] ?? null : null));
+      return vals.every((v) => JSON.stringify(v) === JSON.stringify(vals[0])) ? vals[0] ?? null : MIXED;
+    },
+    setRangeBoundVariable: (s: number, e: number, f: string, v: { id: string } | null) => {
+      for (const c of chars.slice(s, e)) {
+        const b = isNode(c.boundVariables) ? { ...c.boundVariables } : {};
+        if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
+        c.boundVariables = b;
+      }
+    },
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, (s: number, e: number) => uniform(lower(f), s, e)])),
+    ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, setRange(lower(f))])),
+    resize(w: number, h: number) { n.width = w; n.height = h; },
+  };
+  return n;
+}
+const ALL_SEGMENT_FIELDS = [...TEXT_RANGE_METHODS.map((f) => f.charAt(0).toLowerCase() + f.slice(1)), "textStyleId", "fillStyleId", "boundVariables"];
+const runsOf = (n: FakeNode): string => JSON.stringify([n.characters, (n.getStyledTextSegments as (f: readonly string[]) => unknown)(ALL_SEGMENT_FIELDS)]);
+

@@ -1,6 +1,6 @@
-// What every write op that is resolved before its batch runs shares (writes.ts): a problem found while resolving,
-// the refusal that lists them all, and a change that can be undone when a later op of the batch fails
-// (docs/write-plane-spec.md decisions 14, 15). Variable modes (variable-modes.ts) and tree specs (tree.ts) use it.
+// What every write op shares (writes.ts): a problem found while resolving, the refusal that lists them all, and a
+// change that can be undone when a later op of the batch fails (docs/write-plane-spec.md decisions 14, 15, 16). Every
+// op that changes the file returns a Change, so a batch that fails partway puts back everything it did.
 import type { AppliedWrite } from "../../bridge/src/commands.ts";
 import { errMsg } from "./util";
 
@@ -19,21 +19,36 @@ export function batchRefusal(problems: readonly OpProblem[]): string {
   return problems.length + " problems — nothing was changed:\n" + problems.map(line).join("\n");
 }
 
-/** An applied change, and how to undo it. `kind` names it in a sentence ("variable mode change", "created tree"). */
+/** An applied change, and how to undo it. `kind` names it in a sentence ("variable mode change", "created tree"). A
+ *  restore may await (a text style is set back with setTextStyleIdAsync). */
 export interface Change {
   applied: AppliedWrite;
   kind: string;
   /** What it is, for a sentence saying it could not be undone. */
   what: string;
-  restore(): void;
+  /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. */
+  restore(allowed: () => boolean): void | Promise<void>;
 }
+/** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
+export class RestoreStopped extends Error {}
 
-/** Undo `changes`, newest first. Returns the ones undone and a sentence for each that could not be. */
-export function restoreChanges(changes: readonly Change[]): { restored: Change[]; failed: string[] } {
+/** Undo `changes`, newest first. Returns the ones undone and a sentence for each that could not be. `allowed` is asked
+ *  before each: once the designer has turned "Allow edits" off, the plugin changes nothing more, not even to undo its
+ *  own work, and the rest are reported as kept. */
+export async function restoreChanges(changes: readonly Change[], allowed: () => boolean): Promise<{ restored: Change[]; failed: string[] }> {
   const restored: Change[] = [];
   const failed: string[] = [];
-  for (const c of [...changes].reverse()) {
-    try { c.restore(); restored.push(c); } catch (e) {
+  const left = [...changes].reverse();
+  for (const [i, c] of left.entries()) {
+    if (!allowed()) {
+      failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
+      break;
+    }
+    try { await c.restore(allowed); restored.push(c); } catch (e) {
+      if (e instanceof RestoreStopped) {
+        failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
+        break;
+      }
       failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
     }
   }
