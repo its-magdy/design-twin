@@ -26,8 +26,11 @@ export interface Change {
   kind: string;
   /** What it is, for a sentence saying it could not be undone. */
   what: string;
-  restore(): void | Promise<void>;
+  /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. */
+  restore(allowed: () => boolean): void | Promise<void>;
 }
+/** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
+export class RestoreStopped extends Error {}
 
 /** Undo `changes`, newest first. Returns the ones undone and a sentence for each that could not be. `allowed` is asked
  *  before each: once the designer has turned "Allow edits" off, the plugin changes nothing more, not even to undo its
@@ -41,7 +44,11 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
       failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
       break;
     }
-    try { await c.restore(); restored.push(c); } catch (e) {
+    try { await c.restore(allowed); restored.push(c); } catch (e) {
+      if (e instanceof RestoreStopped) {
+        failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
+        break;
+      }
       failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
     }
   }

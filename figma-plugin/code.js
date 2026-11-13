@@ -5626,6 +5626,43 @@
     bindNumbers(t, s, made);
   }
 
+  // src/write-batch.ts
+  function batchRefusal(problems) {
+    const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
+    const first2 = problems[0];
+    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
+    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
+  }
+  var RestoreStopped = class extends Error {
+  };
+  async function restoreChanges(changes, allowed2) {
+    const restored = [];
+    const failed = [];
+    const left = [...changes].reverse();
+    for (const [i, c] of left.entries()) {
+      if (!allowed2()) {
+        failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
+        break;
+      }
+      try {
+        await c.restore(allowed2);
+        restored.push(c);
+      } catch (e) {
+        if (e instanceof RestoreStopped) {
+          failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
+          break;
+        }
+        failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
+      }
+    }
+    return { restored, failed };
+  }
+  function countChanges(changes) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const c of changes) counts.set(c.kind, (counts.get(c.kind) || 0) + 1);
+    return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
+  }
+
   // src/patch.ts
   var getF = (n, k) => Reflect.get(n, k);
   function setF(n, k, v) {
@@ -5667,6 +5704,7 @@
       else if (set.strokes.weights !== void 0 && !has(node, "strokeTopWeight")) say("strokes.weights", "per-side weights are not on a " + node.type + "; use `strokes.weight`");
     }
     if (set.radius !== void 0 && !has(node, "cornerRadius")) say("radius", what + ", which has no corner radius");
+    else if (set.radius !== void 0 && node.type === "VECTOR") say("radius", "a vector's corner radius is set per vertex, which a patch cannot put back yet");
     else if (typeof set.radius === "object" && !has(node, "topLeftRadius")) say("radius", what + ", which has no per-corner radius; give one number");
     if (set.opacity !== void 0 && !has(node, "opacity")) say("opacity", what + ", which has no opacity");
     if (set.box !== void 0 && !has(node, "resize")) say("box", what + ", which cannot be resized");
@@ -5832,45 +5870,112 @@
   ];
   var STROKE_PROPS = ["strokes", "strokeWeight", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "strokeAlign"];
   var CORNER_PROPS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"];
-  var SEGMENT_FIELDS = ["fontName", "fontSize", "textStyleId", "fills", "fillStyleId", "lineHeight", "letterSpacing", "textCase", "textDecoration"];
+  var SEGMENT_FIELDS = [
+    "fontName",
+    "fontSize",
+    "textStyleId",
+    "fills",
+    "fillStyleId",
+    "lineHeight",
+    "letterSpacing",
+    "textCase",
+    "textDecoration",
+    "paragraphSpacing",
+    "paragraphIndent",
+    "boundVariables"
+  ];
+  var TEXT_BINDABLE = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
+  var checker = (allowed2) => () => {
+    if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+  };
   function keep(n, keys) {
     return keys.filter((k) => k in n).map((k) => [k, getF(n, k)]);
   }
-  function keepText(t) {
+  async function variablesById(ids) {
+    const out = /* @__PURE__ */ new Map();
+    for (const id of ids) {
+      if (out.has(id)) continue;
+      let v = null;
+      try {
+        v = await figma.variables.getVariableByIdAsync(id);
+      } catch {
+        v = null;
+      }
+      if (v) out.set(id, v);
+    }
+    return out;
+  }
+  async function keepText(t) {
     const chars = t.characters;
     const runs = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
-    const whole = chars.length ? null : { fontName: t.fontName, fontSize: t.fontSize, textStyleId: t.textStyleId, fills: t.fills };
-    return async () => {
+    const whole = chars.length ? null : { fontName: t.fontName, fontSize: t.fontSize, textStyleId: t.textStyleId, fills: t.fills, fillStyleId: t.fillStyleId };
+    const ids = [];
+    for (const r of runs) for (const f of TEXT_BINDABLE) {
+      const a = r.boundVariables && r.boundVariables[f];
+      if (a) ids.push(a.id);
+    }
+    const vars = await variablesById(ids);
+    return async (allowed2) => {
+      const check = checker(allowed2);
       if (t.characters !== chars) t.characters = chars;
       if (whole) {
-        if (typeof whole.textStyleId === "string" && whole.textStyleId && whole.textStyleId !== t.textStyleId) await t.setTextStyleIdAsync(whole.textStyleId);
-        else {
-          if (t.textStyleId) await t.setTextStyleIdAsync("");
-          putBack(t, "fontName", whole.fontName);
-          putBack(t, "fontSize", whole.fontSize);
+        const style = typeof whole.textStyleId === "string" ? whole.textStyleId : null;
+        if (style !== null && t.textStyleId !== style) {
+          await t.setTextStyleIdAsync(style);
+          check();
         }
-        putBack(t, "fills", whole.fills);
+        if (whole.fontName !== figma.mixed) putBack(t, "fontName", whole.fontName);
+        if (whole.fontSize !== figma.mixed) putBack(t, "fontSize", whole.fontSize);
+        if (whole.fills !== figma.mixed) putBack(t, "fills", whole.fills);
+        if (typeof whole.fillStyleId === "string" && whole.fillStyleId && t.fillStyleId !== whole.fillStyleId) {
+          await t.setFillStyleIdAsync(whole.fillStyleId);
+          check();
+        }
         return;
       }
-      const now = t.getStyledTextSegments([...SEGMENT_FIELDS]);
-      if (same(now, runs)) return;
+      if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) return;
       for (const r of runs) {
-        if (r.textStyleId) await t.setRangeTextStyleIdAsync(r.start, r.end, r.textStyleId);
-        else {
-          if (t.getRangeTextStyleId(r.start, r.end) !== "") await t.setRangeTextStyleIdAsync(r.start, r.end, "");
-          t.setRangeFontName(r.start, r.end, r.fontName);
-          t.setRangeFontSize(r.start, r.end, r.fontSize);
-          t.setRangeLineHeight(r.start, r.end, r.lineHeight);
-          t.setRangeLetterSpacing(r.start, r.end, r.letterSpacing);
-          t.setRangeTextCase(r.start, r.end, r.textCase);
-          t.setRangeTextDecoration(r.start, r.end, r.textDecoration);
+        const s = r.start, e = r.end;
+        if (t.getRangeTextStyleId(s, e) !== r.textStyleId) {
+          await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
+          check();
         }
-        t.setRangeFills(r.start, r.end, r.fills);
-        if (r.fillStyleId) await t.setRangeFillStyleIdAsync(r.start, r.end, r.fillStyleId);
+        if (!same(t.getRangeFontName(s, e), r.fontName)) t.setRangeFontName(s, e, r.fontName);
+        if (!same(t.getRangeFontSize(s, e), r.fontSize)) t.setRangeFontSize(s, e, r.fontSize);
+        if (!same(t.getRangeLineHeight(s, e), r.lineHeight)) t.setRangeLineHeight(s, e, r.lineHeight);
+        if (!same(t.getRangeLetterSpacing(s, e), r.letterSpacing)) t.setRangeLetterSpacing(s, e, r.letterSpacing);
+        if (!same(t.getRangeTextCase(s, e), r.textCase)) t.setRangeTextCase(s, e, r.textCase);
+        if (!same(t.getRangeTextDecoration(s, e), r.textDecoration)) t.setRangeTextDecoration(s, e, r.textDecoration);
+        if (!same(t.getRangeParagraphSpacing(s, e), r.paragraphSpacing)) t.setRangeParagraphSpacing(s, e, r.paragraphSpacing);
+        if (!same(t.getRangeParagraphIndent(s, e), r.paragraphIndent)) t.setRangeParagraphIndent(s, e, r.paragraphIndent);
+        if (!same(t.getRangeFills(s, e), r.fills)) t.setRangeFills(s, e, r.fills);
+        if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) {
+          await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId);
+          check();
+        }
+      }
+      for (const r of runs) for (const f of TEXT_BINDABLE) {
+        const want = r.boundVariables && r.boundVariables[f];
+        const have = t.getRangeBoundVariable(r.start, r.end, f);
+        const haveId = have && have !== figma.mixed ? have.id : null;
+        if (want) {
+          const v = vars.get(want.id);
+          if (v && haveId !== want.id) t.setRangeBoundVariable(r.start, r.end, f, v);
+        } else if (have !== null) t.setRangeBoundVariable(r.start, r.end, f, null);
       }
     };
   }
-  function snapshot(t) {
+  function keepStyleLink(n, field) {
+    const old = field in n ? getF(n, field) : void 0;
+    if (typeof old !== "string" || !old) return null;
+    return async (check) => {
+      if (getF(n, field) === old) return;
+      if (field === "fillStyleId" && "setFillStyleIdAsync" in n) await n.setFillStyleIdAsync(old);
+      else if (field === "strokeStyleId" && "setStrokeStyleIdAsync" in n) await n.setStrokeStyleIdAsync(old);
+      check();
+    };
+  }
+  async function snapshot(t) {
     const n = t.node;
     const set = t.set;
     const tok = set.tokens || {};
@@ -5880,17 +5985,16 @@
       for (const [k, id] of before) if (id === null && boundId(n, k) !== null) bindField(n, k, null);
     });
     if (t.props && n.type === "INSTANCE") {
-      const inst = t.node;
       const old = {};
       for (const k of Object.keys(t.props)) {
-        const p = inst.componentProperties[k];
+        const p = n.componentProperties[k];
         if (p) old[k] = p.value;
       }
       steps.push(() => {
         if (Object.keys(old).some((k) => {
-          const p = inst.componentProperties[k];
+          const p = n.componentProperties[k];
           return !p || p.value !== old[k];
-        })) inst.setProperties(old);
+        })) n.setProperties(old);
       });
     }
     const sizeTouched = set.box !== void 0 || set.widthMode !== void 0 || set.heightMode !== void 0 || set.layout !== void 0 || set.props !== void 0 || set.autoResize !== void 0 || set.text !== void 0 || set.styles !== void 0 || tok.width !== void 0 || tok.height !== void 0;
@@ -5930,10 +6034,20 @@
       });
     }
     const plain = [];
+    const links = [];
     const textRuns = n.type === "TEXT" && (set.text !== void 0 || set.styles !== void 0 || (set.fills !== void 0 || tok.fills !== void 0) && n.fills === figma.mixed);
-    if ((set.fills !== void 0 || tok.fills !== void 0) && !textRuns) plain.push(...keep(n, ["fills"]));
-    if (set.strokes !== void 0 || tok.strokes !== void 0 || tok.strokeWeight !== void 0 || tok.strokeTopWeight !== void 0 || tok.strokeRightWeight !== void 0 || tok.strokeBottomWeight !== void 0 || tok.strokeLeftWeight !== void 0) plain.push(...keep(n, STROKE_PROPS).filter(([, v]) => v !== figma.mixed));
-    if (set.radius !== void 0 || CORNER_PROPS.some((k) => tok[k] !== void 0)) plain.push(...keep(n, CORNER_PROPS));
+    const notMixed = ([, v]) => v !== figma.mixed;
+    if ((set.fills !== void 0 || tok.fills !== void 0) && !textRuns) {
+      plain.push(...keep(n, ["fills"]).filter(notMixed));
+      const link = keepStyleLink(n, "fillStyleId");
+      if (link) links.push(link);
+    }
+    if (set.strokes !== void 0 || tok.strokes !== void 0 || tok.strokeWeight !== void 0 || tok.strokeTopWeight !== void 0 || tok.strokeRightWeight !== void 0 || tok.strokeBottomWeight !== void 0 || tok.strokeLeftWeight !== void 0) {
+      plain.push(...keep(n, STROKE_PROPS).filter(notMixed));
+      const link = keepStyleLink(n, "strokeStyleId");
+      if (link) links.push(link);
+    }
+    if (set.radius !== void 0 || CORNER_PROPS.some((k) => tok[k] !== void 0)) plain.push(...keep(n, ["cornerRadius", ...CORNER_PROPS]).filter(notMixed));
     if (set.opacity !== void 0 || tok.opacity !== void 0) plain.push(...keep(n, ["opacity"]));
     if (set.hidden !== void 0) plain.push(...keep(n, ["visible"]));
     if (set.name !== void 0) plain.push(...keep(n, ["name"]));
@@ -5941,7 +6055,14 @@
     steps.push(() => {
       for (const [k, v] of plain) putBack(n, k, v);
     });
-    if (textRuns && n.type === "TEXT") steps.push(keepText(n));
+    for (const link of links) steps.push(link);
+    if (textRuns && n.type === "TEXT") {
+      const text = await keepText(n);
+      steps.push((check) => text(() => {
+        check();
+        return true;
+      }));
+    }
     steps.push(() => {
       for (const [k, id] of before) {
         if (id === null || boundId(n, k) === id) continue;
@@ -5949,12 +6070,15 @@
         if (v) bindField(n, k, v);
       }
     });
-    return async () => {
+    return async (allowed2) => {
+      const check = checker(allowed2);
       const failed = [];
       for (const step of steps) {
+        check();
         try {
-          await step();
+          await step(check);
         } catch (e) {
+          if (e instanceof RestoreStopped) throw e;
           failed.push(errMsg(e));
         }
       }
@@ -6067,23 +6191,26 @@
       bindField(n, k, ref2 === null ? null : variable2(t, ref2));
     }
   }
-  async function applyPatch(t, consent2, allowed2) {
-    const restore = snapshot(t);
+  async function applyPatch(t, consent2, allowed2, changes) {
+    const restore = await snapshot(t);
+    consent2();
+    const applied = { id: t.node.id };
+    if (t.unbound) applied.unbound = t.unbound;
+    const change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+    changes.push(change);
     try {
       await setFields(t, consent2);
     } catch (e) {
       if (allowed2()) {
         try {
-          await restore();
-        } catch (r) {
-          throw new Error(errMsg(e) + "; and what this op had set could not all be put back (" + errMsg(r) + ")");
+          await restore(allowed2);
+          changes.splice(changes.indexOf(change), 1);
+        } catch {
         }
       }
       throw e;
     }
-    const applied = { id: t.node.id };
-    if (t.unbound) applied.unbound = t.unbound;
-    return { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+    return change;
   }
 
   // src/structure.ts
@@ -6191,37 +6318,6 @@
     return out;
   }
 
-  // src/write-batch.ts
-  function batchRefusal(problems) {
-    const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
-    const first2 = problems[0];
-    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
-    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
-  }
-  async function restoreChanges(changes, allowed2) {
-    const restored = [];
-    const failed = [];
-    const left = [...changes].reverse();
-    for (const [i, c] of left.entries()) {
-      if (!allowed2()) {
-        failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
-        break;
-      }
-      try {
-        await c.restore();
-        restored.push(c);
-      } catch (e) {
-        failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
-      }
-    }
-    return { restored, failed };
-  }
-  function countChanges(changes) {
-    const counts = /* @__PURE__ */ new Map();
-    for (const c of changes) counts.set(c.kind, (counts.get(c.kind) || 0) + 1);
-    return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
-  }
-
   // src/writes.ts
   function solidPaint(hex2, what) {
     const c = parseHexColor(hex2);
@@ -6307,10 +6403,21 @@
         consent();
         const target = nd;
         const old = target.fills;
+        const oldStyle = target.fillStyleId;
         target.fills = [paint];
-        const change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore() {
-          target.fills = old;
-        } };
+        const change = {
+          applied: ifDefined("id", op.nodeId),
+          kind: "fill change",
+          what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+          // The paints, then the paint style they came from (setting paints detaches it).
+          async restore(allowed2) {
+            target.fills = old;
+            if (typeof oldStyle === "string" && oldStyle && target.fillStyleId !== oldStyle) {
+              await target.setFillStyleIdAsync(oldStyle);
+              if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+            }
+          }
+        };
         changes.push(change);
         return change.applied;
       }
@@ -6320,7 +6427,8 @@
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
         consent();
-        const restore = keepText(nd);
+        const restore = await keepText(nd);
+        consent();
         nd.characters = op.text || "";
         const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
         changes.push(change);
@@ -6350,9 +6458,7 @@
       case "patch": {
         if (!patch) throw new Error("patch: the op was not resolved before the batch ran");
         consent();
-        const change = await applyPatch(patch, consent, editsAllowedNow);
-        changes.push(change);
-        return change.applied;
+        return (await applyPatch(patch, consent, editsAllowedNow, changes)).applied;
       }
       case "move": {
         if (!move) throw new Error("move: the op was not resolved before the batch ran");
@@ -6443,11 +6549,12 @@
       const revoked = e instanceof EditsRevoked;
       const off = revoked || !editsAllowedNow();
       const { restored, failed } = off ? { restored: [], failed: [] } : await restoreChanges(changes, editsAllowedNow);
-      const back = new Set(restored.map((c) => c.applied));
+      const back = new Set(restored);
       const kept = !revoked && off && changes.length ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied" : "";
       return {
         ok: false,
-        applied: rows.filter((a) => a !== void 0 && !back.has(a)),
+        // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
+        applied: [...changes.filter((c) => !back.has(c)).map((c) => c.applied), ...rows.filter((a) => a !== void 0 && a.deleted === true)],
         failedAt: i,
         failedOp: op && op.op,
         error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,

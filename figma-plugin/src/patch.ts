@@ -28,7 +28,7 @@ import { NUMBER_TOKEN_FIELDS, type NumberTokenField, type TreeFill } from "../..
 import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
-import type { Change, OpProblem } from "./write-batch";
+import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 
 /** A patch op whose node, fonts and names all resolved. */
 export interface PatchTarget {
@@ -88,6 +88,7 @@ function unfit(node: SceneNode, set: PatchSet): string[] {
     else if (set.strokes.weights !== undefined && !has(node, "strokeTopWeight")) say("strokes.weights", "per-side weights are not on a " + node.type + "; use `strokes.weight`");
   }
   if (set.radius !== undefined && !has(node, "cornerRadius")) say("radius", what + ", which has no corner radius");
+  else if (set.radius !== undefined && node.type === "VECTOR") say("radius", "a vector's corner radius is set per vertex, which a patch cannot put back yet");
   else if (typeof set.radius === "object" && !has(node, "topLeftRadius")) say("radius", what + ", which has no per-corner radius; give one number");
   if (set.opacity !== undefined && !has(node, "opacity")) say("opacity", what + ", which has no opacity");
   if (set.box !== undefined && !has(node, "resize")) say("box", what + ", which cannot be resized");
@@ -221,57 +222,99 @@ const LAYOUT_PROPS = ["layoutMode", "layoutWrap", "itemSpacing", "paddingTop", "
   "counterAxisAlignItems", "counterAxisSpacing", "counterAxisAlignContent", "itemReverseZIndex"] as const;
 const STROKE_PROPS = ["strokes", "strokeWeight", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "strokeAlign"] as const;
 const CORNER_PROPS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"] as const;
-const SEGMENT_FIELDS = ["fontName", "fontSize", "textStyleId", "fills", "fillStyleId", "lineHeight", "letterSpacing", "textCase", "textDecoration"] as const;
+const SEGMENT_FIELDS = ["fontName", "fontSize", "textStyleId", "fills", "fillStyleId", "lineHeight", "letterSpacing", "textCase", "textDecoration",
+  "paragraphSpacing", "paragraphIndent", "boundVariables"] as const;
 type Segment = Pick<StyledTextSegment, (typeof SEGMENT_FIELDS)[number] | "start" | "end">;
+const TEXT_BINDABLE: readonly VariableBindableTextField[] = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
+/** A restore: puts a change back, asking `allowed` after every await (RestoreStopped once "Allow edits" is off). */
+export type Restore = (allowed: () => boolean) => Promise<void>;
+const checker = (allowed: () => boolean) => (): void => { if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off"); };
 
 /** The props of `n` named in `keys` that it has, as they are now. */
 function keep(n: object, keys: readonly string[]): Array<[string, unknown]> {
   return keys.filter((k) => k in n).map((k): [string, unknown] => [k, getF(n, k)]);
 }
+/** The variables `ids` name, by id (one that does not resolve is left out). */
+async function variablesById(ids: Iterable<string>): Promise<Map<string, Variable>> {
+  const out = new Map<string, Variable>();
+  for (const id of ids) {
+    if (out.has(id)) continue;
+    let v: Variable | null = null;
+    try { v = await figma.variables.getVariableByIdAsync(id); } catch { v = null; }
+    if (v) out.set(id, v);
+  }
+  return out;
+}
 
-/** A text as it is now, run by run, and how to put it back: its characters, then each run's text style or font, size,
- *  line height, letter spacing, case and decoration, and its paints. */
-export function keepText(t: TextNode): () => Promise<void> {
+/** A text as it is now, run by run, and how to put it back: its characters; then each run's text style, the formatting
+ *  on top of it (or the raw formatting of an unstyled run: font, size, line height, letter spacing, case, decoration,
+ *  paragraph spacing and indent), its paints and paint style; then, last, the variables its runs were bound to (a raw
+ *  value set above unbinds one). Every font involved must be loaded by the caller. */
+export async function keepText(t: TextNode): Promise<Restore> {
   const chars = t.characters;
   const runs: Segment[] = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
-  const whole = chars.length ? null : { fontName: t.fontName, fontSize: t.fontSize, textStyleId: t.textStyleId, fills: t.fills };
-  return async () => {
+  const whole = chars.length ? null : { fontName: t.fontName, fontSize: t.fontSize, textStyleId: t.textStyleId, fills: t.fills, fillStyleId: t.fillStyleId };
+  const ids: string[] = [];
+  for (const r of runs) for (const f of TEXT_BINDABLE) { const a = r.boundVariables && r.boundVariables[f]; if (a) ids.push(a.id); }
+  const vars = await variablesById(ids);
+  return async (allowed) => {
+    const check = checker(allowed);
     if (t.characters !== chars) t.characters = chars;
     if (whole) {
-      if (typeof whole.textStyleId === "string" && whole.textStyleId && whole.textStyleId !== t.textStyleId) await t.setTextStyleIdAsync(whole.textStyleId);
-      else {
-        if (t.textStyleId) await t.setTextStyleIdAsync("");
-        putBack(t, "fontName", whole.fontName);
-        putBack(t, "fontSize", whole.fontSize);
-      }
-      putBack(t, "fills", whole.fills);
+      // An empty text has one formatting: its style (kept when it already matches), then the rest.
+      const style = typeof whole.textStyleId === "string" ? whole.textStyleId : null;
+      if (style !== null && t.textStyleId !== style) { await t.setTextStyleIdAsync(style); check(); }
+      if (whole.fontName !== figma.mixed) putBack(t, "fontName", whole.fontName);
+      if (whole.fontSize !== figma.mixed) putBack(t, "fontSize", whole.fontSize);
+      if (whole.fills !== figma.mixed) putBack(t, "fills", whole.fills);
+      if (typeof whole.fillStyleId === "string" && whole.fillStyleId && t.fillStyleId !== whole.fillStyleId) { await t.setFillStyleIdAsync(whole.fillStyleId); check(); }
       return;
     }
-    const now = t.getStyledTextSegments([...SEGMENT_FIELDS]);
-    if (same(now, runs)) return;
+    if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) return;
     for (const r of runs) {
-      if (r.textStyleId) await t.setRangeTextStyleIdAsync(r.start, r.end, r.textStyleId);
-      else {
-        if (t.getRangeTextStyleId(r.start, r.end) !== "") await t.setRangeTextStyleIdAsync(r.start, r.end, "");
-        t.setRangeFontName(r.start, r.end, r.fontName);
-        t.setRangeFontSize(r.start, r.end, r.fontSize);
-        t.setRangeLineHeight(r.start, r.end, r.lineHeight);
-        t.setRangeLetterSpacing(r.start, r.end, r.letterSpacing);
-        t.setRangeTextCase(r.start, r.end, r.textCase);
-        t.setRangeTextDecoration(r.start, r.end, r.textDecoration);
-      }
-      t.setRangeFills(r.start, r.end, r.fills);
-      if (r.fillStyleId) await t.setRangeFillStyleIdAsync(r.start, r.end, r.fillStyleId);
+      const s = r.start, e = r.end;
+      if (t.getRangeTextStyleId(s, e) !== r.textStyleId) { await t.setRangeTextStyleIdAsync(s, e, r.textStyleId); check(); }
+      if (!same(t.getRangeFontName(s, e), r.fontName)) t.setRangeFontName(s, e, r.fontName);
+      if (!same(t.getRangeFontSize(s, e), r.fontSize)) t.setRangeFontSize(s, e, r.fontSize);
+      if (!same(t.getRangeLineHeight(s, e), r.lineHeight)) t.setRangeLineHeight(s, e, r.lineHeight);
+      if (!same(t.getRangeLetterSpacing(s, e), r.letterSpacing)) t.setRangeLetterSpacing(s, e, r.letterSpacing);
+      if (!same(t.getRangeTextCase(s, e), r.textCase)) t.setRangeTextCase(s, e, r.textCase);
+      if (!same(t.getRangeTextDecoration(s, e), r.textDecoration)) t.setRangeTextDecoration(s, e, r.textDecoration);
+      if (!same(t.getRangeParagraphSpacing(s, e), r.paragraphSpacing)) t.setRangeParagraphSpacing(s, e, r.paragraphSpacing);
+      if (!same(t.getRangeParagraphIndent(s, e), r.paragraphIndent)) t.setRangeParagraphIndent(s, e, r.paragraphIndent);
+      if (!same(t.getRangeFills(s, e), r.fills)) t.setRangeFills(s, e, r.fills);
+      if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) { await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId); check(); }
+    }
+    for (const r of runs) for (const f of TEXT_BINDABLE) {
+      const want = r.boundVariables && r.boundVariables[f];
+      const have = t.getRangeBoundVariable(r.start, r.end, f);
+      const haveId = have && have !== figma.mixed ? have.id : null;
+      if (want) {
+        const v = vars.get(want.id);
+        if (v && haveId !== want.id) t.setRangeBoundVariable(r.start, r.end, f, v);
+      } else if (have !== null) t.setRangeBoundVariable(r.start, r.end, f, null);
     }
   };
 }
 
+/** A node's paint style link (fill or stroke) as it is now, when it has one: put back after its paints. */
+function keepStyleLink(n: SceneNode, field: "fillStyleId" | "strokeStyleId"): ((check: () => void) => Promise<void>) | null {
+  const old = field in n ? getF(n, field) : undefined;
+  if (typeof old !== "string" || !old) return null;
+  return async (check) => {
+    if (getF(n, field) === old) return;
+    if (field === "fillStyleId" && "setFillStyleIdAsync" in n) await n.setFillStyleIdAsync(old);
+    else if (field === "strokeStyleId" && "setStrokeStyleIdAsync" in n) await n.setStrokeStyleIdAsync(old);
+    check();
+  };
+}
+
 /** Everything the patch can change on the node, as it is now, and the restore that puts it back in a fixed order. */
-function snapshot(t: PatchTarget): () => Promise<void> {
+async function snapshot(t: PatchTarget): Promise<Restore> {
   const n = t.node;
   const set = t.set;
   const tok = set.tokens || {};
-  const steps: Array<() => void | Promise<void>> = [];
+  const steps: Array<(check: () => void) => void | Promise<void>> = [];
   // 0. a field the patch binds that was unbound: unbind it first, so the raw value below is the one it had
   const before = new Map<NumberTokenField, string | null>(NUMBER_TOKEN_FIELDS.filter((k) => k in n).map((k) => [k, boundId(n, k)]));
   steps.push(() => {
@@ -279,10 +322,9 @@ function snapshot(t: PatchTarget): () => Promise<void> {
   });
   // 1. the instance's property values (a variant switch can change its layout and size, which come after)
   if (t.props && n.type === "INSTANCE") {
-    const inst = t.node as InstanceNode;
     const old: Record<string, string | boolean> = {};
-    for (const k of Object.keys(t.props)) { const p = inst.componentProperties[k]; if (p) old[k] = p.value; }
-    steps.push(() => { if (Object.keys(old).some((k) => { const p = inst.componentProperties[k]; return !p || p.value !== old[k]; })) inst.setProperties(old); });
+    for (const k of Object.keys(t.props)) { const p = n.componentProperties[k]; if (p) old[k] = p.value; }
+    steps.push(() => { if (Object.keys(old).some((k) => { const p = n.componentProperties[k]; return !p || p.value !== old[k]; })) n.setProperties(old); });
   }
   // 2. auto-layout, and 3. the children's places when it is turned on or off (Figma moves them)
   const sizeTouched = set.box !== undefined || set.widthMode !== undefined || set.heightMode !== undefined || set.layout !== undefined || set.props !== undefined ||
@@ -321,20 +363,37 @@ function snapshot(t: PatchTarget): () => Promise<void> {
       for (const [k, v] of auto) putBack(n, k, v);
     });
   }
-  // 5. paints, strokes, corners and the plain fields; the raw values of the number fields it binds
+  // 5. paints (then the paint style they came from), strokes, corners and the plain fields; the raw values of the
+  // number fields it binds
   const plain: Array<[string, unknown]> = [];
+  const links: Array<(check: () => void) => Promise<void>> = [];
   const textRuns = n.type === "TEXT" && (set.text !== undefined || set.styles !== undefined || ((set.fills !== undefined || tok.fills !== undefined) && n.fills === figma.mixed));
-  if ((set.fills !== undefined || tok.fills !== undefined) && !textRuns) plain.push(...keep(n, ["fills"]));
+  const notMixed = ([, v]: [string, unknown]): boolean => v !== figma.mixed;
+  if ((set.fills !== undefined || tok.fills !== undefined) && !textRuns) {
+    plain.push(...keep(n, ["fills"]).filter(notMixed));
+    const link = keepStyleLink(n, "fillStyleId");
+    if (link) links.push(link);
+  }
   if (set.strokes !== undefined || tok.strokes !== undefined || tok.strokeWeight !== undefined || tok.strokeTopWeight !== undefined || tok.strokeRightWeight !== undefined ||
-    tok.strokeBottomWeight !== undefined || tok.strokeLeftWeight !== undefined) plain.push(...keep(n, STROKE_PROPS).filter(([, v]) => v !== figma.mixed));
-  if (set.radius !== undefined || CORNER_PROPS.some((k) => tok[k] !== undefined)) plain.push(...keep(n, CORNER_PROPS));
+    tok.strokeBottomWeight !== undefined || tok.strokeLeftWeight !== undefined) {
+    plain.push(...keep(n, STROKE_PROPS).filter(notMixed));
+    const link = keepStyleLink(n, "strokeStyleId");
+    if (link) links.push(link);
+  }
+  // A shape with one radius (a polygon, a star) has `cornerRadius` alone; a frame or rectangle has the four corners too
+  // (`cornerRadius` is mixed when they differ).
+  if (set.radius !== undefined || CORNER_PROPS.some((k) => tok[k] !== undefined)) plain.push(...keep(n, ["cornerRadius", ...CORNER_PROPS]).filter(notMixed));
   if (set.opacity !== undefined || tok.opacity !== undefined) plain.push(...keep(n, ["opacity"]));
   if (set.hidden !== undefined) plain.push(...keep(n, ["visible"]));
   if (set.name !== undefined) plain.push(...keep(n, ["name"]));
   for (const k of Object.keys(tok) as NumberTokenField[]) if (k !== "width" && k !== "height" && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
   steps.push(() => { for (const [k, v] of plain) putBack(n, k, v); });
+  for (const link of links) steps.push(link);
   // 6. the text, run by run
-  if (textRuns && n.type === "TEXT") steps.push(keepText(n));
+  if (textRuns && n.type === "TEXT") {
+    const text = await keepText(n);
+    steps.push((check) => text(() => { check(); return true; }));
+  }
   // 7. the variables that were bound, bound again where a raw value above (or the patch) unbound them
   steps.push(() => {
     for (const [k, id] of before) {
@@ -343,10 +402,15 @@ function snapshot(t: PatchTarget): () => Promise<void> {
       if (v) bindField(n, k, v);
     }
   });
-  return async () => {
+  return async (allowed) => {
+    const check = checker(allowed);
     const failed: string[] = [];
     for (const step of steps) {
-      try { await step(); } catch (e) { failed.push(errMsg(e)); }
+      check();
+      try { await step(check); } catch (e) {
+        if (e instanceof RestoreStopped) throw e;
+        failed.push(errMsg(e));
+      }
     }
     if (failed.length) throw new Error(failed.join("; "));
   };
@@ -468,21 +532,26 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
 }
 
 /**
- * Apply a resolved patch, keeping what it replaces. A patch that throws partway puts back what it already set before
- * the error goes on (unless `allowed` says "Allow edits" is off by then: the plugin then changes nothing more).
- * `consent` is checked after the one await (setting a text style).
+ * Apply a resolved patch, keeping what it replaces. Its Change is on `changes` before the first field is set, so a
+ * patch stopped partway ("Allow edits" turned off during the text-style await) is still reported as applied. A patch
+ * that throws puts back what it already set before the error goes on (unless `allowed` says "Allow edits" is off by
+ * then: the plugin then changes nothing more). `consent` is checked after every await.
  */
-export async function applyPatch(t: PatchTarget, consent: () => void, allowed: () => boolean): Promise<Change> {
-  const restore = snapshot(t);
+export async function applyPatch(t: PatchTarget, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<Change> {
+  const restore = await snapshot(t);
+  consent();
+  const applied: AppliedWrite = { id: t.node.id };
+  if (t.unbound) applied.unbound = t.unbound;
+  const change: Change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+  changes.push(change);
   try {
     await setFields(t, consent);
   } catch (e) {
     if (allowed()) {
-      try { await restore(); } catch (r) { throw new Error(errMsg(e) + "; and what this op had set could not all be put back (" + errMsg(r) + ")"); }
+      // Put back here so the op leaves nothing; if that fails or is stopped, the Change stays for the batch to report.
+      try { await restore(allowed); changes.splice(changes.indexOf(change), 1); } catch { /* the batch's restore tries again and reports it */ }
     }
     throw e;
   }
-  const applied: AppliedWrite = { id: t.node.id };
-  if (t.unbound) applied.unbound = t.unbound;
-  return { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+  return change;
 }

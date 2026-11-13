@@ -396,29 +396,38 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
 }
 
 /** The text-run API on a fake TEXT node whose formatting is one run (its own fields): getStyledTextSegments answers one
- *  segment with the fields asked for, and each setRange* sets the node's own field — what the plugin's write path uses
- *  to keep a text as it was and put it back (figma-plugin/src/patch.ts keepText). Returns the same node. */
+ *  segment with the fields asked for, each getRange* reads the node's own field and each setRange* sets it, and range
+ *  variable bindings live in `rangeBound` — what the plugin's write path uses to keep a text as it was and put it back
+ *  (figma-plugin/src/patch.ts keepText). Returns the same node. A text with several runs: test/harness/writes.ts runText. */
 export function textRuns<T extends FakeNode>(node: T): T {
   const n: FakeNode = node;
   const styleField = (k: string): boolean => k === "textStyleId" || k === "fillStyleId";
+  const bound = (): Record<string, unknown> => (typeof n.rangeBound === "object" && n.rangeBound !== null ? { ...(n.rangeBound as Record<string, unknown>) } : {});
+  const RANGE = ["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "ParagraphSpacing", "ParagraphIndent", "Fills"];
+  const field = (f: string): string => f.charAt(0).toLowerCase() + f.slice(1);
   Object.assign(n, {
     getStyledTextSegments: (fields: readonly string[]) => {
       const chars = String(n.characters ?? "");
       if (!chars.length) return [];
       const seg: Record<string, unknown> = { start: 0, end: chars.length, characters: chars };
-      for (const f of fields) seg[f] = n[f] ?? (styleField(f) ? "" : undefined);
+      for (const f of fields) seg[f] = f === "boundVariables" ? bound() : n[f] ?? (styleField(f) ? "" : f === "paragraphSpacing" || f === "paragraphIndent" ? 0 : undefined);
       return [seg];
     },
     getRangeTextStyleId: () => n.textStyleId ?? "",
+    getRangeFillStyleId: () => n.fillStyleId ?? "",
     setRangeTextStyleIdAsync: async (_s: number, _e: number, id: string) => {
       if (typeof n.setTextStyleIdAsync === "function" && id) await (n.setTextStyleIdAsync as (id: string) => Promise<void>)(id);
       else n.textStyleId = id;
     },
     setRangeFillStyleIdAsync: async (_s: number, _e: number, id: string) => { n.fillStyleId = id; },
-    ...Object.fromEntries(["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "Fills"].map((f) => {
-      const field = f.charAt(0).toLowerCase() + f.slice(1);
-      return ["setRange" + f, (_s: number, _e: number, v: unknown) => { n[field] = v; }];
-    })),
+    getRangeBoundVariable: (_s: number, _e: number, f: string) => bound()[f] ?? null,
+    setRangeBoundVariable: (_s: number, _e: number, f: string, v: { id: string } | null) => {
+      const b = bound();
+      if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
+      n.rangeBound = b;
+    },
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => n[field(f)] ?? (f.startsWith("Paragraph") ? 0 : undefined)])),
+    ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, (_s: number, _e: number, v: unknown) => { n[field(f)] = v; }])),
   });
   if (n.textStyleId === undefined) n.textStyleId = "";
   return node;

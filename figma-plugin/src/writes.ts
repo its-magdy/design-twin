@@ -9,7 +9,7 @@ import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyPatch, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyDelete, applyMove, idsBelow, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, restoreChanges, type Change, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
@@ -129,8 +129,19 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       consent();
       const target = nd as SceneNode & MinimalFillsMixin;
       const old = target.fills;
+      const oldStyle = target.fillStyleId;
       target.fills = [paint];
-      const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore() { target.fills = old; } };
+      const change: Change = {
+        applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+        // The paints, then the paint style they came from (setting paints detaches it).
+        async restore(allowed) {
+          target.fills = old;
+          if (typeof oldStyle === "string" && oldStyle && target.fillStyleId !== oldStyle) {
+            await target.setFillStyleIdAsync(oldStyle);
+            if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off");
+          }
+        },
+      };
       changes.push(change);
       return change.applied;
     }
@@ -140,7 +151,8 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
       consent();
-      const restore = keepText(nd);
+      const restore = await keepText(nd);
+      consent();
       nd.characters = op.text || "";
       const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
       changes.push(change);
@@ -170,9 +182,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
     case "patch": {
       if (!patch) throw new Error("patch: the op was not resolved before the batch ran");
       consent();
-      const change = await applyPatch(patch, consent, editsAllowedNow);
-      changes.push(change);
-      return change.applied;
+      return (await applyPatch(patch, consent, editsAllowedNow, changes)).applied;
     }
     case "move": {
       if (!move) throw new Error("move: the op was not resolved before the batch ran");
@@ -298,13 +308,14 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     // late): after that the plugin changes nothing, not even to undo its own work, and the reply says what stayed.
     const off = revoked || !editsAllowedNow();
     const { restored, failed } = off ? { restored: [], failed: [] } : await restoreChanges(changes, editsAllowedNow);
-    const back = new Set(restored.map((c) => c.applied));
+    const back = new Set(restored);
     const kept = !revoked && off && changes.length
       ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied"
       : "";
     return {
       ok: false,
-      applied: rows.filter((a): a is AppliedWrite => a !== undefined && !back.has(a)),
+      // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
+      applied: [...changes.filter((c) => !back.has(c)).map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
       failedAt: i,
       failedOp: op && op.op,
       error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,

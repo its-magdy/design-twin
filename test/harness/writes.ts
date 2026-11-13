@@ -4,7 +4,7 @@ import { checkPatch } from "../../bridge/src/patch-spec.ts";
 import { MAX_TREE_NODES, NUMBER_TOKEN_FIELDS } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import { textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
+import { MIXED, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -310,7 +310,7 @@ const KIT_VARS: Record<string, FakeVariable> = {
   "VariableID:30:4": variable("VariableID:30:4", "color/text", "COLOR", "local-text-a"),
   "VariableID:31:4": variable("VariableID:31:4", "color/text", "COLOR", "local-text-b"),
 };
-const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight } });
+const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight }, fontSize: 24 });
 const KIT_STYLES: FakeNode[] = [
   style("S:h1,", "Heading/H1", "local-h1", "Inter", "Bold"),
   style("S:body,", "Body", "local-body", "Inter", "Regular"),
@@ -1366,13 +1366,88 @@ export const cases: Case[] = [{
       && writeOpPreview({ op: "move", nodeId: "1:2", parentId: "1:3" }, 0).effect === "moves" && writeOpPreview({ op: "move", nodeId: "1:2" }, 0).invalid === "missing parentId");
     void h;
   },
+}, {
+  name: "patch rollback: shapes with one radius, mixed and styled text with overrides and bindings, paint styles, empty styled text",
+  async run() {
+    const RED = [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], STYLE_PAINTS = [{ type: "SOLID", color: { r: 0, g: 0, b: 1 } }];
+    // A rectangle linked to a fill and a stroke style: setting paints detaches the style, as in Figma.
+    const swatch: FakeNode = {
+      id: "sw:1", type: "RECTANGLE", name: "Swatch", _fills: STYLE_PAINTS, fillStyleId: "S:paint", _strokes: STYLE_PAINTS, strokeStyleId: "S:line", strokeWeight: 1, strokeAlign: "INSIDE",
+      get fills() { return swatch._fills; }, set fills(v: unknown) { swatch._fills = v; swatch.fillStyleId = ""; },
+      get strokes() { return swatch._strokes; }, set strokes(v: unknown) { swatch._strokes = v; swatch.strokeStyleId = ""; },
+      setFillStyleIdAsync: async (id: string) => { swatch.fillStyleId = id; swatch._fills = STYLE_PAINTS; },
+      setStrokeStyleIdAsync: async (id: string) => { swatch.strokeStyleId = id; swatch._strokes = STYLE_PAINTS; },
+    };
+    const hex: FakeNode = { id: "pl:1", type: "POLYGON", name: "Hex", cornerRadius: 3 };
+    const path: FakeNode = { id: "vc:1", type: "VECTOR", name: "Path", cornerRadius: 0 };
+    const rich = runText("rx:1", [
+      { text: "Hello ", fontSize: 22, fills: RED, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "VariableID:30:2" } } },
+      { text: "World", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Bold" }, fontSize: 30, fills: STYLE_PAINTS, textDecoration: "UNDERLINE" },
+    ]);
+    const p = await patchWorld({ "sw:1": swatch, "pl:1": hex, "vc:1": path, "rx:1": rich });
+    const { w, h } = p;
+    const fail = { op: "patch", nodeId: h.card, set: { radius: 1 } };
+    const richBefore = runsOf(rich);
+    w.trap.add("cornerRadius");
+    const r = await w.api.applyWrites([
+      { op: "patch", nodeId: "pl:1", set: { radius: 9 } },
+      { op: "patch", nodeId: "sw:1", set: { fills: [{ type: "solid", color: "#00ff00" }], strokes: { colors: ["#00ff00"] } } },
+      { op: "setFill", nodeId: "sw:1", color: "#ffff00" },
+      { op: "patch", nodeId: "rx:1", set: { text: "Bye", styles: { text: "Body" } } },
+      fail,
+    ]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] the batch fails and puts back all four earlier changes", r.ok === false && r.failedAt === 4 && (r.restored ?? []).length === 4 && r.applied.length === 0);
+    ok("[ROLLBACK-2] a polygon's single corner radius is put back", hex.cornerRadius === 3);
+    ok("[ROLLBACK-2] paints linked to a fill and a stroke style: the paints and the style links are put back",
+      swatch.fillStyleId === "S:paint" && swatch.strokeStyleId === "S:line" && swatch.fills === STYLE_PAINTS && swatch.strokes === STYLE_PAINTS);
+    ok("[ROLLBACK-2] a text of two runs (one unstyled with its size bound to a variable, one styled with overrides on top) is put back run by run, bindings included",
+      runsOf(rich) === richBefore);
+    const vec = await w.api.applyWrites([{ op: "patch", nodeId: "vc:1", set: { radius: 4 } }]);
+    ok("[ROLLBACK-2] a vector's per-vertex radius is refused (it could not be put back)", vec.ok === false && /a vector's corner radius is set per vertex/.test(vec.error ?? "") && path.cornerRadius === 0);
+
+    // An empty text with a text style: its style stays when the batch puts the text back.
+    const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Holder", children: [{ text: "", handle: "empty", styles: { text: "Body" } }] } }]);
+    const empty = made.applied[0]?.handles?.empty ?? "";
+    const emptyNode = w.alive().find((n) => n.id === empty);
+    w.trap.add("cornerRadius");
+    const e = await w.api.applyWrites([{ op: "patch", nodeId: empty, set: { text: "now full" } }, fail]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] an empty styled text keeps its text style when put back", e.ok === false && emptyNode?.characters === "" && emptyNode.textStyleId === "S:body,");
+  },
+}, {
+  name: "patch: 'Allow edits' turned off partway — a stopped patch is still reported, and a put-back stops where it was",
+  async run() {
+    // Unticked during the patch's own text-style await: it stops there, nothing is put back, and the reply still lists it.
+    const p = await patchWorld();
+    const { w, h, node } = p;
+    w.hooks.onStyle = async () => { await w.allowEdits(false); };
+    const r = await w.api.applyWrites([{ op: "patch", nodeId: h.email, set: { name: "Renamed", styles: { text: "Heading/H1" } } }]);
+    w.hooks.onStyle = undefined;
+    ok("[PATCH-CONSENT] stopped mid-patch: refused as edits-off, and the patch's row stays in `applied` (its name did change)",
+      r.ok === false && r.refused === "edits-off" && JSON.stringify(r.applied) === JSON.stringify([{ id: h.email }]) && node("email")?.name === "Renamed");
+
+    // Unticked while the batch is being put back: the restore stops before its next mutation and says what stayed.
+    let calls = 0;
+    let q: Awaited<ReturnType<typeof patchWorld>> | null = null;
+    const rich = runText("rx:2", [{ text: "Hi ", fontSize: 20 }, { text: "there", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Bold" } }], async () => {
+      if (++calls === 2 && q) await q.w.allowEdits(false); // the first call is the patch's own; the second is the put-back's
+    });
+    q = await patchWorld({ "rx:2": rich });
+    q.w.trap.add("cornerRadius");
+    const stopped = await q.w.api.applyWrites([{ op: "patch", nodeId: "rx:2", set: { styles: { text: "Body" } } }, { op: "patch", nodeId: q.h.card, set: { radius: 1 } }]);
+    q.w.trap.clear();
+    ok("[PATCH-CONSENT] unticked during the put-back: it stops there, the error says what stayed, and the patch is still in `applied`",
+      stopped.ok === false && /'Allow edits' was turned off while the batch was being put back/.test(stopped.error ?? "")
+      && JSON.stringify(stopped.applied) === JSON.stringify([{ id: "rx:2" }]) && stopped.restored === undefined);
+  },
 }];
 
 /** A tree world with a screen to patch: a column (its gap bound to space/md) holding an email text, a card frame with
  *  auto-layout and a text, a Button instance and a spare frame. `h` maps each handle to its id; `node` reads a node by
  *  handle; `state` is every patchable field of every node, by id, to compare before and after a batch. */
-async function patchWorld() {
-  const w = await treeWorld({ kit: true });
+async function patchWorld(extra: Record<string, FakeNode> = {}) {
+  const w = await treeWorld({ kit: true, extra: { nodes: extra } });
   const r: WriteResult = await w.api.applyWrites([{ op: "createTree", tree: {
     name: "Profile", handle: "screen", box: { w: 390, h: 844 }, layout: { display: "flex", flexDirection: "column", gap: 16 }, tokens: { itemSpacing: "space/md" },
     fills: [{ type: "solid", color: "#ffffff" }],
@@ -1402,3 +1477,84 @@ function boundColor(n: FakeNode | undefined): string | null {
   const bv = isNode(p) && isNode(p.boundVariables) && isNode(p.boundVariables.color) ? p.boundVariables.color.id : null;
   return typeof bv === "string" ? bv : null;
 }
+
+/** A TEXT with several runs, formatted per character the way Figma keeps it: getStyledTextSegments groups equal
+ *  characters, getRange* answers one value or figma.mixed, setRange* sets (a raw size, height, spacing or font unbinds
+ *  its variable on those characters), a text style replaces the formatting and bindings of its range (overrides set
+ *  after it stay), and setting `characters` gives the new text the first character's formatting. `onStyle` runs inside
+ *  each style call (to untick "Allow edits" there). */
+function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<string, unknown>>, onStyle: () => Promise<void> = async () => {}): FakeNode {
+  const base = { fontName: { family: "Inter", style: "Regular" }, fontSize: 16, textStyleId: "", fills: [], fillStyleId: "", lineHeight: { unit: "AUTO" },
+    letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 0, paragraphIndent: 0, boundVariables: {} };
+  let chars: Array<Record<string, unknown>> = runs.flatMap((r) => { const { text, ...f } = r; return Array.from(text, () => ({ ...base, ...f })); });
+  let text = runs.map((r) => r.text).join("");
+  const UNBINDS: Record<string, readonly string[]> = { fontSize: ["fontSize"], lineHeight: ["lineHeight"], letterSpacing: ["letterSpacing"], paragraphSpacing: ["paragraphSpacing"],
+    paragraphIndent: ["paragraphIndent"], fontName: ["fontFamily", "fontStyle", "fontWeight"] };
+  const uniform = (f: string, s = 0, e = chars.length): unknown => {
+    const vals = chars.slice(s, e).map((c) => JSON.stringify(c[f]));
+    return vals.every((v) => v === vals[0]) ? chars[s]?.[f] : MIXED;
+  };
+  const setRange = (f: string) => (s: number, e: number, v: unknown): void => {
+    for (const c of chars.slice(s, e)) {
+      c[f] = v;
+      const b = isNode(c.boundVariables) ? { ...c.boundVariables } : {};
+      for (const k of UNBINDS[f] ?? []) delete b[k];
+      c.boundVariables = b;
+    }
+  };
+  const styleRange = async (s: number, e: number, sid: string): Promise<void> => {
+    await onStyle();
+    const st = KIT_STYLES.find((x) => x.id === sid);
+    for (const c of chars.slice(s, e)) {
+      c.textStyleId = sid;
+      if (st) Object.assign(c, { fontName: st.fontName, fontSize: typeof st.fontSize === "number" ? st.fontSize : 16, lineHeight: base.lineHeight, letterSpacing: base.letterSpacing, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {} });
+    }
+  };
+  const RANGE = ["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "ParagraphSpacing", "ParagraphIndent", "Fills"];
+  const lower = (f: string): string => f.charAt(0).toLowerCase() + f.slice(1);
+  const n: FakeNode = {
+    id, type: "TEXT", name: "Rich", visible: true, width: 100, height: 20, textAutoResize: "WIDTH_AND_HEIGHT",
+    get characters() { return text; },
+    set characters(v: string) { const first = { ...(chars[0] ?? base) }; text = v; chars = Array.from(v, () => ({ ...first, boundVariables: { ...(isNode(first.boundVariables) ? first.boundVariables : {}) } })); },
+    get fontName() { return uniform("fontName"); },
+    get fontSize() { return uniform("fontSize"); },
+    get textStyleId() { return uniform("textStyleId"); },
+    get fillStyleId() { return uniform("fillStyleId"); },
+    get fills() { return uniform("fills"); },
+    set fills(v: unknown) { setRange("fills")(0, chars.length, v); setRange("fillStyleId")(0, chars.length, ""); },
+    getRangeAllFontNames: (s: number, e: number) => [...new Set(chars.slice(s, e).map((c) => JSON.stringify(c.fontName)))].map((f) => JSON.parse(f) as unknown),
+    getStyledTextSegments: (fields: readonly string[]) => {
+      const out: Array<Record<string, unknown>> = [];
+      chars.forEach((c, i) => {
+        const pick = Object.fromEntries(fields.map((f) => [f, c[f]]));
+        const last = out.at(-1);
+        if (last && fields.every((f) => JSON.stringify(last[f]) === JSON.stringify(pick[f]))) { last.end = i + 1; last.characters = text.slice(Number(last.start), i + 1); }
+        else out.push({ characters: text[i], start: i, end: i + 1, ...pick });
+      });
+      return out;
+    },
+    getRangeTextStyleId: (s: number, e: number) => uniform("textStyleId", s, e),
+    getRangeFillStyleId: (s: number, e: number) => uniform("fillStyleId", s, e),
+    setRangeTextStyleIdAsync: styleRange,
+    setTextStyleIdAsync: (sid: string) => styleRange(0, chars.length, sid),
+    setRangeFillStyleIdAsync: async (s: number, e: number, sid: string) => { setRange("fillStyleId")(s, e, sid); },
+    getRangeBoundVariable: (s: number, e: number, f: string) => {
+      const vals = chars.slice(s, e).map((c) => (isNode(c.boundVariables) ? c.boundVariables[f] ?? null : null));
+      return vals.every((v) => JSON.stringify(v) === JSON.stringify(vals[0])) ? vals[0] ?? null : MIXED;
+    },
+    setRangeBoundVariable: (s: number, e: number, f: string, v: { id: string } | null) => {
+      for (const c of chars.slice(s, e)) {
+        const b = isNode(c.boundVariables) ? { ...c.boundVariables } : {};
+        if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
+        c.boundVariables = b;
+      }
+    },
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, (s: number, e: number) => uniform(lower(f), s, e)])),
+    ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, setRange(lower(f))])),
+    resize(w: number, h: number) { n.width = w; n.height = h; },
+  };
+  return n;
+}
+const ALL_SEGMENT_FIELDS = ["fontName", "fontSize", "textStyleId", "fills", "fillStyleId", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent", "boundVariables"];
+const runsOf = (n: FakeNode): string => JSON.stringify([n.characters, (n.getStyledTextSegments as (f: readonly string[]) => unknown)(ALL_SEGMENT_FIELDS)]);
+
