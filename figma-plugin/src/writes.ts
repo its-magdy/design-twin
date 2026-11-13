@@ -8,7 +8,7 @@ import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyPatch, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
-import { applyDelete, applyMove, idsBelow, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
+import { applyDelete, applyMove, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
 import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 
@@ -297,7 +297,7 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const trees = await resolveTreeOps(list);
   const patches = await resolvePatchOps(list);
   const structure = await resolveStructureOps(list);
-  const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes)].sort((a, b) => a.index - b.index);
+  const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
   // A library item a spec or patch names by key (or a library variable it names) is imported only now: the whole batch
@@ -367,9 +367,9 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
 
 /** An op that names a node a delete of the same batch removes (it, or anything below it), as a parent or a target:
  *  deletes run last, so the op would act on a node about to go. Refused up front, like any other problem. */
-function deleteConflicts(list: readonly WriteOp[], deletes: ReadonlyMap<number, DeleteTarget>): OpProblem[] {
+function deleteConflicts(list: readonly WriteOp[], deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
   const gone = new Map<string, number>();
-  for (const [i, t] of deletes) for (const id of idsBelow(t.node)) if (!gone.has(id)) gone.set(id, i);
+  for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
   const out: OpProblem[] = [];
   for (const [index, op] of list.entries()) {
     for (const k of ["nodeId", "parentId"] as const) {

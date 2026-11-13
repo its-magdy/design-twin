@@ -1529,6 +1529,12 @@ export const cases: Case[] = [{
     const swap = await w.api.applyWrites([{ op: "move", nodeId: iId, parentId: w.pages.current.id ?? "" }, { op: "move", nodeId: oId, parentId: iId }]);
     ok("[PATCH-MORE] a child moved out, then its old parent moved into it, in one batch: accepted (" + (swap.error ?? "") + ")",
       swap.ok === true && parentOf(w.alive().find((n) => n.id === oId))?.id === iId);
+    // A child moved out of a frame, then the frame deleted: the child is not deleted with it, so nothing conflicts.
+    const keepKid = await w.api.applyWrites([{ op: "createTree", tree: { name: "Box3", handle: "x", children: [{ name: "Kid3", handle: "k" }] } }]);
+    const xId = keepKid.applied[0]?.handles?.x ?? "", kId = keepKid.applied[0]?.handles?.k ?? "";
+    const saved = await w.api.applyWrites([{ op: "move", nodeId: kId, parentId: w.pages.current.id ?? "" }, { op: "delete", nodeId: xId }, { op: "patch", nodeId: kId, set: { name: "Kept" } }]);
+    ok("[PATCH-MORE] a child moved out, then its old parent deleted (and the child patched): accepted, the child survives (" + (saved.error ?? "") + ")",
+      saved.ok === true && (await w.figma.getNodeByIdAsync(xId)) === null && w.alive().find((n) => n.id === kId)?.name === "Kept");
     // Moved back out (a later op fails): its parent, size and sizing go back as they were.
     const sizeBefore = JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]);
     w.trap.add("cornerRadius");

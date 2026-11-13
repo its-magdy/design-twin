@@ -131,9 +131,22 @@ export function applyDelete(t: DeleteTarget): AppliedWrite {
   return { id, deleted: true };
 }
 
-/** Every node id at or below `n` (an instance's sublayers included): what a delete of `n` takes with it. */
-export function idsBelow(n: BaseNode, out: Set<string> = new Set()): Set<string> {
-  out.add(n.id);
-  if ("children" in n) for (const c of n.children) idsBelow(c, out);
+/** Every node at or below `n` in the file (an instance's sublayers included). */
+function nodesBelow(n: BaseNode, out: BaseNode[] = []): BaseNode[] {
+  out.push(n);
+  if ("children" in n) for (const c of n.children) nodesBelow(c, out);
+  return out;
+}
+
+/** Every node id a delete of `n` takes with it, once the batch's moves have run (deletes run last): what is below `n`
+ *  in the file and stays there, and what a move puts below it. */
+export function idsDeletedWith(n: BaseNode, moves: ReadonlyMap<number, MoveTarget>): Set<string> {
+  const movedTo = new Map<string, BaseNode>();
+  for (const [, m] of [...moves].sort((a, b) => a[0] - b[0])) movedTo.set(m.node.id, m.parent);
+  const up = (x: BaseNode): BaseNode | null => movedTo.get(x.id) ?? x.parent;
+  const under = (x: BaseNode): boolean => { for (let p: BaseNode | null = x; p; p = up(p)) if (p.id === n.id) return true; return false; };
+  const candidates = [...nodesBelow(n), ...[...moves.values()].flatMap((m) => nodesBelow(m.node))];
+  const out = new Set<string>();
+  for (const c of candidates) if (under(c)) out.add(c.id);
   return out;
 }

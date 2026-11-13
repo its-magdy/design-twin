@@ -6421,9 +6421,25 @@
     t.node.remove();
     return { id, deleted: true };
   }
-  function idsBelow(n, out = /* @__PURE__ */ new Set()) {
-    out.add(n.id);
-    if ("children" in n) for (const c of n.children) idsBelow(c, out);
+  function nodesBelow(n, out = []) {
+    out.push(n);
+    if ("children" in n) for (const c of n.children) nodesBelow(c, out);
+    return out;
+  }
+  function idsDeletedWith(n, moves) {
+    const movedTo = /* @__PURE__ */ new Map();
+    for (const [, m] of [...moves].sort((a, b) => a[0] - b[0])) movedTo.set(m.node.id, m.parent);
+    const up = (x) => {
+      var _a;
+      return (_a = movedTo.get(x.id)) != null ? _a : x.parent;
+    };
+    const under = (x) => {
+      for (let p = x; p; p = up(p)) if (p.id === n.id) return true;
+      return false;
+    };
+    const candidates = [...nodesBelow(n), ...[...moves.values()].flatMap((m) => nodesBelow(m.node))];
+    const out = /* @__PURE__ */ new Set();
+    for (const c of candidates) if (under(c)) out.add(c.id);
     return out;
   }
 
@@ -6658,7 +6674,7 @@
     const trees = await resolveTreeOps(list);
     const patches = await resolvePatchOps(list);
     const structure = await resolveStructureOps(list);
-    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes)].sort((a, b) => a.index - b.index);
+    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     const firstProblem = problems[0];
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
     for (const step of [trees, patches]) {
@@ -6714,9 +6730,9 @@
     const done = rows.filter((a) => a !== void 0);
     return { ok: true, applied: done, ...warnings.length ? { warnings } : {} };
   }
-  function deleteConflicts(list, deletes) {
+  function deleteConflicts(list, deletes, moves) {
     const gone = /* @__PURE__ */ new Map();
-    for (const [i, t] of deletes) for (const id of idsBelow(t.node)) if (!gone.has(id)) gone.set(id, i);
+    for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
     const out = [];
     for (const [index, op] of list.entries()) {
       for (const k of ["nodeId", "parentId"]) {
