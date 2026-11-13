@@ -16,13 +16,14 @@
 //     scheduler orders every run from them, and the bridge side reads `export` for its stall check,
 //     progress ticks and read plans.
 //
-// Dependency-free apart from read-opts.ts and tree-spec.ts (both pure) and type imports: the plugin bundle imports it too, so it
+// Dependency-free apart from read-opts.ts, tree-spec.ts and patch-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
 // must type-check under figma-plugin/tsconfig.json (ES2019 lib, no Node types). Reply shapes that ARE
 // documents on disk (ScreenExport, LayersDoc, DesignSystemDoc, VariablesDoc, Manifest, Asset) are
 // referenced from doc-types.ts, never restated.
 import type { Asset, DesignSystemDoc, LayersDoc, Manifest, ScreenExport, VariablesDoc } from "./doc-types.ts";
 import { isRecord } from "./json-util.ts";
 import { READ_OPTS, type ReadOptName } from "./read-opts.ts";
+import { checkPatch, describePatch, isPatchSet, patchRefusal, patchRows, type PatchRow, type PatchSet } from "./patch-spec.ts";
 import { checkTree, describeTree, isTreeSpec, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -69,7 +70,7 @@ export interface ScreenshotArgs extends NodeArgs {
 }
 
 /** The write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
-export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree"] as const;
+export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete"] as const;
 export type WriteOpName = (typeof WRITE_OP_NAMES)[number];
 /** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
@@ -97,6 +98,11 @@ export interface WriteOp {
   tree?: TreeNodeSpec | Record<string, unknown> | undefined;
   /** createTree: the page the new frame lands on — its exact name or id (the current page when absent) */
   page?: string | undefined;
+  /** patch: the fields to change on node `nodeId`, in the read export's field names (patch-spec.ts). Typed loosely on
+   *  the wire, like `tree`: patch-spec.ts checkPatch narrows it, at all three readers of WRITE_OPS. */
+  set?: PatchSet | Record<string, unknown> | undefined;
+  /** move: the place among the new parent's children (0 = first; the end when absent) */
+  index?: number | undefined;
 }
 export interface WriteArgs {
   ops: WriteOp[];
@@ -104,22 +110,24 @@ export interface WriteArgs {
 
 /** A WriteOp field that holds a string. */
 type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page";
-/** A WriteOp field an op can require: the string fields, and createTree's spec. */
-type WriteField = WriteStrField | "tree";
+/** A WriteOp field an op can require: the string fields, createTree's spec and a patch's fields. */
+type WriteField = WriteStrField | "tree" | "set";
 /** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
  *  (writeOpError — the gate a `write` command passes in the plugin's handleBridge, via parseCommandRequest, before
  *  writes.ts applyWrites runs; applyWrites repeats it for its direct callers). So a batch the preview calls invalid
  *  is one the plugin refuses before it touches the file, never one it half-applies. */
 interface WriteOpRow {
-  /** creates = additive (a new node); overwrites = replaces a property on a node the user already has (the
-   *  irreversible half). */
-  effect: "creates" | "overwrites";
+  /** creates = additive (a new node); overwrites = replaces a property on a node the user already has; moves =
+   *  reparents a node this plugin session created; deletes = removes one. */
+  effect: WriteEffect;
   /** The fields the op cannot run without. */
   required: readonly WriteField[];
   /** The new value the preview shows, by preview key, and the op field it is read from. `newMode: INHERITED` is
    *  the value itself: the op puts the node back on the mode it inherits. */
   shows: { newFill?: WriteStrField; newText?: WriteStrField; collection?: WriteStrField; newMode?: WriteStrField | typeof INHERITED };
 }
+/** What an op does to the file, as the dry run counts it. */
+export type WriteEffect = "creates" | "overwrites" | "moves" | "deletes";
 /** What a node's mode for a collection is when none is set on it explicitly: whatever its parent resolves to. */
 export const INHERITED = "inherited";
 // A Record keyed by the union, like COMMAND_SET: an op added to WRITE_OP_NAMES without a row fails to compile.
@@ -131,6 +139,9 @@ export const WRITE_OPS: { readonly [K in WriteOpName]: WriteOpRow } = {
   setVariableMode: { effect: "overwrites", required: ["nodeId", "collection", "mode"], shows: { collection: "collection", newMode: "mode" } },
   clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
   createTree: { effect: "creates", required: ["tree"], shows: {} },
+  patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
+  move: { effect: "moves", required: ["nodeId", "parentId"], shows: {} },
+  delete: { effect: "deletes", required: ["nodeId"], shows: {} },
 };
 
 /** The fields op `op` requires that `fields` lacks (an undefined field is absent: see WriteOp). */
@@ -142,7 +153,7 @@ export function missingWriteFields(op: WriteOpName, fields: Partial<Record<Write
 export interface WritePreviewStep {
   index: number;
   op: WriteOpName;
-  effect: "creates" | "overwrites";
+  effect: WriteEffect;
   /** the node an overwrite changes (null when the op names none); where a create lands */
   target: string | null;
   newFill?: string | undefined;
@@ -154,6 +165,8 @@ export interface WritePreviewStep {
   change?: string;
   /** createTree: what the spec has no effect on (x/y inside auto-layout, …) */
   warnings?: string[];
+  /** patch: one row per field it sets, with the value it gets */
+  fields?: PatchRow[];
   /** "missing <fields>", or every problem with a createTree spec — the plugin refuses the batch up front for the same reason */
   invalid?: string;
 }
@@ -162,6 +175,8 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
   const creates = row.effect === "creates";
   const missing = missingWriteFields(o.op, o);
   if (o.op === "createTree") return treePreview(o, index, missing);
+  if (o.op === "patch") return patchPreview(o, index, missing);
+  if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
   return {
     index,
     op: o.op,
@@ -183,6 +198,27 @@ function treePreview(o: WriteOp, index: number, missing: readonly string[]): Wri
   const { problems, summary } = checkTree(o.tree);
   if (problems.length || !isTreeSpec(o.tree)) return { ...base, invalid: problems.join("\n") };
   return { ...base, change: describeTree(o.tree, o.page, summary), ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
+}
+
+/** A patch op's preview: the node, one row per field it sets, the change in one sentence — or every problem. */
+function patchPreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
+  const base = { index, op: o.op, effect: "overwrites" as const, target: o.nodeId || null };
+  if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+  const { problems, summary } = checkPatch(o.set);
+  if (problems.length || !isPatchSet(o.set)) return { ...base, invalid: problems.join("\n") };
+  return { ...base, fields: patchRows(o.set, summary), change: describePatch(o.nodeId, summary) };
+}
+
+/** A move or delete op's preview: the change in one sentence. Whether the node was created this session is checked
+ *  by the plugin (the preview reads no file). */
+function structurePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
+  const base = { index, op: o.op, effect: WRITE_OPS[o.op].effect, target: o.nodeId || null };
+  if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+  const only = " — only a node this plugin session created (checked when applied)";
+  const change = o.op === "delete"
+    ? `deletes node ${o.nodeId} and everything inside it${only}; deletes run after every other op of the batch has landed`
+    : `moves node ${o.nodeId} into ${o.parentId}${o.index !== undefined ? ` at index ${o.index}` : " as its last child"}${only}; put back if a later op fails`;
+  return { ...base, change };
 }
 
 /** A mode op's preview fields: the new mode and the plain sentence of what changes. */
@@ -333,20 +369,24 @@ export interface ScreenshotReply {
  *  they carry (`screen` / `reference` / `layersDoc`), which is what writeAny narrows on. */
 export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | ScreenshotReply;
 
-/** One applied write op: the id of the node it created or changed (writes.ts applyWrite). A variable-mode op also
+/** One applied write op: the id of the node it created, changed, moved or deleted (writes.ts applyWrite). A variable-mode op also
  *  names the collection and the mode before and after (by name; "inherited" when no mode was set on the node). */
 export interface AppliedWrite {
   id?: string;
   /** createTree: how many nodes the tree made (`instances` only when it made any) */
   created?: { frames: number; texts: number; instances?: number };
-  /** createTree: the raw values where a variable or text style could stand (colours, spacing, radii, stroke weights,
-   *  texts without a style); absent when none */
+  /** createTree / patch: the raw values where a variable or text style could stand (colours, spacing, radii, stroke
+   *  weights, a tree's texts without a style); absent when none */
   unbound?: number;
   /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did) */
   handles?: Record<string, string>;
   collection?: string;
   from?: string;
   to?: string;
+  /** move: the node's new parent */
+  parentId?: string;
+  /** delete: the node is gone */
+  deleted?: true;
 }
 /** Why a whole batch was refused before any op ran — the one refusal a caller must hand to the PERSON at
  *  the Figma window rather than fix itself. `edits-off`: the designer has not ticked "Allow edits"
@@ -365,9 +405,9 @@ export interface WriteResult {
   failedOp?: string;
   error?: string;
   refused?: WriteRefusal;
-  /** On a failure: the changes earlier in the batch that were undone — variable modes put back as they were, trees
-   *  createTree made removed (they are not in `applied`). Absent when there were none, and when the batch stopped
-   *  because edits were turned off. */
+  /** On a failure: the changes earlier in the batch that were undone — values put back as they were, nodes the batch
+   *  created removed, moved nodes back where they were (they are not in `applied`). Absent when there were none, and
+   *  when the batch stopped because edits were turned off. */
   restored?: AppliedWrite[];
   /** What the batch accepted but had no effect (a createTree spec's x/y inside auto-layout, …). Absent when none. */
   warnings?: string[];
@@ -547,6 +587,7 @@ const isWriteOpName = (v: unknown): v is WriteOpName => isStr(v) && Object.proto
 const isPadding = (v: unknown): boolean => Array.isArray(v) && v.length === 4 && v.every(isNum);
 const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page"];
 const WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
+const isIndex = (v: unknown): boolean => isNum(v) && Number.isInteger(v) && v >= 0;
 /** Op `i` of a write batch against WriteOp: `op` names one of the ops, every other declared field has its
  *  type, and the op's row in WRITE_OPS has every field it requires. The wire check (argsShapeError, which the
  *  plugin's handleBridge applies to every `write` before it runs) is this, and writes.ts applyWrites repeats it. */
@@ -560,6 +601,7 @@ export function writeOpError(o: unknown, i: number): string | null {
     ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum, "a number", `${at}.${k}`)),
     opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
     opt(o, "padding", isPadding, "four numbers", `${at}.padding`),
+    opt(o, "index", isIndex, "a whole number ≥ 0", `${at}.index`),
   ]);
   if (typeErr !== null) return typeErr;
   const missing = missingWriteFields(op, o);
@@ -567,6 +609,10 @@ export function writeOpError(o: unknown, i: number): string | null {
   if (op === "createTree") {
     const { problems } = checkTree(o.tree);
     if (problems.length) return treeRefusal(problems.map((p) => p.replace(/^tree/, `${at}.tree`)));
+  }
+  if (op === "patch") {
+    const { problems } = checkPatch(o.set, `${at}.set`);
+    if (problems.length) return patchRefusal(problems);
   }
   return null;
 }

@@ -244,6 +244,20 @@ export const dsRefs: Route = {
   },
 };
 
+// ---- patch by id (#168): an existing node changed by id through one typed op. Finding the node still takes the
+// outline read (the job names a screen, not a node); the change is one `patch` op whose `set` names the read export's
+// field, and its reply is checked like the four-op route's: ok, with the node's id.
+export const patchById: Route = {
+  name: "patch",
+  ticket: "#168",
+  jobs: {
+    "fix-one-node": async (s, b) => {
+      const hit = (await readOutline(s, b.screenId, "find")).filter((n) => n.text === b.wrong);
+      await patch(s, hit.map((n) => ({ op: "patch", nodeId: n.id, set: { text: b.right } })));
+    },
+  },
+};
+
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById];
 export const BASELINE = fourOp.name;

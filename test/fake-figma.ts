@@ -394,3 +394,32 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
   };
 }
+
+/** The text-run API on a fake TEXT node whose formatting is one run (its own fields): getStyledTextSegments answers one
+ *  segment with the fields asked for, and each setRange* sets the node's own field — what the plugin's write path uses
+ *  to keep a text as it was and put it back (figma-plugin/src/patch.ts keepText). Returns the same node. */
+export function textRuns<T extends FakeNode>(node: T): T {
+  const n: FakeNode = node;
+  const styleField = (k: string): boolean => k === "textStyleId" || k === "fillStyleId";
+  Object.assign(n, {
+    getStyledTextSegments: (fields: readonly string[]) => {
+      const chars = String(n.characters ?? "");
+      if (!chars.length) return [];
+      const seg: Record<string, unknown> = { start: 0, end: chars.length, characters: chars };
+      for (const f of fields) seg[f] = n[f] ?? (styleField(f) ? "" : undefined);
+      return [seg];
+    },
+    getRangeTextStyleId: () => n.textStyleId ?? "",
+    setRangeTextStyleIdAsync: async (_s: number, _e: number, id: string) => {
+      if (typeof n.setTextStyleIdAsync === "function" && id) await (n.setTextStyleIdAsync as (id: string) => Promise<void>)(id);
+      else n.textStyleId = id;
+    },
+    setRangeFillStyleIdAsync: async (_s: number, _e: number, id: string) => { n.fillStyleId = id; },
+    ...Object.fromEntries(["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "Fills"].map((f) => {
+      const field = f.charAt(0).toLowerCase() + f.slice(1);
+      return ["setRange" + f, (_s: number, _e: number, v: unknown) => { n[field] = v; }];
+    })),
+  });
+  if (n.textStyleId === undefined) n.textStyleId = "";
+  return node;
+}

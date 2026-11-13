@@ -24,9 +24,23 @@ list of merged PRs.
 - Each `figma_write` call is now its own Cmd-Z step in Figma. Before, one Cmd-Z undid every write since the plugin
   started. A failed write no longer ends with an empty "0 earlier op(s) ... NOT rolled back" list, and one whose mode
   changes were put back lists them.
+- A `figma_write` batch is now all or nothing: if an op fails, everything the batch already did is put back (values
+  restored, created nodes removed, moved nodes returned) and listed as `restored`. Before, only variable-mode
+  changes and `createTree` trees were put back; `createFrame`, `createText`, `setFill` and `setText` stayed applied.
+  `figma_write`'s definition grew from 1,184 to 1,304 estimated tokens.
 
 ### Added
 
+- `figma_write` can change existing nodes by id: `patch` (`nodeId`, `set`) takes the read export's field names and
+  changes only the fields given — name, visibility, opacity, text, text style, fills, strokes, corner radius,
+  auto-layout and spacing, size and sizing, text resizing, variable bindings (`null` unbinds) and an instance's
+  property values. Variables and text styles are named as in a `createTree` spec and resolved the same way. Before
+  anything runs, the plugin checks that each node has each field, and every problem in the batch is listed at once.
+  The dry run shows one row per field. On the write-cost suite's fix-one-node job, the patch route costs 777 tokens
+  against 775 for `setText`: the job is the same size, and `patch` reaches the fields `setText`/`setFill` cannot.
+- `move` and `delete` reparent or remove a node, but only one this plugin session created (since the plugin window
+  was opened). A delete is refused if anything below the node is not the session's own. Deletes run after every
+  other op of the batch.
 - A `createTree` spec can name the file's design system instead of raw values: an `INSTANCE` node names a component
   (by exact name, key or id) with its property values, a paint or a spacing, radius or stroke field names a variable,
   and a text names a text style. Every name is resolved before anything runs; one that matches nothing or several

@@ -3,7 +3,9 @@
 Status: **accepted, partly built** (the four ops `figma_write` started with are the baseline this replaces; setting a
 node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built; the tree spec, `createTree` — frames,
 auto-layout and text, placement, all or nothing — is built; design-system references in it — instances of a named
-component with property values, variables, text styles, library imports under the consent gate — are built)
+component with property values, variables, text styles, library imports under the consent gate — are built; patch by
+id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the whole batch put back when an
+op fails, one undo per batch — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token

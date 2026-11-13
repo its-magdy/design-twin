@@ -397,6 +397,10 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    code→design path. Kept a separate process so the write surface never touches the CLI's read path.
    Writes are still a small fixed set of safe ops with a `dryRun` preview, not a general authoring API, and
    the plugin applies none of them until the designer ticks **Allow edits** in its window (see Security posture).
+   A batch is all or nothing (`figma-plugin/src/writes.ts`): every op is resolved against the file before the first
+   runs, each op that changes the file returns a `Change` that can put it back (`write-batch.ts`), and a failure
+   partway puts back the whole batch; deletes run last since a deleted node cannot be restored. One batch is one
+   Cmd-Z step (`commitUndo` before and after).
 
 ## Security posture
 
@@ -472,8 +476,12 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   window's checkbox can set it: the relay (`relay.ts`) turns every socket frame into a `bridge` command or a
   bridge cancel, never a settings message. Every applied or refused batch is announced (a Figma toast and the
   window's status line). The harness ticks the box the way the window does (a `set-allow-edits` message).
-  Importing a library component, variable or text style a `createTree` spec names is a write too: it runs only once
-  every op of the batch resolved, with the box re-checked right before (`figma-plugin/src/tree-refs.ts`).
+  Importing a library component, variable or text style a `createTree` spec or a `patch` names is a write too: it runs
+  only once every op of the batch resolved, with the box re-checked right before (`figma-plugin/src/tree-refs.ts`).
+- Destruction is limited to the session's own nodes. A write may create anywhere and overwrite the properties of any
+  node (`patch`), but `move` and `delete` work only on nodes this plugin session created
+  (`figma-plugin/src/session.ts`: an in-memory list, empty each time the plugin window opens, never written to the
+  file), and a delete is refused when anything below the node is not the session's own.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).

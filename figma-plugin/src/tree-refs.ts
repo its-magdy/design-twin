@@ -1,5 +1,6 @@
-// Design-system references in a tree spec (docs/write-plane-spec.md decisions 5, 14, 15): what a createTree spec names
-// — a component with property values, a variable, a text style — resolved against the file before the batch runs.
+// Design-system references in a tree spec or a patch (docs/write-plane-spec.md decisions 5, 14, 15): what a createTree
+// spec names — a component with property values, a variable, a text style — and what a patch names — a variable, a text
+// style — resolved against the file before the batch runs, the same way for both.
 //
 // The spec's shape has been checked (bridge/src/tree-spec.ts). This module answers what only the file can: does each
 // name match exactly one thing, is it the right kind (a colour variable for a paint, a number one for a spacing), do
@@ -23,6 +24,7 @@
 //   * importComponentByKeyAsync / importComponentSetByKeyAsync / importStyleByKeyAsync /
 //     figma.variables.importVariableByKeyAsync reject for a key no enabled library publishes.
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
+import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { nodeKind, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { OpProblem } from "./write-batch";
 
@@ -36,9 +38,11 @@ export interface ResolvedRefs {
   textStyles: Map<string, TextStyle>;
 }
 
-/** One place a spec names something, with what it needs. */
-interface Use {
+/** One place a spec or a patch names something, with what it needs. */
+export interface Use {
   index: number;
+  /** the op that names it (createTree, patch), for the refusal */
+  op: string;
   path: string;
   kind: "component" | "variable" | "textStyle";
   ref: string;
@@ -54,9 +58,10 @@ const isKey = (ref: string): boolean => /^[0-9a-f]{40}$/i.test(ref);
 /** Every reference `spec` makes, with its path (as checkTree names it). */
 function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[] {
   const kind = nodeKind(s);
-  if (kind === "INSTANCE" && s.component !== undefined) out.push({ index, path: path + ".component", kind: "component", ref: s.component, node: s });
-  if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
-  (s.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
+  const op = "createTree";
+  if (kind === "INSTANCE" && s.component !== undefined) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
+  if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
+  (s.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
   const t = s.tokens || {};
   for (const k of Object.keys(t) as Array<keyof typeof t>) {
     const v = t[k];
@@ -65,9 +70,36 @@ function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[]
     const type: VariableResolvedDataType = k === "fills" || k === "strokes" ? "COLOR" : "FLOAT";
     // `tokens.fills` beside `fills` repeats what the paints name (checkTree made sure): resolved once, from the paints.
     if (k === "fills" && s.fills) continue;
-    names.forEach((ref, i) => out.push({ index, path: path + ".tokens." + k + (names.length > 1 ? "[" + i + "]" : ""), kind: "variable", ref, type }));
+    names.forEach((ref, i) => out.push({ index, op, path: path + ".tokens." + k + (names.length > 1 ? "[" + i + "]" : ""), kind: "variable", ref, type }));
   }
   (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out));
+  return out;
+}
+
+/** Every reference the createTree specs of a batch make (`specs`: op index → spec). */
+export function treeUses(specs: ReadonlyMap<number, TreeNodeSpec>): Use[] {
+  const uses: Use[] = [];
+  for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
+  return uses;
+}
+
+/** Every reference patch op `index` makes: its paints' variables, its `tokens` (a `null` unbinds, naming nothing) and
+ *  its text style. Paths read as checkPatch writes them (`set.fills[0].tokens.color`). */
+export function patchUses(index: number, set: PatchSet): Use[] {
+  const out: Use[] = [];
+  const op = "patch";
+  (set.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, op, path: "set.fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
+  const t = set.tokens || {};
+  for (const k of Object.keys(t) as Array<keyof typeof t>) {
+    const v = t[k];
+    if (v === undefined || v === null) continue;
+    // As in a tree spec: `tokens.fills` beside `fills` repeats what the paints name, so it is resolved once, from them.
+    if (k === "fills" && set.fills) continue;
+    const names = typeof v === "string" ? [v] : v;
+    const type: VariableResolvedDataType = k === "fills" || k === "strokes" ? "COLOR" : "FLOAT";
+    names.forEach((ref, i) => out.push({ index, op, path: "set.tokens." + k + (names.length > 1 ? "[" + i + "]" : ""), kind: "variable", ref, type }));
+  }
+  if (set.styles && set.styles.text !== undefined) out.push({ index, op, path: "set.styles.text", kind: "textStyle", ref: set.styles.text });
   return out;
 }
 
@@ -89,12 +121,10 @@ export interface RefResolution {
 }
 
 /**
- * Resolve every design-system reference of a batch's createTree specs. `specs` maps an op index to its spec;
- * `loadFont` loads a font (null = loaded, else why not), shared with the raw-font loads so a family loads once.
+ * Resolve every design-system reference `uses` names (treeUses, patchUses). `loadFont` loads a font (null = loaded,
+ * else why not), shared with the raw-font loads so a family loads once.
  */
-export async function resolveRefs(specs: ReadonlyMap<number, TreeNodeSpec>, loadFont: (f: FontName) => Promise<string | null>): Promise<RefResolution> {
-  const uses: Use[] = [];
-  for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
+export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) => Promise<string | null>): Promise<RefResolution> {
   const refs: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
   const problems: OpProblem[] = [];
   if (!uses.length) return { refs, problems, imports: async () => ({ problems: [], revoked: false }), importCount: 0 };
@@ -167,7 +197,7 @@ function reporter(out: OpProblem[]): { bad: (u: Use, message: string) => void; f
       const k = u.index + "\u0000" + u.kind + "\u0000" + u.ref + "\u0000" + message;
       const seen = reported.get(k);
       if (seen) { seen.more++; return; }
-      const problem: OpProblem = { index: u.index, op: "createTree", message: u.path + ": " + message };
+      const problem: OpProblem = { index: u.index, op: u.op, message: u.path + ": " + message };
       reported.set(k, { problem, more: 0 });
       out.push(problem);
     },
@@ -228,7 +258,7 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
 /** The variant of `set` an instance made from `start` shows once `props` are set: each VARIANT property at its given
  *  value, else at `start`'s. A combination the set does not have is `missing` (as "Size=Large, Tone=Off"): Figma would
  *  keep the instance on another variant, so it is refused rather than built wrong. */
-function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions): ComponentNode | { missing: string } {
+export function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions): ComponentNode | { missing: string } {
   const want: Record<string, string> = {};
   const from = start.variantProperties || {};
   for (const k of Object.keys(defs)) {

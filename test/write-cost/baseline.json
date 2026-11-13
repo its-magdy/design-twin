@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 1184,
+  "toolDefinition": 1304,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -69,6 +69,15 @@
         "out": 412,
         "in": 919,
         "total": 1331
+      }
+    },
+    "patch": {
+      "fix-one-node": {
+        "calls": 2,
+        "ops": 1,
+        "out": 42,
+        "in": 735,
+        "total": 777
       }
     }
   }
