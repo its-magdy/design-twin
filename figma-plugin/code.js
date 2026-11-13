@@ -7825,8 +7825,14 @@
       for (const m of t.modes) {
         consent2();
         const old = v.valuesByMode[m.modeId];
-        kept.push({ modeId: m.modeId, value: old && typeof old === "object" ? JSON.parse(JSON.stringify(old)) : old });
-        v.setValueForMode(m.modeId, t.variable.resolvedType === "COLOR" || typeof m.value === "object" ? figmaValue(m.value, t.refs) : m.value);
+        const keptValue = old && typeof old === "object" ? JSON.parse(JSON.stringify(old)) : old;
+        try {
+          v.setValueForMode(m.modeId, t.variable.resolvedType === "COLOR" || typeof m.value === "object" ? figmaValue(m.value, t.refs) : m.value);
+        } catch (e) {
+          const msg = errMsg(e);
+          throw new Error("Figma refused the value of '" + v.name + "' for mode '" + m.name + "': " + msg + (/limit/i.test(msg) ? " (this file's Figma plan lets a plugin change only a collection's first mode(s); change that mode by hand, or move the file to a plan with more modes)" : ""));
+        }
+        kept.push({ modeId: m.modeId, value: keptValue });
       }
     } catch (e) {
       try {

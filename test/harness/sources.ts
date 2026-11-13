@@ -170,6 +170,13 @@ export const cases: Case[] = [{
     ok("[SOURCE] an alias that makes a loop is refused, naming the variable", !aliased.ok && /aliases 'brand\/primary'.*loop/.test(aliased.error ?? "") && same(val(w.primary, "50:1"), rgba(0, 0, 0, 128 / 255)));
     const ali = await write(w, [{ op: "setVariable", variable: "brand/accent", values: { Light: "#123456", Dark: { aliasOf: w.primary.id } } }]);
     ok("[SOURCE] an alias to another variable is set as a VariableAlias", ali.ok && same(val(w.accent, "50:1"), alias(w.primary.id)) && isObj(val(w.accent, "50:0")) && (val(w.accent, "50:0") as { r: number }).r > 0);
+    // Figma refuses a mode past the file plan's limit (seen live): the op fails naming the mode, and the batch is put back.
+    const set = w.primary.setValueForMode;
+    w.primary.setValueForMode = (m: string, x: unknown) => { if (m === "50:1") throw new Error("in setValueForMode: cannot modify modes beyond limit of 1"); set(m, x); };
+    const before = JSON.stringify(w.primary.valuesByMode);
+    const limited = await write(w, [{ op: "setVariable", variable: "brand/primary", values: { Light: "#111111", Dark: "#222222" } }]);
+    ok("[SOURCE] a mode past the plan's limit: refused naming the mode and the plan, nothing kept", !limited.ok && /for mode 'Dark'.*limit of 1.*plan/.test(limited.error ?? "") && JSON.stringify(w.primary.valuesByMode) === before);
+    w.primary.setValueForMode = set;
     ok("[SOURCE] the edits are one undo step each (commitUndo around each batch)", w.undo.commits >= 2);
   },
 }, {

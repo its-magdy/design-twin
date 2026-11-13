@@ -397,8 +397,18 @@ export function applyVariable(t: VariableTarget, consent: () => void): Change {
       consent();
       const old = v.valuesByMode[m.modeId];
       // A value as Figma holds it: a colour or alias object is copied, so a later change cannot reach the kept one.
-      kept.push({ modeId: m.modeId, value: old && typeof old === "object" ? JSON.parse(JSON.stringify(old)) as VariableValue : old });
-      v.setValueForMode(m.modeId, t.variable.resolvedType === "COLOR" || typeof m.value === "object" ? figmaValue(m.value, t.refs) : m.value);
+      const keptValue = old && typeof old === "object" ? JSON.parse(JSON.stringify(old)) as VariableValue : old;
+      try {
+        v.setValueForMode(m.modeId, t.variable.resolvedType === "COLOR" || typeof m.value === "object" ? figmaValue(m.value, t.refs) : m.value);
+      } catch (e) {
+        // Seen live: a file on a Figma plan with fewer modes than a copied collection has refuses every mode past the
+        // plan's limit ("cannot modify modes beyond limit of 1").
+        const msg = errMsg(e);
+        throw new Error("Figma refused the value of '" + v.name + "' for mode '" + m.name + "': " + msg +
+          (/limit/i.test(msg) ? " (this file's Figma plan lets a plugin change only a collection's first mode(s); change that mode by hand, or move the file to a plan with more modes)" : ""));
+      }
+      // Kept only once set: putting back a mode Figma refused would fail the same way and stop the rest.
+      kept.push({ modeId: m.modeId, value: keptValue });
     }
   } catch (e) {
     try { restore(() => true); } catch { /* reported with the error below */ }
