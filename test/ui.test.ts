@@ -20,7 +20,9 @@ const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..",
 // Fake DOM element / WebSocket / timer shapes — only what ui.html's script touches.
 interface FakeEl {
   id: string; textContent: string; className: string; hidden: boolean; open: boolean; disabled: boolean;
-  value: string; style: Record<string, string>; appendChild(): void; innerHTML: string;
+  value: string; style: Record<string, string>; appendChild(c: FakeEl): void; innerHTML: string;
+  /** what appendChild added, in order */
+  kids: FakeEl[];
   checked?: boolean;
   onclick?: () => void;
   onchange?: () => void;
@@ -33,12 +35,16 @@ interface FakeSocket {
   close(): void; send(d: string): void;
 }
 interface Timer { fn: (() => void) | null; ms: number }
-interface PluginMsg { type: string; allowed?: unknown; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
+interface PluginMsg { type: string; allowed?: unknown; on?: unknown; apply?: unknown; reason?: unknown; lines?: string[]; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
   const els: Record<string, FakeEl> = {};
-  const el = (id: string): FakeEl => (els[id] ||= { id, textContent: "", className: "", hidden: false, open: false, disabled: false, value: "", style: {}, appendChild() {}, innerHTML: "" });
+  const make = (id: string): FakeEl => {
+    const e: FakeEl = { id, textContent: "", className: "", hidden: false, open: false, disabled: false, value: "", style: {}, kids: [], appendChild(c) { e.kids.push(c); }, innerHTML: "" };
+    return e;
+  };
+  const el = (id: string): FakeEl => (els[id] ||= make(id));
   const sockets: FakeSocket[] = [];
   const posted: PluginMsg[] = [];
   const timers: Timer[] = [];
@@ -52,7 +58,7 @@ function boot() {
     send(d: string) { this.sent.push(d); }
   }
   const ctx: Record<string, unknown> & { onmessage?: (e: { data: { pluginMessage: PluginMsg } }) => void } = {
-    document: { getElementById: el, readyState: "complete", createElement: () => el("_tmp"), addEventListener() {} },
+    document: { getElementById: el, readyState: "complete", createElement: (tag: string) => make("<" + tag + ">"), addEventListener() {} },
     window: {},
     parent: { postMessage: (m: { pluginMessage: PluginMsg }) => posted.push(m.pluginMessage) },
     WebSocket: FakeWS,
@@ -262,6 +268,63 @@ check("a write notice from the main thread lands on the status line (red when re
   const shown = w.el("status").textContent === "Design Twin applied 2 edits to this file." && w.el("status").className !== "err";
   w.msg({ type: "writes", applied: 0, ok: false, text: "Design Twin refused an edit request — 'Allow edits' is off." });
   return shown && /refused/.test(w.el("status").textContent) && w.el("status").className === "err";
+})());
+
+console.log("Review each write:");
+check("the review card and its controls are in the markup, hidden until a write waits; the checkbox sits under Allow edits", (() => {
+  const reviewIds = ["review", "review-lines", "review-wait", "review-reason", "review-apply", "review-reject", "review-writes"];
+  const connectAt = html.indexOf('<details id="connect">');
+  return reviewIds.every((id) => new RegExp(`id="${id}"`).test(html)) && /<div id="review"[^>]*hidden/.test(html)
+    && /<input id="review-writes" type="checkbox" disabled/.test(html) && html.indexOf('id="review-writes"') > html.indexOf('id="allow-edits"')
+    && html.indexOf('id="review-writes"') < connectAt && /Review each write/.test(html);
+})());
+check("the window asks for the saved Review setting on load; the main thread's answer drives the box; ticking it posts set-review-writes", (() => {
+  const w = boot();
+  const asked = w.posted.some((p) => p.type === "get-review-writes");
+  w.msg({ type: "review-writes", on: true });
+  const shown = w.el("review-writes").checked === true && !w.el("review-writes").disabled;
+  const box = w.el("review-writes"); box.checked = false; box.onchange?.();
+  const sent = w.posted.filter((p) => p.type === "set-review-writes");
+  return asked && shown && sent.length === 1 && sent[0]?.on === false && box.disabled === true;
+})());
+check("a waiting write shows the card: one list item per line, as TEXT (never markup), Cancel hidden", (() => {
+  const w = boot();
+  w.msg({ type: "run-begin", source: "bridge", label: "write" });
+  w.msg({ type: "review", id: "review-1", lines: ["creates a frame 'Card' — new node on the current page", "<img src=x onerror=alert(1)>"], waitMs: 300000 });
+  const items = w.el("review-lines").kids;
+  return !w.el("review").hidden && items.length === 2 && items[0]?.textContent === "creates a frame 'Card' — new node on the current page"
+    && items[1]?.textContent === "<img src=x onerror=alert(1)>" && items.every((li) => li.innerHTML === "")
+    && w.el("cancel").hidden === true && /5 min/.test(w.el("review-wait").textContent) && /review it below/.test(w.el("status").textContent);
+})());
+check("Apply posts review-answer {apply:true} with no reason, and disables both buttons", (() => {
+  const w = boot();
+  w.msg({ type: "review", id: "review-2", lines: ["x"], waitMs: 300000 });
+  w.el("review-reason").value = "ignored on apply";
+  w.el("review-apply").onclick?.();
+  const sent = w.posted.filter((p) => p.type === "review-answer");
+  return sent.length === 1 && sent[0]?.id === "review-2" && sent[0]?.apply === true && sent[0]?.reason === undefined
+    && w.el("review-apply").disabled && w.el("review-reject").disabled;
+})());
+check("Reject posts review-answer {apply:false} with the typed reason", (() => {
+  const w = boot();
+  w.msg({ type: "review", id: "review-3", lines: ["x"], waitMs: 300000 });
+  w.el("review-reason").value = "Use the token.";
+  w.el("review-reject").onclick?.();
+  const sent = w.posted.filter((p) => p.type === "review-answer");
+  return sent.length === 1 && sent[0]?.apply === false && sent[0]?.reason === "Use the token.";
+})());
+check("review-end takes the card down, and says why when no click ended it (timed out, withdrawn)", (() => {
+  const w = boot();
+  w.msg({ type: "review", id: "review-4", lines: ["x"], waitMs: 300000 });
+  w.msg({ type: "review-end", id: "other", end: "timed-out" });
+  const stillUp = !w.el("review").hidden;
+  w.msg({ type: "review-end", id: "review-4", end: "timed-out" });
+  const timedOut = w.el("review").hidden && /waited too long/.test(w.el("status").textContent) && w.el("status").className === "err";
+  w.msg({ type: "review", id: "review-5", lines: ["x"], waitMs: 300000 });
+  w.msg({ type: "review-end", id: "review-5", end: "withdrawn" });
+  const withdrawn = w.el("review").hidden && /withdrawn/.test(w.el("status").textContent);
+  w.el("review-apply").onclick?.();
+  return stillUp && timedOut && withdrawn && !w.posted.some((p) => p.type === "review-answer");
 })());
 
 report();

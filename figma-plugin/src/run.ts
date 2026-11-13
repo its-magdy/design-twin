@@ -152,6 +152,10 @@ export class Run {
    *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it
    *  was meant for had already finished — cannot kill the next one. */
   cancel: "designer" | "abandoned" | null = null;
+  /** Called once when `cancel` is set (progress.ts requestCancel / requestAbandon): how a run that is WAITING rather
+   *  than walking — a write held for the designer's review (review.ts) — learns at once that it was stopped, where a
+   *  walk only notices at its next safe point. */
+  onCancel: (() => void) | null = null;
   /** The page the walk is on (progress.ts enterPage), so the ticks that are not page boundaries can say WHERE they
    *  are. */
   page: ProgressPage | undefined = undefined;

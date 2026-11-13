@@ -2,6 +2,7 @@
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
 import { applyWrites } from "./writes";
 import { editsAllowed } from "./edits";
+import { reviewWrites } from "./review";
 import { listLibraries } from "./libraries";
 import { scheduleRun } from "./state";
 import { type RunInfo } from "./progress";
@@ -91,6 +92,8 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
         fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
         // So figma_write's dry run can say a real write would be refused before anyone sends one.
         editsAllowed: await editsAllowed(),
+        // …and that it would wait for the designer's Apply or Reject in the plugin window.
+        reviewWrites: await reviewWrites(),
       };
       return r;
     };

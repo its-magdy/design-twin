@@ -124,6 +124,7 @@ export function requestCancel(): RunInfo | null {
   const r = activeRun();
   if (!r || !r.info) return null;
   r.cancel = "designer"; // a designer's click overrides an earlier abandonment (a human did ask)
+  wake(r);
   return r.info;
 }
 
@@ -135,7 +136,15 @@ export function requestAbandon(matches: (run: RunInfo) => boolean): RunInfo | nu
   const r = activeRun();
   if (!r || !r.info || !matches(r.info)) return null;
   if (r.cancel === null) r.cancel = "abandoned"; // an abandonment never overrides a click
+  wake(r);
   return r.info;
+}
+
+/** Tell a run that is waiting (Run.onCancel) that it was stopped — once. */
+function wake(r: { onCancel: (() => void) | null }): void {
+  const f = r.onCancel;
+  r.onCancel = null;
+  if (f) f();
 }
 
 /** Throw if the designer pressed Cancel (CANCELLED_MESSAGE) or the bridge abandoned the request that

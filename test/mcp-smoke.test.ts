@@ -16,7 +16,8 @@ import type { JSONRPCMessage, Progress } from "@modelcontextprotocol/sdk/types.j
 // The plugin stand-in — see fake-plugin.ts.
 import { fakePlugin, fail, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { malformed } from "./fixtures.ts";
-import { EDITS_OFF_MESSAGE } from "../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE, rejectedMessage, unreviewedMessage } from "../bridge/src/commands.ts";
+import { REVIEW_WAIT_MS } from "../bridge/src/timeouts.ts";
 import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply, WriteResult } from "../bridge/src/commands.ts";
 import type { BridgeFrame, CommandFrame } from "../bridge/src/server-core.ts";
 // Type-only: erased before Bun runs this file, so the server module is NOT imported here (it is
@@ -376,9 +377,11 @@ void (async () => {
     // checkbox's state and refuses a write the way writes.ts does while it is off.
     let editsOn = false;
     let failWith: WriteResult | null = null; // set to make the next writes fail the way writes.ts reports it
+    let reviewOn = false; // "Review each write" as whoami reports it
+    let holdWrite = false; // the write waits for a review nobody answers (review.ts)
     const editsPlugin = fakePlugin(8789, { token: "smoke-test-token", hello: { instanceId: "fig-edits", file: "Edits File" }, unhandled: HANG, on: {
-      whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn }),
-      write: (): WriteResult => failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }),
+      whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn }),
+      write: (): WriteResult | typeof HANG => holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }),
     } });
     await editsPlugin.opened;
     const card = [{ op: "createFrame", name: "Card" }];
@@ -425,6 +428,33 @@ void (async () => {
     const partialText = await failText({ ok: false, applied: [{ id: "1:9" }], failedAt: 1, failedOp: "setFill", error: "setFill: no node with id '9:9' (invalid or removed)" });
     ok(`[WRITE-FAIL] ops that stay applied are still listed with their ids (got ${JSON.stringify(partialText)})`,
       /\n1 earlier op\(s\) stay applied \(not undone\):\n/.test(partialText) && partialText.includes('"id": "1:9"') && !/were undone/.test(partialText));
+
+    // ---- "Review each write" (figma-plugin/src/review.ts), as figma_write sees it.
+    reviewOn = true;
+    const dryReview = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview & { reviewWrites?: boolean };
+    ok("[REVIEW] dryRun with review on says a real write waits for the designer", dryReview.reviewWrites === true && /WAITS \(up to 5 min\) until the designer applies or rejects it/.test(dryReview.note));
+    reviewOn = false;
+    const dryNoReview = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview & { reviewWrites?: boolean };
+    ok("[REVIEW] …and with review off the dry run carries no review field or sentence", dryNoReview.reviewWrites === undefined && !/WAITS/.test(dryNoReview.note));
+    const reason = "Use the spacing token instead.";
+    const rejectedText = await failText({ ok: false, applied: [], refused: "rejected", reason, error: rejectedMessage(reason) });
+    ok(`[REVIEW] a rejected write is an error carrying the designer's reason, not a generic failure (got ${JSON.stringify(rejectedText)})`,
+      rejectedText === rejectedMessage(reason) && rejectedText.includes('Their reason: "' + reason + '"') && !/Write failed at op/.test(rejectedText));
+    const timedOutText = await failText({ ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage("timed-out", REVIEW_WAIT_MS) });
+    ok(`[REVIEW] an unreviewed write says nobody answered and nothing changed (got ${JSON.stringify(timedOutText)})`,
+      timedOutText === unreviewedMessage("timed-out", REVIEW_WAIT_MS) && /Nothing in the file was changed/.test(timedOutText));
+    // An agent that gives up on a write still waiting for review withdraws it: the plugin is sent a cancel for it.
+    holdWrite = true;
+    const writesBefore = editsPlugin.commands("write").length;
+    const abort = new AbortController();
+    const waiting = client.callTool({ name: "figma_write", arguments: { ops: card } }, undefined, { signal: abort.signal }).then(() => "answered", () => "aborted");
+    for (let i = 0; i < 100 && editsPlugin.commands("write").length === writesBefore; i++) await sleep(20);
+    const heldId = editsPlugin.commands("write").at(-1)?.id;
+    abort.abort();
+    ok("[REVIEW] the cancelled call ends on the agent's side", (await waiting) === "aborted");
+    for (let i = 0; i < 100 && !editsPlugin.cancels.includes(String(heldId)); i++) await sleep(20);
+    ok("[REVIEW] …and the plugin is told to withdraw the waiting write (a cancel for its request id)", heldId !== undefined && editsPlugin.cancels.includes(heldId));
+    holdWrite = false;
     editsPlugin.close();
     await sleep(200);
 

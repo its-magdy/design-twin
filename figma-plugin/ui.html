@@ -62,11 +62,21 @@
   @keyframes indet { from { margin-left: -30%; } to { margin-left: 100%; } }
   /* "Allow edits": always visible (never inside the collapsed connection section), because it is the one
      control an agent will ask the designer to find. */
-  #edits-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; margin: 6px 0; }
-  #edits-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0; }
+  #edits-row, #review-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; margin: 6px 0; }
+  #edits-row input, #review-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0; }
   #edits-state { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 9px;
                  background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-tertiary, #888); }
   #edits-state.on { background: var(--figma-color-bg-warning-tertiary, #fff4e0); color: var(--figma-color-text-warning, #8a5a00); }
+  /* The review card (figma-plugin/src/review.ts): a write waiting for the designer. At the top of the window, under the
+     status line, so it is the first thing seen; plain words, one line per op. */
+  #review { margin-bottom: 12px; padding: 8px; border: 1px solid var(--figma-color-border-warning, #e8c37a); border-radius: 6px;
+            background: var(--figma-color-bg-warning-tertiary, #fff4e0); font-size: 12px; line-height: 1.4; }
+  #review-title { font-weight: 600; margin-bottom: 6px; }
+  #review-lines { margin: 0 0 8px 18px; padding: 0; max-height: 140px; overflow-y: auto; }
+  #review-lines li { margin-bottom: 4px; overflow-wrap: anywhere; }
+  #review-reason { width: 100%; box-sizing: border-box; min-height: 40px; margin-bottom: 8px; font: inherit; resize: vertical; }
+  #review-wait { font-size: 11px; color: var(--figma-color-text-secondary, #555); margin-bottom: 6px; }
+  #review-apply { border-color: var(--figma-color-border-brand-strong, #0d99ff); }
   #cancel { border-color: var(--figma-color-border-danger-strong, #c0362c); color: var(--figma-color-text-danger, #c0362c); }
   /* Bo, the brand mark (assets/logo-16.svg), in front of the status line: it "says" the status. It sits in the
      line's own height, so no control moves and the window keeps its size. The frame and eyes are currentColor
@@ -80,6 +90,18 @@
      or that a download batch failed. -->
 <div id="head"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" shape-rendering="crispEdges" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" stroke="currentColor"/><g fill="#d6409f"><rect x="2" y="2" width="3" height="3"/><rect x="11" y="2" width="3" height="3"/><rect x="2" y="11" width="3" height="3"/><rect x="11" y="11" width="3" height="3"/></g><g fill="currentColor"><rect x="5" y="6" width="2" height="3"/><rect x="9" y="6" width="2" height="3"/></g></svg><div id="status" role="status" aria-live="polite">Loading…</div></div>
 <div id="banner" role="alert" hidden></div>
+<!-- A write waiting for the designer ("Review each write" on). Apply runs it; Reject refuses it, and the reason typed
+     here goes back to Claude Code with the refusal. Nothing in the file changes until Apply. -->
+<div id="review" role="alertdialog" aria-labelledby="review-title" hidden>
+  <div id="review-title">Claude Code wants to change this file</div>
+  <ol id="review-lines"></ol>
+  <div id="review-wait"></div>
+  <textarea id="review-reason" maxlength="500" placeholder="Reason, if you reject (sent to Claude Code)"></textarea>
+  <div class="row">
+    <button id="review-apply" class="primary">Apply</button>
+    <button id="review-reject">Reject</button>
+  </div>
+</div>
 <div id="progress" hidden><div id="bar"></div></div>
 
 <div class="label">Export</div>
@@ -107,7 +129,11 @@
   <span>Allow edits</span>
   <span id="edits-state">off</span>
 </label>
-<div class="hint" id="edits-hint" style="margin-top:2px">Lets Claude Code change this file over the bridge (add frames and text, set fills and text). Off: it can only read. Every change is announced here.</div>
+<label id="review-row" for="review-writes">
+  <input id="review-writes" type="checkbox" disabled />
+  <span>Review each write</span>
+</label>
+<div class="hint" id="edits-hint" style="margin-top:2px">Lets Claude Code change this file over the bridge (add frames and text, set fills and text). Off: it can only read. Every change is announced here. Review each write: every change waits here until you apply or reject it.</div>
 
 <div class="sep"></div>
 <!-- Optional. Closed by default; opened automatically only when it needs the user (a rejected token). -->
@@ -344,6 +370,49 @@ var DesignTwinRelay = (() => {
       setBusy(false);
     }
 
+    // The review card (review.ts). One at a time: writes run one after another, so a second card cannot arrive while
+    // one waits. Its lines are text, never markup (they quote names and text from the request).
+    var reviewId = null;
+    function showReview(m) {
+      reviewId = m.id;
+      var list = $("review-lines");
+      if (list) {
+        list.innerHTML = "";
+        (m.lines || []).forEach(function (line) {
+          var li = document.createElement("li");
+          li.textContent = String(line);
+          list.appendChild(li);
+        });
+      }
+      var wait = $("review-wait");
+      if (wait) wait.textContent = "Nothing changes until you apply it. It is refused on its own after " + Math.round((m.waitMs || 0) / 60000) + " min.";
+      var reason = $("review-reason"); if (reason) reason.value = "";
+      setReviewButtons(false);
+      // A write in review is not running yet: its Cancel button would only duplicate Reject.
+      var c = $("cancel"); if (c) c.hidden = true;
+      var p = $("progress"); if (p) p.hidden = true;
+      var card = $("review"); if (card) card.hidden = false;
+      setStatus("Claude Code wants to change this file — review it below.");
+      var apply = $("review-apply"); if (apply && apply.focus) apply.focus();
+    }
+    function hideReview() {
+      reviewId = null;
+      var card = $("review"); if (card) card.hidden = true;
+    }
+    function setReviewButtons(disabled) {
+      var a = $("review-apply"); if (a) a.disabled = disabled;
+      var r = $("review-reject"); if (r) r.disabled = disabled;
+    }
+    function answerReview(apply) {
+      if (!reviewId) return;
+      // Disabled at once, so a double click cannot answer twice (the main thread ignores a second answer anyway).
+      setReviewButtons(true);
+      var reason = $("review-reason");
+      var msg = { type: "review-answer", id: reviewId, apply: apply };
+      if (!apply && reason && reason.value) msg.reason = reason.value;
+      parent.postMessage({ pluginMessage: msg }, "*");
+    }
+
     // Any uncaught UI-script error becomes visible text in the plugin window.
     window.onerror = function (msg, src, line) {
       setStatus("UI error: " + msg + (line ? " (line " + line + ")" : ""), true);
@@ -480,6 +549,25 @@ var DesignTwinRelay = (() => {
         // The main thread's answer is the truth (edits.ts): the checkbox only ever shows what it holds.
         var ae = $("allow-edits"); if (ae) { ae.checked = !!m.allowed; ae.disabled = false; }
         var es = $("edits-state"); if (es) { es.textContent = m.allowed ? "on" : "off"; es.className = m.allowed ? "on" : ""; }
+        return;
+      }
+      if (m.type === "review-writes") {
+        var rw = $("review-writes"); if (rw) { rw.checked = !!m.on; rw.disabled = false; }
+        return;
+      }
+      if (m.type === "review") {
+        showReview(m);
+        return;
+      }
+      if (m.type === "review-end") {
+        // Whatever ended it, the card goes. A click of the designer's says nothing more here (the write's own
+        // `writes` notice follows); an end nobody here clicked for is said, so the card does not just vanish.
+        if (reviewId !== m.id) return;
+        hideReview();
+        if (m.end === "approved") setStatus("Applying the edits you approved…");
+        else if (m.end === "timed-out") setStatus("An edit request waited too long for review and was not applied.", true);
+        else if (m.end === "withdrawn") setStatus("An edit request was withdrawn before you answered — nothing was applied.", true);
+        else if (m.end === "edits-off") setStatus("An edit request was refused — 'Allow edits' was turned off.", true);
         return;
       }
       if (m.type === "writes") {
@@ -714,6 +802,13 @@ var DesignTwinRelay = (() => {
           parent.postMessage({ pluginMessage: { type: "set-allow-edits", allowed: !!ae.checked } }, "*");
         };
         parent.postMessage({ pluginMessage: { type: "get-allow-edits" } }, "*");
+        var rw = $("review-writes"); if (rw) rw.onchange = function () {
+          rw.disabled = true;
+          parent.postMessage({ pluginMessage: { type: "set-review-writes", on: !!rw.checked } }, "*");
+        };
+        parent.postMessage({ pluginMessage: { type: "get-review-writes" } }, "*");
+        var ra = $("review-apply"); if (ra) ra.onclick = function () { answerReview(true); };
+        var rj = $("review-reject"); if (rj) rj.onclick = function () { answerReview(false); };
         // Ask code.js for the stored token; connect() runs once it replies. Also proves the round-trip.
         parent.postMessage({ pluginMessage: { type: "get-token" } }, "*");
         setStatus("Ready — select a frame, or use the blue button.");

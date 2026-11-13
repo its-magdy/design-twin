@@ -26,6 +26,7 @@ import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
 import { editsAllowed, setEditsAllowed } from "./edits";
+import { answerReview, endReviews, reviewWrites, setReviewWrites } from "./review";
 import { isUIToMain, type ExportFile, type ExportLayerFile, type MainToUI } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
@@ -156,7 +157,24 @@ figma.ui.onmessage = async (raw: unknown) => {
     }
     case "set-allow-edits": {
       // Only `allowed: true` turns edits on; every other value posted here leaves the file read-only.
-      post({ type: "allow-edits", allowed: await setEditsAllowed(raw.allowed === true) });
+      const allowed = await setEditsAllowed(raw.allowed === true);
+      // Off is off at once: a write waiting for review is refused now rather than when someone clicks Apply.
+      if (!allowed) endReviews("edits-off");
+      post({ type: "allow-edits", allowed });
+      break;
+    }
+    case "get-review-writes": {
+      post({ type: "review-writes", on: await reviewWrites() });
+      break;
+    }
+    case "set-review-writes": {
+      // Only `on: true` turns review on. Turning it off does not apply a write already waiting: that card still
+      // needs its Apply.
+      post({ type: "review-writes", on: await setReviewWrites(raw.on === true) });
+      break;
+    }
+    case "review-answer": {
+      if (typeof raw.id === "string") answerReview(raw.id, raw.apply === true, raw.reason);
       break;
     }
     case "run-selection": {

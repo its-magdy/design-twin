@@ -31,6 +31,13 @@ list of merged PRs.
 
 ### Added
 
+- The plugin window has a **Review each write** checkbox under **Allow edits**, off by default. When it is on, each
+  `figma_write` batch waits on a card in the window that lists what it will do in plain words (the dry run's
+  description), and runs only when the designer presses **Apply**. **Reject** leaves the file untouched, and the reason
+  the designer types reaches the agent in the reply. A card nobody answers within 5 minutes, or one whose call was
+  cancelled or whose bridge dropped, is refused with nothing changed. A dry run reports `reviewWrites: true` when it is
+  on. The write's bridge budget is now 6 minutes (it was 2), and `figma_write`'s definition grew by 28 tokens
+  (1,304 → 1,332 on the write-cost suite; every job's cost is unchanged).
 - `figma_write` can change existing nodes by id: `patch` (`nodeId`, `set`) takes the read export's field names and
   changes only the fields given — name, visibility, opacity, text, text style, fills, strokes, corner radius,
   auto-layout and spacing, size and sizing, text resizing, variable bindings (`null` unbinds) and an instance's

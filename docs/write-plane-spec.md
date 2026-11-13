@@ -117,7 +117,9 @@ screens.
     change in the plugin window, with an optional reason that goes back to the agent) sits on top of it.
     Its exact form, when it applies and how the agent waits are **not decided**: they are to be
     prototyped. The write path only produces a plain description of the change, which the dry run needs
-    anyway, so every candidate form displays the same data.
+    anyway, so every candidate form displays the same data. The plainest form is built: "Review each write" in the
+    plugin window holds a batch on a card of those lines until the designer applies or rejects it
+    (`figma-plugin/src/review.ts`).
 
 ### Cost control
 

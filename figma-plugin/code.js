@@ -518,6 +518,10 @@
        *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it
        *  was meant for had already finished — cannot kill the next one. */
       this.cancel = null;
+      /** Called once when `cancel` is set (progress.ts requestCancel / requestAbandon): how a run that is WAITING rather
+       *  than walking — a write held for the designer's review (review.ts) — learns at once that it was stopped, where a
+       *  walk only notices at its next safe point. */
+      this.onCancel = null;
       /** The page the walk is on (progress.ts enterPage), so the ticks that are not page boundaries can say WHERE they
        *  are. */
       this.page = void 0;
@@ -685,13 +689,20 @@
     const r = activeRun();
     if (!r || !r.info) return null;
     r.cancel = "designer";
+    wake(r);
     return r.info;
   }
   function requestAbandon(matches) {
     const r = activeRun();
     if (!r || !r.info || !matches(r.info)) return null;
     if (r.cancel === null) r.cancel = "abandoned";
+    wake(r);
     return r.info;
+  }
+  function wake(r) {
+    const f = r.onCancel;
+    r.onCancel = null;
+    if (f) f();
   }
   function checkCancelled() {
     const r = activeRun();
@@ -1415,6 +1426,25 @@
     if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
     return problems.length + " problems in the tree spec \u2014 nothing was changed:\n" + problems.join("\n");
   }
+  function describeTree(spec, page, s) {
+    const size2 = spec.box ? " " + spec.box.w + "\xD7" + spec.box.h : spec.layout && spec.layout.width && spec.layout.height ? " " + spec.layout.width + "\xD7" + spec.layout.height : "";
+    const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
+    const nodes = s.frames + s.texts + s.instances;
+    const plural = (n, one) => n + " " + one + (n === 1 ? "" : "s");
+    const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
+    const parts = [
+      "creates frame '" + (spec.name || "Frame") + "'" + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + ") " + where
+    ];
+    if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
+    if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
+    const { components, variables, textStyles } = s.refs;
+    if (components.length) parts.push("components " + quoteList(components));
+    if (variables.length) parts.push("variables " + quoteList(variables));
+    if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
+    if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
+    const checked = components.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied";
+    return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
+  }
 
   // ../bridge/src/patch-spec.ts
   var bool = (v) => typeof v === "boolean" ? null : "must be true or false";
@@ -1602,6 +1632,17 @@
     if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
     return problems.length + " problems in the patch \u2014 nothing was changed:\n" + problems.join("\n");
   }
+  function patchRows(set, s) {
+    return s.fields.map((f) => ({ field: f, to: JSON.stringify(set[f]) }));
+  }
+  function describePatch(nodeId, s) {
+    const { variables, textStyles } = s.refs;
+    const parts = ["node " + (nodeId || "?") + ": sets " + s.fields.join(", ")];
+    if (variables.length) parts.push("variables " + quoteList(variables));
+    if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
+    if (s.unbound) parts.push(s.unbound + " raw value" + (s.unbound === 1 ? "" : "s") + " left unbound");
+    return parts.join("; ") + " \u2014 the node, its kind and the names are checked against the file when applied; the values it replaces are kept, and put back if a later op of the batch fails";
+  }
 
   // ../bridge/src/commands.ts
   var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete"];
@@ -1621,7 +1662,85 @@
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
   }
+  function writeOpPreview(o, index) {
+    const row = WRITE_OPS[o.op];
+    const creates = row.effect === "creates";
+    const missing = missingWriteFields(o.op, o);
+    if (o.op === "createTree") return treePreview(o, index, missing);
+    if (o.op === "patch") return patchPreview(o, index, missing);
+    if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
+    return {
+      index,
+      op: o.op,
+      effect: row.effect,
+      target: creates ? o.parentId ? `new node under ${o.parentId}` : "new node on the current page" : o.nodeId || null,
+      ...row.shows.newFill ? { newFill: o[row.shows.newFill] } : {},
+      ...row.shows.newText ? { newText: o[row.shows.newText] } : {},
+      ...row.shows.collection ? { collection: o[row.shows.collection] } : {},
+      ...row.shows.newMode ? modeChange(o, row.shows.newMode) : {},
+      ...missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}
+    };
+  }
+  function treePreview(o, index, missing) {
+    const base = { index, op: o.op, effect: "creates", target: o.page ? `new frame on page '${o.page}'` : "new frame on the current page" };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    const { problems, summary } = checkTree(o.tree);
+    if (problems.length || !isTreeSpec(o.tree)) return { ...base, invalid: problems.join("\n") };
+    return { ...base, change: describeTree(o.tree, o.page, summary), ...summary.warnings.length ? { warnings: summary.warnings } : {} };
+  }
+  function patchPreview(o, index, missing) {
+    const base = { index, op: o.op, effect: "overwrites", target: o.nodeId || null };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    const { problems, summary } = checkPatch(o.set);
+    if (problems.length || !isPatchSet(o.set)) return { ...base, invalid: problems.join("\n") };
+    return { ...base, fields: patchRows(o.set, summary), change: describePatch(o.nodeId, summary) };
+  }
+  function structurePreview(o, index, missing) {
+    const base = { index, op: o.op, effect: WRITE_OPS[o.op].effect, target: o.nodeId || null };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    const only = " \u2014 only a node this plugin session created (checked when applied)";
+    const change = o.op === "delete" ? `deletes node ${o.nodeId} and everything inside it${only}; deletes run after every other op of the batch has landed` : `moves node ${o.nodeId} into ${o.parentId}${o.index !== void 0 ? ` at index ${o.index}` : " as its last child"}${only}; put back if a later op fails`;
+    return { ...base, change };
+  }
+  function modeChange(o, shows) {
+    const newMode = shows === INHERITED ? INHERITED : o[shows];
+    const node = `node ${o.nodeId || "?"}`, coll = `'${o.collection || "?"}'`;
+    const change = shows === INHERITED ? `${node}: the ${coll} variable mode goes from its current mode to inherited (whatever its parent uses)` : `${node}: the ${coll} variable mode goes from its current mode to '${newMode || "?"}'`;
+    return { newMode, change: change + " \u2014 the reply names the mode it replaced; the names are checked against the file when applied" };
+  }
   var EDITS_OFF_MESSAGE = "Edits are off in the Design Twin plugin \u2014 tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
+  var REVIEW_REASON_MAX = 500;
+  function reviewReason(raw) {
+    const said = typeof raw === "string" ? raw.trim() : "";
+    if (!said) return void 0;
+    return said.length > REVIEW_REASON_MAX ? said.slice(0, REVIEW_REASON_MAX) + "\u2026 (cut)" : said;
+  }
+  function rejectedMessage(reason) {
+    return "The designer rejected this write in the Design Twin plugin window. Nothing in the file was changed. " + (reason ? 'Their reason: "' + reason + '"' : "They gave no reason.");
+  }
+  function unreviewedMessage(end, waitMs) {
+    const nothing = " Nothing in the file was changed.";
+    if (end === "timed-out") {
+      return "Nobody applied or rejected this write in the Design Twin plugin window within " + Math.round(waitMs / 6e4) + " min, so it was not applied." + nothing + " Ask the designer to watch the plugin window (or to untick 'Review each write' there), then retry.";
+    }
+    if (end === "cancelled") return "The designer stopped this write with Cancel in the Design Twin plugin window before applying it." + nothing;
+    return "This write was withdrawn before the designer answered its review: the request was abandoned or the bridge disconnected." + nothing;
+  }
+  function reviewLines(ops) {
+    return ops.map((o, i) => {
+      var _a;
+      const s = writeOpPreview(o, i);
+      if (s.change) return s.change;
+      const parts = [];
+      if (s.op === "createFrame") parts.push("creates a frame" + (o.name ? " '" + o.name + "'" : "") + " \u2014 " + s.target);
+      else if (s.op === "createText") parts.push("creates a text" + (s.newText !== void 0 ? ' "' + s.newText + '"' : "") + " \u2014 " + s.target);
+      else if (s.op === "setFill") parts.push("node " + (s.target || "?") + ": the fill becomes " + (s.newFill || "?"));
+      else if (s.op === "setText") parts.push("node " + (s.target || "?") + ': the text becomes "' + ((_a = s.newText) != null ? _a : "") + '"');
+      else parts.push(s.op + " " + (s.target || ""));
+      if ((s.op === "createFrame" || s.op === "createText") && s.newFill) parts.push("fill " + s.newFill);
+      return parts.join(", ");
+    });
+  }
   var COMMAND_TRAITS = {
     ping: { run: "identity", export: false },
     whoami: { run: "identity", export: false },
@@ -2793,9 +2912,9 @@
     const feats = src.openTypeFeatures;
     if (feats && feats !== figma.mixed) {
       const tags = Object.keys(feats);
-      const on = tags.filter((k) => feats[k]);
+      const on2 = tags.filter((k) => feats[k]);
       const off = tags.filter((k) => !feats[k]);
-      if (on.length) f.openType = on;
+      if (on2.length) f.openType = on2;
       if (off.length) f.openTypeOff = off;
     }
     const color = solidFromFills(src.fills);
@@ -4777,6 +4896,15 @@
     return { designSystem, layersDoc, assets: r.assets.slice() };
   }
 
+  // ../bridge/src/ports.ts
+  var ALLOWED_PORTS = [8787, 8788, 8789];
+
+  // ../bridge/src/timeouts.ts
+  var REVIEW_WAIT_MS = 3e5;
+  var TIMEOUTS = { command: 12e4, selection: 12e4, list: 3e5, export: 3e5, exportAll: 9e5, write: REVIEW_WAIT_MS + 6e4 };
+  var PLUGIN_REDIAL_MS = 1e3;
+  var SETTLE_MS = ALLOWED_PORTS.length * PLUGIN_REDIAL_MS + 500;
+
   // src/edits.ts
   var KEY = "allowEdits";
   var allowed = false;
@@ -4795,15 +4923,77 @@
   function editsAllowedNow() {
     return allowed;
   }
-  async function setEditsAllowed(on) {
+  async function setEditsAllowed(on2) {
     await loaded;
-    allowed = on;
+    allowed = on2;
     try {
-      await figma.clientStorage.setAsync(KEY, on);
+      await figma.clientStorage.setAsync(KEY, on2);
     } catch (e) {
       console.error("[export] could not save the Allow edits setting:", e);
     }
     return allowed;
+  }
+
+  // src/review.ts
+  var KEY2 = "reviewWrites";
+  var on = false;
+  var loaded2 = (async () => {
+    try {
+      on = await figma.clientStorage.getAsync(KEY2) === true;
+    } catch (e) {
+      console.error("[export] could not read the Review each write setting; review stays off:", e);
+      on = false;
+    }
+  })();
+  async function reviewWrites() {
+    await loaded2;
+    return on;
+  }
+  async function setReviewWrites(value) {
+    await loaded2;
+    on = value;
+    try {
+      await figma.clientStorage.setAsync(KEY2, value);
+    } catch (e) {
+      console.error("[export] could not save the Review each write setting:", e);
+    }
+    return on;
+  }
+  var pending = /* @__PURE__ */ new Map();
+  var seq = 0;
+  function awaitReview(ops) {
+    const id = "review-" + ++seq;
+    const run2 = activeRun();
+    return new Promise((resolve) => {
+      if (run2 && run2.cancel) {
+        resolve({ end: run2.cancel === "designer" ? "cancelled" : "withdrawn" });
+        return;
+      }
+      let timer;
+      const onCancel = () => settle({ end: run2 && run2.cancel === "designer" ? "cancelled" : "withdrawn" });
+      const settle = (o) => {
+        if (!pending.delete(id)) return;
+        if (timer !== void 0) clearTimeout(timer);
+        if (run2 && run2.onCancel === onCancel) run2.onCancel = null;
+        const ended = { type: "review-end", id, end: o.end };
+        figma.ui.postMessage(ended);
+        resolve(o);
+      };
+      pending.set(id, { settle });
+      if (run2) run2.onCancel = onCancel;
+      timer = setTimeout(() => settle({ end: "timed-out" }), REVIEW_WAIT_MS);
+      const card = { type: "review", id, lines: reviewLines(ops), waitMs: REVIEW_WAIT_MS };
+      figma.ui.postMessage(card);
+    });
+  }
+  function answerReview(id, apply, reason) {
+    const p = pending.get(id);
+    if (!p) return;
+    const said = reviewReason(reason);
+    p.settle(apply ? { end: "approved" } : { end: "rejected", ...said !== void 0 ? { reason: said } : {} });
+  }
+  function endReviews(end) {
+    for (const p of [...pending.values()]) p.settle({ end });
   }
 
   // src/variable-modes.ts
@@ -5310,7 +5500,7 @@
     const targets = /* @__PURE__ */ new Map();
     const specs = /* @__PURE__ */ new Map();
     const problems = [];
-    const loaded2 = /* @__PURE__ */ new Map();
+    const loaded3 = /* @__PURE__ */ new Map();
     let available = null;
     const availableNames = () => {
       if (!available) available = figma.listAvailableFontsAsync().then((fs) => fs.map((f) => f.fontName.family + " " + f.fontName.style), () => []);
@@ -5318,13 +5508,13 @@
     };
     const load = (family, weight) => {
       const key = family + "|" + weight;
-      let p = loaded2.get(key);
+      let p = loaded3.get(key);
       if (!p) {
         p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
           const near = nearestNames(family + " " + weight, await availableNames());
           return "font '" + family + " " + weight + "' is not available in this file" + (near.length ? "; closest: " + quoteList(near) : "");
         });
-        loaded2.set(key, p);
+        loaded3.set(key, p);
       }
       return p;
     };
@@ -5783,13 +5973,13 @@
     const targets = /* @__PURE__ */ new Map();
     const problems = [];
     const uses = [];
-    const loaded2 = /* @__PURE__ */ new Map();
+    const loaded3 = /* @__PURE__ */ new Map();
     const loadFont = (f) => {
       const key = f.family + "|" + f.style;
-      let p = loaded2.get(key);
+      let p = loaded3.get(key);
       if (!p) {
         p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
-        loaded2.set(key, p);
+        loaded3.set(key, p);
       }
       return p;
     };
@@ -6669,6 +6859,8 @@
     const edits = n + " edit" + (n === 1 ? "" : "s");
     let text = null;
     if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
+    else if (r.refused === "rejected") text = "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
+    else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
@@ -6707,6 +6899,12 @@
     const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     const firstProblem = problems[0];
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
+    if (list.length && await reviewWrites()) {
+      const review = await awaitReview(list);
+      if (review.end !== "approved") return reviewRefusal(review);
+      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      commitUndo();
+    }
     for (const step of [trees, patches]) {
       if (!step.importCount) continue;
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
@@ -6768,6 +6966,11 @@
     }
     const done = rows.filter((a) => a !== void 0);
     return { ok: true, applied: done, ...warnings.length ? { warnings } : {} };
+  }
+  function reviewRefusal(o) {
+    if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...o.reason !== void 0 ? { reason: o.reason } : {} };
+    if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
   }
   function deleteConflicts(list, deletes, moves) {
     const gone = /* @__PURE__ */ new Map();
@@ -6835,7 +7038,9 @@
             fileKey: fileKey === void 0 ? null : fileKey,
             fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
             // So figma_write's dry run can say a real write would be refused before anyone sends one.
-            editsAllowed: await editsAllowed()
+            editsAllowed: await editsAllowed(),
+            // …and that it would wait for the designer's Apply or Reject in the plugin window.
+            reviewWrites: await reviewWrites()
           };
           return r;
         };
@@ -6919,6 +7124,9 @@
     "run-full",
     "get-allow-edits",
     "set-allow-edits",
+    "get-review-writes",
+    "set-review-writes",
+    "review-answer",
     "cancel",
     "bridge"
   ]);
@@ -7000,7 +7208,21 @@
         break;
       }
       case "set-allow-edits": {
-        post2({ type: "allow-edits", allowed: await setEditsAllowed(raw.allowed === true) });
+        const allowed2 = await setEditsAllowed(raw.allowed === true);
+        if (!allowed2) endReviews("edits-off");
+        post2({ type: "allow-edits", allowed: allowed2 });
+        break;
+      }
+      case "get-review-writes": {
+        post2({ type: "review-writes", on: await reviewWrites() });
+        break;
+      }
+      case "set-review-writes": {
+        post2({ type: "review-writes", on: await setReviewWrites(raw.on === true) });
+        break;
+      }
+      case "review-answer": {
+        if (typeof raw.id === "string") answerReview(raw.id, raw.apply === true, raw.reason);
         break;
       }
       case "run-selection": {
