@@ -7663,6 +7663,7 @@
     };
     const aliases = [];
     const fontNow = /* @__PURE__ */ new Map();
+    const fontUnknown = /* @__PURE__ */ new Set();
     for (const [index, op] of ops.entries()) {
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
@@ -7744,22 +7745,26 @@
         let font = null;
         const bound = [];
         if (st.type === "TEXT") {
-          let fontOk = true;
-          const projected = fontNow.get(st.id);
-          const now = projected ? projected : st.fontName;
-          const after = fontAfter(now, set);
-          for (const f of [st.fontName, now, after]) {
-            const err = await loadFont(f);
-            if (err) {
-              bad("text style '" + st.name + "': its " + err + (f === after ? " (check `font` and `weight`)" : ""));
-              fontOk = false;
-              break;
-            }
-          }
-          if (!fontOk) continue;
-          font = after;
-          fontNow.set(st.id, after);
           const bv = st.boundVariables || {};
+          const fontBound = !!(bv.fontFamily || bv.fontStyle || bv.fontWeight);
+          if (fontUnknown.has(st.id) || fontBound && ops.slice(0, index).some((o) => o.op === "setVariable")) fontUnknown.add(st.id);
+          else {
+            let fontOk = true;
+            const projected = fontNow.get(st.id);
+            const now = projected ? projected : st.fontName;
+            const after = fontAfter(now, set);
+            for (const f of [st.fontName, now, after]) {
+              const err = await loadFont(f);
+              if (err) {
+                bad("text style '" + st.name + "': its " + err + (f === after ? " (check `font` and `weight`)" : ""));
+                fontOk = false;
+                break;
+              }
+            }
+            if (!fontOk) continue;
+            font = after;
+            fontNow.set(st.id, after);
+          }
           for (const field of Object.keys(bv)) {
             const a = bv[field];
             if (!a) continue;
@@ -7901,7 +7906,7 @@
       }
       if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
       if (st.type === "TEXT") {
-        if (t.font && (set.font !== void 0 || set.weight !== void 0)) st.fontName = fontAfter(st.fontName, set);
+        if (set.font !== void 0 || set.weight !== void 0) st.fontName = fontAfter(st.fontName, set);
         if (set.size !== void 0) st.fontSize = set.size;
         const lh = set.lineHeight;
         if (lh) st.lineHeight = lh.unit === "auto" ? { unit: "AUTO" } : { unit: LINE_UNIT[lh.unit], value: lh.value === void 0 ? 0 : lh.value };

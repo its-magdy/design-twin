@@ -265,6 +265,14 @@ export const cases: Case[] = [{
       { op: "patch", nodeId: "2:6", set: { fills: [{ type: "solid", color: "#000000" }] } },
     ]);
     ok("[SOURCE] the batch fails at the patch, and the style is back on its own font", !r.ok && r.failedAt === 2 && (r.restored ?? []).length === 2 && same(w.textStyle.fontName, { family: "Inter", style: "Regular" }));
+    // The style starts on a family the file cannot load; the variable switches it to one it can, then a weight is set.
+    w.textStyle.boundVariables = { ...(isObj(w.textStyle.boundVariables) ? w.textStyle.boundVariables : {}), fontFamily: alias("VariableID:51:5") };
+    // A family the file cannot load (set past the fake's font rule, as the designer's own file could hold one).
+    Object.defineProperty(w.textStyle, "fontName", { value: { family: "Times", style: "Regular" }, writable: true, enumerable: true, configurable: true });
+    const unloadable = await write(w, [{ op: "setVariable", variable: "font/family", value: "Inter Display" }, { op: "setStyle", style: "Body", set: { weight: "Semi Bold" } }]);
+    ok("[SOURCE] a font an earlier variable edit switches the style to is checked when the style edit applies, not against the old font",
+      unloadable.ok && same(w.textStyle.fontName, { family: "Inter Display", style: "Semi Bold" }));
+    await write(w, [{ op: "setVariable", variable: "font/family", value: "Inter" }, { op: "setStyle", style: "Body", set: { weight: "Regular" } }]);
     const bad = await write(w, [{ op: "setVariable", variable: "font/family", value: "Comic" }, { op: "setStyle", style: "Body", set: { size: 20 } }]);
     ok("[SOURCE] a font an earlier op switched the style to that the file lacks fails the style edit, and the batch is put back",
       !bad.ok && bad.failedAt === 1 && /font 'Comic Regular' is not available/.test(bad.error ?? "") && w.textStyle.fontSize === 16);

@@ -42,7 +42,7 @@ export interface StyleTarget {
   style: PaintStyle | TextStyle | EffectStyle;
   set: StyleSet;
   refs: ResolvedRefs;
-  /** a text style: the font it ends with (loaded) */
+  /** a text style: the font it ends with, when the batch can know it before it runs (applyStyle loads it either way) */
   font: FontName | null;
   /** a text style: the variables its fields are bound to now, by field, bound back on restore */
   bound: Array<{ field: VariableBindableTextField; variable: Variable }>;
@@ -273,6 +273,8 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
   const aliases: Array<{ index: number; variable: Variable; ref: string; path: string }> = [];
   // A text style's font as the batch's earlier edits leave it (two edits of one style in a batch build on each other).
   const fontNow = new Map<string, FontName>();
+  // …and the text styles whose font an earlier variable edit of the batch may change: checked when they apply.
+  const fontUnknown = new Set<string>();
 
   for (const [index, op] of ops.entries()) {
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
@@ -318,19 +320,25 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
       let font: FontName | null = null;
       const bound: StyleTarget["bound"] = [];
       if (st.type === "TEXT") {
-        // Its font now (to set anything on it and to put it back) and the one it ends with must load.
-        let fontOk = true;
-        const projected = fontNow.get(st.id);
-        const now = projected ? projected : st.fontName;
-        const after = fontAfter(now, set);
-        for (const f of [st.fontName, now, after]) {
-          const err = await loadFont(f);
-          if (err) { bad("text style '" + st.name + "': its " + err + (f === after ? " (check `font` and `weight`)" : "")); fontOk = false; break; }
-        }
-        if (!fontOk) continue;
-        font = after;
-        fontNow.set(st.id, after);
+        // Its font now (to set anything on it and to put it back) and the one it ends with must load. When its font is
+        // bound to a variable an earlier op of the batch changes, neither is known yet: applyStyle loads both, live, and a
+        // missing one fails the op there (the batch is put back).
         const bv = st.boundVariables || {};
+        const fontBound = !!(bv.fontFamily || bv.fontStyle || bv.fontWeight);
+        if (fontUnknown.has(st.id) || (fontBound && ops.slice(0, index).some((o) => o.op === "setVariable"))) fontUnknown.add(st.id);
+        else {
+          let fontOk = true;
+          const projected = fontNow.get(st.id);
+          const now = projected ? projected : st.fontName;
+          const after = fontAfter(now, set);
+          for (const f of [st.fontName, now, after]) {
+            const err = await loadFont(f);
+            if (err) { bad("text style '" + st.name + "': its " + err + (f === after ? " (check `font` and `weight`)" : "")); fontOk = false; break; }
+          }
+          if (!fontOk) continue;
+          font = after;
+          fontNow.set(st.id, after);
+        }
         for (const field of Object.keys(bv) as VariableBindableTextField[]) {
           const a = bv[field];
           if (!a) continue;
@@ -477,7 +485,7 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
     }
     if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
     if (st.type === "TEXT") {
-      if (t.font && (set.font !== undefined || set.weight !== undefined)) st.fontName = fontAfter(st.fontName, set);
+      if (set.font !== undefined || set.weight !== undefined) st.fontName = fontAfter(st.fontName, set);
       if (set.size !== undefined) st.fontSize = set.size;
       const lh = set.lineHeight;
       if (lh) st.lineHeight = lh.unit === "auto" ? { unit: "AUTO" } : { unit: LINE_UNIT[lh.unit], value: lh.value === undefined ? 0 : lh.value };
