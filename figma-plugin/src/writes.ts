@@ -392,6 +392,12 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     if (!op) continue;
     try { checkDelete(t); } catch (e) { return fail(i, op, e); }
   }
+  // …and so is every node a keyed re-send removes (it must still hold only what its key built), before any delete runs.
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try { for (const n of removalsOf(t.update)) checkRemoval(t.update, n); } catch (e) { return fail(i, op, e); }
+  }
   for (const [i, t] of structure.deletes) {
     const op = list[i];
     if (!op) continue;
@@ -405,12 +411,6 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     }
   }
   // The nodes a keyed re-send no longer has (or built anew) go last, with the deletes: a removed node cannot be brought back.
-  // Each is checked again first (it must still hold only what its key built), while the batch can still be put back.
-  for (const [i, t] of trees.targets) {
-    const op = list[i];
-    if (!op || !t.update) continue;
-    try { for (const n of removalsOf(t.update)) checkRemoval(t.update, n); } catch (e) { return fail(i, op, e); }
-  }
   for (const [i, t] of trees.targets) {
     const op = list[i];
     if (!op || !t.update) continue;

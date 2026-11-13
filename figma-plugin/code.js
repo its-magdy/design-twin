@@ -7056,13 +7056,19 @@
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
     if (!todo.length) return;
     const kept = [];
-    const bound = todo.indexOf("sizeLimits") >= 0 ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+    const limits = todo.indexOf("sizeLimits") >= 0;
+    const bound = limits ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+    const size2 = limits ? { w: n.width, h: n.height, sizing: ["layoutSizingHorizontal", "layoutSizingVertical"].map((k) => [k, k in n ? Reflect.get(n, k) : void 0]) } : null;
     changes.push({
       applied: { id: n.id },
       kind: "updated node",
       what: "the place, clipping or size limits of " + label(n),
       async restore() {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+        if (size2) {
+          if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
+          for (const [k, v] of size2.sizing) if (v !== void 0 && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
+        }
         for (const [k, id] of bound) {
           if (boundTo(n, k) === id) continue;
           const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
@@ -7102,18 +7108,22 @@
       if (parent.children[i] !== n) parent.insertChild(i, n);
     }
   }
-  function applyOrder(o, built) {
+  function applyOrder(o, built, replaced) {
     const parent = o.parent;
     const was = parent.children.slice();
     const nodes = [];
+    const olds = [];
     for (const e of o.order) {
       const n = "ref" in e ? e.ref : built[e.build];
       if (n && n.parent === parent) nodes.push(n);
+      const r = "build" in e ? replaced[e.build] : null;
+      if (r && r.parent === parent) olds.push(r);
     }
-    const slots = was.map((c, i) => nodes.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
+    const seq2 = nodes.concat(olds);
+    const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
     const want = was.slice();
     slots.forEach((slot, k) => {
-      const n = nodes[k];
+      const n = seq2[k];
       if (n) want[slot] = n;
     });
     arrange(parent, want);
@@ -7169,9 +7179,10 @@
       for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
       built.push(n);
     }
+    const replaced = plan.builds.map((b) => b.replaces);
     for (const o of plan.orders) {
       consent2();
-      changes.push(applyOrder(o, built));
+      changes.push(applyOrder(o, built, replaced));
     }
     if (plan.stamps.length) {
       consent2();
@@ -7641,6 +7652,15 @@
         return fail(i, op, e);
       }
     }
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
+        for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
+      } catch (e) {
+        return fail(i, op, e);
+      }
+    }
     for (const [i, t] of structure.deletes) {
       const op = list[i];
       if (!op) continue;
@@ -7651,15 +7671,6 @@
         const r = await fail(i, op, e);
         const gone = rows.filter((a) => a !== void 0 && a.deleted === true).length;
         return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
-      }
-    }
-    for (const [i, t] of trees.targets) {
-      const op = list[i];
-      if (!op || !t.update) continue;
-      try {
-        for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
-      } catch (e) {
-        return fail(i, op, e);
       }
     }
     for (const [i, t] of trees.targets) {

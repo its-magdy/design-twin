@@ -1838,6 +1838,40 @@ export const cases: Case[] = [{
     const bv = child("B")?.boundVariables as Record<string, { id?: string }> | undefined;
     ok("[KEYED-SAFE] a changed size limit keeps the variable the spec still binds it to", l1.ok === true && l2.ok === true && bv?.minWidth?.id === "VariableID:30:5" && num(child("B"), "maxWidth") === 900);
 
+    // A limit change put back with its batch: the size the limit's variable gave the node goes back too.
+    const limTree = (extra: Record<string, unknown>): Record<string, unknown> =>
+      ({ key: "lim", name: "Lim", box: { w: 400, h: 100 }, layout: { display: "flex" }, children: [{ name: "C", box: { w: 50, h: 50 }, ...extra }] });
+    await w.api.applyWrites([{ op: "createTree", tree: limTree({ sizeLimits: { maxWidth: 900 } }) }]);
+    const cNode = (): FakeNode | undefined => byName(kids(w.pages.current).find((n) => n.name === "Lim"), "C");
+    const wBefore = num(cNode(), "width");
+    const limFail = await w.api.applyWrites([{ op: "createTree", tree: limTree({ sizeLimits: { minWidth: 10, maxWidth: 900 }, tokens: { minWidth: "size/min" } }) }, { op: "createFrame", parentId: "missing:1" }]);
+    const bvC = cNode()?.boundVariables as Record<string, unknown> | undefined;
+    ok("[KEYED-SAFE] a size-limit change put back: the limit, its binding and the size it caused", limFail.ok === false && wBefore === 50 && num(cNode(), "width") === 50 && bvC?.minWidth === undefined && cNode()?.minWidth === null);
+    const sized = (extra: Record<string, unknown>): Record<string, unknown> => base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, widthMode: "fill" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, ...extra }]);
+
+    // A node built anew takes the place of the one it replaces; a designer's layer between keeps its own.
+    const note = w.figma.createFrame?.();
+    if (note) { note.name = "Note"; const ins = rootNode()?.insertChild; if (callable(ins)) ins(1, note); }
+    const swap = await w.api.applyWrites([{ op: "createTree", tree: sized({ sizeLimits: { maxWidth: 900 } }) }]);
+    const asText = await w.api.applyWrites([{ op: "createTree", tree: base([{ text: "A", name: "A", handle: "a" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, sizeLimits: { maxWidth: 900 } }]) }]);
+    ok("[KEYED-SAFE] a node built anew takes its predecessor's slot; the designer's layer keeps its own",
+      swap.ok === true && asText.ok === true && kids(rootNode()).map((k) => String(k.name) + ":" + String(k.type)).join() === "A:TEXT,Note:FRAME,B:FRAME");
+
+    // Explicit deletes wait until every removal is checked: a removal refused late leaves every delete undone.
+    const spare = await w.api.applyWrites([{ op: "createFrame", name: "Spare" }]);
+    const spareId = spare.applied[0]?.id ?? "";
+    const spareNode = w.made.find((n) => n.id === spareId);
+    w.hooks.onStyle = async () => {
+      // While the batch awaits a text style, the designer drops a layer into a node the re-send is about to remove.
+      const layer = w.figma.createFrame?.();
+      const target = byName(rootNode(), "B");
+      if (layer && target) { layer.name = "Dropped in"; const add = target.appendChild; if (callable(add)) add(layer); }
+    };
+    const late = await w.api.applyWrites([{ op: "createTree", tree: base([{ text: "A", name: "A", handle: "a" }, { text: "Styled", name: "S", styles: { text: "Body" } }]) }, { op: "delete", nodeId: spareId }]);
+    w.hooks.onStyle = undefined;
+    ok("[KEYED-SAFE] a removal refused after the build: the batch fails and the explicit delete never ran",
+      late.ok === false && /now holds 'Dropped in'/.test(late.error ?? "") && spareNode?.removed === false && byName(rootNode(), "S") === undefined);
+
     // A spec whose own fields cannot be stored on a node: refused before anything is built.
     const before = w.alive().length;
     const huge = await w.api.applyWrites([{ op: "createTree", tree: { key: "huge", name: "Huge", children: [{ text: "x".repeat(120000) }] } }]);

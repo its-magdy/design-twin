@@ -209,13 +209,20 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
   const todo = only.filter((f) => fields.indexOf(f) >= 0);
   if (!todo.length) return;
   const kept: Array<[string, unknown]> = [];
-  const bound: Array<[(typeof LIMITS)[number], string | null]> = todo.indexOf("sizeLimits") >= 0 ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+  const limits = todo.indexOf("sizeLimits") >= 0;
+  const bound: Array<[(typeof LIMITS)[number], string | null]> = limits ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+  // A limit can grow or shrink the node: its size and how it is decided are put back after the limits.
+  const size = limits ? { w: n.width, h: n.height, sizing: (["layoutSizingHorizontal", "layoutSizingVertical"] as const).map((k) => [k, k in n ? Reflect.get(n, k) : undefined] as const) } : null;
   changes.push({
     applied: { id: n.id },
     kind: "updated node",
     what: "the place, clipping or size limits of " + label(n),
     async restore() {
       for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+      if (size) {
+        if ((n.width !== size.w || n.height !== size.h) && "resize" in n) n.resize(size.w, size.h);
+        for (const [k, v] of size.sizing) if (v !== undefined && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
+      }
       for (const [k, id] of bound) {
         if (boundTo(n, k) === id) continue;
         const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
@@ -262,18 +269,24 @@ function arrange(parent: FrameNode, want: readonly SceneNode[]): void {
 }
 
 /** Put a frame's spec children in the new order; the designer's own layers keep their places. */
-function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[]): Change {
+function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>): Change {
   const parent = o.parent as FrameNode;
   const was = parent.children.slice(); // a copy: Figma's array is frozen, and live
   const nodes: SceneNode[] = [];
+  const olds: SceneNode[] = [];
   for (const e of o.order) {
     const n = "ref" in e ? e.ref : built[e.build];
     if (n && n.parent === parent) nodes.push(n);
+    const r = "build" in e ? replaced[e.build] : null;
+    if (r && r.parent === parent) olds.push(r);
   }
-  // The slots the spec's children hold now (built ones were appended last), in place order, take them in spec order.
-  const slots = was.map((c, i) => (nodes.indexOf(c) >= 0 ? i : -1)).filter((i) => i >= 0);
+  // The slots the spec's children hold now (built ones were appended last; a node built anew still has its old one
+  // beside it) take them in spec order, then the old ones about to be removed: so a node built anew takes the place
+  // of the one it replaces, and the designer's own layers keep theirs.
+  const seq = nodes.concat(olds);
+  const slots = was.map((c, i) => (seq.indexOf(c) >= 0 ? i : -1)).filter((i) => i >= 0);
   const want = was.slice();
-  slots.forEach((slot, k) => { const n = nodes[k]; if (n) want[slot] = n; });
+  slots.forEach((slot, k) => { const n = seq[k]; if (n) want[slot] = n; });
   arrange(parent, want);
   return {
     applied: { id: parent.id },
@@ -320,7 +333,8 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
     built.push(n);
   }
-  for (const o of plan.orders) { consent(); changes.push(applyOrder(o, built)); }
+  const replaced = plan.builds.map((b) => b.replaces);
+  for (const o of plan.orders) { consent(); changes.push(applyOrder(o, built, replaced)); }
   if (plan.stamps.length) { consent(); restamp(plan.stamps, key, changes); }
 
   const applied: AppliedWrite = { id: u.root.id, key };
