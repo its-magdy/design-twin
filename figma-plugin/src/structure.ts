@@ -146,7 +146,7 @@ function nodesBelow(n: BaseNode, out: BaseNode[] = []): BaseNode[] {
 export function idsDeletedWith(n: BaseNode, moves: ReadonlyMap<number, MoveTarget>): Set<string> {
   const movedTo = new Map<string, BaseNode>();
   for (const [, m] of [...moves].sort((a, b) => a[0] - b[0])) movedTo.set(m.node.id, m.parent);
-  const up = (x: BaseNode): BaseNode | null => movedTo.get(x.id) ?? x.parent;
+  const up = (x: BaseNode): BaseNode | null => { const m = movedTo.get(x.id); return m !== undefined ? m : x.parent; };
   // Moves that would nest nodes in each other (refused when they run) can make a loop here: each node is visited once.
   const under = (x: BaseNode): boolean => {
     const seen = new Set<string>();

@@ -6429,8 +6429,8 @@
     const movedTo = /* @__PURE__ */ new Map();
     for (const [, m] of [...moves].sort((a, b) => a[0] - b[0])) movedTo.set(m.node.id, m.parent);
     const up = (x) => {
-      var _a;
-      return (_a = movedTo.get(x.id)) != null ? _a : x.parent;
+      const m = movedTo.get(x.id);
+      return m !== void 0 ? m : x.parent;
     };
     const under = (x) => {
       const seen = /* @__PURE__ */ new Set();
