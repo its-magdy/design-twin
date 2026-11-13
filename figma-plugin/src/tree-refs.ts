@@ -435,7 +435,7 @@ async function remoteVariablesInUse(): Promise<Variable[]> {
   const scan = (v: unknown, depth: number): void => {
     if (!v || typeof v !== "object" || depth > 5) return;
     if (Array.isArray(v)) { for (const x of v as unknown[]) scan(x, depth + 1); return; }
-    if (Reflect.get(v, "type") === "VARIABLE_ALIAS") { const id = Reflect.get(v, "id"); if (typeof id === "string") ids.add(id); return; }
+    if (Reflect.get(v, "type") === "VARIABLE_ALIAS") { const id: unknown = Reflect.get(v, "id"); if (typeof id === "string") ids.add(id); return; }
     for (const k of Object.keys(v)) scan(Reflect.get(v, k), depth + 1);
   };
   for (const v of await figma.variables.getLocalVariablesAsync()) scan(v.valuesByMode, 0);
