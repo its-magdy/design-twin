@@ -5881,8 +5881,8 @@
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
   function canonical(v) {
-    var _a;
-    if (v === null || typeof v !== "object") return (_a = JSON.stringify(v)) != null ? _a : "undefined";
+    if (v === void 0) return "undefined";
+    if (v === null || typeof v !== "object") return JSON.stringify(v);
     if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
     return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(getF(v, k))).join(",") + "}";
   }

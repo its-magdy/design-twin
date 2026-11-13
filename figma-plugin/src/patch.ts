@@ -251,7 +251,8 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
 /** `v` as JSON with every object's keys sorted: two values Figma hands back with their keys in another order compare
  *  equal. */
 function canonical(v: unknown): string {
-  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "undefined";
+  if (v === undefined) return "undefined";
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
   if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
   return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(getF(v, k))).join(",") + "}";
 }
