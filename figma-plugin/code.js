@@ -5880,7 +5880,13 @@
     for (const t of targets.values()) t.refs = r.refs;
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
-  var same = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
+  function canonical(v) {
+    var _a;
+    if (v === null || typeof v !== "object") return (_a = JSON.stringify(v)) != null ? _a : "undefined";
+    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(getF(v, k))).join(",") + "}";
+  }
+  var same = (a, b) => a === b || canonical(a) === canonical(b);
   function putBack(n, k, v) {
     if (!same(getF(n, k), v)) setF(n, k, v);
   }
@@ -5923,7 +5929,25 @@
   ];
   var NODE_TEXT_PROPS = ["leadingTrim", "hangingPunctuation", "hangingList"];
   var NULLABLE_ONLY_READ = ["textDecorationStyle", "textDecorationOffset", "textDecorationThickness", "textDecorationColor", "textDecorationSkipInk"];
-  var SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables"];
+  var SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables", "textStyleOverrides"];
+  var STYLE_OWNED = {
+    fontName: "SEMANTIC_WEIGHT|SEMANTIC_ITALIC",
+    fontSize: null,
+    lineHeight: null,
+    letterSpacing: null,
+    textCase: null,
+    textDecoration: "TEXT_DECORATION",
+    textDecorationStyle: "TEXT_DECORATION",
+    textDecorationOffset: "TEXT_DECORATION",
+    textDecorationThickness: "TEXT_DECORATION",
+    textDecorationColor: "TEXT_DECORATION",
+    textDecorationSkipInk: "TEXT_DECORATION",
+    paragraphSpacing: null,
+    paragraphIndent: null,
+    listSpacing: null,
+    hyperlink: "HYPERLINK"
+  };
+  var overrideNames = (r) => (r.textStyleOverrides || []).map((o) => typeof o === "string" ? o : o && typeof o === "object" ? String(getF(o, "type")) : "").filter((x) => x !== "");
   var TEXT_BINDABLE = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
   var call = (t, name, args) => {
     const fn = getF(t, name);
@@ -6027,7 +6051,12 @@
           else await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
           check();
         }
+        const had = r.textStyleId ? overrideNames(r) : null;
         for (const [f, suffix] of RANGE_PROPS) {
+          if (had && Object.prototype.hasOwnProperty.call(STYLE_OWNED, f)) {
+            const kind = STYLE_OWNED[f];
+            if (kind === null || kind === void 0 || !kind.split("|").some((k) => had.indexOf(k) >= 0)) continue;
+          }
           const want = getF(r, f);
           if (want === void 0 || want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0) continue;
           const got = call(t, "getRange" + suffix, [s, e]);

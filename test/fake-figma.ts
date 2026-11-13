@@ -439,7 +439,14 @@ export function textRuns<T extends FakeNode>(node: T): T {
       if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
       n.rangeBound = b;
     },
-    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => { const v = read(field(f)); return f === "Hyperlink" && v === null ? undefined : v; }])),
+    // The range reads can differ in form from the segment reads (seen live: a link that is none, and float noise): a
+    // getRange* answers undefined for a link that is none, and a letter spacing a hair off.
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => {
+      const v = read(field(f));
+      if (f === "Hyperlink" && v === null) return undefined;
+      if (f === "LetterSpacing" && typeof v === "object" && v !== null && typeof (v as { value?: unknown }).value === "number") return { ...v, value: (v as { value: number }).value + 1e-7 };
+      return v;
+    }])),
     // Setting a property on styled text makes it an override of the style, even to the value it had (as in Figma).
     ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, (_s: number, _e: number, v: unknown) => {
       n[field(f)] = v;

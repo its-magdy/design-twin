@@ -248,7 +248,14 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
 
 // ---------------------------------------------------------------- keeping and putting back
 
-const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+/** `v` as JSON with every object's keys sorted: two values Figma hands back with their keys in another order compare
+ *  equal. */
+function canonical(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "undefined";
+  if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+  return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(getF(v, k))).join(",") + "}";
+}
+const same = (a: unknown, b: unknown): boolean => a === b || canonical(a) === canonical(b);
 /** Set `k` back to `v` when it differs (an unchanged field is not touched: setting some fields is only valid in some
  *  states, and a field the batch did not change needs no setting). */
 function putBack(n: object, k: string, v: unknown): void {
@@ -271,7 +278,20 @@ const RANGE_PROPS = [
 const NODE_TEXT_PROPS = ["leadingTrim", "hangingPunctuation", "hangingList"] as const;
 /** Decoration details read null when there is no decoration: nothing to set back. */
 const NULLABLE_ONLY_READ: readonly string[] = ["textDecorationStyle", "textDecorationOffset", "textDecorationThickness", "textDecorationColor", "textDecorationSkipInk"];
-const SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables"] as const;
+const SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables", "textStyleOverrides"] as const;
+/** On a run with a text style, the properties the style owns, and the override (TextStyleOverrideType) under which the
+ *  run may differ from the style on each. A styled run can differ only by those overrides (any other change detaches the
+ *  style), so once its style is set back only the overrides it had are set again: setting anything else on it would
+ *  make an override it did not have (seen live: a link). Properties not listed here are not the style's (paints, lists). */
+const STYLE_OWNED: Readonly<Record<string, string | null>> = {
+  fontName: "SEMANTIC_WEIGHT|SEMANTIC_ITALIC", fontSize: null, lineHeight: null, letterSpacing: null, textCase: null,
+  textDecoration: "TEXT_DECORATION", textDecorationStyle: "TEXT_DECORATION", textDecorationOffset: "TEXT_DECORATION",
+  textDecorationThickness: "TEXT_DECORATION", textDecorationColor: "TEXT_DECORATION", textDecorationSkipInk: "TEXT_DECORATION",
+  paragraphSpacing: null, paragraphIndent: null, listSpacing: null, hyperlink: "HYPERLINK",
+};
+/** The names of a segment's overrides (the runtime gives bare strings; the typings say `{type}`). */
+const overrideNames = (r: { textStyleOverrides?: readonly unknown[] }): string[] =>
+  (r.textStyleOverrides || []).map((o) => (typeof o === "string" ? o : o && typeof o === "object" ? String(getF(o, "type")) : "")).filter((x) => x !== "");
 type Segment = Pick<StyledTextSegment, (typeof SEGMENT_FIELDS)[number] | "start" | "end">;
 const TEXT_BINDABLE: readonly VariableBindableTextField[] = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
 /** Call `t`'s method `name` (a getRange* / setRange* the typings list in RANGE_PROPS) with `args`. */
@@ -366,7 +386,13 @@ export async function keepText(t: TextNode): Promise<Restore> {
         if (all) await t.setTextStyleIdAsync(r.textStyleId); else await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
         check();
       }
+      const had = r.textStyleId ? overrideNames(r) : null;
       for (const [f, suffix] of RANGE_PROPS) {
+        // A styled run: a property its style owns is set again only under an override the run had.
+        if (had && Object.prototype.hasOwnProperty.call(STYLE_OWNED, f)) {
+          const kind = STYLE_OWNED[f];
+          if (kind === null || kind === undefined || !kind.split("|").some((k) => had.indexOf(k) >= 0)) continue;
+        }
         const want: unknown = getF(r, f);
         if (want === undefined || (want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0)) continue;
         // Set only what differs (null and undefined alike are "none"): setting a property on a styled run makes it an

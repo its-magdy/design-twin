@@ -1419,15 +1419,16 @@ export const cases: Case[] = [{
     const path: FakeNode = { id: "vc:1", type: "VECTOR", name: "Path", cornerRadius: 0 };
     const rich = runText("rx:1", [
       { text: "Hello ", fontSize: 22, fills: RED, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "VariableID:30:2" } } },
-      { text: "World", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Semi Bold" }, fontSize: 30, fills: STYLE_PAINTS, textDecoration: "UNDERLINE",
-        textDecorationStyle: "WAVY", hyperlink: { type: "URL", value: "https://example.com" }, listOptions: { type: "UNORDERED" }, indentation: 1, listSpacing: 4 },
+      { text: "World", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Semi Bold" }, fontSize: 24, fills: STYLE_PAINTS, textDecoration: "UNDERLINE",
+        textDecorationStyle: "WAVY", hyperlink: { type: "URL", value: "https://example.com" }, listOptions: { type: "UNORDERED" }, indentation: 1,
+        textStyleOverrides: ["SEMANTIC_WEIGHT", "TEXT_DECORATION", "HYPERLINK"] },
     ]);
     // Two runs with the same paints from two different paint styles: the links are kept run by run.
     const twins = runText("rx:3", [{ text: "ab", fills: STYLE_PAINTS, fillStyleId: "S:a" }, { text: "cd", fills: STYLE_PAINTS, fillStyleId: "S:b" }]);
     // A run whose text style uses one font while the run overrides it with another: putting the style back needs the
     // style's font, which nothing else in the batch loads.
     const font = { loaded: (_f: unknown): boolean => true };
-    const overridden = runText("rx:4", [{ text: "Title", textStyleId: "S:h1,", fontName: { family: "Roboto", style: "Regular" } }], async () => {}, (f) => font.loaded(f));
+    const overridden = runText("rx:4", [{ text: "Title", textStyleId: "S:h1,", fontName: { family: "Roboto", style: "Regular" }, fontSize: 24, textStyleOverrides: ["SEMANTIC_WEIGHT"] }], async () => {}, (f) => font.loaded(f));
     const p = await patchWorld({ "sw:1": swatch, "pl:1": hex, "vc:1": path, "rx:1": rich, "rx:3": twins, "rx:4": overridden });
     font.loaded = p.w.fontLoaded;
     const { w, h } = p;
@@ -1681,7 +1682,9 @@ function boundColor(n: FakeNode | undefined): string | null {
 function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<string, unknown>>, onStyle: () => Promise<void> = async () => {},
   fontLoaded: (f: unknown) => boolean = () => true): FakeNode {
   const base = { ...TEXT_RANGE_DEFAULTS, fontName: { family: "Inter", style: "Regular" }, fontSize: 16, textStyleId: "", fills: [], fillStyleId: "", lineHeight: { unit: "AUTO" },
-    letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {} };
+    letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {}, textStyleOverrides: [] };
+  // On styled text, the override (TextStyleOverrideType) a raw property set records, as Figma's does.
+  const OVERRIDE: Record<string, string> = { fontName: "SEMANTIC_WEIGHT", textDecoration: "TEXT_DECORATION", textDecorationStyle: "TEXT_DECORATION", hyperlink: "HYPERLINK" };
   let chars: Array<Record<string, unknown>> = runs.flatMap((r) => { const { text, ...f } = r; return Array.from(text, () => ({ ...base, ...f })); });
   let text = runs.map((r) => r.text).join("");
   const UNBINDS: Record<string, readonly string[]> = { fontSize: ["fontSize"], lineHeight: ["lineHeight"], letterSpacing: ["letterSpacing"], paragraphSpacing: ["paragraphSpacing"],
@@ -1694,6 +1697,8 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
     for (const c of chars.slice(s, e)) {
       c[f] = v;
       if (f === "fills") c.fillStyleId = ""; // new paints detach the paint style, as in Figma
+      const kind = OVERRIDE[f];
+      if (c.textStyleId && kind) c.textStyleOverrides = [...new Set([...(Array.isArray(c.textStyleOverrides) ? c.textStyleOverrides as string[] : []), kind])];
       const b = isNode(c.boundVariables) ? { ...c.boundVariables } : {};
       for (const k of UNBINDS[f] ?? []) delete b[k];
       c.boundVariables = b;
@@ -1706,6 +1711,7 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
     for (const c of chars.slice(s, e)) {
       c.textStyleId = sid;
       if (st) Object.assign(c, { fontName: st.fontName, fontSize: typeof st.fontSize === "number" ? st.fontSize : 16, lineHeight: base.lineHeight, letterSpacing: base.letterSpacing, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {} });
+      c.textStyleOverrides = []; // a style (re)applied starts with no overrides
     }
   };
   const RANGE = TEXT_RANGE_METHODS;
