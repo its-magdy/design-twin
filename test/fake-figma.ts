@@ -428,6 +428,7 @@ export function textRuns<T extends FakeNode>(node: T): T {
     setRangeTextStyleIdAsync: async (_s: number, _e: number, id: string) => {
       if (typeof n.setTextStyleIdAsync === "function" && id) await (n.setTextStyleIdAsync as (id: string) => Promise<void>)(id);
       else n.textStyleId = id;
+      n.textStyleOverrides = []; // a style (re)applied starts with no overrides
     },
     setRangeFillStyleIdAsync: async (_s: number, _e: number, id: string) => { n.fillStyleId = id; },
     getRangeBoundVariable: (_s: number, _e: number, f: string) => bound()[f] ?? null,
@@ -436,8 +437,12 @@ export function textRuns<T extends FakeNode>(node: T): T {
       if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
       n.rangeBound = b;
     },
-    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => read(field(f))])),
-    ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, (_s: number, _e: number, v: unknown) => { n[field(f)] = v; }])),
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => { const v = read(field(f)); return f === "Hyperlink" && v === null ? undefined : v; }])),
+    // Setting a property on styled text makes it an override of the style, even to the value it had (as in Figma).
+    ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, (_s: number, _e: number, v: unknown) => {
+      n[field(f)] = v;
+      if (n.textStyleId) n.textStyleOverrides = [...new Set([...(Array.isArray(n.textStyleOverrides) ? n.textStyleOverrides as string[] : []), field(f)])];
+    }])),
   });
   if (n.textStyleId === undefined) n.textStyleId = "";
   return node;

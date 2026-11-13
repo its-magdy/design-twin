@@ -6028,7 +6028,9 @@
         for (const [f, suffix] of RANGE_PROPS) {
           const want = getF(r, f);
           if (want === void 0 || want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0) continue;
-          if (!same(call(t, "getRange" + suffix, [s, e]), want)) call(t, "setRange" + suffix, [s, e, want]);
+          const got = call(t, "getRange" + suffix, [s, e]);
+          if ((got === null || got === void 0) && (want === null || want === void 0)) continue;
+          if (!same(got, want)) call(t, "setRange" + suffix, [s, e, want]);
         }
         if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) {
           await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId);

@@ -363,7 +363,11 @@ export async function keepText(t: TextNode): Promise<Restore> {
       for (const [f, suffix] of RANGE_PROPS) {
         const want: unknown = getF(r, f);
         if (want === undefined || (want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0)) continue;
-        if (!same(call(t, "getRange" + suffix, [s, e]), want)) call(t, "setRange" + suffix, [s, e, want]);
+        // Set only what differs (null and undefined alike are "none"): setting a property on a styled run makes it an
+        // override of the style even when the value is the same (seen live: a link set to none became one).
+        const got = call(t, "getRange" + suffix, [s, e]);
+        if ((got === null || got === undefined) && (want === null || want === undefined)) continue;
+        if (!same(got, want)) call(t, "setRange" + suffix, [s, e, want]);
       }
       if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) { await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId); check(); }
     }

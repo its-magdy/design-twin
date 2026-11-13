@@ -1468,6 +1468,17 @@ export const cases: Case[] = [{
     const vec = await w.api.applyWrites([{ op: "patch", nodeId: "vc:1", set: { radius: 4 } }]);
     ok("[ROLLBACK-2] a vector's per-vertex radius is refused (it could not be put back)", vec.ok === false && /a vector's corner radius is set per vertex/.test(vec.error ?? "") && path.cornerRadius === 0);
 
+    // A styled text given another style and text, put back: no property becomes an override of its style (seen live: a
+    // link that was none was set to none again, which made it one).
+    const styledMade = await w.api.applyWrites([{ op: "createTree", tree: { name: "Styled", children: [{ text: "Styled text", handle: "st", styles: { text: "Body" } }] } }]);
+    const st = styledMade.applied[0]?.handles?.st ?? "";
+    const stNode = w.alive().find((n) => n.id === st);
+    const overridesBefore = JSON.stringify(stNode?.textStyleOverrides ?? []);
+    w.trap.add("cornerRadius");
+    const restyled = await w.api.applyWrites([{ op: "patch", nodeId: st, set: { text: "Other", styles: { text: "Heading/H1" } } }, fail]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] a styled text put back gains no style override (" + JSON.stringify(stNode?.textStyleOverrides) + ")",
+      restyled.ok === false && stNode?.textStyleId === "S:body," && JSON.stringify(stNode.textStyleOverrides ?? []) === overridesBefore);
     // An empty text with a text style: its style stays when the batch puts the text back.
     const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Holder", children: [{ text: "", handle: "empty", styles: { text: "Body" } }] } }]);
     const empty = made.applied[0]?.handles?.empty ?? "";
