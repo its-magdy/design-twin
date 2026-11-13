@@ -7597,18 +7597,29 @@
     if (type === "BOOLEAN") return typeof value === "boolean" ? null : "a boolean variable takes true, false or {aliasOf}";
     return "a " + String(type).toLowerCase() + " variable cannot be written yet";
   }
+  function aliasOf(x) {
+    if (!x || typeof x !== "object" || getF2(x, "type") !== "VARIABLE_ALIAS") return null;
+    const id = getF2(x, "id");
+    return typeof id === "string" ? id : null;
+  }
   function aliasIds2(v) {
     const out = [];
     for (const k of Object.keys(v.valuesByMode)) {
-      const x = v.valuesByMode[k];
-      if (x && typeof x === "object" && getF2(x, "type") === "VARIABLE_ALIAS") {
-        const id = getF2(x, "id");
-        if (typeof id === "string") out.push(id);
-      }
+      const id = aliasOf(v.valuesByMode[k]);
+      if (id) out.push(id);
     }
     return out;
   }
-  async function reaches(from, to) {
+  function aliasesIn(graph, v) {
+    let modes = graph.get(v.id);
+    if (!modes) {
+      modes = {};
+      for (const k of Object.keys(v.valuesByMode)) modes[k] = aliasOf(v.valuesByMode[k]);
+      graph.set(v.id, modes);
+    }
+    return modes;
+  }
+  async function reaches(graph, from, to) {
     const seen = /* @__PURE__ */ new Set();
     const queue = [from];
     while (queue.length) {
@@ -7616,7 +7627,10 @@
       if (!v || seen.has(v.id)) continue;
       seen.add(v.id);
       if (v.id === to) return true;
-      for (const id of aliasIds2(v)) {
+      const modes = aliasesIn(graph, v);
+      for (const k of Object.keys(modes)) {
+        const id = modes[k];
+        if (!id) continue;
         let next = null;
         try {
           next = await figma.variables.getVariableByIdAsync(id);
@@ -7628,8 +7642,8 @@
     }
     return false;
   }
-  function fontAfter(st, set) {
-    return { family: set.font !== void 0 ? set.font : st.fontName.family, style: set.weight !== void 0 ? set.weight : st.fontName.style };
+  function fontAfter(now, set) {
+    return { family: set.font !== void 0 ? set.font : now.family, style: set.weight !== void 0 ? set.weight : now.style };
   }
   async function resolveSourceOps(ops, lookups = sourceLookups()) {
     const variables = /* @__PURE__ */ new Map();
@@ -7648,6 +7662,7 @@
       return p;
     };
     const aliases = [];
+    const fontNow = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
@@ -7730,15 +7745,20 @@
         const bound = [];
         if (st.type === "TEXT") {
           let fontOk = true;
-          for (const f of [st.fontName, fontAfter(st, set)]) {
+          const projected = fontNow.get(st.id);
+          const now = projected ? projected : st.fontName;
+          const after = fontAfter(now, set);
+          for (const f of [st.fontName, now, after]) {
             const err = await loadFont(f);
             if (err) {
-              bad("text style '" + st.name + "': its " + err + (f === st.fontName ? "" : " (check `font` and `weight`)"));
+              bad("text style '" + st.name + "': its " + err + (f === after ? " (check `font` and `weight`)" : ""));
               fontOk = false;
+              break;
             }
           }
           if (!fontOk) continue;
-          font = fontAfter(st, set);
+          font = after;
+          fontNow.set(st.id, after);
           const bv = st.boundVariables || {};
           for (const field of Object.keys(bv)) {
             const a = bv[field];
@@ -7757,10 +7777,19 @@
     }
     const r = await resolveRefs(uses, loadFont);
     problems.push(...r.problems);
-    for (const a of aliases) {
-      const target = r.refs.variables.get(a.ref);
-      if (!target) continue;
-      if (target.id === a.variable.id || await reaches(target, a.variable.id)) problems.push({ index: a.index, op: "setVariable", message: a.path + ": '" + target.name + "' " + (target.id === a.variable.id ? "is '" + a.variable.name + "' itself" : "already aliases '" + a.variable.name + "'") + ", so the alias would make a loop" });
+    const graph = /* @__PURE__ */ new Map();
+    for (const [index, t] of variables) {
+      const modes = aliasesIn(graph, t.variable);
+      for (const m of t.modes) {
+        const target = typeof m.value === "object" ? r.refs.variables.get(m.value.aliasOf) : void 0;
+        modes[m.modeId] = target ? target.id : null;
+      }
+      for (const a of aliases) {
+        if (a.index !== index) continue;
+        const target = r.refs.variables.get(a.ref);
+        if (!target) continue;
+        if (target.id === a.variable.id || await reaches(graph, target, a.variable.id)) problems.push({ index: a.index, op: "setVariable", message: a.path + ": '" + target.name + "' " + (target.id === a.variable.id ? "is '" + a.variable.name + "' itself" : "aliases '" + a.variable.name + "'") + ", so the alias would make a loop" });
+      }
     }
     for (const t of variables.values()) t.refs = r.refs;
     for (const t of styles.values()) t.refs = r.refs;
@@ -7863,7 +7892,7 @@
       }
       if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
       if (st.type === "TEXT") {
-        if (t.font && (set.font !== void 0 || set.weight !== void 0)) st.fontName = t.font;
+        if (t.font && (set.font !== void 0 || set.weight !== void 0)) st.fontName = fontAfter(st.fontName, set);
         if (set.size !== void 0) st.fontSize = set.size;
         const lh = set.lineHeight;
         if (lh) st.lineHeight = lh.unit === "auto" ? { unit: "AUTO" } : { unit: LINE_UNIT[lh.unit], value: lh.value === void 0 ? 0 : lh.value };
@@ -7937,10 +7966,11 @@
     }
     return out;
   }
-  async function consumersOf(style, nodes) {
+  async function consumersOf(style, nodes, warn) {
     try {
       for (const c of await style.getStyleConsumersAsync()) nodes.add(c.node.id);
-    } catch {
+    } catch (e) {
+      warn("the layers using the style '" + style.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
     }
   }
   async function variableImpact(v, lookups, warn) {
@@ -7975,16 +8005,17 @@
         warn("page '" + page.name + "' could not be read (" + errMsg(e) + "), so its layers are not counted");
       }
     }
-    for (const st of styles) await consumersOf(st, nodes);
+    for (const st of styles) await consumersOf(st, nodes, warn);
     return { nodes: nodes.size, styles: styles.length, variables: ids.size - 1 };
   }
-  async function instancesOf(c) {
+  async function instancesOf(c, warn) {
     const mains = c.type === "COMPONENT_SET" ? c.children.filter((k) => k.type === "COMPONENT") : [c];
     let n = 0;
     for (const m of mains) {
       try {
         n += (await m.getInstancesAsync()).length;
-      } catch {
+      } catch (e) {
+        warn("the instances of '" + m.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
       }
     }
     return n;
@@ -8008,7 +8039,7 @@
           const c = nd ? componentOf(nd) : null;
           if (!nd || !c) continue;
           const lib = libraryComponentProblem(nd);
-          steps.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c) } });
+          steps.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c, warn) } });
           continue;
         }
         if (op.op === "setVariable" && op.variable) {
@@ -8024,7 +8055,7 @@
             continue;
           }
           const nodes = /* @__PURE__ */ new Set();
-          await consumersOf(found.ok, nodes);
+          await consumersOf(found.ok, nodes, warn);
           steps.push({ index, op: op.op, affects: { nodes: nodes.size } });
         }
       } catch (e) {

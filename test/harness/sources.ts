@@ -154,7 +154,7 @@ export const cases: Case[] = [{
     const byKey = await write(w, [{ op: "setVariable", variable: w.gap.key ?? "", value: 16 }]);
     ok("[SOURCE] by key", byKey.ok && val(w.gap, "51:0") === 16);
     const aliased = await write(w, [{ op: "setVariable", variable: "brand/primary", values: { Dark: { aliasOf: "brand/accent" } } }]);
-    ok("[SOURCE] an alias that makes a loop is refused, naming the variable", !aliased.ok && /already aliases 'brand\/primary'.*loop/.test(aliased.error ?? "") && same(val(w.primary, "50:1"), rgba(0, 0, 0, 128 / 255)));
+    ok("[SOURCE] an alias that makes a loop is refused, naming the variable", !aliased.ok && /aliases 'brand\/primary'.*loop/.test(aliased.error ?? "") && same(val(w.primary, "50:1"), rgba(0, 0, 0, 128 / 255)));
     const ali = await write(w, [{ op: "setVariable", variable: "brand/accent", values: { Light: "#123456", Dark: { aliasOf: w.primary.id } } }]);
     ok("[SOURCE] an alias to another variable is set as a VariableAlias", ali.ok && same(val(w.accent, "50:1"), alias(w.primary.id)) && isObj(val(w.accent, "50:0")) && (val(w.accent, "50:0") as { r: number }).r > 0);
     ok("[SOURCE] the edits are one undo step each (commitUndo around each batch)", w.undo.commits >= 2);
@@ -228,6 +228,25 @@ export const cases: Case[] = [{
     ok("[SOURCE] the wire refuses an effect it cannot write, by name", /'glass' cannot be written yet/.test(argsShapeError("write", { ops: [{ op: "setStyle", style: "x", set: { effects: [{ type: "glass" }] } }] }) ?? ""));
   },
 }, {
+  name: "edits in one batch build on each other: a style's font, and the alias graph a loop check follows",
+  async run() {
+    const w = sourceWorld();
+    await w.allowEdits();
+    const fonts = await write(w, [{ op: "setStyle", style: "Body", set: { weight: "Bold" } }, { op: "setStyle", style: "Body", set: { font: "Inter" } }]);
+    ok("[SOURCE] a second edit of a text style's family keeps the weight the first set", fonts.ok && same(w.textStyle.fontName, { family: "Inter", style: "Bold" }));
+    // accent aliases primary in both modes; the batch replaces both with values, then aliases primary to accent.
+    const order = await write(w, [
+      { op: "setVariable", variable: "brand/accent", values: { Light: "#111111", Dark: "#222222" } },
+      { op: "setVariable", variable: "brand/primary", values: { Dark: { aliasOf: "brand/accent" } } },
+    ]);
+    ok("[SOURCE] an alias whose loop an earlier op of the batch removed is accepted", order.ok && same(val(w.primary, "50:1"), alias(w.accent.id)));
+    const loop = await write(w, [
+      { op: "setVariable", variable: "brand/accent", values: { Light: { aliasOf: "brand/primary" } } },
+      { op: "setVariable", variable: "space/gap", value: 3 },
+    ]);
+    ok("[SOURCE] …and one an earlier op of the batch makes is refused", !loop.ok && /aliases 'brand\/accent'.*loop/.test(loop.error ?? "") && val(w.gap, "51:0") === 8);
+  },
+}, {
   name: "a source edit that a later op's failure takes back is put back exactly (values, aliases, a text style's bindings)",
   async run() {
     const w = sourceWorld();
@@ -274,6 +293,9 @@ export const cases: Case[] = [{
     ok("[SOURCE] gap: its bound layer and the layer using the text style bound to it", same(s[1], { index: 1, op: "setVariable", affects: { nodes: 2, styles: 1, variables: 0 } }));
     ok("[SOURCE] a paint style: its consumers", same(s[2], { index: 2, op: "setStyle", affects: { nodes: 2 } }));
     ok("[SOURCE] a library variable: the refusal, naming the library; a create has no step", /Core Library/.test(s[3]?.problem ?? "") && s.length === 4);
+    w.paintStyle.getStyleConsumersAsync = async () => { throw new Error("in Figma: not readable"); };
+    const failed = await impact(w, [{ op: "setStyle", style: "Brand/Primary", set: { paints: [] } }]);
+    ok("[SOURCE] a consumer lookup Figma refuses is a warning, not a quiet zero", (failed?.warnings ?? []).some((m) => /layers using the style 'Brand\/Primary' could not be read/.test(m)));
     ok("[SOURCE] nothing changed (and Allow edits was never needed)", same(val(w.primary, "50:0"), rgba(1, 0, 0)) && val(w.gap, "51:0") === 8);
   },
 }, {

@@ -201,17 +201,32 @@ function valueProblem(value: SourceValue, type: VariableResolvedDataType): strin
   return "a " + String(type).toLowerCase() + " variable cannot be written yet";
 }
 
+/** The id a value aliases, or null. */
+function aliasOf(x: unknown): string | null {
+  if (!x || typeof x !== "object" || getF(x, "type") !== "VARIABLE_ALIAS") return null;
+  const id = getF(x, "id");
+  return typeof id === "string" ? id : null;
+}
 /** The variables `v`'s values alias, by id (one level). */
 function aliasIds(v: Variable): string[] {
   const out: string[] = [];
-  for (const k of Object.keys(v.valuesByMode)) {
-    const x = v.valuesByMode[k];
-    if (x && typeof x === "object" && getF(x, "type") === "VARIABLE_ALIAS") { const id = getF(x, "id"); if (typeof id === "string") out.push(id); }
-  }
+  for (const k of Object.keys(v.valuesByMode)) { const id = aliasOf(v.valuesByMode[k]); if (id) out.push(id); }
   return out;
 }
-/** Does `from` (followed through its aliases) reach the variable `to`? */
-async function reaches(from: Variable, to: string): Promise<boolean> {
+/** Each variable's alias per mode as the batch's earlier edits leave it: what a loop check follows. */
+type AliasGraph = Map<string, Record<string, string | null>>;
+/** `v`'s aliases by mode in `graph`, read from the file the first time. */
+function aliasesIn(graph: AliasGraph, v: Variable): Record<string, string | null> {
+  let modes = graph.get(v.id);
+  if (!modes) {
+    modes = {};
+    for (const k of Object.keys(v.valuesByMode)) modes[k] = aliasOf(v.valuesByMode[k]);
+    graph.set(v.id, modes);
+  }
+  return modes;
+}
+/** Does `from` (followed through its aliases in `graph`) reach the variable `to`? */
+async function reaches(graph: AliasGraph, from: Variable, to: string): Promise<boolean> {
   const seen = new Set<string>();
   const queue: Variable[] = [from];
   while (queue.length) {
@@ -219,7 +234,10 @@ async function reaches(from: Variable, to: string): Promise<boolean> {
     if (!v || seen.has(v.id)) continue;
     seen.add(v.id);
     if (v.id === to) return true;
-    for (const id of aliasIds(v)) {
+    const modes = aliasesIn(graph, v);
+    for (const k of Object.keys(modes)) {
+      const id = modes[k];
+      if (!id) continue;
       let next: Variable | null = null;
       try { next = await figma.variables.getVariableByIdAsync(id); } catch { next = null; }
       if (next) queue.push(next);
@@ -228,9 +246,9 @@ async function reaches(from: Variable, to: string): Promise<boolean> {
   return false;
 }
 
-/** A font the style's fields name, defaulting to what it has. */
-function fontAfter(st: TextStyle, set: StyleSet): FontName {
-  return { family: set.font !== undefined ? set.font : st.fontName.family, style: set.weight !== undefined ? set.weight : st.fontName.style };
+/** The font a style's fields name, defaulting to `now` (what it has once the batch's earlier edits landed). */
+function fontAfter(now: FontName, set: StyleSet): FontName {
+  return { family: set.font !== undefined ? set.font : now.family, style: set.weight !== undefined ? set.weight : now.style };
 }
 
 /**
@@ -253,6 +271,8 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
   };
   // An alias the batch makes, checked for a loop once the names resolved.
   const aliases: Array<{ index: number; variable: Variable; ref: string; path: string }> = [];
+  // A text style's font as the batch's earlier edits leave it (two edits of one style in a batch build on each other).
+  const fontNow = new Map<string, FontName>();
 
   for (const [index, op] of ops.entries()) {
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
@@ -300,12 +320,16 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
       if (st.type === "TEXT") {
         // Its font now (to set anything on it and to put it back) and the one it ends with must load.
         let fontOk = true;
-        for (const f of [st.fontName, fontAfter(st, set)]) {
+        const projected = fontNow.get(st.id);
+        const now = projected ? projected : st.fontName;
+        const after = fontAfter(now, set);
+        for (const f of [st.fontName, now, after]) {
           const err = await loadFont(f);
-          if (err) { bad("text style '" + st.name + "': its " + err + (f === st.fontName ? "" : " (check `font` and `weight`)")); fontOk = false; }
+          if (err) { bad("text style '" + st.name + "': its " + err + (f === after ? " (check `font` and `weight`)" : "")); fontOk = false; break; }
         }
         if (!fontOk) continue;
-        font = fontAfter(st, set);
+        font = after;
+        fontNow.set(st.id, after);
         const bv = st.boundVariables || {};
         for (const field of Object.keys(bv) as VariableBindableTextField[]) {
           const a = bv[field];
@@ -320,10 +344,21 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
   }
   const r = await resolveRefs(uses, loadFont);
   problems.push(...r.problems);
-  for (const a of aliases) {
-    const target = r.refs.variables.get(a.ref);
-    if (!target) continue; // not resolved (a problem already), or a library variable still to import (it aliases no local one)
-    if (target.id === a.variable.id || (await reaches(target, a.variable.id))) problems.push({ index: a.index, op: "setVariable", message: a.path + ": '" + target.name + "' " + (target.id === a.variable.id ? "is '" + a.variable.name + "' itself" : "already aliases '" + a.variable.name + "'") + ", so the alias would make a loop" });
+  // Loops are checked in op order against the alias graph the batch's earlier edits leave: an op that replaces an alias
+  // with a value removes that edge for the ops after it. Each op's own edges land first, then its aliases are checked.
+  const graph: AliasGraph = new Map();
+  for (const [index, t] of variables) {
+    const modes = aliasesIn(graph, t.variable);
+    for (const m of t.modes) {
+      const target = typeof m.value === "object" ? r.refs.variables.get(m.value.aliasOf) : undefined;
+      modes[m.modeId] = target ? target.id : null;
+    }
+    for (const a of aliases) {
+      if (a.index !== index) continue;
+      const target = r.refs.variables.get(a.ref);
+      if (!target) continue; // not resolved (a problem already), or a library variable still to import (it aliases no local one)
+      if (target.id === a.variable.id || (await reaches(graph, target, a.variable.id))) problems.push({ index: a.index, op: "setVariable", message: a.path + ": '" + target.name + "' " + (target.id === a.variable.id ? "is '" + a.variable.name + "' itself" : "aliases '" + a.variable.name + "'") + ", so the alias would make a loop" });
+    }
   }
   for (const t of variables.values()) t.refs = r.refs;
   for (const t of styles.values()) t.refs = r.refs;
@@ -435,7 +470,7 @@ export function applyStyle(t: StyleTarget, consent: () => void): Change {
     }
     if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
     if (st.type === "TEXT") {
-      if (t.font && (set.font !== undefined || set.weight !== undefined)) st.fontName = t.font;
+      if (t.font && (set.font !== undefined || set.weight !== undefined)) st.fontName = fontAfter(st.fontName, set);
       if (set.size !== undefined) st.fontSize = set.size;
       const lh = set.lineHeight;
       if (lh) st.lineHeight = lh.unit === "auto" ? { unit: "AUTO" } : { unit: LINE_UNIT[lh.unit], value: lh.value === undefined ? 0 : lh.value };
@@ -484,9 +519,11 @@ function styleBoundIds(st: BaseStyle): Set<string> {
   return out;
 }
 
-/** The layers that use `style`. */
-async function consumersOf(style: BaseStyle, nodes: Set<string>): Promise<void> {
-  try { for (const c of await style.getStyleConsumersAsync()) nodes.add(c.node.id); } catch { /* none readable */ }
+/** The layers that use `style`; a lookup Figma refuses is said through `warn` (the count is then low), never a quiet 0. */
+async function consumersOf(style: BaseStyle, nodes: Set<string>, warn: (m: string) => void): Promise<void> {
+  try { for (const c of await style.getStyleConsumersAsync()) nodes.add(c.node.id); } catch (e) {
+    warn("the layers using the style '" + style.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
+  }
 }
 
 /** What follows a change of the variable `v`: the variables that alias it (through any chain), the local styles bound to
@@ -512,15 +549,19 @@ async function variableImpact(v: Variable, lookups: Lookups, warn: (m: string) =
       warn("page '" + page.name + "' could not be read (" + errMsg(e) + "), so its layers are not counted");
     }
   }
-  for (const st of styles) await consumersOf(st, nodes);
+  for (const st of styles) await consumersOf(st, nodes, warn);
   return { nodes: nodes.size, styles: styles.length, variables: ids.size - 1 };
 }
 
 /** The instances that follow a change of `c` (every variant's, for a component set). */
-async function instancesOf(c: ComponentNode | ComponentSetNode): Promise<number> {
+async function instancesOf(c: ComponentNode | ComponentSetNode, warn: (m: string) => void): Promise<number> {
   const mains = c.type === "COMPONENT_SET" ? c.children.filter((k): k is ComponentNode => k.type === "COMPONENT") : [c];
   let n = 0;
-  for (const m of mains) { try { n += (await m.getInstancesAsync()).length; } catch { /* none readable */ } }
+  for (const m of mains) {
+    try { n += (await m.getInstancesAsync()).length; } catch (e) {
+      warn("the instances of '" + m.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
+    }
+  }
   return n;
 }
 
@@ -539,7 +580,7 @@ export async function writeImpact(ops: readonly WriteOp[]): Promise<WriteImpactR
         const c = nd ? componentOf(nd) : null;
         if (!nd || !c) continue; // not a source: an ordinary layer (or no node, which the write itself reports)
         const lib = libraryComponentProblem(nd);
-        steps.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c) } });
+        steps.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c, warn) } });
         continue;
       }
       if (op.op === "setVariable" && op.variable) {
@@ -552,7 +593,7 @@ export async function writeImpact(ops: readonly WriteOp[]): Promise<WriteImpactR
         const found = await lookups.style(op.style, kind);
         if ("error" in found) { steps.push({ index, op: op.op, problem: found.error }); continue; }
         const nodes = new Set<string>();
-        await consumersOf(found.ok, nodes);
+        await consumersOf(found.ok, nodes, warn);
         steps.push({ index, op: op.op, affects: { nodes: nodes.size } });
       }
     } catch (e) {
