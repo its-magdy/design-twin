@@ -5680,6 +5680,8 @@
         const first2 = exact[0];
         if (first2 && exact.length === 1) return { ok: first2 };
         if (isKey(ref2)) {
+          const inUse = await remoteVariableByKey(ref2);
+          if (inUse) return { ok: inUse };
           const listed = (await libraryVariables()).filter((v) => v.key === ref2)[0];
           if (listed) libraryTypes.set(ref2, listed.resolvedType);
           return { later: () => figma.variables.importVariableByKeyAsync(ref2) };
@@ -5717,6 +5719,61 @@
         return none("text style", ref2, m.candidates, "in this file (a library style is named by its key)");
       }
     };
+  }
+  async function remoteVariablesInUse() {
+    const ids = /* @__PURE__ */ new Set();
+    const scan = (v, depth) => {
+      if (!v || typeof v !== "object" || depth > 5) return;
+      if (Array.isArray(v)) {
+        for (const x of v) scan(x, depth + 1);
+        return;
+      }
+      if (Reflect.get(v, "type") === "VARIABLE_ALIAS") {
+        const id = Reflect.get(v, "id");
+        if (typeof id === "string") ids.add(id);
+        return;
+      }
+      for (const k of Object.keys(v)) scan(Reflect.get(v, k), depth + 1);
+    };
+    for (const v of await figma.variables.getLocalVariablesAsync()) scan(v.valuesByMode, 0);
+    const styles = [...await figma.getLocalPaintStylesAsync(), ...await figma.getLocalTextStylesAsync(), ...await figma.getLocalEffectStylesAsync(), ...await figma.getLocalGridStylesAsync()];
+    for (const st of styles) {
+      scan(Reflect.get(st, "boundVariables"), 0);
+      for (const k of ["paints", "effects", "layoutGrids"]) scan(Reflect.get(st, k), 0);
+    }
+    const out = /* @__PURE__ */ new Map();
+    const get = async (id) => {
+      try {
+        return await figma.variables.getVariableByIdAsync(id);
+      } catch {
+        return null;
+      }
+    };
+    const collections = /* @__PURE__ */ new Set();
+    for (const id of ids) {
+      const v = await get(id);
+      if (v && v.remote) {
+        out.set(v.id, v);
+        collections.add(v.variableCollectionId);
+      }
+    }
+    for (const cid of collections) {
+      let c = null;
+      try {
+        c = await figma.variables.getVariableCollectionByIdAsync(cid);
+      } catch {
+        c = null;
+      }
+      for (const id of c ? c.variableIds : []) if (!out.has(id)) {
+        const v = await get(id);
+        if (v && v.remote) out.set(v.id, v);
+      }
+    }
+    return [...out.values()];
+  }
+  async function remoteVariableByKey(key) {
+    for (const v of await remoteVariablesInUse()) if (v.key === key) return v;
+    return null;
   }
   async function importComponent(key, allowed2) {
     try {
@@ -7549,6 +7606,8 @@
         const first2 = exact[0];
         if (first2 && exact.length === 1) return { ok: first2 };
         if (isKey2(ref2)) {
+          const inUse = await remoteVariableByKey(ref2);
+          if (inUse) return { error: libraryOwned("variable '" + inUse.name + "'", await libraryOfVariable(inUse)) };
           const lib2 = (await libraryVariables()).filter((v) => v.key === ref2)[0];
           if (lib2) return { error: libraryOwned("variable '" + lib2.name + "'", lib2.libraryName) };
           return { error: "no local variable has the key '" + ref2 + "'; if it is a library's variable (the read marks those `remote`), it is changed in that library \u2014 this file's enabled libraries do not list it, so its library cannot be named" };

@@ -47,6 +47,10 @@ function sourceWorld() {
   // A string variable the text style's font family is bound to: changing it changes the style's font (see textFields).
   const family = variable("VariableID:51:5", "font/family", "STRING", spacing, { "51:0": "Inter" });
   const libVar = variable("VariableID:lib/9:1", "color/core", "COLOR", core, { "9:0": rgba(0, 1, 0) }, { remote: true, key: KEY("c") });
+  // A library number the file uses (a local variable aliases it); its library lists it by no name a plugin can read.
+  const libSize = variable("VariableID:lib/9:2", "size/core", "FLOAT", core, { "9:0": 20 }, { remote: true, key: KEY("b") });
+  core.variableIds = [libVar.id, libSize.id];
+  const bodySize = variable("VariableID:51:6", "size/body", "FLOAT", spacing, { "51:0": alias(libSize.id) });
 
   // ---- layers that use them
   const n = (id: string, name: string, extra: FakeNode = {}): FakeNode => ({ id, type: "RECTANGLE", name, fills: [], boundVariables: {}, ...extra });
@@ -117,14 +121,14 @@ function sourceWorld() {
   const components = page("0:11", "Components", [row]);
   row.parent = components;
   const nodes = Object.fromEntries([...screenLayers, divider, row, avatar, avatarDot, screens, components].map((x) => [String(x.id), x]));
-  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family, [spare.id]: spare };
+  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family, [spare.id]: spare, [bodySize.id]: bodySize };
   // The text style's family follows the variable it is bound to, as Figma's does.
   const setFamily = family.setValueForMode;
   family.setValueForMode = (m: string, x: unknown) => { setFamily(m, x); caption.fontName = { family: String(x), style: "Regular" }; textFields.fontName = { family: String(x), style: isObj(textFields.fontName) ? String(textFields.fontName.style) : "Regular" }; };
   const w = world({
     pages: [screens, components], currentPage: screens, nodes,
     variables: vars, collections: { [brand.id]: brand, [spacing.id]: spacing },
-    remote: { variables: { [libVar.id]: libVar }, collections: { [core.id]: core } },
+    remote: { variables: { [libVar.id]: libVar, [libSize.id]: libSize }, collections: { [core.id]: core } },
     localStyles: { paint: [paintStyle], text: [textStyle], effect: [effectStyle], grid: [gridStyle] },
     styles: { [String(paintStyle.id)]: paintStyle, [String(textStyle.id)]: textStyle, [String(effectStyle.id)]: effectStyle, [String(gridStyle.id)]: gridStyle, [String(libStyle.id)]: libStyle },
     teamLibrary: {
@@ -214,6 +218,11 @@ export const cases: Case[] = [{
     ok("[SOURCE] by key: refused, naming its library", !byKey.ok && /lives in the library 'Core Library'/.test(byKey.error ?? ""));
     const unlisted = await write(w, [{ op: "setVariable", variable: KEY("d"), value: "#ffffff" }]);
     ok("[SOURCE] a key no local variable and no enabled library has: refused, saying a library's variable cannot be named here", !unlisted.ok && /no local variable has the key .*its library cannot be named/.test(unlisted.error ?? ""));
+    const inUse = await write(w, [{ op: "setVariable", variable: KEY("b"), value: 4 }]);
+    ok("[SOURCE] a library variable the file uses, by key (found through the local variable that aliases it): refused, naming its library",
+      !inUse.ok && /variable 'size\/core' lives in the library 'Core Library'/.test(inUse.error ?? ""));
+    const bindIt = await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { fontSize: KEY("b") } } }]);
+    ok("[SOURCE] …and a text style can be bound to it by key with no import (its library need not be enabled)", bindIt.ok && same(w.textStyle.boundVariables, { fontSize: alias("VariableID:lib/9:2") }));
     const style = await write(w, [{ op: "setStyle", style: "S:remote,", set: { paints: [{ type: "solid", color: "#ffffff" }] } }]);
     ok("[SOURCE] a library style by id: refused (Figma names no library for a style)", !style.ok && /paint style 'Core\/Brand' lives in another library file/.test(style.error ?? ""));
     const comp = await write(w, [{ op: "patch", nodeId: "9:3", set: { name: "Spot" } }]);

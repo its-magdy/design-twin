@@ -26,7 +26,7 @@ import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-matc
 import { checkStyleSet, checkVariableEdit, isStyleSet, TEXT_STYLE_TOKEN_TYPES, type EffectSpec, type SourceValue, type StyleKindName, type StyleSet, type TextStyleTokenField } from "../../bridge/src/source-spec.ts";
 import { registeredLibrary } from "./libraries";
 import { solid } from "./tree";
-import { resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
+import { remoteVariableByKey, resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 
@@ -111,6 +111,8 @@ function sourceLookups() {
       const first = exact[0];
       if (first && exact.length === 1) return { ok: first };
       if (isKey(ref)) {
+        const inUse = await remoteVariableByKey(ref);
+        if (inUse) return { error: libraryOwned("variable '" + inUse.name + "'", await libraryOfVariable(inUse)) };
         const lib = (await libraryVariables()).filter((v) => v.key === ref)[0];
         if (lib) return { error: libraryOwned("variable '" + lib.name + "'", lib.libraryName) };
         // A library variable the file uses but whose library is not enabled here: Figma lists it nowhere a plugin can name.
