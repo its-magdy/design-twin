@@ -64,19 +64,29 @@ const has = (node: BaseNode, k: string): boolean => k in node;
 const isFlex = (n: BaseNode | null): boolean => !!n && "layoutMode" in n && n.layoutMode !== "NONE";
 const SPACING_FIELDS: readonly string[] = ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "counterAxisSpacing"];
 
+type Direction = "row" | "column" | "none";
+/** A node's auto-layout as an earlier patch of the same batch leaves it, by node id: the checks of a later op read it
+ *  instead of the file (a batch may turn a parent's auto-layout on, then make its child fill). */
+type Projected = Map<string, { dir: Direction; wrap: boolean }>;
+/** The node's auto-layout now: as an earlier op of the batch leaves it, else as the file has it. */
+function layoutNow(node: BaseNode | null, proj?: Projected): { dir: Direction; wrap: boolean } {
+  const p = node && proj ? proj.get(node.id) : undefined;
+  if (p) return p;
+  const mode = node && "layoutMode" in node ? node.layoutMode : "NONE";
+  return { dir: mode === "VERTICAL" ? "column" : mode === "HORIZONTAL" ? "row" : "none", wrap: !!node && "layoutWrap" in node && node.layoutWrap === "WRAP" };
+}
 /** The layout direction the node has once the patch's `layout` is set ("none" without auto-layout). */
-function directionAfter(node: BaseNode, set: PatchSet): "row" | "column" | "none" {
+function directionAfter(node: BaseNode, set: PatchSet, proj?: Projected): Direction {
   const l = set.layout;
   if (l && l.mode === "absolute") return "none";
   if (l && l.flexDirection) return l.flexDirection;
-  const now = "layoutMode" in node ? node.layoutMode : "NONE";
-  if (now === "VERTICAL") return "column";
-  if (now === "HORIZONTAL" || (l && l.display === "flex")) return "row";
-  return "none";
+  const now = layoutNow(node, proj).dir;
+  if (now !== "none") return now;
+  return l && l.display === "flex" ? "row" : "none";
 }
 
 /** Why the node cannot take this patch, field by field (empty when it can). */
-function unfit(node: SceneNode, set: PatchSet): string[] {
+function unfit(node: SceneNode, set: PatchSet, proj: Projected): string[] {
   const out: string[] = [];
   const say = (field: string, m: string): void => { out.push("set." + field + ": " + m); };
   const what = "'" + node.name + "' is a " + node.type;
@@ -92,7 +102,7 @@ function unfit(node: SceneNode, set: PatchSet): string[] {
   else if (typeof set.radius === "object" && !has(node, "topLeftRadius")) say("radius", what + ", which has no per-corner radius; give one number");
   if (set.opacity !== undefined && !has(node, "opacity")) say("opacity", what + ", which has no opacity");
   if (set.box !== undefined && !has(node, "resize")) say("box", what + ", which cannot be resized");
-  const flexAfter = directionAfter(node, set) !== "none";
+  const flexAfter = directionAfter(node, set, proj) !== "none";
   const l = set.layout;
   if (l) {
     if (!has(node, "layoutMode")) say("layout", what + ", which cannot have auto-layout (a frame, component or instance can)");
@@ -100,9 +110,9 @@ function unfit(node: SceneNode, set: PatchSet): string[] {
       const fields = Object.keys(l).filter((k) => l[k as keyof typeof l] !== undefined);
       say("layout", "'" + node.name + "' has no auto-layout, so " + fields.map((k) => "`layout." + k + "`").join(", ") + " would do nothing; add `display: \"flex\"`");
     } else if (flexAfter) {
-      const wraps = l.flexWrap === "wrap" || (l.flexWrap === undefined && "layoutWrap" in node && node.layoutWrap === "WRAP" && l.display === undefined);
+      const wraps = l.flexWrap === "wrap" || (l.flexWrap === undefined && layoutNow(node, proj).wrap && l.display === undefined);
       for (const k of ["rowGap", "columnGap", "alignContent"] as const) if (l[k] !== undefined && !wraps) say("layout." + k, "needs wrapping: give `flexWrap: \"wrap\"` (the node does not wrap)");
-      const dir = directionAfter(node, set);
+      const dir = directionAfter(node, set, proj);
       if (wraps && (dir === "column" ? l.rowGap : l.columnGap) !== undefined) say("layout." + (dir === "column" ? "rowGap" : "columnGap"), "is the main-axis gap in a wrapping " + dir + "; use `gap`");
       if (l.alignItems === "baseline" && dir === "column") say("layout.alignItems", "\"baseline\" works only in a row; the node is a column");
     }
@@ -113,7 +123,7 @@ function unfit(node: SceneNode, set: PatchSet): string[] {
     if (m === undefined) continue;
     if (!has(node, "layoutSizingHorizontal")) { say(axis, what + ", which has no sizing mode"); continue; }
     if (m === "fill") {
-      if (!isFlex(parent)) say(axis, "\"fill\" needs a parent with auto-layout; '" + node.name + "''s parent has none");
+      if (layoutNow(parent, proj).dir === "none") say(axis, "\"fill\" needs a parent with auto-layout; '" + node.name + "''s parent has none");
       else if ("layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE") say(axis, "\"fill\" is not on an absolutely positioned child (it is out of the auto-layout flow)");
     }
     if (m === "hug" && node.type !== "TEXT" && !flexAfter) say(axis, "\"hug\" needs auto-layout on the node (or a TEXT); '" + node.name + "' has none — add `layout: {display: \"flex\"}`");
@@ -155,6 +165,7 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     return p;
   };
   const empty: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
+  const projected: Projected = new Map();
 
   for (const [index, op] of ops.entries()) {
     if (op.op !== "patch") continue;
@@ -167,7 +178,12 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); continue; }
     const node = nd;
-    const misfits = unfit(node, set);
+    const misfits = unfit(node, set, projected);
+    // What this patch leaves the node's auto-layout as, for the checks of later ops of the batch.
+    if (set.layout && !misfits.length) {
+      const l = set.layout;
+      projected.set(node.id, { dir: directionAfter(node, set, projected), wrap: l.mode === "absolute" ? false : l.flexWrap !== undefined ? l.flexWrap === "wrap" : layoutNow(node, projected).wrap });
+    }
     for (const m of misfits) bad(m);
     // A text change keeps the text as it was, run by run, to put back: its fonts must load either way.
     if (node.type === "TEXT") {
@@ -369,9 +385,17 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
   });
   // 1. the instance's property values (a variant switch can change its layout and size, which come after)
   if (t.props && n.type === "INSTANCE") {
-    const old: Record<string, string | boolean> = {};
-    for (const k of Object.keys(t.props)) { const p = n.componentProperties[k]; if (p) old[k] = p.value; }
-    steps.push(() => { if (Object.keys(old).some((k) => { const p = n.componentProperties[k]; return !p || p.value !== old[k]; })) n.setProperties(old); });
+    // A TEXT or BOOLEAN property can be bound to a variable: its alias is put back, not only the value it shows.
+    const old: Record<string, string | boolean | VariableAlias> = {};
+    const shown = (k: string): string => { const p = n.componentProperties[k]; return p ? JSON.stringify([p.value, p.boundVariables && p.boundVariables.value ? p.boundVariables.value.id : null]) : ""; };
+    const was = new Map<string, string>();
+    for (const k of Object.keys(t.props)) {
+      const p = n.componentProperties[k];
+      if (!p) continue;
+      old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
+      was.set(k, shown(k));
+    }
+    steps.push(() => { if ([...was].some(([k, v]) => shown(k) !== v)) n.setProperties(old); });
   }
   // 2. auto-layout, and 3. the children's places when it is turned on or off (Figma moves them)
   const LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;

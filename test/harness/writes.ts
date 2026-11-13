@@ -203,11 +203,20 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
           const defs = (owner?.componentPropertyDefinitions ?? {}) as Record<string, { type: string; defaultValue: unknown }>;
           const set = isNode(fields.props) ? fields.props : {};
           const vp = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
-          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? vp[k] : k in set ? set[k] : d.defaultValue }]));
+          const bound = isNode(fields.propBound) ? fields.propBound : {};
+          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? vp[k] : k in set ? set[k] : d.defaultValue,
+            ...(isNode(bound[k]) ? { boundVariables: { value: bound[k] } } : {}) }]));
         },
       });
       fields.props = {};
-      fields.setProperties = (p: Record<string, unknown>) => {
+      fields.setProperties = (given: Record<string, unknown>) => {
+        // A VariableAlias binds the property (it shows the variable's value); a plain value unbinds it.
+        const bound: Record<string, unknown> = isNode(fields.propBound) ? { ...fields.propBound } : {};
+        const p: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(given)) {
+          if (isNode(v) && v.type === "VARIABLE_ALIAS") { bound[k] = v; p[k] = "(" + String(v.id) + ")"; } else { delete bound[k]; p[k] = v; }
+        }
+        fields.propBound = bound;
         fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
         // A variant value switches the instance to that variant, and to its layout (as Figma's does).
         const set = parentOf(main);
@@ -1457,6 +1466,47 @@ export const cases: Case[] = [{
     w.trap.clear();
     ok("[ROLLBACK-2] an empty styled text gets its style back, and the override on top of it",
       e.ok === false && emptyNode?.characters === "" && emptyNode.textStyleId === "S:body," && JSON.stringify(emptyNode.lineHeight) === JSON.stringify({ unit: "PIXELS", value: 30 }));
+  },
+}, {
+  name: "patch: bound instance properties, creates that fail partway, and a patch that depends on an earlier one",
+  async run() {
+    const p = await patchWorld();
+    const { w, h, node } = p;
+    const fail = { op: "patch", nodeId: h.card, set: { radius: 1 } };
+    // An instance's text property bound to a variable: the binding goes back, not only the text it showed.
+    const btn = node("btn");
+    if (btn && typeof btn.setProperties === "function") (btn.setProperties as (p: Record<string, unknown>) => void)({ "Label#1:0": { type: "VARIABLE_ALIAS", id: "VariableID:30:9" } });
+    const propsBefore = JSON.stringify(btn?.componentProperties);
+    w.trap.add("cornerRadius");
+    const r = await w.api.applyWrites([{ op: "patch", nodeId: h.btn, set: { props: { Label: "Pay" } } }, fail]);
+    w.trap.clear();
+    ok("[PATCH-MORE] a text property bound to a variable is bound again when the batch is put back",
+      r.ok === false && JSON.stringify(btn?.componentProperties) === propsBefore && /VariableID:30:9/.test(propsBefore));
+
+    // A create that fails after its node exists leaves no node behind, and nothing is reported as applied.
+    const alive = w.alive().length;
+    const intoInstance = await w.api.applyWrites([{ op: "createFrame", name: "Orphan", parentId: h.btn }]);
+    ok("[PATCH-MORE] a parent that is an instance is refused before anything is made",
+      intoInstance.ok === false && /is an instance, which cannot take new children/.test(intoInstance.error ?? "") && w.alive().length === alive);
+    w.trap.add("layoutMode");
+    const midway = await w.api.applyWrites([{ op: "createFrame", name: "Half", layoutMode: "VERTICAL", parentId: h.screen }]);
+    w.trap.clear();
+    ok("[PATCH-MORE] Figma refusing a value on a frame just made: the frame is removed, nothing applied",
+      midway.ok === false && midway.applied.length === 0 && !w.made.some((n) => n.name === "Half" && !n.removed));
+    const load = w.figma.loadFontAsync;
+    w.figma.loadFontAsync = async () => { throw new Error("font failed to load"); };
+    const noFont = await w.api.applyWrites([{ op: "createText", text: "x", parentId: h.screen }]);
+    if (load) w.figma.loadFontAsync = load;
+    ok("[PATCH-MORE] a text whose font fails to load: the empty text is removed, nothing applied", noFont.ok === false && noFont.applied.length === 0 && w.alive().length === alive);
+
+    // A patch checked against what an earlier op of the batch leaves: auto-layout turned on, then a child fills it.
+    const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Outer", handle: "outer", children: [{ name: "Inner", handle: "inner" }] } }]);
+    const m = made.applied[0]?.handles ?? {};
+    const dep = await w.api.applyWrites([{ op: "patch", nodeId: m.outer ?? "", set: { layout: { display: "flex" } } }, { op: "patch", nodeId: m.inner ?? "", set: { widthMode: "fill" } }]);
+    ok("[PATCH-MORE] auto-layout turned on, then a child set to fill in the same batch: accepted and applied (" + (dep.error ?? "") + ")",
+      dep.ok === true && node("inner", m)?.layoutSizingHorizontal === "FILL");
+    const reversed = await w.api.applyWrites([{ op: "patch", nodeId: m.outer ?? "", set: { layout: { mode: "absolute" } } }, { op: "patch", nodeId: m.inner ?? "", set: { heightMode: "fill" } }]);
+    ok("[PATCH-MORE] …and auto-layout turned off, then a child set to fill: refused up front", reversed.ok === false && /"fill" needs a parent with auto-layout/.test(reversed.error ?? "") && reversed.failedAt === 1);
   },
 }, {
   name: "patch: 'Allow edits' turned off partway — a stopped patch is still reported, and a put-back stops where it was",

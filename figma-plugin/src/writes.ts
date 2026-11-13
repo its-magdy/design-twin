@@ -46,6 +46,9 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
   const p = await figma.getNodeByIdAsync(parentId);
   if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
   if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
+  for (let a: BaseNode | null = p; a; a = a.parent) {
+    if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
+  }
   // manifest documentAccess is "dynamic-page": appendChild on a PageNode requires the page to be
   // loaded first, or it throws. The read plane already does this (collect.ts / components.ts).
   if (p.type === "PAGE") await p.loadAsync();
@@ -85,6 +88,9 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null; // likewise: a bad colour leaves no node
       consent();
       const f = figma.createFrame();
+      // On the list before anything else can throw: a failure below removes the node with the rest of the batch.
+      const change = createdNode(f);
+      changes.push(change);
       if (op.name) f.name = op.name;
       if (op.width && op.height) f.resize(op.width, op.height);
       if (op.layoutMode) f.layoutMode = op.layoutMode; // HORIZONTAL | VERTICAL
@@ -97,8 +103,6 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       }
       if (fill) f.fills = [fill];
       parent.appendChild(f);
-      const change = createdNode(f);
-      changes.push(change);
       return change.applied;
     }
     case "createText": {
@@ -106,15 +110,19 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       const fill = op.fill ? solidPaint(op.fill, "createText fill") : null; // likewise: a bad colour leaves no node
       consent();
       const t = figma.createText();
-      await figma.loadFontAsync(t.fontName as FontName);
+      const change = createdNode(t);
+      changes.push(change);
+      try { await figma.loadFontAsync(t.fontName as FontName); } catch (e) {
+        // The font did not load: take back the empty node (unless edits are off by now: then it stays, and is reported).
+        if (editsAllowedNow()) { t.remove(); changes.pop(); }
+        throw e;
+      }
       // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
-      if (!editsAllowedNow()) { t.remove(); consent(); }
+      if (!editsAllowedNow()) { t.remove(); changes.pop(); consent(); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
       parent.appendChild(t);
-      const change = createdNode(t);
-      changes.push(change);
       return change.applied;
     }
     // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or

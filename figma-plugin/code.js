@@ -5681,16 +5681,21 @@
   var has = (node, k) => k in node;
   var isFlex2 = (n) => !!n && "layoutMode" in n && n.layoutMode !== "NONE";
   var SPACING_FIELDS = ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "counterAxisSpacing"];
-  function directionAfter(node, set) {
+  function layoutNow(node, proj) {
+    const p = node && proj ? proj.get(node.id) : void 0;
+    if (p) return p;
+    const mode = node && "layoutMode" in node ? node.layoutMode : "NONE";
+    return { dir: mode === "VERTICAL" ? "column" : mode === "HORIZONTAL" ? "row" : "none", wrap: !!node && "layoutWrap" in node && node.layoutWrap === "WRAP" };
+  }
+  function directionAfter(node, set, proj) {
     const l = set.layout;
     if (l && l.mode === "absolute") return "none";
     if (l && l.flexDirection) return l.flexDirection;
-    const now = "layoutMode" in node ? node.layoutMode : "NONE";
-    if (now === "VERTICAL") return "column";
-    if (now === "HORIZONTAL" || l && l.display === "flex") return "row";
-    return "none";
+    const now = layoutNow(node, proj).dir;
+    if (now !== "none") return now;
+    return l && l.display === "flex" ? "row" : "none";
   }
-  function unfit(node, set) {
+  function unfit(node, set, proj) {
     const out = [];
     const say = (field, m) => {
       out.push("set." + field + ": " + m);
@@ -5708,7 +5713,7 @@
     else if (typeof set.radius === "object" && !has(node, "topLeftRadius")) say("radius", what + ", which has no per-corner radius; give one number");
     if (set.opacity !== void 0 && !has(node, "opacity")) say("opacity", what + ", which has no opacity");
     if (set.box !== void 0 && !has(node, "resize")) say("box", what + ", which cannot be resized");
-    const flexAfter = directionAfter(node, set) !== "none";
+    const flexAfter = directionAfter(node, set, proj) !== "none";
     const l = set.layout;
     if (l) {
       if (!has(node, "layoutMode")) say("layout", what + ", which cannot have auto-layout (a frame, component or instance can)");
@@ -5716,9 +5721,9 @@
         const fields = Object.keys(l).filter((k) => l[k] !== void 0);
         say("layout", "'" + node.name + "' has no auto-layout, so " + fields.map((k) => "`layout." + k + "`").join(", ") + ' would do nothing; add `display: "flex"`');
       } else if (flexAfter) {
-        const wraps = l.flexWrap === "wrap" || l.flexWrap === void 0 && "layoutWrap" in node && node.layoutWrap === "WRAP" && l.display === void 0;
+        const wraps = l.flexWrap === "wrap" || l.flexWrap === void 0 && layoutNow(node, proj).wrap && l.display === void 0;
         for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0 && !wraps) say("layout." + k, 'needs wrapping: give `flexWrap: "wrap"` (the node does not wrap)');
-        const dir = directionAfter(node, set);
+        const dir = directionAfter(node, set, proj);
         if (wraps && (dir === "column" ? l.rowGap : l.columnGap) !== void 0) say("layout." + (dir === "column" ? "rowGap" : "columnGap"), "is the main-axis gap in a wrapping " + dir + "; use `gap`");
         if (l.alignItems === "baseline" && dir === "column") say("layout.alignItems", '"baseline" works only in a row; the node is a column');
       }
@@ -5732,7 +5737,7 @@
         continue;
       }
       if (m === "fill") {
-        if (!isFlex2(parent)) say(axis, `"fill" needs a parent with auto-layout; '` + node.name + "''s parent has none");
+        if (layoutNow(parent, proj).dir === "none") say(axis, `"fill" needs a parent with auto-layout; '` + node.name + "''s parent has none");
         else if ("layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE") say(axis, '"fill" is not on an absolutely positioned child (it is out of the auto-layout flow)');
       }
       if (m === "hug" && node.type !== "TEXT" && !flexAfter) say(axis, `"hug" needs auto-layout on the node (or a TEXT); '` + node.name + '\' has none \u2014 add `layout: {display: "flex"}`');
@@ -5773,6 +5778,7 @@
       return p;
     };
     const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
+    const projected = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
       if (op.op !== "patch") continue;
       const bad = (message) => {
@@ -5794,7 +5800,11 @@
         continue;
       }
       const node = nd;
-      const misfits = unfit(node, set);
+      const misfits = unfit(node, set, projected);
+      if (set.layout && !misfits.length) {
+        const l = set.layout;
+        projected.set(node.id, { dir: directionAfter(node, set, projected), wrap: l.mode === "absolute" ? false : l.flexWrap !== void 0 ? l.flexWrap === "wrap" : layoutNow(node, projected).wrap });
+      }
       for (const m of misfits) bad(m);
       if (node.type === "TEXT") {
         for (const f of await fontsToKeep(node)) {
@@ -6038,15 +6048,19 @@
     });
     if (t.props && n.type === "INSTANCE") {
       const old = {};
+      const shown2 = (k) => {
+        const p = n.componentProperties[k];
+        return p ? JSON.stringify([p.value, p.boundVariables && p.boundVariables.value ? p.boundVariables.value.id : null]) : "";
+      };
+      const was = /* @__PURE__ */ new Map();
       for (const k of Object.keys(t.props)) {
         const p = n.componentProperties[k];
-        if (p) old[k] = p.value;
+        if (!p) continue;
+        old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
+        was.set(k, shown2(k));
       }
       steps.push(() => {
-        if (Object.keys(old).some((k) => {
-          const p = n.componentProperties[k];
-          return !p || p.value !== old[k];
-        })) n.setProperties(old);
+        if ([...was].some(([k, v]) => shown2(k) !== v)) n.setProperties(old);
       });
     }
     const LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
@@ -6393,6 +6407,9 @@
     const p = await figma.getNodeByIdAsync(parentId);
     if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
     if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
+    for (let a = p; a; a = a.parent) {
+      if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
+    }
     if (p.type === "PAGE") await p.loadAsync();
     return p;
   }
@@ -6414,6 +6431,8 @@
         const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null;
         consent();
         const f = figma.createFrame();
+        const change = createdNode(f);
+        changes.push(change);
         if (op.name) f.name = op.name;
         if (op.width && op.height) f.resize(op.width, op.height);
         if (op.layoutMode) f.layoutMode = op.layoutMode;
@@ -6426,8 +6445,6 @@
         }
         if (fill) f.fills = [fill];
         parent.appendChild(f);
-        const change = createdNode(f);
-        changes.push(change);
         return change.applied;
       }
       case "createText": {
@@ -6435,17 +6452,26 @@
         const fill = op.fill ? solidPaint(op.fill, "createText fill") : null;
         consent();
         const t = figma.createText();
-        await figma.loadFontAsync(t.fontName);
+        const change = createdNode(t);
+        changes.push(change);
+        try {
+          await figma.loadFontAsync(t.fontName);
+        } catch (e) {
+          if (editsAllowedNow()) {
+            t.remove();
+            changes.pop();
+          }
+          throw e;
+        }
         if (!editsAllowedNow()) {
           t.remove();
+          changes.pop();
           consent();
         }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
         if (fill) t.fills = [fill];
         parent.appendChild(t);
-        const change = createdNode(t);
-        changes.push(change);
         return change.applied;
       }
       // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or
