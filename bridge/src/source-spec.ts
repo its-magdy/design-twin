@@ -11,7 +11,8 @@
 //                `{aliasOf: <variable>}`. Whether it fits the variable's type is the plugin's check (only the file knows it).
 //   setStyle     {style, set} — `set` in the read export's style field names (styles.<kind>.json): `paints` for a paint
 //                style; `font`, `weight`, `size`, `lineHeight`, `letterSpacing`, `case`, `decoration`, `paragraphSpacing`,
-//                `paragraphIndent` for a text style; `effects` for an effect style; `name` and `description` for any.
+//                `paragraphIndent` and `tokens` (a field → variable, null unbinds) for a text style; `effects` for an
+//                effect style; `name` and `description` for any.
 //
 // Pure and dependency-free (bar pure siblings): the plugin bundle imports it, so it must type-check under
 // figma-plugin/tsconfig.json (ES2019 lib, no Node types).
@@ -39,7 +40,17 @@ export interface StyleSet {
   paragraphSpacing?: number;
   paragraphIndent?: number;
   effects?: EffectSpec[];
+  /** a text style's fields bound to variables, as the read writes them: a field → a variable's name, key or id, or null
+   *  to unbind it (its value stays) */
+  tokens?: { [K in TextStyleTokenField]?: string | null };
 }
+/** The text style fields a variable can be bound to (Figma's VariableBindableTextField). */
+export const TEXT_STYLE_TOKEN_FIELDS = ["fontFamily", "fontStyle", "fontWeight", "fontSize", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent"] as const;
+export type TextStyleTokenField = (typeof TEXT_STYLE_TOKEN_FIELDS)[number];
+/** The type of variable each field takes: a family or a style name is a string, the rest numbers. */
+export const TEXT_STYLE_TOKEN_TYPES: { readonly [K in TextStyleTokenField]: "STRING" | "FLOAT" } = {
+  fontFamily: "STRING", fontStyle: "STRING", fontWeight: "FLOAT", fontSize: "FLOAT", lineHeight: "FLOAT", letterSpacing: "FLOAT", paragraphSpacing: "FLOAT", paragraphIndent: "FLOAT",
+};
 export type StyleField = keyof StyleSet;
 /** The kind of style a field belongs to (null: every kind has it). */
 export type StyleKindName = "paint" | "text" | "effect";
@@ -103,6 +114,21 @@ export const STYLE_FIELDS: { readonly [K in StyleField]: { rule: Rule; kind: Sty
   paragraphSpacing: { rule: nonNeg, kind: "text" },
   paragraphIndent: { rule: nonNeg, kind: "text" },
   effects: { rule: effectsCheck, kind: "effect" },
+  // Bound after the raw values above (setting a raw value unbinds the field).
+  tokens: {
+    rule: (v) => {
+      if (!isObj(v)) return "must be an object of text style field → variable (or null to unbind)";
+      const keys = Object.keys(v).filter((k) => v[k] !== undefined);
+      if (!keys.length) return "is empty";
+      for (const k of keys) {
+        if ((TEXT_STYLE_TOKEN_FIELDS as readonly string[]).indexOf(k) < 0) { const near = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS); return "." + k + ": not a text style field a variable binds to" + (near.length ? "; closest: " + quoteList(near) : ""); }
+        const x = v[k];
+        if (x !== null && (typeof x !== "string" || !x.trim())) return "." + k + " must be a variable's name, key or id, or null to unbind";
+      }
+      return null;
+    },
+    kind: "text",
+  },
 };
 export const STYLE_FIELD_NAMES = Object.keys(STYLE_FIELDS) as StyleField[];
 const STYLE_RULE_TABLE: Readonly<Record<string, Rule>> = Object.fromEntries(STYLE_FIELD_NAMES.map((k) => [k, STYLE_FIELDS[k].rule]));
@@ -112,7 +138,6 @@ const NOT_STYLED: Readonly<Record<string, string>> = {
   id: "the style is named by the op's `style`", key: "the style is named by the op's `style`",
   remote: "it says where the style lives; a write changes only a style of this file",
   publish: "publishing is done in Figma's library panel", docs: "a style's documentation links cannot be written yet",
-  tokens: "binding a style's fields to variables cannot be written yet (a paint's colour can: `paints[i].tokens.color`)",
   grids: "a grid style cannot be written yet", entries: "an animation style cannot be written yet",
   leadingTrim: "a text style's leading trim cannot be written yet", listSpacing: "a text style's list spacing cannot be written yet",
   textWrap: "a text style's text wrap cannot be written yet",
@@ -156,7 +181,9 @@ export function checkStyleSet(set: unknown, path = "set"): { problems: string[];
   }
   summary.fields = fields;
   summary.kind = kind;
-  if (Array.isArray(set.paints)) for (const p of set.paints) if (isObj(p) && isObj(p.tokens) && typeof p.tokens.color === "string" && summary.variables.indexOf(p.tokens.color) < 0) summary.variables.push(p.tokens.color);
+  const add = (name: unknown): void => { if (typeof name === "string" && summary.variables.indexOf(name) < 0) summary.variables.push(name); };
+  if (Array.isArray(set.paints)) for (const p of set.paints) if (isObj(p) && isObj(p.tokens)) add(p.tokens.color);
+  if (isObj(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
   return { problems, summary };
 }
 

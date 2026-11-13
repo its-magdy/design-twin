@@ -309,6 +309,27 @@ export const cases: Case[] = [{
       && (await write(w, [{ op: "patch", nodeId: "2:8", set: { text: "x" } }])).error?.includes("Times Regular") === true && w.caption.characters === "Hey");
   },
 }, {
+  name: "a text style's variable bindings (`tokens`): bound, unbound, type-checked, and put back exactly",
+  async run() {
+    const w = sourceWorld();
+    await w.allowEdits();
+    const before = JSON.stringify(w.textStyle.boundVariables);
+    const failed = await write(w, [
+      { op: "setStyle", style: "Body", set: { size: 18, tokens: { lineHeight: "space/gap", fontSize: null } } },
+      { op: "patch", nodeId: "2:6", set: { fills: [{ type: "solid", color: "#000000" }] } },
+    ]);
+    ok("[SOURCE] a batch that binds and unbinds a style's fields, then fails, puts the bindings back exactly", !failed.ok && failed.failedAt === 1 && JSON.stringify(w.textStyle.boundVariables) === before && w.textStyle.fontSize === 16);
+    const bind = await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { lineHeight: "space/gap", fontSize: null } } }]);
+    ok("[SOURCE] `tokens` binds a field to a variable and `null` unbinds one", bind.ok && same(w.textStyle.boundVariables, { lineHeight: alias(w.gap.id) }));
+    const rebind = await write(w, [{ op: "setStyle", style: "Body", set: { size: 16, tokens: { fontSize: "space/gap" } } }]);
+    ok("[SOURCE] a raw value and a binding of the same field in one edit: the binding wins (it is set after)", rebind.ok && same(w.textStyle.boundVariables, { lineHeight: alias(w.gap.id), fontSize: alias(w.gap.id) }));
+    const wrong = await write(w, [{ op: "setStyle", style: "Body", set: { tokens: { fontFamily: "space/gap" } } }]);
+    ok("[SOURCE] a field bound to a variable of the wrong type is refused", !wrong.ok && /holds a float, and this field takes a string/.test(wrong.error ?? ""));
+    ok("[SOURCE] the wire refuses an unknown token field, with candidates, and tokens on a paint style's edit as another kind",
+      /not a text style field a variable binds to; closest: 'fontSize'/.test(argsShapeError("write", { ops: [{ op: "setStyle", style: "x", set: { tokens: { fontSiz: "a" } } }] }) ?? "")
+      && /one kind/.test(argsShapeError("write", { ops: [{ op: "setStyle", style: "x", set: { paints: [], tokens: { fontSize: "a" } } }] }) ?? ""));
+  },
+}, {
   name: "a source edit that a later op's failure takes back is put back exactly (values, aliases, a text style's bindings)",
   async run() {
     const w = sourceWorld();

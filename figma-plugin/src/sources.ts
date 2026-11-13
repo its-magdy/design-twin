@@ -23,7 +23,7 @@
 import type { AppliedWrite, WriteImpactCounts, WriteImpactReply, WriteImpactStep, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
-import { checkStyleSet, checkVariableEdit, isStyleSet, type EffectSpec, type SourceValue, type StyleKindName, type StyleSet } from "../../bridge/src/source-spec.ts";
+import { checkStyleSet, checkVariableEdit, isStyleSet, TEXT_STYLE_TOKEN_TYPES, type EffectSpec, type SourceValue, type StyleKindName, type StyleSet, type TextStyleTokenField } from "../../bridge/src/source-spec.ts";
 import { registeredLibrary } from "./libraries";
 import { solid } from "./tree";
 import { resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
@@ -312,6 +312,11 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
       const st = found.ok;
       if (kind && st.type !== kind.toUpperCase()) { bad("'" + st.name + "' is a " + st.type.toLowerCase() + " style, and these fields are a " + kind + " style's"); continue; }
       (set.paints || []).forEach((p, i) => { if (p.tokens) uses.push({ index, op: op.op, path: "set.paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" }); });
+      const tok = set.tokens || {};
+      for (const k of Object.keys(tok) as TextStyleTokenField[]) {
+        const ref = tok[k];
+        if (typeof ref === "string") uses.push({ index, op: op.op, path: "set.tokens." + k, kind: "variable", ref, type: TEXT_STYLE_TOKEN_TYPES[k] });
+      }
       let font: FontName | null = null;
       const bound: StyleTarget["bound"] = [];
       if (st.type === "TEXT") {
@@ -463,6 +468,11 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
     if (st.type === "PAINT") putBack(st, "paints", old.paints);
     if (st.type === "EFFECT") putBack(st, "effects", old.effects);
     if (st.type === "TEXT") {
+      // A field the edit bound that was not bound before is unbound first (its value stays), then the raw values go back,
+      // then the old bindings.
+      const was = new Set<string>(t.bound.map((b) => b.field));
+      const nowBound = st.boundVariables || {};
+      for (const k of Object.keys(nowBound) as VariableBindableTextField[]) if (nowBound[k] && !was.has(k)) { check(); st.setBoundVariable(k, null); }
       for (const k of ["fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent"]) putBack(st, k, old[k]);
       const now = st.boundVariables || {};
       for (const b of t.bound) {
@@ -500,6 +510,16 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
       if (set.decoration !== undefined) st.textDecoration = DECORATIONS[set.decoration];
       if (set.paragraphSpacing !== undefined) st.paragraphSpacing = set.paragraphSpacing;
       if (set.paragraphIndent !== undefined) st.paragraphIndent = set.paragraphIndent;
+      const tok = set.tokens || {};
+      for (const k of Object.keys(tok) as TextStyleTokenField[]) {
+        const ref = tok[k];
+        if (ref === undefined) continue;
+        consent();
+        if (ref === null) { st.setBoundVariable(k, null); continue; }
+        const v = t.refs.variables.get(ref);
+        if (!v) throw new Error("variable '" + ref + "' was not resolved before the batch ran");
+        st.setBoundVariable(k, v);
+      }
     }
   } catch (e) {
     try { restore(() => true); } catch { /* reported with the error below */ }

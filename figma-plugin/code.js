@@ -1651,6 +1651,17 @@
   }
 
   // ../bridge/src/source-spec.ts
+  var TEXT_STYLE_TOKEN_FIELDS = ["fontFamily", "fontStyle", "fontWeight", "fontSize", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent"];
+  var TEXT_STYLE_TOKEN_TYPES = {
+    fontFamily: "STRING",
+    fontStyle: "STRING",
+    fontWeight: "FLOAT",
+    fontSize: "FLOAT",
+    lineHeight: "FLOAT",
+    letterSpacing: "FLOAT",
+    paragraphSpacing: "FLOAT",
+    paragraphIndent: "FLOAT"
+  };
   var isNum2 = (v) => typeof v === "number" && Number.isFinite(v);
   var num2 = (v) => isNum2(v) ? null : "must be a number";
   var xy2 = (v) => isObj(v) && isNum2(v.x) && isNum2(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}";
@@ -1711,7 +1722,25 @@
     decoration: { rule: oneOf("none", "underline", "strikethrough"), kind: "text" },
     paragraphSpacing: { rule: nonNeg, kind: "text" },
     paragraphIndent: { rule: nonNeg, kind: "text" },
-    effects: { rule: effectsCheck, kind: "effect" }
+    effects: { rule: effectsCheck, kind: "effect" },
+    // Bound after the raw values above (setting a raw value unbinds the field).
+    tokens: {
+      rule: (v) => {
+        if (!isObj(v)) return "must be an object of text style field \u2192 variable (or null to unbind)";
+        const keys = Object.keys(v).filter((k) => v[k] !== void 0);
+        if (!keys.length) return "is empty";
+        for (const k of keys) {
+          if (TEXT_STYLE_TOKEN_FIELDS.indexOf(k) < 0) {
+            const near = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
+            return "." + k + ": not a text style field a variable binds to" + (near.length ? "; closest: " + quoteList(near) : "");
+          }
+          const x = v[k];
+          if (x !== null && (typeof x !== "string" || !x.trim())) return "." + k + " must be a variable's name, key or id, or null to unbind";
+        }
+        return null;
+      },
+      kind: "text"
+    }
   };
   var STYLE_FIELD_NAMES = Object.keys(STYLE_FIELDS);
   var STYLE_RULE_TABLE = Object.fromEntries(STYLE_FIELD_NAMES.map((k) => [k, STYLE_FIELDS[k].rule]));
@@ -1721,7 +1750,6 @@
     remote: "it says where the style lives; a write changes only a style of this file",
     publish: "publishing is done in Figma's library panel",
     docs: "a style's documentation links cannot be written yet",
-    tokens: "binding a style's fields to variables cannot be written yet (a paint's colour can: `paints[i].tokens.color`)",
     grids: "a grid style cannot be written yet",
     entries: "an animation style cannot be written yet",
     leadingTrim: "a text style's leading trim cannot be written yet",
@@ -1756,9 +1784,13 @@
     }
     summary.fields = fields;
     summary.kind = kind;
+    const add = (name) => {
+      if (typeof name === "string" && summary.variables.indexOf(name) < 0) summary.variables.push(name);
+    };
     if (Array.isArray(set.paints)) {
-      for (const p of set.paints) if (isObj(p) && isObj(p.tokens) && typeof p.tokens.color === "string" && summary.variables.indexOf(p.tokens.color) < 0) summary.variables.push(p.tokens.color);
+      for (const p of set.paints) if (isObj(p) && isObj(p.tokens)) add(p.tokens.color);
     }
+    if (isObj(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
     return { problems, summary };
   }
   function isStyleSet(v) {
@@ -7744,6 +7776,11 @@
         (set.paints || []).forEach((p, i) => {
           if (p.tokens) uses.push({ index, op: op.op, path: "set.paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" });
         });
+        const tok = set.tokens || {};
+        for (const k of Object.keys(tok)) {
+          const ref2 = tok[k];
+          if (typeof ref2 === "string") uses.push({ index, op: op.op, path: "set.tokens." + k, kind: "variable", ref: ref2, type: TEXT_STYLE_TOKEN_TYPES[k] });
+        }
         let font = null;
         const bound = [];
         if (st.type === "TEXT") {
@@ -7887,6 +7924,12 @@
       if (st.type === "PAINT") putBack2(st, "paints", old.paints);
       if (st.type === "EFFECT") putBack2(st, "effects", old.effects);
       if (st.type === "TEXT") {
+        const was = new Set(t.bound.map((b) => b.field));
+        const nowBound = st.boundVariables || {};
+        for (const k of Object.keys(nowBound)) if (nowBound[k] && !was.has(k)) {
+          check();
+          st.setBoundVariable(k, null);
+        }
         for (const k of ["fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent"]) putBack2(st, k, old[k]);
         const now = st.boundVariables || {};
         for (const b of t.bound) {
@@ -7924,6 +7967,19 @@
         if (set.decoration !== void 0) st.textDecoration = DECORATIONS[set.decoration];
         if (set.paragraphSpacing !== void 0) st.paragraphSpacing = set.paragraphSpacing;
         if (set.paragraphIndent !== void 0) st.paragraphIndent = set.paragraphIndent;
+        const tok = set.tokens || {};
+        for (const k of Object.keys(tok)) {
+          const ref2 = tok[k];
+          if (ref2 === void 0) continue;
+          consent2();
+          if (ref2 === null) {
+            st.setBoundVariable(k, null);
+            continue;
+          }
+          const v = t.refs.variables.get(ref2);
+          if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
+          st.setBoundVariable(k, v);
+        }
       }
     } catch (e) {
       try {
