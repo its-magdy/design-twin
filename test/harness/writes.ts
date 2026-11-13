@@ -500,7 +500,7 @@ export const cases: Case[] = [{
       wPartial.applied.length === 0 && (wPartial.restored ?? []).length === 2 && created.every((n) => n.name !== "A" && n.name !== "B"));
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | move | delete");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | move | delete | setVariable | setStyle");
     // setFill and setText keep what they replace too: a later failure puts the fill and the text back.
     const fillsBefore = rectTarget.fills, textBefore = textTarget.characters;
     const wBack = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#123456" }, { op: "setText", nodeId: "t:1", text: "temporary" }, { op: "setFill", nodeId: "nope:2", color: "#fff" }]);
@@ -534,7 +534,15 @@ export const cases: Case[] = [{
     // figma_write's dry-run step (writeOpPreview), the wire check (argsShapeError) and the plugin's applyWrites in the
     // VM. A dry run that refuses what applying accepts (or the reverse) is the drift this table exists to stop.
     const { textTarget, rectTarget, groupTarget, screenTarget } = targetsOf();
-    const w = await treeWorld({ extra: { ...modeScene(), nodes: { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "f:1": screenTarget } } });
+    // A local colour variable on the Theme collection and a local paint style, for the source edits.
+    const surface: FakeVariable & { setValueForMode(m: string, v: unknown): void } = {
+      id: "VariableID:40:1", name: "color/surface", key: "local-surface", resolvedType: "COLOR", variableCollectionId: THEME.id, scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false,
+      valuesByMode: { "7:0": { r: 1, g: 1, b: 1, a: 1 }, "7:1": { r: 0, g: 0, b: 0, a: 1 } },
+      setValueForMode(m: string, v: unknown) { surface.valuesByMode = { ...surface.valuesByMode, [m]: v }; },
+    };
+    const surfaceStyle: FakeNode = { id: "S:surface,", key: "local-surface-style", type: "PAINT", name: "Surface", description: "", remote: false, paints: [] };
+    const w = await treeWorld({ extra: { ...modeScene(), nodes: { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "f:1": screenTarget },
+      variables: { [surface.id]: surface }, localStyles: { paint: [surfaceStyle] } } });
     const { api } = w;
     const created = { get length() { return w.alive().length; } };
     // A move and a delete need nodes this session created: a frame holding two.
@@ -551,6 +559,8 @@ export const cases: Case[] = [{
       patch: { op: "patch", nodeId: "r:1", set: { fills: [{ type: "solid", color: "#00ff00" }] } },
       move: { op: "move", nodeId: h.c ?? "", parentId: h.b ?? "", index: 0 },
       delete: { op: "delete", nodeId: h.b ?? "" },
+      setVariable: { op: "setVariable", variable: "color/surface", values: { Light: "#f4f4f5" } },
+      setStyle: { op: "setStyle", style: "Surface", set: { paints: [{ type: "solid", color: "#f4f4f5" }] } },
     };
     for (const name of WRITE_OP_NAMES) {
       const full = complete[name];

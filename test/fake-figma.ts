@@ -106,6 +106,7 @@ export interface FakeFigma {
     getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
     importVariableByKeyAsync?(key: string): Promise<FakeVariable>;
     setBoundVariableForPaint?(paint: FakeNode, field: string, variable: FakeVariable | null): FakeNode;
+    createVariableAlias?(variable: FakeVariable): { type: "VARIABLE_ALIAS"; id: string };
   };
   annotations?: { getAnnotationCategoriesAsync(): Promise<Array<{ id: string; label: string }>> };
   editorType?: string;

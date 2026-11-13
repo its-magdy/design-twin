@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op) / patch (change an existing node by id) / move / delete / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, all or nothing) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
+| `figma_write` | `ops` (at most 50, applied in order, all or nothing) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, for a source edit with a plugin connected, what follows it: `affects`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -960,6 +960,8 @@ the current page):
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
 | `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
 | `delete` | `nodeId` (a node this plugin session created) | — |
+| `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a collection with one mode) | — |
+| `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` (the fields to change, below) | — |
 
 **A batch is all or nothing.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
 node has), and a batch with any problem is refused whole, every problem listed. Then each op keeps what it replaces:
@@ -1106,6 +1108,38 @@ spacing, radii or stroke weights were set where a variable could stand). The dry
 so it is refused when anything there was not created this session; a move is refused into the node itself, into an
 instance, or past the end of the new parent's children. An op that names a node a delete of the same batch removes is
 refused up front. The reply is `{id, parentId}` for a move and `{id, deleted: true}` for a delete.
+
+**Source edits** change a design-system source once, and Figma carries the change to everything that uses it: one op
+instead of one per node, and the nodes stay bound. Only this file's own sources can be changed: a variable, style or
+component that lives in another library file is refused, naming the library when Figma says which (it does for a
+variable; for a style or a component only the file's library registry, document plugin data `libraryRegistry`, can).
+
+- `setVariable` sets a local variable's value per mode. `values` maps a mode's exact name (or its modeId) to a value as
+  the read export's `values` writes one: a hex colour for a colour variable, a number, a string, `true`/`false`, or
+  `{aliasOf: <variable name, key or id>}` (an alias of the same type; one that would make a loop is refused). `value`
+  sets the only mode of a one-mode collection (refused, listing the modes, when there are several). A composed colour
+  is refused by name. The reply is `{id, modes}`.
+- `setStyle` changes a local style. `set` takes the read export's style field names, and only those given change; a
+  style is one kind, so fields of two kinds are refused:
+
+  | Kind | Fields |
+  |---|---|
+  | paint | `paints`: `[{type: "solid", color, opacity?, tokens?: {color: variable}}]`, replacing the paints |
+  | text | `font` (family), `weight` (style name), `size`, `lineHeight` (`{unit: "px" \| "percent", value}` or `{unit: "auto"}`), `letterSpacing` (`{unit: "px" \| "percent", value}`), `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent` |
+  | effect | `effects`: `[{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?}]` and `[{type: "layer_blur" \| "background_blur", radius}]`, replacing the effects |
+  | any | `name`, `description` |
+
+  The style's fonts (now and after) must load. The reply is `{id}`.
+- A `patch` of a main component (or of a layer inside one) is a source edit too: every instance follows. A layer
+  inside a library component is refused.
+
+With a plugin connected, the dry run asks it what each source edit carries to (`writeImpact`, a read that needs no
+"Allow edits"): `affects.nodes` counts the layers that use the variable or style (directly, through an alias, or
+through a style bound to the variable), `affects.styles` and `affects.variables` the styles and aliases bound to a
+variable, and `affects.instances` a main component's instances. A source edit the file refuses as it is now shows
+`refusedByFile` with the reason. With no plugin connected the preview says the counts are missing, rather than
+guessing. If a later op of the batch fails, a source edit is put back with the rest (a variable's old values and
+aliases, a style's paints, effects, fonts and its bound variables).
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

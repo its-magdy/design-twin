@@ -11,6 +11,7 @@ import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
+import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
 import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
@@ -74,7 +75,10 @@ function consent(): void {
 // What an op resolved to before the batch ran: a variable-mode op's node/collection/mode (variable-modes.ts
 // resolveModeOps), a createTree op's page and fonts (tree.ts resolveTreeOps), a patch's node and names (patch.ts
 // resolvePatchOps), a move's node and new parent (structure.ts).
-interface Resolved { mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined }
+interface Resolved {
+  mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined;
+  variable?: VariableTarget | undefined; style?: StyleTarget | undefined;
+}
 
 /** A node an op just created, as a Change whose undo removes it. */
 function createdNode(n: SceneNode): Change {
@@ -84,7 +88,7 @@ function createdNode(n: SceneNode): Change {
 
 // Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
 // set, a tree built, a node moved), so a later failure can undo all of them.
-async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, changes: Change[]): Promise<AppliedWrite> {
+async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, style }: Resolved, changes: Change[]): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
@@ -215,6 +219,22 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       changes.push(change);
       return change.applied;
     }
+    // Source edits (sources.ts), resolved up front: a local variable or style, its modes, values, fonts and names. Each
+    // keeps what it replaces and puts itself back if it throws partway.
+    case "setVariable": {
+      if (!variable) throw new Error("setVariable: the op was not resolved before the batch ran");
+      consent();
+      const change = applyVariable(variable, consent);
+      changes.push(change);
+      return change.applied;
+    }
+    case "setStyle": {
+      if (!style) throw new Error("setStyle: the op was not resolved before the batch ran");
+      consent();
+      const change = applyStyle(style, consent);
+      changes.push(change);
+      return change.applied;
+    }
     // Deletes are not run here: gatedWrites runs them after every other op (a deleted node cannot be brought back).
     case "delete":
       throw new Error("delete: deletes run after the rest of the batch");
@@ -308,11 +328,13 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     const keyed = await resolveKeyed(list, trees.targets);
     const patches = await resolvePatchOps(list);
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+    // A variable or style edit, and a patch's library check (a library's component cannot be changed here).
+    const sources = await resolveSourceOps(list);
+    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
       ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
-    return { modes, trees, patches, structure, problems };
+    return { modes, trees, patches, structure, sources, problems };
   };
-  let { modes, trees, patches, structure, problems } = await resolveBatch();
+  let { modes, trees, patches, structure, sources, problems } = await resolveBatch();
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
   // The designer's review (review.ts, spec decision 18), when "Review each write" is ticked: here, once the whole batch
@@ -329,7 +351,7 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     // The designer may have changed the file while the card was up (a node removed, a binding added), so nothing
     // resolved before the wait is used: the batch is resolved again against the file as it is now, and what a
     // failure puts back is what is there now. A batch the file no longer accepts is refused whole, as before review.
-    ({ modes, trees, patches, structure, problems } = await resolveBatch());
+    ({ modes, trees, patches, structure, sources, problems } = await resolveBatch());
     const changed = problems[0];
     if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
@@ -339,7 +361,7 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   // A library item a spec or patch names by key (or a library variable it names) is imported only now: the whole batch
   // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
   // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
-  for (const step of [trees, patches]) {
+  for (const step of [trees, patches, sources]) {
     if (!step.importCount) continue;
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     const { problems: late, revoked } = await step.imports(editsAllowedNow);
@@ -380,7 +402,10 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   for (const [i, op] of list.entries()) {
     if (op.op === "delete") continue;
     try {
-      rows[i] = await applyWrite(op, { mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i) }, changes);
+      rows[i] = await applyWrite(op, {
+        mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i),
+        variable: sources.variables.get(i), style: sources.styles.get(i),
+      }, changes);
     } catch (e) {
       return fail(i, op, e);
     }

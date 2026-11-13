@@ -59,6 +59,13 @@ function readRegistry(sink: (m: string) => void): { [componentKey: string]: stri
   }
 }
 
+/** The library a component or style key belongs to, by the user-maintained registry (the only non-guessed source:
+ *  the Plugin API names no library for a component or a style), or null when the registry does not say. */
+export function registeredLibrary(key: string): string | null {
+  const name = readRegistry(() => {})[key];
+  return name === undefined ? null : name;
+}
+
 // Every INSTANCE in the document. Same traversal discipline as collectComponentCatalog:
 // skipInvisibleInstanceChildren makes findAllWithCriteria "several times faster in large documents"
 // (Plugin API docs) and costs us nothing — a nested instance INSIDE a hidden instance adds no library

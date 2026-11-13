@@ -16,7 +16,7 @@
 //     scheduler orders every run from them, and the bridge side reads `export` for its stall check,
 //     progress ticks and read plans.
 //
-// Dependency-free apart from read-opts.ts, tree-spec.ts and patch-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
+// Dependency-free apart from read-opts.ts, tree-spec.ts, patch-spec.ts and source-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
 // must type-check under figma-plugin/tsconfig.json (ES2019 lib, no Node types). Reply shapes that ARE
 // documents on disk (ScreenExport, LayersDoc, DesignSystemDoc, VariablesDoc, Manifest, Asset) are
 // referenced from doc-types.ts, never restated.
@@ -24,6 +24,7 @@ import type { Asset, DesignSystemDoc, LayersDoc, Manifest, ScreenExport, Variabl
 import { isRecord } from "./json-util.ts";
 import { READ_OPTS, type ReadOptName } from "./read-opts.ts";
 import { checkPatch, describePatch, isPatchSet, patchRefusal, patchRows, type PatchRow, type PatchSet } from "./patch-spec.ts";
+import { checkStyleSet, checkVariableEdit, describeStyleEdit, describeVariableEdit, isStyleSet, sourceRefusal, styleRows, type SourceValue, type StyleField, type StyleSet } from "./source-spec.ts";
 import { checkTree, describeTree, isTreeSpec, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -70,7 +71,7 @@ export interface ScreenshotArgs extends NodeArgs {
 }
 
 /** The write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
-export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete"] as const;
+export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete", "setVariable", "setStyle"] as const;
 export type WriteOpName = (typeof WRITE_OP_NAMES)[number];
 /** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
@@ -98,18 +99,27 @@ export interface WriteOp {
   tree?: TreeNodeSpec | Record<string, unknown> | undefined;
   /** createTree: the page the new frame lands on — its exact name or id (the current page when absent) */
   page?: string | undefined;
-  /** patch: the fields to change on node `nodeId`, in the read export's field names (patch-spec.ts). Typed loosely on
+  /** patch: the fields to change on node `nodeId`, in the read export's field names (patch-spec.ts); setStyle: the style's fields (source-spec.ts). Typed loosely on
    *  the wire, like `tree`: patch-spec.ts checkPatch narrows it, at all three readers of WRITE_OPS. */
-  set?: PatchSet | Record<string, unknown> | undefined;
+  set?: PatchSet | StyleSet | Record<string, unknown> | undefined;
   /** move: the place among the new parent's children (0 = first; the end when absent) */
   index?: number | undefined;
+  /** setVariable: the local variable to change — its exact name, key or id */
+  variable?: string | undefined;
+  /** setVariable: its new value by mode name (or modeId), as the read export writes a variable's `values`
+   *  (source-spec.ts). Typed loosely on the wire: checkVariableEdit narrows it, at all three readers of WRITE_OPS. */
+  values?: Record<string, SourceValue> | Record<string, unknown> | undefined;
+  /** setVariable: its new value, for a collection with one mode */
+  value?: unknown;
+  /** setStyle: the local paint, text or effect style to change — its exact name, key or id (its fields are in `set`) */
+  style?: string | undefined;
 }
 export interface WriteArgs {
   ops: WriteOp[];
 }
 
 /** A WriteOp field that holds a string. */
-type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page";
+type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page" | "variable" | "style";
 /** A WriteOp field an op can require: the string fields, createTree's spec and a patch's fields. */
 type WriteField = WriteStrField | "tree" | "set";
 /** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
@@ -142,7 +152,13 @@ export const WRITE_OPS: { readonly [K in WriteOpName]: WriteOpRow } = {
   patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
   move: { effect: "moves", required: ["nodeId", "parentId"], shows: {} },
   delete: { effect: "deletes", required: ["nodeId"], shows: {} },
+  // Source edits (source-spec.ts): one change that every user of the variable or style follows.
+  setVariable: { effect: "overwrites", required: ["variable"], shows: {} },
+  setStyle: { effect: "overwrites", required: ["style", "set"], shows: {} },
 };
+/** The ops that edit a design-system source (a variable, a style, a main component through `patch`), whose dry run asks
+ *  the plugin how much follows (the `writeImpact` command). */
+export const SOURCE_OPS: readonly WriteOpName[] = ["setVariable", "setStyle", "patch"];
 
 /** The fields op `op` requires that `fields` lacks (an undefined field is absent: see WriteOp). */
 export function missingWriteFields(op: WriteOpName, fields: Partial<Record<WriteField, unknown>>): WriteField[] {
@@ -165,8 +181,14 @@ export interface WritePreviewStep {
   change?: string;
   /** createTree: what the spec has no effect on (x/y inside auto-layout, …) */
   warnings?: string[];
-  /** patch: one row per field it sets, with the value it gets */
-  fields?: PatchRow[];
+  /** patch / setStyle: one row per field it sets, with the value it gets */
+  fields?: Array<PatchRow | { field: StyleField; to: string }>;
+  /** a source edit (setVariable, setStyle, a patch inside a main component), when a plugin answered the dry run: what
+   *  follows the change (writeImpact). Absent when no plugin was reachable or the op changes no source. */
+  affects?: WriteImpactCounts;
+  /** a source edit the file refuses as it is now (a library-owned variable, style or component, a name that matches
+   *  nothing): the plugin's reason, from the dry run's writeImpact. A real write would be refused whole. */
+  refusedByFile?: string;
   /** "missing <fields>", or every problem with a createTree spec — the plugin refuses the batch up front for the same reason */
   invalid?: string;
 }
@@ -177,6 +199,7 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
   if (o.op === "createTree") return treePreview(o, index, missing);
   if (o.op === "patch") return patchPreview(o, index, missing);
   if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
+  if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
   return {
     index,
     op: o.op,
@@ -219,6 +242,21 @@ function structurePreview(o: WriteOp, index: number, missing: readonly string[])
     ? `deletes node ${o.nodeId} and everything inside it${only}; deletes run after every other op of the batch has landed`
     : `moves node ${o.nodeId} into ${o.parentId}${o.index !== undefined ? ` at index ${o.index}` : " as its last child"}${only}; put back if a later op fails`;
   return { ...base, change };
+}
+
+/** A setVariable or setStyle op's preview: what it changes in one sentence (and a style's rows), or every problem. How
+ *  much follows is counted by the plugin (figma_write's dry run asks it: writeImpact). */
+function sourcePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
+  const base = { index, op: o.op, effect: "overwrites" as const, target: (o.op === "setVariable" ? o.variable : o.style) || null };
+  if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+  if (o.op === "setVariable") {
+    const { problems } = checkVariableEdit(o);
+    if (problems.length) return { ...base, invalid: problems.join("\n") };
+    return { ...base, change: describeVariableEdit(o.variable, { values: isRecord(o.values) ? o.values : undefined, value: o.value }) };
+  }
+  const { problems, summary } = checkStyleSet(o.set);
+  if (problems.length || !isStyleSet(o.set)) return { ...base, invalid: problems.join("\n") };
+  return { ...base, fields: styleRows(o.set, summary), change: describeStyleEdit(o.style, summary) };
 }
 
 /** A mode op's preview fields: the new mode and the plain sentence of what changes. */
@@ -401,6 +439,8 @@ export interface AppliedWrite {
   parentId?: string;
   /** delete: the node is gone */
   deleted?: true;
+  /** setVariable: the modes it changed, by name */
+  modes?: string[];
 }
 /** Why a whole batch was refused before any op ran — the refusals a caller must hand to the PERSON at the Figma
  *  window rather than fix itself. Nothing in the file changed (unless `edits-off` also carries `failedAt`, below).
@@ -483,6 +523,30 @@ export interface WriteResult {
   warnings?: string[];
 }
 
+/** What follows a source edit (writeImpact): the layers that use the variable or style (directly, or through an alias
+ *  or a style bound to the variable), the instances of a main component, the styles bound to a variable and the
+ *  variables that alias it. A count that does not apply is left out. */
+export interface WriteImpactCounts {
+  nodes?: number;
+  instances?: number;
+  styles?: number;
+  variables?: number;
+}
+/** One op of a writeImpact reply: a source edit's counts, or why the file refuses it. Only the source edits of the
+ *  batch get a step (a patch only when it changes a main component or a layer inside one, or is refused for one). */
+export interface WriteImpactStep {
+  index: number;
+  op: WriteOpName;
+  affects?: WriteImpactCounts;
+  /** the file refuses the op as it is now: a library-owned item (naming its file when Figma says which), no such name */
+  problem?: string;
+}
+/** writeImpact's reply: the dry run's file-side half. `warnings`: pages that could not be read, so a count may be low. */
+export interface WriteImpactReply {
+  steps: WriteImpactStep[];
+  warnings?: string[];
+}
+
 // ---------------------------------------------------------------- the map
 
 export interface Commands {
@@ -499,6 +563,7 @@ export interface Commands {
   exportNode: { args: ExportNodeArgs; reply: ScreenReply };
   screenshot: { args: ScreenshotArgs; reply: ScreenshotReply };
   write: { args: WriteArgs; reply: WriteResult };
+  writeImpact: { args: WriteArgs; reply: WriteImpactReply };
 }
 
 export type Cmd = keyof Commands;
@@ -549,6 +614,8 @@ const COMMAND_TRAITS = {
   exportNode: { run: "exclusive", export: true },
   screenshot: { run: "exclusive", export: true },
   write: { run: "exclusive", export: false },
+  // Reads the file to count what a source edit would carry to (figma_write's dry run); changes nothing.
+  writeImpact: { run: "scene", export: false },
 } as const satisfies Record<Cmd, CommandTraits>;
 
 export function isCmd(x: string): x is Cmd {
@@ -606,6 +673,7 @@ const REPLY_CHECKS: { [C in Cmd]: (r: unknown) => string | null } = {
   exportNode: (r) => fields(r, [["screenName", "string"], ["screen", "object"], ["assets", "array"]]),
   screenshot: (r) => fields(r, [["id", "string"], ["reference", "string"], ["assets", "array"]]),
   write: (r) => fields(r, [["ok", "boolean"], ["applied", "array"]]),
+  writeImpact: (r) => fields(r, [["steps", "array"]]),
 };
 
 /** What is structurally wrong with `reply` for `cmd`, or null when it has the shape `Commands[cmd]["reply"]` promises. */
@@ -655,7 +723,7 @@ const isPageSel = (v: unknown): boolean => isStr(v) || (Array.isArray(v) && v.ev
 
 const isWriteOpName = (v: unknown): v is WriteOpName => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
 const isPadding = (v: unknown): boolean => Array.isArray(v) && v.length === 4 && v.every(isNum);
-const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page"];
+const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
 const WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
 const isIndex = (v: unknown): boolean => isNum(v) && Number.isInteger(v) && v >= 0;
 /** Op `i` of a write batch against WriteOp: `op` names one of the ops, every other declared field has its
@@ -687,6 +755,14 @@ export function writeOpError(o: unknown, i: number): string | null {
     const { problems } = checkPatch(o.set, `${at}.set`);
     if (problems.length) return patchRefusal(problems);
   }
+  if (op === "setVariable") {
+    const { problems } = checkVariableEdit(o, at);
+    if (problems.length) return sourceRefusal(problems);
+  }
+  if (op === "setStyle") {
+    const { problems } = checkStyleSet(o.set, `${at}.set`);
+    if (problems.length) return sourceRefusal(problems);
+  }
   return null;
 }
 const writeArgs: ArgsCheck = (a) => {
@@ -711,6 +787,7 @@ const ARGS_CHECKS: { [C in Cmd]: ArgsCheck } = {
   exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
   screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum, "a number")]),
   write: writeArgs,
+  writeImpact: writeArgs,
 };
 
 /** What is wrong with `args` for `cmd` — the text a caller sees — or null when it has the shape
@@ -755,6 +832,7 @@ export function parseCommandRequest(cmd: string, args: unknown): ParsedRequest {
     case "exportNode": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     case "screenshot": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     case "write": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+    case "writeImpact": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     default: {
       // Exhaustive: a command added to `Commands` without a case here fails to compile.
       const exhaustive: never = cmd;

@@ -1650,8 +1650,186 @@
     return parts.join("; ") + " \u2014 the node, its kind and the names are checked against the file when applied; the values it replaces are kept, and put back if a later op of the batch fails";
   }
 
+  // ../bridge/src/source-spec.ts
+  var isNum2 = (v) => typeof v === "number" && Number.isFinite(v);
+  var num2 = (v) => isNum2(v) ? null : "must be a number";
+  var xy2 = (v) => isObj(v) && isNum2(v.x) && isNum2(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}";
+  var length = (units, auto) => (v) => {
+    if (!isObj(v)) return "must be an object {unit, value}";
+    if (auto && v.unit === "auto") return Object.keys(v).some((k) => k !== "unit" && v[k] !== void 0) ? '`{unit:"auto"}` takes no value' : null;
+    if (typeof v.unit !== "string" || units.indexOf(v.unit) < 0) return "unit must be one of " + (auto ? [...units, "auto"] : units).join(" | ");
+    const extra = Object.keys(v).filter((k) => k !== "unit" && k !== "value" && v[k] !== void 0);
+    if (extra.length) return "." + extra[0] + ": not a field of a length (it is {unit, value})";
+    if (!isNum2(v.value)) return "is missing value (a number)";
+    return auto && v.value < 0 ? "value must be \u2265 0" : null;
+  };
+  var SHADOW_RULES = {
+    type: oneOf("drop_shadow", "inner_shadow"),
+    color: hex,
+    offset: xy2,
+    radius: nonNeg,
+    spread: num2,
+    behindNode: (v) => v === true ? null : "must be true (omit it for false)",
+    blendMode: refuse("a shadow's blend mode cannot be written yet"),
+    tokens: refuse("binding an effect's fields to variables cannot be written yet")
+  };
+  var BLUR_RULES = {
+    type: oneOf("layer_blur", "background_blur"),
+    radius: nonNeg,
+    blurType: refuse("a progressive blur cannot be written yet"),
+    startOffset: refuse("a progressive blur cannot be written yet"),
+    endOffset: refuse("a progressive blur cannot be written yet"),
+    startRadius: refuse("a progressive blur cannot be written yet"),
+    tokens: refuse("binding an effect's fields to variables cannot be written yet")
+  };
+  var effectsCheck = (v) => {
+    if (!Array.isArray(v)) return "must be a list of effects ([] removes them)";
+    for (const [i, e] of v.entries()) {
+      const at = "[" + i + "]";
+      if (!isObj(e)) return at + " must be an effect object";
+      const shadow = e.type === "drop_shadow" || e.type === "inner_shadow";
+      const blur = e.type === "layer_blur" || e.type === "background_blur";
+      if (!shadow && !blur) return at + ".type: " + (typeof e.type === "string" ? "'" + e.type + "' cannot be written yet (drop_shadow, inner_shadow, layer_blur and background_blur can)" : "must be drop_shadow | inner_shadow | layer_blur | background_blur");
+      const bad = objectProblems(e, shadow ? SHADOW_RULES : BLUR_RULES, "")[0];
+      if (bad) return at + (bad.startsWith(".") ? "" : " ") + bad;
+      const need = shadow ? ["color", "offset", "radius"] : ["radius"];
+      for (const k of need) if (e[k] === void 0) return at + " is missing " + k;
+      if (e.behindNode !== void 0 && e.type !== "drop_shadow") return at + ".behindNode: only a drop_shadow shows behind its node";
+    }
+    return null;
+  };
+  var STYLE_FIELDS = {
+    name: { rule: (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string", kind: null },
+    description: { rule: str, kind: null },
+    paints: { rule: fillsCheck, kind: "paint" },
+    font: { rule: (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a font family name", kind: "text" },
+    weight: { rule: (v) => typeof v === "string" && v.trim().length > 0 ? null : 'must be a font style name, e.g. "Semi Bold"', kind: "text" },
+    size: { rule: (v) => isNum2(v) && v >= 1 ? null : "must be a number \u2265 1", kind: "text" },
+    lineHeight: { rule: length(["px", "percent"], true), kind: "text" },
+    letterSpacing: { rule: length(["px", "percent"], false), kind: "text" },
+    case: { rule: oneOf("original", "upper", "lower", "title", "small_caps", "small_caps_forced"), kind: "text" },
+    decoration: { rule: oneOf("none", "underline", "strikethrough"), kind: "text" },
+    paragraphSpacing: { rule: nonNeg, kind: "text" },
+    paragraphIndent: { rule: nonNeg, kind: "text" },
+    effects: { rule: effectsCheck, kind: "effect" }
+  };
+  var STYLE_FIELD_NAMES = Object.keys(STYLE_FIELDS);
+  var STYLE_RULE_TABLE = Object.fromEntries(STYLE_FIELD_NAMES.map((k) => [k, STYLE_FIELDS[k].rule]));
+  var NOT_STYLED = {
+    id: "the style is named by the op's `style`",
+    key: "the style is named by the op's `style`",
+    remote: "it says where the style lives; a write changes only a style of this file",
+    publish: "publishing is done in Figma's library panel",
+    docs: "a style's documentation links cannot be written yet",
+    tokens: "binding a style's fields to variables cannot be written yet (a paint's colour can: `paints[i].tokens.color`)",
+    grids: "a grid style cannot be written yet",
+    entries: "an animation style cannot be written yet",
+    leadingTrim: "a text style's leading trim cannot be written yet",
+    listSpacing: "a text style's list spacing cannot be written yet",
+    textWrap: "a text style's text wrap cannot be written yet"
+  };
+  function checkStyleSet(set, path = "set") {
+    const summary = { fields: [], kind: null, variables: [] };
+    if (!isObj(set)) return { problems: [path + `: must be an object of the style's fields to change, e.g. {paints: [{type: "solid", color: "#2563eb"}]}`], summary };
+    const problems = [];
+    for (const [k, v] of Object.entries(set)) {
+      if (v === void 0 || Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k)) continue;
+      const at = path + "." + k;
+      const why = Object.prototype.hasOwnProperty.call(NOT_STYLED, k) ? NOT_STYLED[k] : void 0;
+      if (why !== void 0) problems.push(at + ": a style edit cannot set it \u2014 " + why);
+      else {
+        const near = nearestNames(k, STYLE_FIELD_NAMES);
+        problems.push(at + ": not a field a style edit sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+      }
+    }
+    problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
+    const fields = STYLE_FIELD_NAMES.filter((k) => set[k] !== void 0);
+    if (!fields.length && !problems.length) problems.push(path + ": sets nothing; give at least one of " + STYLE_FIELD_NAMES.join(", "));
+    if (problems.length) return { problems, summary };
+    const kinds = fields.map((f) => STYLE_FIELDS[f].kind).filter((k) => k !== null);
+    const kind = kinds[0] === void 0 ? null : kinds[0];
+    const other = kinds.filter((k) => k !== kind)[0];
+    if (kind !== null && other !== void 0) {
+      const of = (want) => fields.filter((f) => STYLE_FIELDS[f].kind === want).map((f) => "`" + f + "`").join(", ");
+      problems.push(path + ": " + of(kind) + " belong" + (of(kind).indexOf(",") < 0 ? "s" : "") + " to a " + kind + " style and " + of(other) + " to a" + (other === "effect" ? "n " : " ") + other + " style; a style is one kind");
+      return { problems, summary };
+    }
+    summary.fields = fields;
+    summary.kind = kind;
+    if (Array.isArray(set.paints)) {
+      for (const p of set.paints) if (isObj(p) && isObj(p.tokens) && typeof p.tokens.color === "string" && summary.variables.indexOf(p.tokens.color) < 0) summary.variables.push(p.tokens.color);
+    }
+    return { problems, summary };
+  }
+  function isStyleSet(v) {
+    return checkStyleSet(v).problems.length === 0;
+  }
+  var valueCheck = (v) => {
+    if (typeof v === "string" || typeof v === "boolean" || isNum2(v)) return null;
+    if (isObj(v)) {
+      if (v.composed !== void 0) return "a composed colour (a colour and a separate opacity) cannot be written yet";
+      const extra = Object.keys(v).filter((k) => k !== "aliasOf" && v[k] !== void 0);
+      if (extra.length) return "." + extra[0] + ": an alias is {aliasOf: <variable name, key or id>}";
+      const bad = ref(v.aliasOf);
+      return bad === null ? null : ".aliasOf " + bad;
+    }
+    return "must be a hex colour, a number, a string, true/false, or {aliasOf: <variable>}";
+  };
+  function checkVariableEdit(o, path = "") {
+    const summary = { modes: [], aliases: [] };
+    const at = (k) => (path ? path + "." : "") + k;
+    const problems = [];
+    const add = (v) => {
+      if (isObj(v) && typeof v.aliasOf === "string" && summary.aliases.indexOf(v.aliasOf) < 0) summary.aliases.push(v.aliasOf);
+    };
+    if (o.values !== void 0 && o.value !== void 0) return { problems: [at("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
+    if (o.values === void 0 && o.value === void 0) return { problems: [(path || "setVariable") + ": missing values \u2014 `values: {<mode>: value}`, or `value` for a collection with one mode"], summary };
+    if (o.value !== void 0) {
+      const bad = valueCheck(o.value);
+      if (bad !== null) problems.push(at("value") + (bad.startsWith(".") ? "" : ": ") + bad);
+      else add(o.value);
+      return { problems, summary };
+    }
+    if (!isObj(o.values) || !Object.keys(o.values).some((k) => isObj(o.values) && o.values[k] !== void 0)) return { problems: [at("values") + ": must be an object of mode name (or modeId) \u2192 value, with at least one mode"], summary };
+    for (const [mode, v] of Object.entries(o.values)) {
+      if (v === void 0) continue;
+      if (!mode.trim()) {
+        problems.push(at("values") + ": a mode name must not be empty");
+        continue;
+      }
+      const bad = valueCheck(v);
+      if (bad !== null) {
+        problems.push(at("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad);
+        continue;
+      }
+      summary.modes.push(mode);
+      add(v);
+    }
+    return { problems, summary };
+  }
+  var shown2 = (v) => typeof v === "object" ? "alias of '" + v.aliasOf + "'" : JSON.stringify(v);
+  function describeVariableEdit(variable3, o) {
+    const parts = [];
+    if (o.value !== void 0) parts.push("its only mode \u2192 " + shown2(o.value));
+    else for (const [m, v] of Object.entries(o.values || {})) if (v !== void 0) parts.push("'" + m + "' \u2192 " + shown2(v));
+    return "variable '" + (variable3 || "?") + "': " + parts.join(", ") + " \u2014 a local variable only (one from a library file is refused, naming the file); the modes and the value types are checked against the file when applied, and everything bound to it (nodes, styles, aliases) follows";
+  }
+  function describeStyleEdit(style, s) {
+    const parts = ["style '" + (style || "?") + "'" + (s.kind ? " (a " + s.kind + " style)" : "") + ": sets " + s.fields.join(", ")];
+    if (s.variables.length) parts.push("variables " + quoteList(s.variables));
+    return parts.join("; ") + " \u2014 a local style only (one from a library file is refused); the kind and the names are checked against the file when applied, and every layer that uses the style follows";
+  }
+  function styleRows(set, s) {
+    return s.fields.map((f) => ({ field: f, to: JSON.stringify(set[f]) }));
+  }
+  function sourceRefusal(problems) {
+    const first2 = problems[0];
+    if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
+    return problems.length + " problems in the edit \u2014 nothing was changed:\n" + problems.join("\n");
+  }
+
   // ../bridge/src/commands.ts
-  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete"];
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete", "setVariable", "setStyle"];
   var INHERITED = "inherited";
   var WRITE_OPS = {
     createFrame: { effect: "creates", required: [], shows: {} },
@@ -1663,7 +1841,10 @@
     createTree: { effect: "creates", required: ["tree"], shows: {} },
     patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
     move: { effect: "moves", required: ["nodeId", "parentId"], shows: {} },
-    delete: { effect: "deletes", required: ["nodeId"], shows: {} }
+    delete: { effect: "deletes", required: ["nodeId"], shows: {} },
+    // Source edits (source-spec.ts): one change that every user of the variable or style follows.
+    setVariable: { effect: "overwrites", required: ["variable"], shows: {} },
+    setStyle: { effect: "overwrites", required: ["style", "set"], shows: {} }
   };
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
@@ -1675,6 +1856,7 @@
     if (o.op === "createTree") return treePreview(o, index, missing);
     if (o.op === "patch") return patchPreview(o, index, missing);
     if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
+    if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
     return {
       index,
       op: o.op,
@@ -1707,6 +1889,18 @@
     const only = " \u2014 only a node this plugin session created (checked when applied)";
     const change = o.op === "delete" ? `deletes node ${o.nodeId} and everything inside it${only}; deletes run after every other op of the batch has landed` : `moves node ${o.nodeId} into ${o.parentId}${o.index !== void 0 ? ` at index ${o.index}` : " as its last child"}${only}; put back if a later op fails`;
     return { ...base, change };
+  }
+  function sourcePreview(o, index, missing) {
+    const base = { index, op: o.op, effect: "overwrites", target: (o.op === "setVariable" ? o.variable : o.style) || null };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    if (o.op === "setVariable") {
+      const { problems: problems2 } = checkVariableEdit(o);
+      if (problems2.length) return { ...base, invalid: problems2.join("\n") };
+      return { ...base, change: describeVariableEdit(o.variable, { values: isRecord(o.values) ? o.values : void 0, value: o.value }) };
+    }
+    const { problems, summary } = checkStyleSet(o.set);
+    if (problems.length || !isStyleSet(o.set)) return { ...base, invalid: problems.join("\n") };
+    return { ...base, fields: styleRows(o.set, summary), change: describeStyleEdit(o.style, summary) };
   }
   function modeChange(o, shows) {
     const newMode = shows === INHERITED ? INHERITED : o[shows];
@@ -1766,7 +1960,9 @@
     exportSelection: { run: "exclusive", export: true },
     exportNode: { run: "exclusive", export: true },
     screenshot: { run: "exclusive", export: true },
-    write: { run: "exclusive", export: false }
+    write: { run: "exclusive", export: false },
+    // Reads the file to count what a source edit would carry to (figma_write's dry run); changes nothing.
+    writeImpact: { run: "scene", export: false }
   };
   function isCmd(x) {
     return Object.prototype.hasOwnProperty.call(COMMAND_TRAITS, x);
@@ -1778,7 +1974,7 @@
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
-  var isNum2 = (v) => typeof v === "number";
+  var isNum3 = (v) => typeof v === "number";
   function opt(a, key, ok, what, label3 = key) {
     const v = a[key];
     return v === void 0 || ok(v) ? null : `\`${label3}\` is not ${what}`;
@@ -1793,10 +1989,10 @@
   var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
   var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
   var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
-  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum2);
-  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page"];
+  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum3);
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
-  var isIndex = (v) => isNum2(v) && Number.isInteger(v) && v >= 0;
+  var isIndex = (v) => isNum3(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
     const at = `ops[${i}]`;
     if (!isRecord(o)) return `\`${at}\` is not an object`;
@@ -1804,7 +2000,7 @@
     if (!isWriteOpName(op)) return `\`${at}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
       ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
-      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum2, "a number", `${at}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum3, "a number", `${at}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at}.padding`),
       opt(o, "index", isIndex, "a whole number \u2265 0", `${at}.index`)
@@ -1820,6 +2016,14 @@
     if (op === "patch") {
       const { problems } = checkPatch(o.set, `${at}.set`);
       if (problems.length) return patchRefusal(problems);
+    }
+    if (op === "setVariable") {
+      const { problems } = checkVariableEdit(o, at);
+      if (problems.length) return sourceRefusal(problems);
+    }
+    if (op === "setStyle") {
+      const { problems } = checkStyleSet(o.set, `${at}.set`);
+      if (problems.length) return sourceRefusal(problems);
     }
     return null;
   }
@@ -1840,8 +2044,9 @@
     exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr, "a string")]),
     exportSelection: readOptArgs,
     exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
-    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum2, "a number")]),
-    write: writeArgs
+    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum3, "a number")]),
+    write: writeArgs,
+    writeImpact: writeArgs
   };
   function argsShapeError(cmd, args) {
     if (!isRecord(args)) return `bad ${cmd} args: not an object`;
@@ -1882,6 +2087,8 @@
         return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
       case "write":
         return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "writeImpact":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
       default: {
         const exhaustive = cmd;
         return { ok: false, error: "unknown cmd: " + String(exhaustive) };
@@ -1920,7 +2127,7 @@
     if (!id || id === figma.mixed) return void 0;
     return run().styleName(id);
   }
-  var STYLE_FIELDS = [
+  var STYLE_FIELDS2 = [
     ["fillStyleId", "fill"],
     ["strokeStyleId", "stroke"],
     ["effectStyleId", "effect"],
@@ -1930,14 +2137,14 @@
   ];
   async function nodeStyles(node) {
     const names = await Promise.all(
-      STYLE_FIELDS.map(([field]) => {
+      STYLE_FIELDS2.map(([field]) => {
         if (!(field in node)) return Promise.resolve(void 0);
         const id = anyProp(node, field);
         return typeof id === "string" || id === figma.mixed ? styleName(id) : Promise.resolve(void 0);
       })
     );
     const out = {};
-    STYLE_FIELDS.forEach(([, key], i) => {
+    STYLE_FIELDS2.forEach(([, key], i) => {
       const n = names[i];
       if (n) out[key] = n;
     });
@@ -3763,6 +3970,11 @@
       return {};
     }
   }
+  function registeredLibrary(key) {
+    const name = readRegistry(() => {
+    })[key];
+    return name === void 0 ? null : name;
+  }
   async function allInstances(sink) {
     await loadAllPages("library component scan may be incomplete", sink);
     const out = [];
@@ -5281,12 +5493,12 @@
     }
     const mapped = mapProps(node.props || {}, defs, (set || c).name);
     if ("errors" in mapped) return mapped.errors.join("; ");
-    const shown2 = set ? variantFor(set, main, mapped.ok, defs) : main;
-    if ("missing" in shown2) {
+    const shown3 = set ? variantFor(set, main, mapped.ok, defs) : main;
+    if ("missing" in shown3) {
       const have = set ? set.children.filter((k) => k.type === "COMPONENT").map((k) => k.name) : [];
-      return "component '" + (set || c).name + "' has no variant " + shown2.missing + (have.length ? "; closest: " + quoteList(nearestNames(shown2.missing, have)) : "");
+      return "component '" + (set || c).name + "' has no variant " + shown3.missing + (have.length ? "; closest: " + quoteList(nearestNames(shown3.missing, have)) : "");
     }
-    if (shown2.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
+    if (shown3.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
       if (node[axis] === "hug") return "component '" + (set || c).name + "' has no auto-layout, so its instance cannot `" + axis + ': "hug"`';
     }
     refs2.instances.set(node, { main, props: mapped.ok });
@@ -6328,8 +6540,8 @@
     } catch {
       defs = {};
     }
-    const shown2 = variantFor(owner, main, props, defs);
-    return "missing" in shown2 ? "set.props: component '" + owner.name + "' has no variant " + shown2.missing : null;
+    const shown3 = variantFor(owner, main, props, defs);
+    return "missing" in shown3 ? "set.props: component '" + owner.name + "' has no variant " + shown3.missing : null;
   }
   async function checkBeforeApply(t) {
     const problems = unfit(t.node, t.set).state;
@@ -6666,7 +6878,7 @@
     });
     if (t.props && n.type === "INSTANCE") {
       const old = {};
-      const shown2 = (k) => {
+      const shown3 = (k) => {
         const p = n.componentProperties[k];
         return p ? JSON.stringify([p.value, p.boundVariables && p.boundVariables.value ? p.boundVariables.value.id : null]) : "";
       };
@@ -6675,10 +6887,10 @@
         const p = n.componentProperties[k];
         if (!p) continue;
         old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
-        was.set(k, shown2(k));
+        was.set(k, shown3(k));
       }
       steps.push(() => {
-        if ([...was].some(([k, v]) => shown2(k) !== v)) n.setProperties(old);
+        if ([...was].some(([k, v]) => shown3(k) !== v)) n.setProperties(old);
       });
     }
     const LIMITS2 = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
@@ -7225,6 +7437,603 @@
     return applied;
   }
 
+  // src/sources.ts
+  var isKey2 = (ref2) => /^[0-9a-f]{40}$/i.test(ref2);
+  var getF2 = (o, k) => Reflect.get(o, k);
+  function libraryOwned(what, library) {
+    return what + " lives in " + (library ? "the library '" + library + "'" : "another library file (Figma does not tell plugins which)") + ", not in this file \u2014 change it in that library and publish it; this file then takes the update";
+  }
+  function sourceLookups() {
+    let locals = null;
+    let libColls = null;
+    let libVars = null;
+    let styles = null;
+    const localVariables = () => {
+      if (!locals) locals = figma.variables.getLocalVariablesAsync();
+      return locals;
+    };
+    const libraryCollections = () => {
+      if (!libColls) libColls = figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync().then((c) => c, () => []);
+      return libColls;
+    };
+    const libraryVariables = () => {
+      if (!libVars) libVars = (async () => {
+        const out = [];
+        for (const c of await libraryCollections()) {
+          try {
+            for (const v of await figma.teamLibrary.getVariablesInLibraryCollectionAsync(c.key)) out.push({ ...v, libraryName: c.libraryName });
+          } catch {
+          }
+        }
+        return out;
+      })();
+      return libVars;
+    };
+    const localStyles = () => {
+      if (!styles) styles = (async () => {
+        const out = [];
+        out.push(...await figma.getLocalPaintStylesAsync(), ...await figma.getLocalTextStylesAsync(), ...await figma.getLocalEffectStylesAsync());
+        return out;
+      })();
+      return styles;
+    };
+    const libraryOfVariable = async (v) => {
+      let coll = null;
+      try {
+        coll = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
+      } catch {
+        coll = null;
+      }
+      const colls = await libraryCollections();
+      for (const c of colls) if (coll && c.key === coll.key) return c.libraryName;
+      for (const lv of await libraryVariables()) if (lv.key === v.key) return lv.libraryName;
+      return null;
+    };
+    return {
+      localVariables,
+      async variable(ref2) {
+        if (ref2.indexOf("VariableID:") === 0) {
+          let byId = null;
+          try {
+            byId = await figma.variables.getVariableByIdAsync(ref2);
+          } catch {
+            byId = null;
+          }
+          if (byId && byId.remote) return { error: libraryOwned("variable '" + byId.name + "'", await libraryOfVariable(byId)) };
+          if (byId) return { ok: byId };
+        }
+        const all = await localVariables();
+        const exact = all.filter((v) => v.id === ref2 || v.key === ref2);
+        const first2 = exact[0];
+        if (first2 && exact.length === 1) return { ok: first2 };
+        if (isKey2(ref2)) {
+          const lib2 = (await libraryVariables()).filter((v) => v.key === ref2)[0];
+          if (lib2) return { error: libraryOwned("variable '" + lib2.name + "'", lib2.libraryName) };
+          return { error: "no variable of this file has the key '" + ref2 + "'" };
+        }
+        const m = matchByName(ref2, all, (v) => v.name);
+        if (m.kind === "one") return { ok: m.item };
+        if (m.kind === "many") return { error: "variable '" + ref2 + "' matches " + m.matches.length + " variables \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", ") };
+        const lib = (await libraryVariables()).filter((v) => v.name === ref2);
+        if (lib.length) {
+          const names = lib.map((v) => v.libraryName).filter((n, i, a) => a.indexOf(n) === i);
+          return { error: names.length === 1 ? libraryOwned("variable '" + ref2 + "'", names[0] === void 0 ? null : names[0]) : "variable '" + ref2 + "' is not in this file; libraries " + quoteList(names) + " have one by that name \u2014 a library's variable is changed in that library" };
+        }
+        return { error: "variable '" + ref2 + "' matches no variable of this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+      },
+      async style(ref2, kind) {
+        const all = await localStyles();
+        const exact = all.filter((st) => st.id === ref2 || st.key === ref2);
+        const first2 = exact[0];
+        if (first2 && exact.length === 1) return { ok: first2 };
+        if (ref2.indexOf("S:") === 0) {
+          let byId = null;
+          try {
+            byId = await figma.getStyleByIdAsync(ref2);
+          } catch {
+            byId = null;
+          }
+          if (byId && byId.remote) return { error: libraryOwned(byId.type.toLowerCase() + " style '" + byId.name + "'", registeredLibrary(byId.key)) };
+          if (byId) return { error: "'" + byId.name + "' is a " + byId.type.toLowerCase() + " style, which a style edit cannot change yet (paint, text and effect styles can)" };
+        }
+        if (isKey2(ref2)) return { error: libraryOwned("the style with the key '" + ref2 + "' (it is not a style of this file)", registeredLibrary(ref2)) };
+        const pool = kind ? all.filter((st) => st.type === kind.toUpperCase()) : all;
+        const m = matchByName(ref2, pool, (st) => st.name);
+        if (m.kind === "one") return { ok: m.item };
+        if (m.kind === "many") return { error: "style '" + ref2 + "' matches " + m.matches.length + " styles \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((st) => "'" + st.name + "' (" + st.type.toLowerCase() + ", " + st.id + ")").join(", ") };
+        const near = nearestNames(ref2, pool.map((st) => st.name));
+        const elsewhere = kind ? all.filter((st) => st.name === ref2)[0] : void 0;
+        if (elsewhere) return { error: "'" + ref2 + "' is a " + elsewhere.type.toLowerCase() + " style, and these fields are a " + kind + " style's" };
+        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near.length ? "; closest: " + quoteList(near) : "") };
+      }
+    };
+  }
+  function componentOf(node) {
+    for (let n = node; n; n = n.parent) {
+      if (n.type === "COMPONENT" || n.type === "COMPONENT_SET") return n;
+      if (n.type === "PAGE" || n.type === "DOCUMENT") return null;
+    }
+    return null;
+  }
+  function libraryComponentProblem(node) {
+    const c = componentOf(node);
+    if (!c || !c.remote) return null;
+    return libraryOwned("the component '" + c.name + "'" + (c === node ? "" : " that '" + node.name + "' sits in"), registeredLibrary(c.key));
+  }
+  var MODE_LIMIT = 3;
+  function modesOf(op, coll, v) {
+    const errors = [];
+    const modes = [];
+    if (op.value !== void 0) {
+      const only = coll.modes[0];
+      if (coll.modes.length !== 1 || !only) return { errors: ["`value` sets the only mode, and '" + coll.name + "' has " + coll.modes.length + " (" + quoteList(coll.modes.slice(0, MODE_LIMIT).map((m) => m.name)) + "); give `values` by mode"] };
+      modes.push({ modeId: only.modeId, name: only.name, value: op.value });
+      return { modes };
+    }
+    const values = op.values || {};
+    for (const name of Object.keys(values)) {
+      const value = values[name];
+      if (value === void 0) continue;
+      const m = matchByName(name, coll.modes, (x) => x.name, (x) => [x.modeId]);
+      if (m.kind === "one") {
+        modes.push({ modeId: m.item.modeId, name: m.item.name, value });
+        continue;
+      }
+      if (m.kind === "many") {
+        errors.push("values[" + JSON.stringify(name) + "]: '" + coll.name + "' has " + m.matches.length + " modes named '" + name + "' \u2014 pass its modeId: " + m.matches.slice(0, MODE_LIMIT).map((x) => x.modeId).join(", "));
+        continue;
+      }
+      errors.push("values[" + JSON.stringify(name) + "]: '" + coll.name + "' (the collection of '" + v.name + "') has no mode '" + name + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "; it has " + quoteList(coll.modes.map((x) => x.name))));
+    }
+    const ids = modes.map((m) => m.modeId);
+    for (const [i, id] of ids.entries()) if (ids.indexOf(id) !== i) errors.push("values: two entries name the mode '" + (modes[i] ? modes[i].name : id) + "'");
+    return errors.length ? { errors } : { modes };
+  }
+  function valueProblem(value, type) {
+    if (typeof value === "object") return null;
+    if (type === "COLOR") return typeof value === "string" && parseHexColor(value) ? null : "a colour variable takes a hex colour (#rrggbb or #rrggbbaa) or {aliasOf}";
+    if (type === "FLOAT") return typeof value === "number" ? null : "a number variable takes a number or {aliasOf}";
+    if (type === "STRING") return typeof value === "string" ? null : "a string variable takes a string or {aliasOf}";
+    if (type === "BOOLEAN") return typeof value === "boolean" ? null : "a boolean variable takes true, false or {aliasOf}";
+    return "a " + String(type).toLowerCase() + " variable cannot be written yet";
+  }
+  function aliasIds2(v) {
+    const out = [];
+    for (const k of Object.keys(v.valuesByMode)) {
+      const x = v.valuesByMode[k];
+      if (x && typeof x === "object" && getF2(x, "type") === "VARIABLE_ALIAS") {
+        const id = getF2(x, "id");
+        if (typeof id === "string") out.push(id);
+      }
+    }
+    return out;
+  }
+  async function reaches(from, to) {
+    const seen = /* @__PURE__ */ new Set();
+    const queue = [from];
+    while (queue.length) {
+      const v = queue.shift();
+      if (!v || seen.has(v.id)) continue;
+      seen.add(v.id);
+      if (v.id === to) return true;
+      for (const id of aliasIds2(v)) {
+        let next = null;
+        try {
+          next = await figma.variables.getVariableByIdAsync(id);
+        } catch {
+          next = null;
+        }
+        if (next) queue.push(next);
+      }
+    }
+    return false;
+  }
+  function fontAfter(st, set) {
+    return { family: set.font !== void 0 ? set.font : st.fontName.family, style: set.weight !== void 0 ? set.weight : st.fontName.style };
+  }
+  async function resolveSourceOps(ops, lookups = sourceLookups()) {
+    const variables = /* @__PURE__ */ new Map();
+    const styles = /* @__PURE__ */ new Map();
+    const problems = [];
+    const uses = [];
+    const empty = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() });
+    const loaded3 = /* @__PURE__ */ new Map();
+    const loadFont = (f) => {
+      const key = f.family + "|" + f.style;
+      let p = loaded3.get(key);
+      if (!p) {
+        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
+        loaded3.set(key, p);
+      }
+      return p;
+    };
+    const aliases = [];
+    for (const [index, op] of ops.entries()) {
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      if (op.op === "patch" && op.nodeId) {
+        let nd = null;
+        try {
+          nd = await figma.getNodeByIdAsync(op.nodeId);
+        } catch {
+          nd = null;
+        }
+        const lib = nd ? libraryComponentProblem(nd) : null;
+        if (lib) bad(lib);
+        continue;
+      }
+      if (op.op === "setVariable") {
+        if (checkVariableEdit(op).problems.length || !op.variable) {
+          bad("the edit did not pass its check");
+          continue;
+        }
+        const found = await lookups.variable(op.variable);
+        if ("error" in found) {
+          bad(found.error);
+          continue;
+        }
+        const v = found.ok;
+        let coll = null;
+        try {
+          coll = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
+        } catch {
+          coll = null;
+        }
+        if (!coll) {
+          bad("variable '" + v.name + "': its collection cannot be read");
+          continue;
+        }
+        const m = modesOf(op, coll, v);
+        if ("errors" in m) {
+          for (const e of m.errors) bad(e);
+          continue;
+        }
+        let ok = true;
+        for (const mode of m.modes) {
+          const path = op.value !== void 0 ? "value" : "values[" + JSON.stringify(mode.name) + "]";
+          const err = valueProblem(mode.value, v.resolvedType);
+          if (err) {
+            bad(path + ": " + err + " ('" + v.name + "' is a " + v.resolvedType.toLowerCase() + " variable)");
+            ok = false;
+            continue;
+          }
+          if (typeof mode.value === "object") {
+            uses.push({ index, op: op.op, path: path + ".aliasOf", kind: "variable", ref: mode.value.aliasOf, type: v.resolvedType });
+            aliases.push({ index, variable: v, ref: mode.value.aliasOf, path: path + ".aliasOf" });
+          }
+        }
+        if (ok) variables.set(index, { variable: v, modes: m.modes, refs: empty() });
+        continue;
+      }
+      if (op.op === "setStyle") {
+        const set = op.set;
+        if (!isStyleSet(set) || !op.style) {
+          bad("the edit did not pass its check");
+          continue;
+        }
+        const { kind } = checkStyleSet(set).summary;
+        const found = await lookups.style(op.style, kind);
+        if ("error" in found) {
+          bad(found.error);
+          continue;
+        }
+        const st = found.ok;
+        if (kind && st.type !== kind.toUpperCase()) {
+          bad("'" + st.name + "' is a " + st.type.toLowerCase() + " style, and these fields are a " + kind + " style's");
+          continue;
+        }
+        (set.paints || []).forEach((p, i) => {
+          if (p.tokens) uses.push({ index, op: op.op, path: "set.paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" });
+        });
+        let font = null;
+        const bound = [];
+        if (st.type === "TEXT") {
+          let fontOk = true;
+          for (const f of [st.fontName, fontAfter(st, set)]) {
+            const err = await loadFont(f);
+            if (err) {
+              bad("text style '" + st.name + "': its " + err + (f === st.fontName ? "" : " (check `font` and `weight`)"));
+              fontOk = false;
+            }
+          }
+          if (!fontOk) continue;
+          font = fontAfter(st, set);
+          const bv = st.boundVariables || {};
+          for (const field of Object.keys(bv)) {
+            const a = bv[field];
+            if (!a) continue;
+            let v = null;
+            try {
+              v = await figma.variables.getVariableByIdAsync(a.id);
+            } catch {
+              v = null;
+            }
+            if (v) bound.push({ field, variable: v });
+          }
+        }
+        styles.set(index, { style: st, set, refs: empty(), font, bound });
+      }
+    }
+    const r = await resolveRefs(uses, loadFont);
+    problems.push(...r.problems);
+    for (const a of aliases) {
+      const target = r.refs.variables.get(a.ref);
+      if (!target) continue;
+      if (target.id === a.variable.id || await reaches(target, a.variable.id)) problems.push({ index: a.index, op: "setVariable", message: a.path + ": '" + target.name + "' " + (target.id === a.variable.id ? "is '" + a.variable.name + "' itself" : "already aliases '" + a.variable.name + "'") + ", so the alias would make a loop" });
+    }
+    for (const t of variables.values()) t.refs = r.refs;
+    for (const t of styles.values()) t.refs = r.refs;
+    return { variables, styles, problems, imports: r.imports, importCount: r.importCount };
+  }
+  function figmaValue(value, refs2) {
+    if (typeof value === "object") {
+      const target = refs2.variables.get(value.aliasOf);
+      if (!target) throw new Error("variable '" + value.aliasOf + "' was not resolved before the batch ran");
+      return figma.variables.createVariableAlias(target);
+    }
+    const c = typeof value === "string" ? parseHexColor(value) : null;
+    if (!c) throw new Error("'" + String(value) + "' is not a hex colour");
+    return { r: c.r, g: c.g, b: c.b, a: c.a === void 0 ? 1 : c.a };
+  }
+  function applyVariable(t, consent2) {
+    const v = t.variable;
+    const kept = [];
+    const restore = (allowed2) => {
+      for (const k of kept.slice().reverse()) {
+        if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+        if (k.value !== void 0) v.setValueForMode(k.modeId, k.value);
+      }
+    };
+    try {
+      for (const m of t.modes) {
+        consent2();
+        const old = v.valuesByMode[m.modeId];
+        kept.push({ modeId: m.modeId, value: old && typeof old === "object" ? JSON.parse(JSON.stringify(old)) : old });
+        v.setValueForMode(m.modeId, t.variable.resolvedType === "COLOR" || typeof m.value === "object" ? figmaValue(m.value, t.refs) : m.value);
+      }
+    } catch (e) {
+      try {
+        restore(() => true);
+      } catch {
+      }
+      throw e;
+    }
+    const applied = { id: v.id, modes: t.modes.map((m) => m.name) };
+    return { applied, kind: "variable change", what: "the values of the variable '" + v.name + "'", restore };
+  }
+  var LINE_UNIT = { px: "PIXELS", percent: "PERCENT" };
+  var CASES = { original: "ORIGINAL", upper: "UPPER", lower: "LOWER", title: "TITLE", small_caps: "SMALL_CAPS", small_caps_forced: "SMALL_CAPS_FORCED" };
+  var DECORATIONS = { none: "NONE", underline: "UNDERLINE", strikethrough: "STRIKETHROUGH" };
+  function effectOf(e) {
+    if (!("color" in e)) return { type: e.type === "layer_blur" ? "LAYER_BLUR" : "BACKGROUND_BLUR", blurType: "NORMAL", radius: e.radius, visible: true };
+    const c = parseHexColor(e.color);
+    const color = c ? { r: c.r, g: c.g, b: c.b, a: c.a === void 0 ? 1 : c.a } : { r: 0, g: 0, b: 0, a: 1 };
+    const base = { color, offset: { x: e.offset.x, y: e.offset.y }, radius: e.radius, spread: e.spread === void 0 ? 0 : e.spread, visible: true, blendMode: "NORMAL" };
+    return e.type === "drop_shadow" ? { type: "DROP_SHADOW", ...base, showShadowBehindNode: e.behindNode === true } : { type: "INNER_SHADOW", ...base };
+  }
+  function keepStyle(st) {
+    const out = { name: st.name, description: st.description };
+    const copy = (v) => v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v;
+    if (st.type === "PAINT") out.paints = st.paints.slice();
+    if (st.type === "EFFECT") out.effects = st.effects.slice();
+    if (st.type === "TEXT") for (const k of ["fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent"]) out[k] = copy(getF2(st, k));
+    return out;
+  }
+  function putBack2(o, k, v) {
+    if (JSON.stringify(getF2(o, k)) === JSON.stringify(v)) return;
+    if (!Reflect.set(o, k, v)) throw new Error("cannot set " + k);
+  }
+  function applyStyle(t, consent2) {
+    const st = t.style;
+    const set = t.set;
+    const old = keepStyle(st);
+    const restore = (allowed2) => {
+      const check = () => {
+        if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+      };
+      check();
+      if (st.type === "PAINT") putBack2(st, "paints", old.paints);
+      if (st.type === "EFFECT") putBack2(st, "effects", old.effects);
+      if (st.type === "TEXT") {
+        for (const k of ["fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent"]) putBack2(st, k, old[k]);
+        const now = st.boundVariables || {};
+        for (const b of t.bound) {
+          check();
+          const a = now[b.field];
+          if (!a || a.id !== b.variable.id) st.setBoundVariable(b.field, b.variable);
+        }
+      }
+      putBack2(st, "description", old.description);
+      putBack2(st, "name", old.name);
+    };
+    try {
+      consent2();
+      if (set.name !== void 0) st.name = set.name;
+      if (set.description !== void 0) st.description = set.description;
+      if (st.type === "PAINT" && set.paints) {
+        st.paints = set.paints.map((p) => {
+          const paint = solid(p.color === void 0 ? "#000000" : p.color, p.opacity);
+          const ref2 = p.tokens && p.tokens.color;
+          if (ref2 === void 0) return paint;
+          const v = t.refs.variables.get(ref2);
+          if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
+          return figma.variables.setBoundVariableForPaint(paint, "color", v);
+        });
+      }
+      if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
+      if (st.type === "TEXT") {
+        if (t.font && (set.font !== void 0 || set.weight !== void 0)) st.fontName = t.font;
+        if (set.size !== void 0) st.fontSize = set.size;
+        const lh = set.lineHeight;
+        if (lh) st.lineHeight = lh.unit === "auto" ? { unit: "AUTO" } : { unit: LINE_UNIT[lh.unit], value: lh.value === void 0 ? 0 : lh.value };
+        const ls = set.letterSpacing;
+        if (ls) st.letterSpacing = { unit: LINE_UNIT[ls.unit], value: ls.value };
+        if (set.case !== void 0) st.textCase = CASES[set.case];
+        if (set.decoration !== void 0) st.textDecoration = DECORATIONS[set.decoration];
+        if (set.paragraphSpacing !== void 0) st.paragraphSpacing = set.paragraphSpacing;
+        if (set.paragraphIndent !== void 0) st.paragraphIndent = set.paragraphIndent;
+      }
+    } catch (e) {
+      try {
+        restore(() => true);
+      } catch {
+      }
+      throw e;
+    }
+    return { applied: { id: st.id }, kind: "style change", what: "the " + st.type.toLowerCase() + " style '" + st.name + "'", restore };
+  }
+  function boundIds(node, out) {
+    const walk = (v, depth) => {
+      if (!v || typeof v !== "object" || depth > 4) return;
+      if (Array.isArray(v)) {
+        for (const x of v) walk(x, depth + 1);
+        return;
+      }
+      if (getF2(v, "type") === "VARIABLE_ALIAS") {
+        const id = getF2(v, "id");
+        if (typeof id === "string") out.add(id);
+        return;
+      }
+      for (const k of Object.keys(v)) walk(getF2(v, k), depth + 1);
+    };
+    try {
+      walk(getF2(node, "boundVariables"), 0);
+    } catch {
+    }
+    for (const k of ["fills", "strokes", "effects"]) {
+      let list = null;
+      try {
+        list = getF2(node, k);
+      } catch {
+        list = null;
+      }
+      if (Array.isArray(list)) {
+        for (const p of list) if (p && typeof p === "object") walk(getF2(p, "boundVariables"), 0);
+      }
+    }
+  }
+  function styleBoundIds(st) {
+    const out = /* @__PURE__ */ new Set();
+    const scan = (v) => {
+      if (!v || typeof v !== "object") return;
+      if (Array.isArray(v)) {
+        for (const x of v) scan(x);
+        return;
+      }
+      if (getF2(v, "type") === "VARIABLE_ALIAS") {
+        const id = getF2(v, "id");
+        if (typeof id === "string") out.add(id);
+        return;
+      }
+      for (const k of Object.keys(v)) scan(getF2(v, k));
+    };
+    scan(getF2(st, "boundVariables"));
+    for (const k of ["paints", "effects"]) {
+      const list = getF2(st, k);
+      if (Array.isArray(list)) {
+        for (const p of list) if (p && typeof p === "object") scan(getF2(p, "boundVariables"));
+      }
+    }
+    return out;
+  }
+  async function consumersOf(style, nodes) {
+    try {
+      for (const c of await style.getStyleConsumersAsync()) nodes.add(c.node.id);
+    } catch {
+    }
+  }
+  async function variableImpact(v, lookups, warn) {
+    const ids = /* @__PURE__ */ new Set([v.id]);
+    const locals = await lookups.localVariables();
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const x of locals) if (!ids.has(x.id) && aliasIds2(x).some((id) => ids.has(id))) {
+        ids.add(x.id);
+        grew = true;
+      }
+    }
+    const styles = [];
+    for (const st of [...await figma.getLocalPaintStylesAsync(), ...await figma.getLocalTextStylesAsync(), ...await figma.getLocalEffectStylesAsync()]) {
+      for (const id of styleBoundIds(st)) if (ids.has(id)) {
+        styles.push(st);
+        break;
+      }
+    }
+    const nodes = /* @__PURE__ */ new Set();
+    for (const page of figma.root.children) {
+      try {
+        await page.loadAsync();
+        const hits = page.findAll((n) => {
+          const b = /* @__PURE__ */ new Set();
+          boundIds(n, b);
+          for (const id of b) if (ids.has(id)) return true;
+          return false;
+        });
+        for (const n of hits) nodes.add(n.id);
+      } catch (e) {
+        warn("page '" + page.name + "' could not be read (" + errMsg(e) + "), so its layers are not counted");
+      }
+    }
+    for (const st of styles) await consumersOf(st, nodes);
+    return { nodes: nodes.size, styles: styles.length, variables: ids.size - 1 };
+  }
+  async function instancesOf(c) {
+    const mains = c.type === "COMPONENT_SET" ? c.children.filter((k) => k.type === "COMPONENT") : [c];
+    let n = 0;
+    for (const m of mains) {
+      try {
+        n += (await m.getInstancesAsync()).length;
+      } catch {
+      }
+    }
+    return n;
+  }
+  async function writeImpact(ops) {
+    const warnings = [];
+    const warn = (m) => {
+      if (warnings.indexOf(m) < 0) warnings.push(m);
+    };
+    const lookups = sourceLookups();
+    const steps = [];
+    for (const [index, op] of ops.entries()) {
+      try {
+        if (op.op === "patch") {
+          let nd = null;
+          try {
+            nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+          } catch {
+            nd = null;
+          }
+          const c = nd ? componentOf(nd) : null;
+          if (!nd || !c) continue;
+          const lib = libraryComponentProblem(nd);
+          steps.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c) } });
+          continue;
+        }
+        if (op.op === "setVariable" && op.variable) {
+          const found = await lookups.variable(op.variable);
+          steps.push("error" in found ? { index, op: op.op, problem: found.error } : { index, op: op.op, affects: await variableImpact(found.ok, lookups, warn) });
+          continue;
+        }
+        if (op.op === "setStyle" && op.style) {
+          const kind = isStyleSet(op.set) ? checkStyleSet(op.set).summary.kind : null;
+          const found = await lookups.style(op.style, kind);
+          if ("error" in found) {
+            steps.push({ index, op: op.op, problem: found.error });
+            continue;
+          }
+          const nodes = /* @__PURE__ */ new Set();
+          await consumersOf(found.ok, nodes);
+          steps.push({ index, op: op.op, affects: { nodes: nodes.size } });
+        }
+      } catch (e) {
+        steps.push({ index, op: op.op, problem: "could not be counted: " + errMsg(e) });
+      }
+    }
+    return warnings.length ? { steps, warnings } : { steps };
+  }
+
   // src/structure.ts
   var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
@@ -7401,7 +8210,7 @@
       n.remove();
     } };
   }
-  async function applyWrite(op, { mode, tree, patch, move }, changes) {
+  async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style }, changes) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
@@ -7536,6 +8345,22 @@
         changes.push(change);
         return change.applied;
       }
+      // Source edits (sources.ts), resolved up front: a local variable or style, its modes, values, fonts and names. Each
+      // keeps what it replaces and puts itself back if it throws partway.
+      case "setVariable": {
+        if (!variable3) throw new Error("setVariable: the op was not resolved before the batch ran");
+        consent();
+        const change = applyVariable(variable3, consent);
+        changes.push(change);
+        return change.applied;
+      }
+      case "setStyle": {
+        if (!style) throw new Error("setStyle: the op was not resolved before the batch ran");
+        consent();
+        const change = applyStyle(style, consent);
+        changes.push(change);
+        return change.applied;
+      }
       // Deletes are not run here: gatedWrites runs them after every other op (a deleted node cannot be brought back).
       case "delete":
         throw new Error("delete: deletes run after the rest of the batch");
@@ -7602,19 +8427,21 @@
       const keyed = await resolveKeyed(list, trees2.targets);
       const patches2 = await resolvePatchOps(list);
       const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
+      const sources2 = await resolveSourceOps(list);
       const problems2 = [
         ...modes2.problems,
         ...trees2.problems,
         ...keyed.problems,
         ...patches2.problems,
         ...structure2.problems,
+        ...sources2.problems,
         ...deleteConflicts(list, structure2.deletes, structure2.moves),
         ...removalConflicts(list, trees2.targets, structure2.moves),
         ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
-      return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, problems: problems2 };
+      return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, sources: sources2, problems: problems2 };
     };
-    let { modes, trees, patches, structure, problems } = await resolveBatch();
+    let { modes, trees, patches, structure, sources, problems } = await resolveBatch();
     const firstProblem = problems[0];
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
     if (list.length && await reviewWrites()) {
@@ -7622,13 +8449,13 @@
       const review = await awaitReview(list);
       if (review.end !== "approved") return reviewRefusal(review);
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      ({ modes, trees, patches, structure, problems } = await resolveBatch());
+      ({ modes, trees, patches, structure, sources, problems } = await resolveBatch());
       const changed = problems[0];
       if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       commitUndo();
     }
-    for (const step of [trees, patches]) {
+    for (const step of [trees, patches, sources]) {
       if (!step.importCount) continue;
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       const { problems: late, revoked } = await step.imports(editsAllowedNow);
@@ -7661,7 +8488,14 @@
     for (const [i, op] of list.entries()) {
       if (op.op === "delete") continue;
       try {
-        rows[i] = await applyWrite(op, { mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i) }, changes);
+        rows[i] = await applyWrite(op, {
+          mode: modes.targets.get(i),
+          tree: trees.targets.get(i),
+          patch: patches.targets.get(i),
+          move: structure.moves.get(i),
+          variable: sources.variables.get(i),
+          style: sources.styles.get(i)
+        }, changes);
       } catch (e) {
         return fail(i, op, e);
       }
@@ -7892,6 +8726,12 @@
       case "write": {
         const ops = req.args.ops;
         return () => applyWrites(ops);
+      }
+      // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts). Reads
+      // only, so it needs no "Allow edits"; a scene run, so it waits for a write ahead of it.
+      case "writeImpact": {
+        const ops = req.args.ops;
+        return () => writeImpact(ops);
       }
       default: {
         const exhaustive = req;

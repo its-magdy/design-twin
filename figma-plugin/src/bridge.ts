@@ -1,6 +1,7 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
 import { applyWrites } from "./writes";
+import { writeImpact } from "./sources";
 import { editsAllowed } from "./edits";
 import { reviewWrites } from "./review";
 import { listLibraries } from "./libraries";
@@ -160,6 +161,12 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
     case "write": {
       const ops = req.args.ops;
       return () => applyWrites(ops);
+    }
+    // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts). Reads
+    // only, so it needs no "Allow edits"; a scene run, so it waits for a write ahead of it.
+    case "writeImpact": {
+      const ops = req.args.ops;
+      return () => writeImpact(ops);
     }
     default: {
       // Exhaustive: a command added to commands.ts without a branch here fails to compile. Unreachable

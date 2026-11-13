@@ -300,6 +300,28 @@ export const keyedFile: Route = {
   },
 };
 
+// ---- source edits (#172): change the design-system source once and let Figma carry it. The colour update is one
+// setVariable naming the variable from the brief (its collection has one mode, so `value`), no read at all; the fault
+// in a repeated part is found as the four-op route finds it (the screen's outline names the instance's main component,
+// whose outline names the part) and fixed by one patch of the main component's layer, which every instance follows.
+export const sourceEdit: Route = {
+  name: "source-edit",
+  ticket: "#172",
+  jobs: {
+    "colour-update": async (s, b) => {
+      appliedIds(must(await s.call("figma_write", { ops: [{ op: "setVariable", variable: b.variable, value: b.to }] }, "write"), "figma_write"));
+    },
+    "repeated-part": async (s, b) => {
+      const part = (await readOutline(s, b.screenId, "find")).find((n) => n.name === b.part);
+      let inst = part?.parent ?? null;
+      while (inst && inst.mainId === null) inst = inst.parent;
+      if (!inst?.mainId) throw new Error(`no instance on the screen holds a "${b.part}"`);
+      const inMain = (await readOutline(s, inst.mainId, "find")).filter((n) => n.name === b.part);
+      await patch(s, inMain.map((n) => ({ op: "patch", nodeId: n.id, set: { fills: [{ type: "solid", color: b.to }] } })));
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -315,5 +337,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit];
 export const BASELINE = fourOp.name;

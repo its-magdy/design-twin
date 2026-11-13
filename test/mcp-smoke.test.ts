@@ -18,7 +18,7 @@ import { fakePlugin, fail, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { malformed } from "./fixtures.ts";
 import { EDITS_OFF_MESSAGE, rejectedMessage, unreviewedMessage } from "../bridge/src/commands.ts";
 import { REVIEW_WAIT_MS } from "../bridge/src/timeouts.ts";
-import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply, WriteResult } from "../bridge/src/commands.ts";
+import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply, WriteImpactReply, WriteResult } from "../bridge/src/commands.ts";
 import type { BridgeFrame, CommandFrame } from "../bridge/src/server-core.ts";
 // Type-only: erased before Bun runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
@@ -52,7 +52,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }> }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; refusedByFile?: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }>; affects?: Record<string, number>; refusedByFile?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -123,6 +123,8 @@ void (async () => {
       dryPatch.overwrites === 2 && dryPatch.moves === 1 && dryPatch.deletes === 1 && dryPatch.invalid === 1
       && JSON.stringify(dryPatch.steps[0]?.fields) === JSON.stringify([{ field: "text", to: '"Hi"' }, { field: "tokens", to: '{"opacity":"alpha/md"}' }])
       && /^set\.font: a patch cannot set it/.test(dryPatch.steps[1]?.invalid ?? "") && dryPatch.steps[3]?.effect === "deletes");
+    ok("…and with no plugin to count what a source edit (a patch may be one) carries to, the note says so instead of guessing",
+      /none answered \(no plugin is connected\)/.test(dryPatch.note) && dryPatch.steps.every((st) => st.affects === undefined));
     const dryProto = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: { handle: "__proto__" } }] } }))) as WritePreview;
     ok("dryRun refuses a '__proto__' handle (the plugin's reply could not carry it back), through the tool",
       dryProto.invalid === 1 && /^tree\.handle '__proto__' cannot be a handle/.test(dryProto.steps[0]?.invalid ?? ""));
@@ -383,6 +385,8 @@ void (async () => {
     const editsPlugin = fakePlugin(8789, { token: "smoke-test-token", hello: { instanceId: "fig-edits", file: "Edits File" }, unhandled: HANG, on: {
       whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn }),
       write: (a): WriteResult | typeof HANG => { lastWrite = a; return holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }); },
+      // The dry run's count of what a source edit carries to (figma-plugin/src/sources.ts writeImpact).
+      writeImpact: (): WriteImpactReply => ({ steps: [{ index: 0, op: "setVariable", affects: { nodes: 24, styles: 0, variables: 1 } }, { index: 1, op: "setStyle", problem: "paint style 'Core' lives in another library file" }], warnings: ["page 'Old' could not be read"] }),
     } });
     await editsPlugin.opened;
     const card = [{ op: "createFrame", name: "Card" }];
@@ -396,6 +400,14 @@ void (async () => {
     editsOn = true;
     const dryOn = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview;
     ok("[EDITS] dryRun with edits on reports editsAllowed:true and no refusal", dryOn.editsAllowed === true && dryOn.wouldRefuse === undefined);
+    ok("[EDITS] a batch with no source edit never asks the plugin to count (writeImpact)", editsPlugin.commands("writeImpact").length === 0);
+    const sourceOps = [{ op: "setVariable", variable: "color/brand", value: "#2563eb" }, { op: "setStyle", style: "Core", set: { paints: [{ type: "solid", color: "#ffffff" }] } }];
+    const writesBeforeDry = editsPlugin.commands("write").length;
+    const drySource = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: sourceOps } }))) as WritePreview;
+    ok("[SOURCE] a source edit's dry run carries the plugin's count and the file's refusal, and says a count may be low",
+      drySource.steps[0]?.affects?.nodes === 24 && drySource.steps[0].affects.variables === 1 && /another library file/.test(drySource.steps[1]?.refusedByFile ?? "")
+      && drySource.refusedByFile === 1 && /`affects` counts what follows/.test(drySource.note) && /page 'Old' could not be read/.test(drySource.note)
+      && JSON.stringify(editsPlugin.commands("writeImpact").at(-1)?.args).includes('"variable":"color/brand","value":"#2563eb"') && editsPlugin.commands("write").length === writesBeforeDry);
     const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
     ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
     // A spec by path (spec-file.ts): the server reads it, so the plugin gets the spec itself, exactly as if sent inline;
