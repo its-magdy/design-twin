@@ -1093,6 +1093,31 @@ the bridge side can turn it on.
   to one user and this plugin. It is not per file: the plugin cannot reliably name a file (`fileKey` is only for
   private plugins, and file names repeat), and a per-file flag stored in the document would itself be an edit.
   Untick it when you are done.
+
+### "Review each write" — the designer applies or rejects each batch
+Under **Allow edits** the plugin window has a second checkbox, **Review each write**, also **off by default** (off,
+writes apply at once). When it is on, a `figma_write` batch that resolves against the file does not run: the window
+shows a card listing what the batch would do, one plain line per op (the same description the dry run gives), with
+**Apply**, **Reject** and a box for a reason. The tool call waits for the answer.
+
+- **Apply** runs the batch as usual (one Cmd-Z step).
+- **Reject** refuses it with nothing changed. The error carries the reason the designer typed (up to 500 characters):
+
+  > The designer rejected this write in the Design Twin plugin window. Nothing in the file was changed. Their reason: "…"
+
+  Act on the reason; don't resend the same batch.
+- **Nobody answers within 5 minutes**: refused with nothing changed ("Nobody applied or rejected this write …").
+  The write's bridge budget is 6 minutes, so this reply always comes first.
+- **The call is cancelled, or the bridge drops** while the card is up: the card is withdrawn, so a designer can never
+  apply a write nobody is waiting for. Closing the plugin window stops the plugin, and the bridge rejects the call on
+  the disconnect; nothing was applied.
+- **"Allow edits" is unticked while the card is up**: refused at once as edits-off. "Allow edits" off is still checked
+  first, before any card.
+
+A dry run reports `reviewWrites: true` when it is on, and its note says a real write will wait. Only the window's
+checkbox can set it (saved per user, like Allow edits); nothing on the bridge side can turn it off or answer a card.
+This is the plainest form of the review: how a richer review is shown, when it applies and how the agent waits is
+still being prototyped.
 - **No write is silent.** Each applied batch (and each refused one) shows a Figma toast and a line in the plugin
   window, e.g. "Design Twin applied 3 edits to this file."
 - `dtwin whoami` prints the state (`edits: off — …` / `edits: ALLOWED — …`) and `editsAllowed` is in its JSON.

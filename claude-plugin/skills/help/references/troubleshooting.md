@@ -150,6 +150,11 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   default. Nothing was changed, and the agent cannot turn it on: **ask the user to tick "Allow edits" in the
   Design Twin plugin window**, then retry the same call. The setting is saved for this user in every file, so
   remind them to untick it when they are done. Reads and exports work either way.
+- **`figma_write` waits, then returns "The designer rejected this write …" or "Nobody applied or rejected this write …"**
+  (or a dry run says `reviewWrites: true`) → the designer ticked **Review each write**: every write waits for them to
+  press Apply or Reject in the plugin window (up to 5 minutes). Nothing was changed. On a rejection, act on the reason
+  it quotes rather than resending the same batch; if nobody answered, ask the user to watch the plugin window (or to
+  untick Review each write), then retry.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/export/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-pull (`/designtwin:extract`). Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.

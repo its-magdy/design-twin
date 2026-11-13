@@ -17,6 +17,12 @@ export interface RunFullMsg { type: "run-full"; }
 // sends these — relay.ts never turns a socket frame into either.
 export interface GetAllowEditsMsg { type: "get-allow-edits"; }
 export interface SetAllowEditsMsg { type: "set-allow-edits"; allowed: boolean; }
+// "Review each write" (review.ts): ask for its saved state, or set it — the window's checkbox only, like Allow edits.
+export interface GetReviewWritesMsg { type: "get-review-writes"; }
+export interface SetReviewWritesMsg { type: "set-review-writes"; on: boolean; }
+// The designer's answer on review card `id`: Apply (`apply: true`) or Reject, with the reason they typed. The window's
+// buttons only — relay.ts never turns a socket frame into it.
+export interface ReviewAnswerMsg { type: "review-answer"; id: string; apply: boolean; reason?: string; }
 // Three meanings, one message type (main.ts `case "cancel"`):
 //   no `id`, no `scope` — the designer's Cancel button (answered with `cancel-ack`, unchanged);
 //   `id`                — the bridge gave up on request <id> (relay.ts forwards the socket's
@@ -35,11 +41,15 @@ export type UIToMain =
   | RunFullMsg
   | GetAllowEditsMsg
   | SetAllowEditsMsg
+  | GetReviewWritesMsg
+  | SetReviewWritesMsg
+  | ReviewAnswerMsg
   | CancelMsg
   | BridgeMsg;
 
 const UI_TO_MAIN_TYPES: ReadonlySet<UIToMain["type"]> = new Set([
-  "get-token", "set-token", "get-identity", "run-selection", "run-full", "get-allow-edits", "set-allow-edits", "cancel", "bridge",
+  "get-token", "set-token", "get-identity", "run-selection", "run-full", "get-allow-edits", "set-allow-edits",
+  "get-review-writes", "set-review-writes", "review-answer", "cancel", "bridge",
 ]);
 
 export function isUIToMain(x: unknown): x is UIToMain {
@@ -105,6 +115,16 @@ export interface CancelAckMsg { type: "cancel-ack"; accepted: boolean; label: st
 export interface AllowEditsMsg { type: "allow-edits"; allowed: boolean; }
 /** A write batch changed the file, or was refused (writes.ts announce): `text` is the sentence Figma's toast showed. */
 export interface WritesMsg { type: "writes"; applied: number; ok: boolean; text: string; }
+/** The Review each write setting as the main thread holds it (the answer to get-/set-review-writes). */
+export interface ReviewWritesMsg { type: "review-writes"; on: boolean; }
+/** A write batch waits for the designer (review.ts): one plain line per op (commands.ts reviewLines, the dry run's
+ *  description), and how long the card waits before the batch is refused unreviewed. */
+export interface ReviewMsg { type: "review"; id: string; lines: string[]; waitMs: number; }
+/** How a review card ended: applied by the designer, rejected, nobody answered in time, withdrawn by the bridge (its
+ *  caller gave up or disconnected), stopped with Cancel, or ended because "Allow edits" was unticked. */
+export type ReviewEnd = "approved" | "rejected" | "timed-out" | "withdrawn" | "cancelled" | "edits-off";
+/** Card `id` has ended (whatever ended it): the window takes it down. */
+export interface ReviewEndMsg { type: "review-end"; id: string; end: ReviewEnd; }
 export interface BridgeResultMsg { type: "bridge-result"; id?: string; ok: boolean; result: unknown; error?: string; }
 
 export type MainToUI =
@@ -116,6 +136,9 @@ export type MainToUI =
   | CancelAckMsg
   | AllowEditsMsg
   | WritesMsg
+  | ReviewWritesMsg
+  | ReviewMsg
+  | ReviewEndMsg
   | BridgeResultMsg
   // run-begin / progress / run-end, posted by progress.ts
   | ProgressPost;

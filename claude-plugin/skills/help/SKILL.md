@@ -98,7 +98,7 @@ tool's full name is `mcp__designtwin__<tool>`), Claude gets live tools instead o
 `figma_export_design_system` / `figma_export_selection` / `figma_export_url`, `figma_screenshot`,
 `design_get_component`, `design_drift_lint`, and `figma_write` for the small set of safe writes (only after
 the user ticks **Allow edits** in the plugin window — it is off by default; if a write is refused, ask them to
-tick it, then retry). The
+tick it, then retry; with **Review each write** ticked, each write waits for their Apply or Reject there). The
 standout move is pasting a Figma link mid-conversation — `figma_export_url` reads that exact node
 live, so "what spacing does this use?" gets answered from the real file, not a stale export. Inline it answers with
 a one-line-per-node outline (`format: "json"` for the raw node JSON; the outline's first line says what level you got).

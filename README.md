@@ -251,7 +251,8 @@ work the same way on those files.
 - **Big files are slow.** A whole-file pull of a large file can take many minutes (the default budget is 300 s, and
   900 s with `--all-pages`), so pull one screen or page at a time.
 - **Allow edits** is off by default and nothing on the bridge or MCP side can turn it on. Once ticked, it stays on for
-  every file until you untick it. `figma_write` runs no arbitrary code.
+  every file until you untick it. `figma_write` runs no arbitrary code. Tick **Review each write** as well to see each
+  change in the plugin window first and apply or reject it (with a reason that goes back to Claude).
 - **Windows details.** The `dtwin serve` daemon runs over a named pipe with a token handshake there
   ([#61](https://github.com/its-magdy/design-twin/pull/61), closing [#12](https://github.com/its-magdy/design-twin/issues/12)).
   A few raw-socket daemon checks are POSIX-only and skipped on Windows CI.

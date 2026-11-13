@@ -61,6 +61,8 @@ export interface PostedMessage {
   requestId?: string;
   /** main.ts `bridge-result` */
   id?: string; ok?: boolean; result?: unknown; error?: string;
+  /** review.ts `review` (id, lines, waitMs) / `review-end` (id, end); main.ts `review-writes` (on) */
+  lines?: string[]; waitMs?: number; end?: string; on?: boolean;
 }
 export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
@@ -215,6 +217,20 @@ export interface Scene {
   rootPluginData?: (key: string) => string;
   /** what figma.clientStorage holds when the plugin starts (e.g. `{ allowEdits: true }` saved last session) */
   clientStorage?: Record<string, unknown>;
+  /** the plugin realm's setTimeout/clearTimeout (the real ones by default): a fake clock's, for a case that times out */
+  timers?: PluginTimers;
+}
+/** The timer pair the plugin's main thread has (review.ts waits on one). */
+export interface PluginTimers { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }
+/** A fake clock (fake-clock.ts) as the plugin realm's timers: time moves only when the case advances it. */
+export function clockTimers(clock: { after(ms: number, fn: () => void): () => void }): PluginTimers {
+  // A handle is the clock's own cancel function, kept here by id so clearTimeout needs no cast.
+  const cancels = new Map<number, () => void>();
+  let seq = 0;
+  return {
+    setTimeout: (fn, ms) => { const id = ++seq; cancels.set(id, clock.after(ms, () => { cancels.delete(id); fn(); })); return id; },
+    clearTimeout: (h) => { const id = typeof h === "number" ? h : -1; const c = cancels.get(id); cancels.delete(id); if (c) c(); },
+  };
 }
 /** A scene with every table present: what a world's lookups read, live. */
 export interface ResolvedScene {
@@ -373,9 +389,12 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   Object.assign(figma, rest);
   if (varOverrides) Object.assign(figma.variables, varOverrides);
 
+  const timers = delta.timers ?? base.timers;
   const context: Record<string, unknown> = {
     figma, __html__: "<ui/>", Promise, JSON, Math, Array, Object, Symbol, Map, Set, Date, console: pluginConsole,
     parseInt, Number, String, Boolean, isNaN, undefined,
+    setTimeout: timers ? timers.setTimeout : setTimeout,
+    clearTimeout: timers ? timers.clearTimeout : clearTimeout,
   };
   vm.createContext(context);
   BUNDLE.runInContext(context);

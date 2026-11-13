@@ -258,6 +258,9 @@ export interface WhoamiReply {
   /** Whether the designer has ticked "Allow edits" in the plugin window (edits.ts). Absent from a plugin
    *  built before the opt-in existed — which applies every write it is sent. */
   editsAllowed?: boolean;
+  /** Whether the designer has ticked "Review each write" in the plugin window (figma-plugin/src/review.ts): a write
+   *  then waits until they apply or reject it there. Absent from a plugin built before the review card existed. */
+  reviewWrites?: boolean;
 }
 
 /** One selected node (figma.currentPage.selection, summarised). */
@@ -388,13 +391,67 @@ export interface AppliedWrite {
   /** delete: the node is gone */
   deleted?: true;
 }
-/** Why a whole batch was refused before any op ran — the one refusal a caller must hand to the PERSON at
- *  the Figma window rather than fix itself. `edits-off`: the designer has not ticked "Allow edits"
- *  (figma-plugin/src/edits.ts); nothing in the file changed. */
-export type WriteRefusal = "edits-off";
+/** Why a whole batch was refused before any op ran — the refusals a caller must hand to the PERSON at the Figma
+ *  window rather than fix itself. Nothing in the file changed (unless `edits-off` also carries `failedAt`, below).
+ *    `edits-off`  — the designer has not ticked "Allow edits" (figma-plugin/src/edits.ts).
+ *    `rejected`   — review was on and the designer pressed Reject on the card (figma-plugin/src/review.ts); their
+ *                   typed reason, if any, is in `reason`.
+ *    `unreviewed` — review was on and nobody applied the batch: no answer in time, the request was withdrawn (the
+ *                   caller gave up or the bridge dropped), or the designer stopped it with Cancel. */
+export type WriteRefusal = "edits-off" | "rejected" | "unreviewed";
 /** The sentence a refused `edits-off` batch carries as `error`, and what figma_write shows the agent. */
 export const EDITS_OFF_MESSAGE =
   "Edits are off in the Design Twin plugin — tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
+/** The longest rejection reason passed on to the agent: longer text is cut, and says so. */
+export const REVIEW_REASON_MAX = 500;
+/** A rejection reason as the agent gets it: trimmed, cut to REVIEW_REASON_MAX; undefined when there is none. */
+export function reviewReason(raw: unknown): string | undefined {
+  const said = typeof raw === "string" ? raw.trim() : "";
+  if (!said) return undefined;
+  return said.length > REVIEW_REASON_MAX ? said.slice(0, REVIEW_REASON_MAX) + "… (cut)" : said;
+}
+/** The sentence a `rejected` batch carries as `error`: the refusal, then the designer's own reason, quoted so it reads
+ *  as theirs. */
+export function rejectedMessage(reason: string | undefined): string {
+  return "The designer rejected this write in the Design Twin plugin window. Nothing in the file was changed. " +
+    (reason ? "Their reason: \"" + reason + "\"" : "They gave no reason.");
+}
+/** The sentence an `unreviewed` batch carries as `error`, by how its review card ended (figma-plugin/src/review.ts). */
+export function unreviewedMessage(end: "timed-out" | "withdrawn" | "cancelled", waitMs: number): string {
+  const nothing = " Nothing in the file was changed.";
+  if (end === "timed-out") {
+    return "Nobody applied or rejected this write in the Design Twin plugin window within " + Math.round(waitMs / 60000) +
+      " min, so it was not applied." + nothing + " Ask the designer to watch the plugin window (or to untick 'Review each write' there), then retry.";
+  }
+  if (end === "cancelled") return "The designer stopped this write with Cancel in the Design Twin plugin window before applying it." + nothing;
+  return "This write was withdrawn before the designer answered its review: the request was abandoned or the bridge disconnected." + nothing;
+}
+/** One line of the plugin window's review card for each op: the sentence the dry run gives (`change`) where it has
+ *  one, else one built from the same preview step's fields. So the card shows the data figma_write's dry run returns
+ *  (writeOpPreview), and any later form of the review can show it too (docs/write-plane-spec.md decision 18). */
+export function reviewLines(ops: readonly WriteOp[]): string[] {
+  return ops.map((o, i) => {
+    const s = writeOpPreview(o, i);
+    if (s.change) return s.change;
+    const parts: string[] = [];
+    if (s.op === "createFrame") parts.push("creates a frame" + (o.name ? " '" + o.name + "'" : "") + " — " + s.target);
+    else if (s.op === "createText") parts.push("creates a text" + (s.newText !== undefined ? " \"" + s.newText + "\"" : "") + " — " + s.target);
+    else if (s.op === "setFill") parts.push("node " + (s.target || "?") + ": the fill becomes " + (s.newFill || "?"));
+    else if (s.op === "setText") parts.push("node " + (s.target || "?") + ": the text becomes \"" + (s.newText !== undefined ? s.newText : "") + "\"");
+    else parts.push(s.op + " " + (s.target || ""));
+    // A create's preview step names only where it lands: what it makes is read from the op itself, every field the
+    // plugin sets (writes.ts applyWrite), so the designer sees the whole of what they apply.
+    if (s.op === "createFrame") {
+      if (o.width && o.height) parts.push(o.width + "×" + o.height);
+      if (o.layoutMode) parts.push((o.layoutMode === "HORIZONTAL" ? "row" : "column") + " auto-layout");
+      if (o.itemSpacing != null) parts.push("gap " + o.itemSpacing);
+      if (o.padding) parts.push("padding " + o.padding.join(" "));
+    }
+    if (s.op === "createText" && o.fontSize) parts.push("size " + o.fontSize);
+    if ((s.op === "createFrame" || s.op === "createText") && o.fill) parts.push("fill " + o.fill);
+    return parts.join(", ");
+  });
+}
 /** writes.ts applyWrites' reply: `ok: false` on a partial failure, with what was applied before it. A batch
  *  refused whole carries `refused` (and no `failedAt`: no op was tried); one stopped partway because the designer
  *  unticked "Allow edits" carries `refused` AND `failedAt`, with the applied prefix. */
@@ -405,6 +462,8 @@ export interface WriteResult {
   failedOp?: string;
   error?: string;
   refused?: WriteRefusal;
+  /** `rejected` only: the reason the designer typed on the review card, when they typed one. */
+  reason?: string;
   /** On a failure: the changes earlier in the batch that were undone — values put back as they were, nodes the batch
    *  created removed, moved nodes back where they were (they are not in `applied`). Absent when there were none, and
    *  when the batch stopped because edits were turned off. */

@@ -30,7 +30,7 @@ import { z } from "zod";
 import { createBridge } from "./server-core.ts";
 import { createRoute } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
-import { TIMEOUTS, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { TIMEOUTS, NAMED_CLIENT_WAIT_MS, REVIEW_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { runRead, tickMessage } from "./read-run.ts";
 import type { ReadRun } from "./read-run.ts";
@@ -742,7 +742,8 @@ const writeOpShape = z.object({
 // `editsAllowed` is the plugin's "Allow edits" checkbox as its whoami reports it: false => a real write would be
 // refused (and `wouldRefuse` says what to ask the designer); null => unknown (no plugin reachable, or one built
 // before the opt-in).
-function previewWrites(ops: WriteOp[], editsAllowed: boolean | null) {
+// `reviewWrites` is its "Review each write" checkbox: true => a real write waits for the designer's Apply or Reject.
+function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWriteSettings) {
   const steps = ops.map(writeOpPreview);
   return {
     dryRun: true,
@@ -755,7 +756,9 @@ function previewWrites(ops: WriteOp[], editsAllowed: boolean | null) {
     steps,
     editsAllowed,
     ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
+    ...(reviewWrites ? { reviewWrites: true } : {}),
     note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch). " +
+      (reviewWrites ? `A real write WAITS (up to ${Math.round(REVIEW_WAIT_MS / 60000)} min) until the designer applies or rejects it in the plugin window. ` : "") +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
         : editsAllowed === null
@@ -773,14 +776,16 @@ function counted(steps: ReadonlyArray<{ effect: WriteEffect }>, effect: "moves" 
 // The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
 // with none): no connected file that `client` names (or none at all), several it could mean, or any failure, is
 // `null` (unknown) — so a named file not connected yet is not waited for.
-async function readEditsAllowed(a: { client?: string | undefined } | undefined): Promise<boolean | null> {
+interface PluginWriteSettings { editsAllowed: boolean | null; reviewWrites: boolean }
+async function readWriteSettings(a: { client?: string | undefined } | undefined): Promise<PluginWriteSettings> {
+  const unknown: PluginWriteSettings = { editsAllowed: null, reviewWrites: false };
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
-    if (p.kind !== "one") return null;
+    if (p.kind !== "one") return unknown;
     const who = await ask("whoami", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client });
-    return typeof who.editsAllowed === "boolean" ? who.editsAllowed : null;
+    return { editsAllowed: typeof who.editsAllowed === "boolean" ? who.editsAllowed : null, reviewWrites: who.reviewWrites === true };
   } catch {
-    return null;
+    return unknown;
   }
 }
 
@@ -809,7 +814,8 @@ registerTool(
       "For anything that OVERWRITES (setFill/setText/patch/setVariableMode/clearVariableMode), call once with dryRun:true, show the user the preview, and only then apply. " +
       "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
       "while it is off a write is refused with that instruction, and a dry run reports editsAllowed:false — " +
-      "ask the designer to tick it, then retry.",
+      "ask the designer to tick it, then retry. " +
+      "With 'Review each write' on, a write waits (≤5 min) for their Apply/Reject; a rejection carries their reason.",
     inputSchema: {
       ...clientShape,
       // Constrain `op` to the ops the plugin actually implements — reject unknown ops at the
@@ -829,16 +835,19 @@ registerTool(
     // idempotentHint is likewise false: re-running a batch creates a SECOND set of frames/text.
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
-  guarded(async (a) => {
+  guarded(async (a, extra) => {
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
-    if (a.dryRun) return textResult(previewWrites(a.ops || [], await readEditsAllowed(a)));
-    // No cancel signal here (unlike the reads): a write cannot be un-applied, and aborting the wait would
-    // only lose the `applied` ids below.
-    const r = await ask("write", { ops: a.ops || [] }, { target: a && a.client });
-    // The designer has not consented: nothing was tried, so there is no op index and nothing to clean up. The
-    // fix is the PERSON's (a checkbox in the plugin window), so say exactly that rather than "write failed".
-    if (r.refused === "edits-off" && !r.applied.length) return errorResult(r.error || EDITS_OFF_MESSAGE);
+    if (a.dryRun) return textResult(previewWrites(a.ops || [], await readWriteSettings(a)));
+    // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
+    // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
+    // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write
+    // nobody is waiting for. A batch already running is not stopped by it (writes have no cancel point).
+    const r = await ask("write", { ops: a.ops || [] }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    // Refused whole — the designer has not consented ("Allow edits" off), rejected the batch on the review card, or
+    // nobody reviewed it: nothing was tried, so there is no op index and nothing to clean up. The answer is the
+    // PERSON's, so say exactly what they did or must do (and pass on their reason) rather than "write failed".
+    if (r.refused && !r.applied.length) return errorResult(r.error || EDITS_OFF_MESSAGE);
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
     // exist in the document and the agent needs their ids to continue or undo. A section with nothing in it
     // (no mode put back, no op left applied) is left out rather than printed as an empty list.

@@ -478,6 +478,15 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   window's status line). The harness ticks the box the way the window does (a `set-allow-edits` message).
   Importing a library component, variable or text style a `createTree` spec or a `patch` names is a write too: it runs
   only once every op of the batch resolved, with the box re-checked right before (`figma-plugin/src/tree-refs.ts`).
+- The designer can review each write (`figma-plugin/src/review.ts`), on top of Allow edits. A second checkbox,
+  **Review each write** (off by default, saved like Allow edits), holds a batch that resolved, before anything touches
+  the file, on a card in the window: one plain line per op (`commands.ts` `reviewLines`, the dry run's own
+  description), Apply, Reject and a reason that goes back to the agent (`refused: "rejected"`, `reason`). Anything but
+  Apply refuses the batch with nothing changed (`refused: "unreviewed"`): no answer within `REVIEW_WAIT_MS` (5 min,
+  shorter than the write's 6-min bridge budget), the bridge withdrawing the request (its caller cancelled or the socket
+  closed, which reaches the waiting card through `Run.onCancel`), Cancel, or Allow edits unticked. Only the window can
+  answer a card or change the setting, as with Allow edits. This is the plainest form on purpose: the richer review is
+  undecided, and replacing it means replacing this module and the card's markup.
 - Destruction is limited to the session's own nodes. A write may create anywhere and overwrite the properties of any
   node (`patch`), but `move` and `delete` work only on nodes this plugin session created
   (`figma-plugin/src/session.ts`: an in-memory list, empty each time the plugin window opens, never written to the

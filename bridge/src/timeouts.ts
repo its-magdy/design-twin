@@ -14,7 +14,11 @@ import { ALLOWED_PORTS } from "./ports.ts";
 //                the first to fail on exactly the large files where looking before you pull matters.
 //   export     — one page / one node: found the hard way on a ~1000-node file.
 //   exportAll  — whole file / --all-pages: measured >15 min on a real 25-page file.
-export const TIMEOUTS = { command: 120000, selection: 120000, list: 300000, export: 300000, exportAll: 900000 };
+//   write      — a write batch. With "Review each write" on (figma-plugin/src/review.ts) it waits for the designer for
+//                up to REVIEW_WAIT_MS before it runs, so its budget is that wait plus a minute for the batch itself:
+//                the plugin's own "nobody answered" reply always lands before the bridge would give up.
+export const REVIEW_WAIT_MS = 300000;
+export const TIMEOUTS = { command: 120000, selection: 120000, list: 300000, export: 300000, exportAll: 900000, write: REVIEW_WAIT_MS + 60000 };
 
 // The scope -> tier RULE is read-plan.ts's (with the rest of what a read sends): hoisting only the numbers
 // still left both front-ends restating which tier an export picks, and they had already drifted once (the

@@ -27,6 +27,7 @@ src/
   assets.ts      vector/icon -> SVG, image -> PNG, reference PNG (whole-frame + on-demand single-node), dev-resource links
   writes.ts      minimal, explicit, no-eval write ops (code -> design), refused while "Allow edits" is off
   edits.ts       the "Allow edits" opt-in: off by default, saved per user in clientStorage
+  review.ts      "Review each write": a write waits on a card in the window until the designer applies or rejects it
   run.ts         one run's context: read options, counters, warnings, asset tables, memo caches, cancel flag
   state.ts       the run scheduler: queue, bracket (opens/closes each run's context), bridge cancels
   progress.ts    export progress frames + the cancellation flag/error (main thread -> ui.html)
@@ -46,6 +47,12 @@ file: every write from the bridge (`figma_write`) is refused before anything cha
 thread decides (`src/edits.ts`, checked in `applyWrites`); the checkbox only shows what it holds, and
 nothing on the bridge can set it. The setting is saved per user for every file (`figma.clientStorage`).
 Every applied or refused batch shows a Figma toast and a line in the window.
+
+**Review each write** (off by default, saved the same way) holds every write that resolves against the file on a card
+at the top of the window: one plain line per op, **Apply**, **Reject**, and a reason box whose text goes back to the
+agent with the rejection (`src/review.ts`). The card ends without applying anything when nobody answers within 5
+minutes, when the bridge withdraws the request (its caller gave up or disconnected), on Cancel, or when "Allow edits"
+is unticked.
 
 ## Dev Mode
 

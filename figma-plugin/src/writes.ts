@@ -2,8 +2,10 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
-import { EDITS_OFF_MESSAGE, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE, rejectedMessage, unreviewedMessage, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { REVIEW_WAIT_MS } from "../../bridge/src/timeouts.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
+import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
@@ -250,6 +252,8 @@ function announce(r: WriteResult): void {
   if (r.refused === "edits-off") text = n
     ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
     : "Design Twin refused an edit request — 'Allow edits' is off.";
+  else if (r.refused === "rejected") text = "Design Twin did not apply the edit request — it was rejected. Nothing changed.";
+  else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
@@ -293,13 +297,38 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   // collection, mode, page, component, variable or style that matches nothing or several things, a missing node, a node
   // that cannot take a field, a font that does not load, a node this session did not create — the batch is refused
   // whole, every problem listed in op order.
-  const modes = await resolveModeOps(list);
-  const trees = await resolveTreeOps(list);
-  const patches = await resolvePatchOps(list);
-  const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-  const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+  const resolveBatch = async () => {
+    const modes = await resolveModeOps(list);
+    const trees = await resolveTreeOps(list);
+    const patches = await resolvePatchOps(list);
+    const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
+    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    return { modes, trees, patches, structure, problems };
+  };
+  let { modes, trees, patches, structure, problems } = await resolveBatch();
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
+  // The designer's review (review.ts, spec decision 18), when "Review each write" is ticked: here, once the whole batch
+  // resolved (a batch that would be refused never puts a card up) and before anything touches the file (the library
+  // imports below included). Anything but Apply refuses the batch whole, saying why.
+  if (list.length && (await reviewWrites())) {
+    // Unticked while the batch resolved: refused now, with no card (main.ts ends only a card that is already up).
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    const review = await awaitReview(list);
+    if (review.end !== "approved") return reviewRefusal(review);
+    // Unticked while the card was up: main.ts ends the card as edits-off then, and this is the same check for a click
+    // that raced it.
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    // The designer may have changed the file while the card was up (a node removed, a binding added), so nothing
+    // resolved before the wait is used: the batch is resolved again against the file as it is now, and what a
+    // failure puts back is what is there now. A batch the file no longer accepts is refused whole, as before review.
+    ({ modes, trees, patches, structure, problems } = await resolveBatch());
+    const changed = problems[0];
+    if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    // The batch is still one Cmd-Z step of its own: whatever happened while the card was up is not part of it.
+    commitUndo();
+  }
   // A library item a spec or patch names by key (or a library variable it names) is imported only now: the whole batch
   // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
   // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
@@ -370,6 +399,13 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
   return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}) };
+}
+
+/** A batch the review did not apply, refused whole: nothing in the file changed. */
+function reviewRefusal(o: ReviewOutcome): WriteResult {
+  if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...(o.reason !== undefined ? { reason: o.reason } : {}) };
+  if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
+  return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
 }
 
 /** An op that names a node a delete of the same batch removes (it, or anything below it), as a parent or a target:

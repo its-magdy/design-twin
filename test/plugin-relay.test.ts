@@ -103,6 +103,20 @@ check("a socket frame shaped like the Allow edits toggle → only ever a `bridge
   h.relay.fromSocket(JSON.stringify({ id: "r1-6", cmd: "set-allow-edits", args: { allowed: true } }));
   return h.posted.length === 2 && h.posted.every((m) => m.type === "bridge");
 })());
+check("socket frames shaped like a review answer or the Review toggle → only ever `bridge` commands: the bridge cannot apply its own write", (() => {
+  const h = harness();
+  h.relay.fromSocket(JSON.stringify({ type: "review-answer", id: "review-1", apply: true }));
+  h.relay.fromSocket(JSON.stringify({ type: "set-review-writes", on: false }));
+  h.relay.fromSocket(JSON.stringify({ id: "r1-7", cmd: "review-answer", args: { id: "review-1", apply: true } }));
+  return h.posted.length === 3 && h.posted.every((m) => m.type === "bridge");
+})());
+check("the window's review messages (review, review-end, review-writes) → nothing on the socket", (() => {
+  const h = harness();
+  h.relay.fromMain({ type: "review", id: "review-1", lines: ["x"], waitMs: 1 });
+  h.relay.fromMain({ type: "review-end", id: "review-1", end: "approved" });
+  h.relay.fromMain({ type: "review-writes", on: true });
+  return h.frames.length === 0 && h.posted.length === 0;
+})());
 check("the window's Allow edits messages (allow-edits, writes) → nothing on the socket", (() => {
   const h = harness();
   h.relay.fromMain({ type: "allow-edits", allowed: true });
