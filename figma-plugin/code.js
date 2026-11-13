@@ -6892,16 +6892,25 @@
       const bad = writeOpError(op, i);
       if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
     }
-    const modes = await resolveModeOps(list);
-    const trees = await resolveTreeOps(list);
-    const patches = await resolvePatchOps(list);
-    const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    const resolveBatch = async () => {
+      const modes2 = await resolveModeOps(list);
+      const trees2 = await resolveTreeOps(list);
+      const patches2 = await resolvePatchOps(list);
+      const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
+      const problems2 = [...modes2.problems, ...trees2.problems, ...patches2.problems, ...structure2.problems, ...deleteConflicts(list, structure2.deletes, structure2.moves)].sort((a, b) => a.index - b.index);
+      return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, problems: problems2 };
+    };
+    let { modes, trees, patches, structure, problems } = await resolveBatch();
     const firstProblem = problems[0];
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
     if (list.length && await reviewWrites()) {
+      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       const review = await awaitReview(list);
       if (review.end !== "approved") return reviewRefusal(review);
+      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      ({ modes, trees, patches, structure, problems } = await resolveBatch());
+      const changed = problems[0];
+      if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       commitUndo();
     }

@@ -194,6 +194,21 @@ export const cases: Case[] = [{
     ok("[REVIEW] unticked: writes apply directly again", e.card === undefined && re?.ok === true && w.label.characters === "new");
   },
 }, {
+  name: "Review each write: 'Allow edits' unticked while the batch resolves — refused edits-off, no card",
+  async run() {
+    const w = reviewWorld({ clientStorage: { reviewWrites: true, allowEdits: true } });
+    // The patch's node lookup is where the batch waits: the designer unticks the box there.
+    const lookup = w.figma.getNodeByIdAsync;
+    let unticked = false;
+    w.figma.getNodeByIdAsync = async (id: string) => {
+      if (!unticked) { unticked = true; await w.allowEdits(false); }
+      return lookup(id);
+    };
+    const r = await w.api.applyWrites([{ op: "patch", nodeId: "t:1", set: { name: "Renamed" } }]);
+    ok("[REVIEW] unticked during resolution: refused edits-off at once, no card, file untouched",
+      unticked && r.refused === "edits-off" && !w.posted.some((m) => m.type === "review") && w.label.name === "Label");
+  },
+}, {
   name: "Review each write: direct applyWrites (the test surface) meets the same review",
   async run() {
     const w = reviewWorld({ clientStorage: { reviewWrites: true, allowEdits: true } });

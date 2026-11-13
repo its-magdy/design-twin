@@ -1637,7 +1637,47 @@ export const cases: Case[] = [{
       stopped.ok === false && /'Allow edits' was turned off while the batch was being put back/.test(stopped.error ?? "")
       && JSON.stringify(stopped.applied) === JSON.stringify([{ id: "rx:2" }]) && stopped.restored === undefined);
   },
+}, {
+  name: "review (review.ts): an approved batch is resolved against the file as it is after the wait",
+  async run() {
+    const { w, h, node } = await patchWorld();
+    await w.send({ type: "set-review-writes", on: true });
+    const spaceMd = Object.values(w.scene.variables).find((v) => v.name === "space/md");
+    const card = node("card");
+    const tick = async (until: () => boolean): Promise<void> => { for (let i = 0; i < 200 && !until(); i++) await new Promise((r) => setTimeout(r, 0)); };
+    const cardId = (): string => String([...w.posted].reverse().find((m) => m.type === "review")?.id);
+
+    // The designer binds the card's gap while the card is up; the batch then fails, and its put-back must keep that
+    // binding (what is put back is what was there when the batch ran, not when it first resolved).
+    w.trap.add("cornerRadius");
+    const from = w.posted.length;
+    const pending = w.api.applyWrites([{ op: "patch", nodeId: h.card, set: { layout: { gap: 6 } } }, { op: "patch", nodeId: h.card, set: { radius: 1 } }]);
+    await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
+    const bind = card?.setBoundVariable;
+    if (callable(bind)) bind("itemSpacing", spaceMd);
+    await w.send({ type: "review-answer", id: cardId(), apply: true });
+    const r = await pending;
+    w.trap.clear();
+    const bound = card?.boundVariables as Record<string, { id?: string }> | undefined;
+    ok("[REVIEW-RESOLVE] a binding the designer added during review survives the batch's put-back",
+      r.ok === false && r.failedAt === 1 && spaceMd !== undefined && bound?.itemSpacing?.id === spaceMd.id);
+
+    // A node removed during review: refused whole, saying the file changed while it waited.
+    const from2 = w.posted.length;
+    const spare = node("spare");
+    const pending2 = w.api.applyWrites([{ op: "patch", nodeId: h.spare, set: { name: "Gone?" } }]);
+    await tick(() => w.posted.slice(from2).some((m) => m.type === "review"));
+    const drop = spare?.remove;
+    if (callable(drop)) drop();
+    await w.send({ type: "review-answer", id: cardId(), apply: true });
+    const r2 = await pending2;
+    ok("[REVIEW-RESOLVE] a node removed during review: refused whole, the error says the file changed while it waited",
+      r2.ok === false && r2.applied.length === 0 && /the file changed while the write waited for review/.test(r2.error ?? ""));
+  },
 }];
+
+/** A fake node's method, typed for a call. */
+const callable = (f: unknown): f is (...a: unknown[]) => unknown => typeof f === "function";
 
 /** A tree world with a screen to patch: a column (its gap bound to space/md) holding an email text, a card frame with
  *  auto-layout and a text, a Button instance and a spare frame. `h` maps each handle to its id; `node` reads a node by

@@ -297,22 +297,34 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   // collection, mode, page, component, variable or style that matches nothing or several things, a missing node, a node
   // that cannot take a field, a font that does not load, a node this session did not create — the batch is refused
   // whole, every problem listed in op order.
-  const modes = await resolveModeOps(list);
-  const trees = await resolveTreeOps(list);
-  const patches = await resolvePatchOps(list);
-  const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-  const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+  const resolveBatch = async () => {
+    const modes = await resolveModeOps(list);
+    const trees = await resolveTreeOps(list);
+    const patches = await resolvePatchOps(list);
+    const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
+    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    return { modes, trees, patches, structure, problems };
+  };
+  let { modes, trees, patches, structure, problems } = await resolveBatch();
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
   // The designer's review (review.ts, spec decision 18), when "Review each write" is ticked: here, once the whole batch
   // resolved (a batch that would be refused never puts a card up) and before anything touches the file (the library
-  // imports below included). Anything but Apply refuses the batch whole, saying why. A node the designer changes or
-  // removes while the card is up is met when its op runs, and the batch puts itself back as on any failure.
+  // imports below included). Anything but Apply refuses the batch whole, saying why.
   if (list.length && (await reviewWrites())) {
+    // Unticked while the batch resolved: refused now, with no card (main.ts ends only a card that is already up).
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     const review = await awaitReview(list);
     if (review.end !== "approved") return reviewRefusal(review);
     // Unticked while the card was up: main.ts ends the card as edits-off then, and this is the same check for a click
     // that raced it.
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    // The designer may have changed the file while the card was up (a node removed, a binding added), so nothing
+    // resolved before the wait is used: the batch is resolved again against the file as it is now, and what a
+    // failure puts back is what is there now. A batch the file no longer accepts is refused whole, as before review.
+    ({ modes, trees, patches, structure, problems } = await resolveBatch());
+    const changed = problems[0];
+    if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     // The batch is still one Cmd-Z step of its own: whatever happened while the card was up is not part of it.
     commitUndo();
