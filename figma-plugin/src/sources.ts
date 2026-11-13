@@ -432,10 +432,17 @@ function putBack(o: object, k: string, v: unknown): void {
   if (!Reflect.set(o, k, v)) throw new Error("cannot set " + k);
 }
 
-/** Set a setStyle's fields; the Change puts the old ones back (a text style's bound variables included). */
-export function applyStyle(t: StyleTarget, consent: () => void): Change {
+/** Set a setStyle's fields; the Change puts the old ones back (a text style's bound variables included). A text style's
+ *  font now and the one it ends with are loaded first, read live: an earlier op of the batch (a variable its font is
+ *  bound to) may have changed it since the batch resolved, and putting it back needs it loaded too. */
+export async function applyStyle(t: StyleTarget, consent: () => void): Promise<Change> {
   const st = t.style;
   const set = t.set;
+  if (st.type === "TEXT") {
+    for (const f of [st.fontName, fontAfter(st.fontName, set)]) {
+      try { await figma.loadFontAsync(f); } catch { throw new Error("text style '" + st.name + "': font '" + f.family + " " + f.style + "' is not available in this file (an earlier op of the batch changed its font)"); }
+    }
+  }
   const old = keepStyle(st);
   const restore = (allowed: () => boolean): void => {
     const check = (): void => { if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off"); };
@@ -515,7 +522,7 @@ function styleBoundIds(st: BaseStyle): Set<string> {
     for (const k of Object.keys(v)) scan(getF(v, k));
   };
   scan(getF(st, "boundVariables"));
-  for (const k of ["paints", "effects"]) { const list = getF(st, k); if (Array.isArray(list)) for (const p of list as unknown[]) if (p && typeof p === "object") scan(getF(p, "boundVariables")); }
+  for (const k of ["paints", "effects", "layoutGrids"]) { const list = getF(st, k); if (Array.isArray(list)) for (const p of list as unknown[]) if (p && typeof p === "object") scan(getF(p, "boundVariables")); }
   return out;
 }
 
@@ -536,7 +543,8 @@ async function variableImpact(v: Variable, lookups: Lookups, warn: (m: string) =
     for (const x of locals) if (!ids.has(x.id) && aliasIds(x).some((id) => ids.has(id))) { ids.add(x.id); grew = true; }
   }
   const styles: BaseStyle[] = [];
-  for (const st of [...(await figma.getLocalPaintStylesAsync()), ...(await figma.getLocalTextStylesAsync()), ...(await figma.getLocalEffectStylesAsync())]) {
+  const local: BaseStyle[] = [...(await figma.getLocalPaintStylesAsync()), ...(await figma.getLocalTextStylesAsync()), ...(await figma.getLocalEffectStylesAsync()), ...(await figma.getLocalGridStylesAsync())];
+  for (const st of local) {
     for (const id of styleBoundIds(st)) if (ids.has(id)) { styles.push(st); break; }
   }
   const nodes = new Set<string>();

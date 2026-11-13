@@ -42,6 +42,8 @@ function sourceWorld() {
   const gap = variable("VariableID:51:2", "space/gap", "FLOAT", spacing, { "51:0": 8 });
   const cta = variable("VariableID:51:3", "label/cta", "STRING", spacing, { "51:0": "Go" });
   const beta = variable("VariableID:51:4", "flag/beta", "BOOLEAN", spacing, { "51:0": false });
+  // A string variable the text style's font family is bound to: changing it changes the style's font (see textFields).
+  const family = variable("VariableID:51:5", "font/family", "STRING", spacing, { "51:0": "Inter" });
   const libVar = variable("VariableID:lib/9:1", "color/core", "COLOR", core, { "9:0": rgba(0, 1, 0) }, { remote: true, key: KEY("c") });
 
   // ---- layers that use them
@@ -85,7 +87,10 @@ function sourceWorld() {
   const effectStyle: FakeNode = { id: "S:shadow,", key: "key-shadow", type: "EFFECT", name: "Shadow/Card", description: "", remote: false,
     effects: Object.freeze([{ type: "DROP_SHADOW", color: rgba(0, 0, 0, 0.25), offset: { x: 0, y: 4 }, radius: 4, spread: 0, visible: true, blendMode: "NORMAL", showShadowBehindNode: false }]),
     getStyleConsumersAsync: async () => [] };
-  const gridStyle: FakeNode = { id: "S:grid,", key: "key-grid", type: "GRID", name: "Grid/12", remote: false, layoutGrids: [] };
+  const gridded = n("2:7", "Gridded");
+  const gridStyle: FakeNode = { id: "S:grid,", key: "key-grid", type: "GRID", name: "Grid/12", remote: false,
+    layoutGrids: [{ pattern: "COLUMNS", count: 12, gutterSize: 8, boundVariables: { gutterSize: alias(gap.id) } }],
+    getStyleConsumersAsync: async () => [{ node: gridded, fields: ["gridStyleId"] }] };
   const libStyle: FakeNode = { id: "S:remote,", key: KEY("a"), type: "PAINT", name: "Core/Brand", remote: true, paints: [] };
 
   // ---- components
@@ -107,7 +112,10 @@ function sourceWorld() {
   const components = page("0:11", "Components", [row]);
   row.parent = components;
   const nodes = Object.fromEntries([...screenLayers, divider, row, avatar, avatarDot, screens, components].map((x) => [String(x.id), x]));
-  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta };
+  const vars = { [primary.id]: primary, [accent.id]: accent, [gap.id]: gap, [cta.id]: cta, [beta.id]: beta, [family.id]: family };
+  // The text style's family follows the variable it is bound to, as Figma's does.
+  const setFamily = family.setValueForMode;
+  family.setValueForMode = (m: string, x: unknown) => { setFamily(m, x); textFields.fontName = { family: String(x), style: isObj(textFields.fontName) ? String(textFields.fontName.style) : "Regular" }; };
   const w = world({
     pages: [screens, components], currentPage: screens, nodes,
     variables: vars, collections: { [brand.id]: brand, [spacing.id]: spacing },
@@ -119,7 +127,7 @@ function sourceWorld() {
       getVariablesInLibraryCollectionAsync: async () => [{ name: "color/core", key: KEY("c"), resolvedType: "COLOR" }],
     },
   }, {
-    loadFontAsync: async (f: { family: string; style: string }) => { if (f.family !== "Inter" || !["Regular", "Bold", "Semi Bold"].includes(f.style)) throw new Error("font not found"); loaded.add(fontKey(f)); },
+    loadFontAsync: async (f: { family: string; style: string }) => { if (!["Inter", "Inter Display"].includes(f.family) || !["Regular", "Bold", "Semi Bold"].includes(f.style)) throw new Error("font not found"); loaded.add(fontKey(f)); },
     variables: {
       createVariableAlias: (v: FakeVariable) => alias(v.id),
       setBoundVariableForPaint: (p: FakeNode, field: string, v: FakeVariable | null) => ({ ...p, boundVariables: v ? { [field]: alias(v.id) } : {} }),
@@ -247,6 +255,21 @@ export const cases: Case[] = [{
     ok("[SOURCE] …and one an earlier op of the batch makes is refused", !loop.ok && /aliases 'brand\/accent'.*loop/.test(loop.error ?? "") && val(w.gap, "51:0") === 8);
   },
 }, {
+  name: "a text style whose font an earlier variable edit changed: its live font is loaded, so a failure puts it back",
+  async run() {
+    const w = sourceWorld();
+    await w.allowEdits();
+    const r = await write(w, [
+      { op: "setVariable", variable: "font/family", value: "Inter Display" },
+      { op: "setStyle", style: "Body", set: { font: "Inter", weight: "Bold" } },
+      { op: "patch", nodeId: "2:6", set: { fills: [{ type: "solid", color: "#000000" }] } },
+    ]);
+    ok("[SOURCE] the batch fails at the patch, and the style is back on its own font", !r.ok && r.failedAt === 2 && (r.restored ?? []).length === 2 && same(w.textStyle.fontName, { family: "Inter", style: "Regular" }));
+    const bad = await write(w, [{ op: "setVariable", variable: "font/family", value: "Comic" }, { op: "setStyle", style: "Body", set: { size: 20 } }]);
+    ok("[SOURCE] a font an earlier op switched the style to that the file lacks fails the style edit, and the batch is put back",
+      !bad.ok && bad.failedAt === 1 && /font 'Comic Regular' is not available/.test(bad.error ?? "") && w.textStyle.fontSize === 16);
+  },
+}, {
   name: "a source edit that a later op's failure takes back is put back exactly (values, aliases, a text style's bindings)",
   async run() {
     const w = sourceWorld();
@@ -290,7 +313,7 @@ export const cases: Case[] = [{
     ]);
     const s = imp ? imp.steps : [];
     ok("[SOURCE] primary: 2 layers (one through the alias accent), 1 aliasing variable, no style", same(s[0], { index: 0, op: "setVariable", affects: { nodes: 2, styles: 0, variables: 1 } }));
-    ok("[SOURCE] gap: its bound layer and the layer using the text style bound to it", same(s[1], { index: 1, op: "setVariable", affects: { nodes: 2, styles: 1, variables: 0 } }));
+    ok("[SOURCE] gap: its bound layer, and the layers using the text and grid styles bound to it", same(s[1], { index: 1, op: "setVariable", affects: { nodes: 3, styles: 2, variables: 0 } }));
     ok("[SOURCE] a paint style: its consumers", same(s[2], { index: 2, op: "setStyle", affects: { nodes: 2 } }));
     ok("[SOURCE] a library variable: the refusal, naming the library; a create has no step", /Core Library/.test(s[3]?.problem ?? "") && s.length === 4);
     w.paintStyle.getStyleConsumersAsync = async () => { throw new Error("in Figma: not readable"); };

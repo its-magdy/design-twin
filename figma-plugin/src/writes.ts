@@ -231,7 +231,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     case "setStyle": {
       if (!style) throw new Error("setStyle: the op was not resolved before the batch ran");
       consent();
-      const change = applyStyle(style, consent);
+      const change = await applyStyle(style, consent);
       changes.push(change);
       return change.applied;
     }

@@ -7853,9 +7853,18 @@
     if (JSON.stringify(getF2(o, k)) === JSON.stringify(v)) return;
     if (!Reflect.set(o, k, v)) throw new Error("cannot set " + k);
   }
-  function applyStyle(t, consent2) {
+  async function applyStyle(t, consent2) {
     const st = t.style;
     const set = t.set;
+    if (st.type === "TEXT") {
+      for (const f of [st.fontName, fontAfter(st.fontName, set)]) {
+        try {
+          await figma.loadFontAsync(f);
+        } catch {
+          throw new Error("text style '" + st.name + "': font '" + f.family + " " + f.style + "' is not available in this file (an earlier op of the batch changed its font)");
+        }
+      }
+    }
     const old = keepStyle(st);
     const restore = (allowed2) => {
       const check = () => {
@@ -7958,7 +7967,7 @@
       for (const k of Object.keys(v)) scan(getF2(v, k));
     };
     scan(getF2(st, "boundVariables"));
-    for (const k of ["paints", "effects"]) {
+    for (const k of ["paints", "effects", "layoutGrids"]) {
       const list = getF2(st, k);
       if (Array.isArray(list)) {
         for (const p of list) if (p && typeof p === "object") scan(getF2(p, "boundVariables"));
@@ -7984,7 +7993,8 @@
       }
     }
     const styles = [];
-    for (const st of [...await figma.getLocalPaintStylesAsync(), ...await figma.getLocalTextStylesAsync(), ...await figma.getLocalEffectStylesAsync()]) {
+    const local = [...await figma.getLocalPaintStylesAsync(), ...await figma.getLocalTextStylesAsync(), ...await figma.getLocalEffectStylesAsync(), ...await figma.getLocalGridStylesAsync()];
+    for (const st of local) {
       for (const id of styleBoundIds(st)) if (ids.has(id)) {
         styles.push(st);
         break;
@@ -8388,7 +8398,7 @@
       case "setStyle": {
         if (!style) throw new Error("setStyle: the op was not resolved before the batch ran");
         consent();
-        const change = applyStyle(style, consent);
+        const change = await applyStyle(style, consent);
         changes.push(change);
         return change.applied;
       }
