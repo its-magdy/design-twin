@@ -4,7 +4,7 @@ import { checkPatch } from "../../bridge/src/patch-spec.ts";
 import { MAX_TREE_NODES, NUMBER_TOKEN_FIELDS } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import { MIXED, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
+import { MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -162,6 +162,7 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
           letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", textStyleId: "", fillStyleId: "" }
       : { layoutMode: main ? main.layoutMode : "NONE", clipsContent: true, itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
           primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", layoutWrap: "NO_WRAP", counterAxisSpacing: 0, counterAxisAlignContent: "AUTO", itemReverseZIndex: false,
+          minWidth: null, maxWidth: null, minHeight: null, maxHeight: null,
           cornerRadius: 0, topLeftRadius: 0, topRightRadius: 0, bottomRightRadius: 0, bottomLeftRadius: 0,
           strokeTopWeight: 1, strokeRightWeight: 1, strokeBottomWeight: 1, strokeLeftWeight: 1 };
     const fields: FakeNode = {
@@ -177,6 +178,13 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       if (v === null) { delete bound[field]; fields.boundVariables = bound; return; }
       if (!isNode(v) || typeof v.id !== "string") throw new Error("in Figma: setBoundVariable takes a Variable object");
       fields.boundVariables = { ...bound, [field]: { type: "VARIABLE_ALIAS", id: v.id } };
+      // A bound size limit takes the variable's value, and the node grows or shrinks to meet it (as Figma's layout does).
+      const value = isNode(v.valuesByMode) ? Object.values(v.valuesByMode)[0] : undefined;
+      if (typeof value === "number" && (field === "minWidth" || field === "maxWidth")) {
+        fields[field] = value;
+        const width = num(fields, "width");
+        if ((field === "minWidth" && width < value) || (field === "maxWidth" && width > value)) fields.width = value;
+      }
     };
     if (type === "TEXT") {
       textRuns(fields);
@@ -217,6 +225,7 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
         if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");
         fields.textStyleId = id;
         fields.fontName = st.fontName;
+        fields.lineHeight = { unit: "AUTO" }; // a style replaces the formatting it sets
         if (hooks.onStyle) await hooks.onStyle();
       };
     }
@@ -295,7 +304,7 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
    *  parent is null, so everything below it is gone with it, as in Figma) */
   const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
-  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens } };
+  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
 }
 
 // ---- the design system a kit world has: components, variables, text styles, and a library
@@ -309,6 +318,7 @@ const KIT_VARS: Record<string, FakeVariable> = {
   "VariableID:30:3": variable("VariableID:30:3", "radius/md", "FLOAT", "local-radius-md"),
   "VariableID:30:4": variable("VariableID:30:4", "color/text", "COLOR", "local-text-a"),
   "VariableID:31:4": variable("VariableID:31:4", "color/text", "COLOR", "local-text-b"),
+  "VariableID:30:5": { ...variable("VariableID:30:5", "size/min", "FLOAT", "local-size-min"), valuesByMode: { "30:0": 300 } },
 };
 const style = (id: string, name: string, key: string, family: string, weight: string): FakeNode => ({ id, name, key, type: "TEXT", fontName: { family, style: weight }, fontSize: 24 });
 const KIT_STYLES: FakeNode[] = [
@@ -372,6 +382,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const scene: Scene = {
     variables: KIT_VARS,
     localStyles: { text: KIT_STYLES },
+    styles: Object.fromEntries(KIT_STYLES.map((st) => [String(st.id), st])), // getStyleByIdAsync finds them too
+
     teamLibrary: {
       getAvailableLibraryVariableCollectionsAsync: async () => [{ name: "Core tokens", key: "lib-core", libraryName: "Core Library" }],
       getVariablesInLibraryCollectionAsync: async () => Object.values(library.variables).map((v) => ({ name: v.name, key: String(v.key), resolvedType: v.resolvedType })),
@@ -1382,26 +1394,42 @@ export const cases: Case[] = [{
     const path: FakeNode = { id: "vc:1", type: "VECTOR", name: "Path", cornerRadius: 0 };
     const rich = runText("rx:1", [
       { text: "Hello ", fontSize: 22, fills: RED, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "VariableID:30:2" } } },
-      { text: "World", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Bold" }, fontSize: 30, fills: STYLE_PAINTS, textDecoration: "UNDERLINE" },
+      { text: "World", textStyleId: "S:h1,", fontName: { family: "Inter", style: "Semi Bold" }, fontSize: 30, fills: STYLE_PAINTS, textDecoration: "UNDERLINE",
+        textDecorationStyle: "WAVY", hyperlink: { type: "URL", value: "https://example.com" }, listOptions: { type: "UNORDERED" }, indentation: 1, listSpacing: 4 },
     ]);
-    const p = await patchWorld({ "sw:1": swatch, "pl:1": hex, "vc:1": path, "rx:1": rich });
+    // Two runs with the same paints from two different paint styles: the links are kept run by run.
+    const twins = runText("rx:3", [{ text: "ab", fills: STYLE_PAINTS, fillStyleId: "S:a" }, { text: "cd", fills: STYLE_PAINTS, fillStyleId: "S:b" }]);
+    // A run whose text style uses one font while the run overrides it with another: putting the style back needs the
+    // style's font, which nothing else in the batch loads.
+    const font = { loaded: (_f: unknown): boolean => true };
+    const overridden = runText("rx:4", [{ text: "Title", textStyleId: "S:h1,", fontName: { family: "Roboto", style: "Regular" } }], async () => {}, (f) => font.loaded(f));
+    const p = await patchWorld({ "sw:1": swatch, "pl:1": hex, "vc:1": path, "rx:1": rich, "rx:3": twins, "rx:4": overridden });
+    font.loaded = p.w.fontLoaded;
     const { w, h } = p;
     const fail = { op: "patch", nodeId: h.card, set: { radius: 1 } };
-    const richBefore = runsOf(rich);
+    const richBefore = runsOf(rich), twinsBefore = runsOf(twins), overriddenBefore = runsOf(overridden);
+    const cardWidth = p.node("card")?.width;
     w.trap.add("cornerRadius");
     const r = await w.api.applyWrites([
       { op: "patch", nodeId: "pl:1", set: { radius: 9 } },
       { op: "patch", nodeId: "sw:1", set: { fills: [{ type: "solid", color: "#00ff00" }], strokes: { colors: ["#00ff00"] } } },
       { op: "setFill", nodeId: "sw:1", color: "#ffff00" },
       { op: "patch", nodeId: "rx:1", set: { text: "Bye", styles: { text: "Body" } } },
+      { op: "patch", nodeId: "rx:3", set: { fills: [{ type: "solid", color: "#ff0000" }] } },
+      { op: "patch", nodeId: "rx:4", set: { styles: { text: "Body" } } },
+      { op: "patch", nodeId: h.card, set: { tokens: { minWidth: "size/min" } } },
       fail,
     ]);
     w.trap.clear();
-    ok("[ROLLBACK-2] the batch fails and puts back all four earlier changes", r.ok === false && r.failedAt === 4 && (r.restored ?? []).length === 4 && r.applied.length === 0);
+    ok("[ROLLBACK-2] the batch fails and puts back all seven earlier changes (" + (r.error ?? "") + ")", r.ok === false && r.failedAt === 7 && (r.restored ?? []).length === 7 && r.applied.length === 0);
+    ok("[ROLLBACK-2] runs with the same paints from two paint styles: each run's style link is put back", runsOf(twins) === twinsBefore);
+    ok("[ROLLBACK-2] a style whose font a run overrides: the style's font was loaded up front, so the style and the override both go back", runsOf(overridden) === overriddenBefore);
+    ok("[ROLLBACK-2] a size limit bound to a variable that grew the frame: the limit, the binding and the width go back",
+      p.node("card")?.width === cardWidth && p.node("card")?.minWidth === null && !(isNode(p.node("card")?.boundVariables) && "minWidth" in (p.node("card")?.boundVariables as object)));
     ok("[ROLLBACK-2] a polygon's single corner radius is put back", hex.cornerRadius === 3);
     ok("[ROLLBACK-2] paints linked to a fill and a stroke style: the paints and the style links are put back",
       swatch.fillStyleId === "S:paint" && swatch.strokeStyleId === "S:line" && swatch.fills === STYLE_PAINTS && swatch.strokes === STYLE_PAINTS);
-    ok("[ROLLBACK-2] a text of two runs (one unstyled with its size bound to a variable, one styled with overrides on top) is put back run by run, bindings included",
+    ok("[ROLLBACK-2] a text of two runs (one unstyled with its size bound to a variable, one styled with overrides, a link, a list and a wavy underline) is put back run by run, bindings included",
       runsOf(rich) === richBefore);
     const vec = await w.api.applyWrites([{ op: "patch", nodeId: "vc:1", set: { radius: 4 } }]);
     ok("[ROLLBACK-2] a vector's per-vertex radius is refused (it could not be put back)", vec.ok === false && /a vector's corner radius is set per vertex/.test(vec.error ?? "") && path.cornerRadius === 0);
@@ -1410,10 +1438,12 @@ export const cases: Case[] = [{
     const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Holder", children: [{ text: "", handle: "empty", styles: { text: "Body" } }] } }]);
     const empty = made.applied[0]?.handles?.empty ?? "";
     const emptyNode = w.alive().find((n) => n.id === empty);
+    if (emptyNode) emptyNode.lineHeight = { unit: "PIXELS", value: 30 }; // an override on top of its style
     w.trap.add("cornerRadius");
-    const e = await w.api.applyWrites([{ op: "patch", nodeId: empty, set: { text: "now full" } }, fail]);
+    const e = await w.api.applyWrites([{ op: "patch", nodeId: empty, set: { text: "now full", styles: { text: "Heading/H1" } } }, fail]);
     w.trap.clear();
-    ok("[ROLLBACK-2] an empty styled text keeps its text style when put back", e.ok === false && emptyNode?.characters === "" && emptyNode.textStyleId === "S:body,");
+    ok("[ROLLBACK-2] an empty styled text gets its style back, and the override on top of it",
+      e.ok === false && emptyNode?.characters === "" && emptyNode.textStyleId === "S:body," && JSON.stringify(emptyNode.lineHeight) === JSON.stringify({ unit: "PIXELS", value: 30 }));
   },
 }, {
   name: "patch: 'Allow edits' turned off partway — a stopped patch is still reported, and a put-back stops where it was",
@@ -1483,9 +1513,10 @@ function boundColor(n: FakeNode | undefined): string | null {
  *  its variable on those characters), a text style replaces the formatting and bindings of its range (overrides set
  *  after it stay), and setting `characters` gives the new text the first character's formatting. `onStyle` runs inside
  *  each style call (to untick "Allow edits" there). */
-function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<string, unknown>>, onStyle: () => Promise<void> = async () => {}): FakeNode {
-  const base = { fontName: { family: "Inter", style: "Regular" }, fontSize: 16, textStyleId: "", fills: [], fillStyleId: "", lineHeight: { unit: "AUTO" },
-    letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 0, paragraphIndent: 0, boundVariables: {} };
+function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<string, unknown>>, onStyle: () => Promise<void> = async () => {},
+  fontLoaded: (f: unknown) => boolean = () => true): FakeNode {
+  const base = { ...TEXT_RANGE_DEFAULTS, fontName: { family: "Inter", style: "Regular" }, fontSize: 16, textStyleId: "", fills: [], fillStyleId: "", lineHeight: { unit: "AUTO" },
+    letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {} };
   let chars: Array<Record<string, unknown>> = runs.flatMap((r) => { const { text, ...f } = r; return Array.from(text, () => ({ ...base, ...f })); });
   let text = runs.map((r) => r.text).join("");
   const UNBINDS: Record<string, readonly string[]> = { fontSize: ["fontSize"], lineHeight: ["lineHeight"], letterSpacing: ["letterSpacing"], paragraphSpacing: ["paragraphSpacing"],
@@ -1497,6 +1528,7 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
   const setRange = (f: string) => (s: number, e: number, v: unknown): void => {
     for (const c of chars.slice(s, e)) {
       c[f] = v;
+      if (f === "fills") c.fillStyleId = ""; // new paints detach the paint style, as in Figma
       const b = isNode(c.boundVariables) ? { ...c.boundVariables } : {};
       for (const k of UNBINDS[f] ?? []) delete b[k];
       c.boundVariables = b;
@@ -1505,12 +1537,13 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
   const styleRange = async (s: number, e: number, sid: string): Promise<void> => {
     await onStyle();
     const st = KIT_STYLES.find((x) => x.id === sid);
+    if (st && !fontLoaded(st.fontName)) throw new Error("in Figma: the style's font " + JSON.stringify(st.fontName) + " is not loaded");
     for (const c of chars.slice(s, e)) {
       c.textStyleId = sid;
       if (st) Object.assign(c, { fontName: st.fontName, fontSize: typeof st.fontSize === "number" ? st.fontSize : 16, lineHeight: base.lineHeight, letterSpacing: base.letterSpacing, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: {} });
     }
   };
-  const RANGE = ["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "ParagraphSpacing", "ParagraphIndent", "Fills"];
+  const RANGE = TEXT_RANGE_METHODS;
   const lower = (f: string): string => f.charAt(0).toLowerCase() + f.slice(1);
   const n: FakeNode = {
     id, type: "TEXT", name: "Rich", visible: true, width: 100, height: 20, textAutoResize: "WIDTH_AND_HEIGHT",
@@ -1521,7 +1554,7 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
     get textStyleId() { return uniform("textStyleId"); },
     get fillStyleId() { return uniform("fillStyleId"); },
     get fills() { return uniform("fills"); },
-    set fills(v: unknown) { setRange("fills")(0, chars.length, v); setRange("fillStyleId")(0, chars.length, ""); },
+    set fills(v: unknown) { setRange("fills")(0, chars.length, v); },
     getRangeAllFontNames: (s: number, e: number) => [...new Set(chars.slice(s, e).map((c) => JSON.stringify(c.fontName)))].map((f) => JSON.parse(f) as unknown),
     getStyledTextSegments: (fields: readonly string[]) => {
       const out: Array<Record<string, unknown>> = [];
@@ -1555,6 +1588,6 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
   };
   return n;
 }
-const ALL_SEGMENT_FIELDS = ["fontName", "fontSize", "textStyleId", "fills", "fillStyleId", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent", "boundVariables"];
+const ALL_SEGMENT_FIELDS = [...TEXT_RANGE_METHODS.map((f) => f.charAt(0).toLowerCase() + f.slice(1)), "textStyleId", "fillStyleId", "boundVariables"];
 const runsOf = (n: FakeNode): string => JSON.stringify([n.characters, (n.getStyledTextSegments as (f: readonly string[]) => unknown)(ALL_SEGMENT_FIELDS)]);
 

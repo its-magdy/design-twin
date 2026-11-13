@@ -171,7 +171,7 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     for (const m of misfits) bad(m);
     // A text change keeps the text as it was, run by run, to put back: its fonts must load either way.
     if (node.type === "TEXT") {
-      for (const f of fontsOf(node)) {
+      for (const f of await fontsToKeep(node)) {
         const err = await loadFont(f);
         if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
       }
@@ -222,10 +222,41 @@ const LAYOUT_PROPS = ["layoutMode", "layoutWrap", "itemSpacing", "paddingTop", "
   "counterAxisAlignItems", "counterAxisSpacing", "counterAxisAlignContent", "itemReverseZIndex"] as const;
 const STROKE_PROPS = ["strokes", "strokeWeight", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "strokeAlign"] as const;
 const CORNER_PROPS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"] as const;
-const SEGMENT_FIELDS = ["fontName", "fontSize", "textStyleId", "fills", "fillStyleId", "lineHeight", "letterSpacing", "textCase", "textDecoration",
-  "paragraphSpacing", "paragraphIndent", "boundVariables"] as const;
+/** Every writable range property of a text, by its StyledTextSegment field and the suffix of its getRange* / setRange*
+ *  methods, in the order they are put back (a decoration's details after the decoration). */
+const RANGE_PROPS = [
+  ["fontName", "FontName"], ["fontSize", "FontSize"], ["lineHeight", "LineHeight"], ["letterSpacing", "LetterSpacing"], ["textCase", "TextCase"],
+  ["textDecoration", "TextDecoration"], ["textDecorationStyle", "TextDecorationStyle"], ["textDecorationOffset", "TextDecorationOffset"],
+  ["textDecorationThickness", "TextDecorationThickness"], ["textDecorationColor", "TextDecorationColor"], ["textDecorationSkipInk", "TextDecorationSkipInk"],
+  ["paragraphSpacing", "ParagraphSpacing"], ["paragraphIndent", "ParagraphIndent"], ["listOptions", "ListOptions"], ["listSpacing", "ListSpacing"],
+  ["indentation", "Indentation"], ["hyperlink", "Hyperlink"], ["textWrapStyle", "TextWrapStyle"], ["fills", "Fills"],
+] as const;
+/** Decoration details read null when there is no decoration: nothing to set back. */
+const NULLABLE_ONLY_READ: readonly string[] = ["textDecorationStyle", "textDecorationOffset", "textDecorationThickness", "textDecorationColor", "textDecorationSkipInk"];
+const SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables"] as const;
 type Segment = Pick<StyledTextSegment, (typeof SEGMENT_FIELDS)[number] | "start" | "end">;
 const TEXT_BINDABLE: readonly VariableBindableTextField[] = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
+/** Call `t`'s method `name` (a getRange* / setRange* the typings list in RANGE_PROPS) with `args`. */
+const call = (t: TextNode, name: string, args: readonly unknown[]): unknown => {
+  const fn = getF(t, name);
+  if (typeof fn !== "function") throw new Error("this Figma version has no TextNode." + name);
+  return Reflect.apply(fn, t, args);
+};
+
+/** Every font a text needs to be put back as it is now: the fonts it uses, and the fonts of the text styles its runs use
+ *  (setting a style back needs the style's font loaded, even where the run overrides it with another). */
+export async function fontsToKeep(t: TextNode): Promise<FontName[]> {
+  const out = fontsOf(t);
+  const ids = new Set<string>();
+  if (t.characters.length) { for (const r of t.getStyledTextSegments(["textStyleId"])) if (r.textStyleId) ids.add(r.textStyleId); }
+  else if (typeof t.textStyleId === "string" && t.textStyleId) ids.add(t.textStyleId);
+  for (const id of ids) {
+    let st: BaseStyle | null = null;
+    try { st = await figma.getStyleByIdAsync(id); } catch { st = null; }
+    if (st && st.type === "TEXT") out.push(st.fontName);
+  }
+  return out;
+}
 /** A restore: puts a change back, asking `allowed` after every await (RestoreStopped once "Allow edits" is off). */
 export type Restore = (allowed: () => boolean) => Promise<void>;
 const checker = (allowed: () => boolean) => (): void => { if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off"); };
@@ -246,43 +277,54 @@ async function variablesById(ids: Iterable<string>): Promise<Map<string, Variabl
   return out;
 }
 
-/** A text as it is now, run by run, and how to put it back: its characters; then each run's text style, the formatting
- *  on top of it (or the raw formatting of an unstyled run: font, size, line height, letter spacing, case, decoration,
- *  paragraph spacing and indent), its paints and paint style; then, last, the variables its runs were bound to (a raw
- *  value set above unbinds one). Every font involved must be loaded by the caller. */
+/** A text as it is now, run by run, and how to put it back: its characters; then each run's text style, every writable
+ *  range property on top of it (RANGE_PROPS: font, size, spacing, case, decoration and its details, paragraph and list
+ *  settings, link, paints), its paint style; then, last, the variables its runs were bound to (a raw value set above
+ *  unbinds one). An empty text has no runs: the same properties are kept on the node. Every font it needs to be put back
+ *  (fontsToKeep) is loaded here, before the caller changes anything; one that does not load is an error. */
 export async function keepText(t: TextNode): Promise<Restore> {
+  for (const f of await fontsToKeep(t)) {
+    try { await figma.loadFontAsync(f); } catch {
+      throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
+    }
+  }
   const chars = t.characters;
   const runs: Segment[] = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
-  const whole = chars.length ? null : { fontName: t.fontName, fontSize: t.fontSize, textStyleId: t.textStyleId, fills: t.fills, fillStyleId: t.fillStyleId };
+  // An empty text: its own properties (the ones it has), its style, paint style and bindings.
+  const whole = chars.length ? null : {
+    props: keep(t, RANGE_PROPS.map(([f]) => f)).filter(([, v]) => v !== figma.mixed && v !== null),
+    textStyleId: t.textStyleId, fillStyleId: t.fillStyleId,
+    bound: TEXT_BINDABLE.map((f): [VariableBindableTextField, string | null] => [f, boundId(t, f)]),
+  };
   const ids: string[] = [];
   for (const r of runs) for (const f of TEXT_BINDABLE) { const a = r.boundVariables && r.boundVariables[f]; if (a) ids.push(a.id); }
+  if (whole) for (const [, id] of whole.bound) if (id) ids.push(id);
   const vars = await variablesById(ids);
   return async (allowed) => {
     const check = checker(allowed);
     if (t.characters !== chars) t.characters = chars;
     if (whole) {
-      // An empty text has one formatting: its style (kept when it already matches), then the rest.
+      // Its style (kept when it already matches), then the properties on top, then the bindings.
       const style = typeof whole.textStyleId === "string" ? whole.textStyleId : null;
       if (style !== null && t.textStyleId !== style) { await t.setTextStyleIdAsync(style); check(); }
-      if (whole.fontName !== figma.mixed) putBack(t, "fontName", whole.fontName);
-      if (whole.fontSize !== figma.mixed) putBack(t, "fontSize", whole.fontSize);
-      if (whole.fills !== figma.mixed) putBack(t, "fills", whole.fills);
+      for (const [k, v] of whole.props) putBack(t, k, v);
       if (typeof whole.fillStyleId === "string" && whole.fillStyleId && t.fillStyleId !== whole.fillStyleId) { await t.setFillStyleIdAsync(whole.fillStyleId); check(); }
+      for (const [f, id] of whole.bound) {
+        if (boundId(t, f) === id) continue;
+        const v = id ? vars.get(id) : null;
+        if (v !== undefined) t.setBoundVariable(f, v);
+      }
       return;
     }
     if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) return;
     for (const r of runs) {
       const s = r.start, e = r.end;
       if (t.getRangeTextStyleId(s, e) !== r.textStyleId) { await t.setRangeTextStyleIdAsync(s, e, r.textStyleId); check(); }
-      if (!same(t.getRangeFontName(s, e), r.fontName)) t.setRangeFontName(s, e, r.fontName);
-      if (!same(t.getRangeFontSize(s, e), r.fontSize)) t.setRangeFontSize(s, e, r.fontSize);
-      if (!same(t.getRangeLineHeight(s, e), r.lineHeight)) t.setRangeLineHeight(s, e, r.lineHeight);
-      if (!same(t.getRangeLetterSpacing(s, e), r.letterSpacing)) t.setRangeLetterSpacing(s, e, r.letterSpacing);
-      if (!same(t.getRangeTextCase(s, e), r.textCase)) t.setRangeTextCase(s, e, r.textCase);
-      if (!same(t.getRangeTextDecoration(s, e), r.textDecoration)) t.setRangeTextDecoration(s, e, r.textDecoration);
-      if (!same(t.getRangeParagraphSpacing(s, e), r.paragraphSpacing)) t.setRangeParagraphSpacing(s, e, r.paragraphSpacing);
-      if (!same(t.getRangeParagraphIndent(s, e), r.paragraphIndent)) t.setRangeParagraphIndent(s, e, r.paragraphIndent);
-      if (!same(t.getRangeFills(s, e), r.fills)) t.setRangeFills(s, e, r.fills);
+      for (const [f, suffix] of RANGE_PROPS) {
+        const want: unknown = getF(r, f);
+        if (want === undefined || (want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0)) continue;
+        if (!same(call(t, "getRange" + suffix, [s, e]), want)) call(t, "setRange" + suffix, [s, e, want]);
+      }
       if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) { await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId); check(); }
     }
     for (const r of runs) for (const f of TEXT_BINDABLE) {
@@ -327,8 +369,10 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
     steps.push(() => { if (Object.keys(old).some((k) => { const p = n.componentProperties[k]; return !p || p.value !== old[k]; })) n.setProperties(old); });
   }
   // 2. auto-layout, and 3. the children's places when it is turned on or off (Figma moves them)
+  const LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;
+  const limitsTouched = LIMITS.some((k) => tok[k] !== undefined);
   const sizeTouched = set.box !== undefined || set.widthMode !== undefined || set.heightMode !== undefined || set.layout !== undefined || set.props !== undefined ||
-    set.autoResize !== undefined || set.text !== undefined || set.styles !== undefined || tok.width !== undefined || tok.height !== undefined;
+    set.autoResize !== undefined || set.text !== undefined || set.styles !== undefined || tok.width !== undefined || tok.height !== undefined || limitsTouched;
   if (set.layout) {
     const props = keep(n, LAYOUT_PROPS);
     steps.push(() => { for (const [k, v] of props) putBack(n, k, v); });
@@ -351,7 +395,11 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
     const w = t.node.width, h = t.node.height;
     const sizing = keep(n, ["layoutSizingHorizontal", "layoutSizingVertical"]);
     const auto = keep(n, ["textAutoResize"]);
+    // A size limit bound to a variable can grow or shrink the node: the limits go back first, so they cannot hold the
+    // size below away from what it was.
+    const limits = limitsTouched ? keep(n, LIMITS) : [];
     steps.push(() => {
+      for (const [k, v] of limits) putBack(n, k, v);
       if ((n.width !== w || n.height !== h) && "resize" in n) n.resize(w, h);
       const inFlex = isFlex(t.node.parent);
       for (const [k, v] of sizing) {
@@ -367,7 +415,9 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
   // number fields it binds
   const plain: Array<[string, unknown]> = [];
   const links: Array<(check: () => void) => Promise<void>> = [];
-  const textRuns = n.type === "TEXT" && (set.text !== undefined || set.styles !== undefined || ((set.fills !== undefined || tok.fills !== undefined) && n.fills === figma.mixed));
+  // A text's paints and paint-style links can differ from run to run even when the paints look the same: every change
+  // to them is kept run by run.
+  const textRuns = n.type === "TEXT" && (set.text !== undefined || set.styles !== undefined || set.fills !== undefined || tok.fills !== undefined);
   const notMixed = ([, v]: [string, unknown]): boolean => v !== figma.mixed;
   if ((set.fills !== undefined || tok.fills !== undefined) && !textRuns) {
     plain.push(...keep(n, ["fills"]).filter(notMixed));
@@ -386,7 +436,8 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
   if (set.opacity !== undefined || tok.opacity !== undefined) plain.push(...keep(n, ["opacity"]));
   if (set.hidden !== undefined) plain.push(...keep(n, ["visible"]));
   if (set.name !== undefined) plain.push(...keep(n, ["name"]));
-  for (const k of Object.keys(tok) as NumberTokenField[]) if (k !== "width" && k !== "height" && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
+  const geometry: readonly string[] = ["width", "height", ...LIMITS];
+  for (const k of Object.keys(tok) as NumberTokenField[]) if (geometry.indexOf(k) < 0 && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
   steps.push(() => { for (const [k, v] of plain) putBack(n, k, v); });
   for (const link of links) steps.push(link);
   // 6. the text, run by run

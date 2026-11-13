@@ -399,18 +399,28 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
  *  segment with the fields asked for, each getRange* reads the node's own field and each setRange* sets it, and range
  *  variable bindings live in `rangeBound` — what the plugin's write path uses to keep a text as it was and put it back
  *  (figma-plugin/src/patch.ts keepText). Returns the same node. A text with several runs: test/harness/writes.ts runText. */
+/** What a text's range properties read when nothing set them (Figma's defaults). */
+export const TEXT_RANGE_DEFAULTS: Readonly<Record<string, unknown>> = {
+  textDecorationStyle: null, textDecorationOffset: null, textDecorationThickness: null, textDecorationColor: null, textDecorationSkipInk: null,
+  paragraphSpacing: 0, paragraphIndent: 0, listOptions: { type: "NONE" }, listSpacing: 0, indentation: 0, hyperlink: null, textWrapStyle: "NONE",
+};
+/** The suffixes of the getRange* / setRange* methods a fake text answers. */
+export const TEXT_RANGE_METHODS = ["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "TextDecorationStyle", "TextDecorationOffset",
+  "TextDecorationThickness", "TextDecorationColor", "TextDecorationSkipInk", "ParagraphSpacing", "ParagraphIndent", "ListOptions", "ListSpacing", "Indentation",
+  "Hyperlink", "TextWrapStyle", "Fills"];
 export function textRuns<T extends FakeNode>(node: T): T {
   const n: FakeNode = node;
   const styleField = (k: string): boolean => k === "textStyleId" || k === "fillStyleId";
   const bound = (): Record<string, unknown> => (typeof n.rangeBound === "object" && n.rangeBound !== null ? { ...(n.rangeBound as Record<string, unknown>) } : {});
-  const RANGE = ["FontName", "FontSize", "LineHeight", "LetterSpacing", "TextCase", "TextDecoration", "ParagraphSpacing", "ParagraphIndent", "Fills"];
+  const RANGE = TEXT_RANGE_METHODS;
   const field = (f: string): string => f.charAt(0).toLowerCase() + f.slice(1);
+  const read = (f: string): unknown => (n[f] !== undefined ? n[f] : styleField(f) ? "" : TEXT_RANGE_DEFAULTS[f]);
   Object.assign(n, {
     getStyledTextSegments: (fields: readonly string[]) => {
       const chars = String(n.characters ?? "");
       if (!chars.length) return [];
       const seg: Record<string, unknown> = { start: 0, end: chars.length, characters: chars };
-      for (const f of fields) seg[f] = f === "boundVariables" ? bound() : n[f] ?? (styleField(f) ? "" : f === "paragraphSpacing" || f === "paragraphIndent" ? 0 : undefined);
+      for (const f of fields) seg[f] = f === "boundVariables" ? bound() : read(f);
       return [seg];
     },
     getRangeTextStyleId: () => n.textStyleId ?? "",
@@ -426,7 +436,7 @@ export function textRuns<T extends FakeNode>(node: T): T {
       if (v === null) delete b[f]; else b[f] = { type: "VARIABLE_ALIAS", id: v.id };
       n.rangeBound = b;
     },
-    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => n[field(f)] ?? (f.startsWith("Paragraph") ? 0 : undefined)])),
+    ...Object.fromEntries(RANGE.map((f) => ["getRange" + f, () => read(field(f))])),
     ...Object.fromEntries(RANGE.map((f) => ["setRange" + f, (_s: number, _e: number, v: unknown) => { n[field(f)] = v; }])),
   });
   if (n.textStyleId === undefined) n.textStyleId = "";

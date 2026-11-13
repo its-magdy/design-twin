@@ -5797,7 +5797,7 @@
       const misfits = unfit(node, set);
       for (const m of misfits) bad(m);
       if (node.type === "TEXT") {
-        for (const f of fontsOf(node)) {
+        for (const f of await fontsToKeep(node)) {
           const err = await loadFont(f);
           if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
         }
@@ -5870,21 +5870,52 @@
   ];
   var STROKE_PROPS = ["strokes", "strokeWeight", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "strokeAlign"];
   var CORNER_PROPS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"];
-  var SEGMENT_FIELDS = [
-    "fontName",
-    "fontSize",
-    "textStyleId",
-    "fills",
-    "fillStyleId",
-    "lineHeight",
-    "letterSpacing",
-    "textCase",
-    "textDecoration",
-    "paragraphSpacing",
-    "paragraphIndent",
-    "boundVariables"
+  var RANGE_PROPS = [
+    ["fontName", "FontName"],
+    ["fontSize", "FontSize"],
+    ["lineHeight", "LineHeight"],
+    ["letterSpacing", "LetterSpacing"],
+    ["textCase", "TextCase"],
+    ["textDecoration", "TextDecoration"],
+    ["textDecorationStyle", "TextDecorationStyle"],
+    ["textDecorationOffset", "TextDecorationOffset"],
+    ["textDecorationThickness", "TextDecorationThickness"],
+    ["textDecorationColor", "TextDecorationColor"],
+    ["textDecorationSkipInk", "TextDecorationSkipInk"],
+    ["paragraphSpacing", "ParagraphSpacing"],
+    ["paragraphIndent", "ParagraphIndent"],
+    ["listOptions", "ListOptions"],
+    ["listSpacing", "ListSpacing"],
+    ["indentation", "Indentation"],
+    ["hyperlink", "Hyperlink"],
+    ["textWrapStyle", "TextWrapStyle"],
+    ["fills", "Fills"]
   ];
+  var NULLABLE_ONLY_READ = ["textDecorationStyle", "textDecorationOffset", "textDecorationThickness", "textDecorationColor", "textDecorationSkipInk"];
+  var SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables"];
   var TEXT_BINDABLE = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
+  var call = (t, name, args) => {
+    const fn = getF(t, name);
+    if (typeof fn !== "function") throw new Error("this Figma version has no TextNode." + name);
+    return Reflect.apply(fn, t, args);
+  };
+  async function fontsToKeep(t) {
+    const out = fontsOf(t);
+    const ids = /* @__PURE__ */ new Set();
+    if (t.characters.length) {
+      for (const r of t.getStyledTextSegments(["textStyleId"])) if (r.textStyleId) ids.add(r.textStyleId);
+    } else if (typeof t.textStyleId === "string" && t.textStyleId) ids.add(t.textStyleId);
+    for (const id of ids) {
+      let st = null;
+      try {
+        st = await figma.getStyleByIdAsync(id);
+      } catch {
+        st = null;
+      }
+      if (st && st.type === "TEXT") out.push(st.fontName);
+    }
+    return out;
+  }
   var checker = (allowed2) => () => {
     if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
   };
@@ -5906,13 +5937,28 @@
     return out;
   }
   async function keepText(t) {
+    for (const f of await fontsToKeep(t)) {
+      try {
+        await figma.loadFontAsync(f);
+      } catch {
+        throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
+      }
+    }
     const chars = t.characters;
     const runs = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
-    const whole = chars.length ? null : { fontName: t.fontName, fontSize: t.fontSize, textStyleId: t.textStyleId, fills: t.fills, fillStyleId: t.fillStyleId };
+    const whole = chars.length ? null : {
+      props: keep(t, RANGE_PROPS.map(([f]) => f)).filter(([, v]) => v !== figma.mixed && v !== null),
+      textStyleId: t.textStyleId,
+      fillStyleId: t.fillStyleId,
+      bound: TEXT_BINDABLE.map((f) => [f, boundId(t, f)])
+    };
     const ids = [];
     for (const r of runs) for (const f of TEXT_BINDABLE) {
       const a = r.boundVariables && r.boundVariables[f];
       if (a) ids.push(a.id);
+    }
+    if (whole) {
+      for (const [, id] of whole.bound) if (id) ids.push(id);
     }
     const vars = await variablesById(ids);
     return async (allowed2) => {
@@ -5924,12 +5970,15 @@
           await t.setTextStyleIdAsync(style);
           check();
         }
-        if (whole.fontName !== figma.mixed) putBack(t, "fontName", whole.fontName);
-        if (whole.fontSize !== figma.mixed) putBack(t, "fontSize", whole.fontSize);
-        if (whole.fills !== figma.mixed) putBack(t, "fills", whole.fills);
+        for (const [k, v] of whole.props) putBack(t, k, v);
         if (typeof whole.fillStyleId === "string" && whole.fillStyleId && t.fillStyleId !== whole.fillStyleId) {
           await t.setFillStyleIdAsync(whole.fillStyleId);
           check();
+        }
+        for (const [f, id] of whole.bound) {
+          if (boundId(t, f) === id) continue;
+          const v = id ? vars.get(id) : null;
+          if (v !== void 0) t.setBoundVariable(f, v);
         }
         return;
       }
@@ -5940,15 +5989,11 @@
           await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
           check();
         }
-        if (!same(t.getRangeFontName(s, e), r.fontName)) t.setRangeFontName(s, e, r.fontName);
-        if (!same(t.getRangeFontSize(s, e), r.fontSize)) t.setRangeFontSize(s, e, r.fontSize);
-        if (!same(t.getRangeLineHeight(s, e), r.lineHeight)) t.setRangeLineHeight(s, e, r.lineHeight);
-        if (!same(t.getRangeLetterSpacing(s, e), r.letterSpacing)) t.setRangeLetterSpacing(s, e, r.letterSpacing);
-        if (!same(t.getRangeTextCase(s, e), r.textCase)) t.setRangeTextCase(s, e, r.textCase);
-        if (!same(t.getRangeTextDecoration(s, e), r.textDecoration)) t.setRangeTextDecoration(s, e, r.textDecoration);
-        if (!same(t.getRangeParagraphSpacing(s, e), r.paragraphSpacing)) t.setRangeParagraphSpacing(s, e, r.paragraphSpacing);
-        if (!same(t.getRangeParagraphIndent(s, e), r.paragraphIndent)) t.setRangeParagraphIndent(s, e, r.paragraphIndent);
-        if (!same(t.getRangeFills(s, e), r.fills)) t.setRangeFills(s, e, r.fills);
+        for (const [f, suffix] of RANGE_PROPS) {
+          const want = getF(r, f);
+          if (want === void 0 || want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0) continue;
+          if (!same(call(t, "getRange" + suffix, [s, e]), want)) call(t, "setRange" + suffix, [s, e, want]);
+        }
         if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) {
           await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId);
           check();
@@ -5997,7 +6042,9 @@
         })) n.setProperties(old);
       });
     }
-    const sizeTouched = set.box !== void 0 || set.widthMode !== void 0 || set.heightMode !== void 0 || set.layout !== void 0 || set.props !== void 0 || set.autoResize !== void 0 || set.text !== void 0 || set.styles !== void 0 || tok.width !== void 0 || tok.height !== void 0;
+    const LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
+    const limitsTouched = LIMITS.some((k) => tok[k] !== void 0);
+    const sizeTouched = set.box !== void 0 || set.widthMode !== void 0 || set.heightMode !== void 0 || set.layout !== void 0 || set.props !== void 0 || set.autoResize !== void 0 || set.text !== void 0 || set.styles !== void 0 || tok.width !== void 0 || tok.height !== void 0 || limitsTouched;
     if (set.layout) {
       const props = keep(n, LAYOUT_PROPS);
       steps.push(() => {
@@ -6021,7 +6068,9 @@
       const w = t.node.width, h = t.node.height;
       const sizing2 = keep(n, ["layoutSizingHorizontal", "layoutSizingVertical"]);
       const auto = keep(n, ["textAutoResize"]);
+      const limits = limitsTouched ? keep(n, LIMITS) : [];
       steps.push(() => {
+        for (const [k, v] of limits) putBack(n, k, v);
         if ((n.width !== w || n.height !== h) && "resize" in n) n.resize(w, h);
         const inFlex = isFlex2(t.node.parent);
         for (const [k, v] of sizing2) {
@@ -6035,7 +6084,7 @@
     }
     const plain = [];
     const links = [];
-    const textRuns = n.type === "TEXT" && (set.text !== void 0 || set.styles !== void 0 || (set.fills !== void 0 || tok.fills !== void 0) && n.fills === figma.mixed);
+    const textRuns = n.type === "TEXT" && (set.text !== void 0 || set.styles !== void 0 || set.fills !== void 0 || tok.fills !== void 0);
     const notMixed = ([, v]) => v !== figma.mixed;
     if ((set.fills !== void 0 || tok.fills !== void 0) && !textRuns) {
       plain.push(...keep(n, ["fills"]).filter(notMixed));
@@ -6051,7 +6100,8 @@
     if (set.opacity !== void 0 || tok.opacity !== void 0) plain.push(...keep(n, ["opacity"]));
     if (set.hidden !== void 0) plain.push(...keep(n, ["visible"]));
     if (set.name !== void 0) plain.push(...keep(n, ["name"]));
-    for (const k of Object.keys(tok)) if (k !== "width" && k !== "height" && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
+    const geometry = ["width", "height", ...LIMITS];
+    for (const k of Object.keys(tok)) if (geometry.indexOf(k) < 0 && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
     steps.push(() => {
       for (const [k, v] of plain) putBack(n, k, v);
     });
