@@ -5695,7 +5695,7 @@
     if (now !== "none") return now;
     return l && l.display === "flex" ? "row" : "none";
   }
-  function unfit(node, set, proj) {
+  function unfit(node, set, proj, parent) {
     const out = [];
     const say = (field, m) => {
       out.push("set." + field + ": " + m);
@@ -5728,7 +5728,6 @@
         if (l.alignItems === "baseline" && dir === "column") say("layout.alignItems", '"baseline" works only in a row; the node is a column');
       }
     }
-    const parent = node.parent;
     for (const axis of ["widthMode", "heightMode"]) {
       const m = set[axis];
       if (m === void 0) continue;
@@ -5779,7 +5778,9 @@
     };
     const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
     const projected = /* @__PURE__ */ new Map();
+    const moved = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
+      if (op.op === "move" && op.nodeId !== void 0 && op.parentId !== void 0) moved.set(op.nodeId, op.parentId);
       if (op.op !== "patch") continue;
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
@@ -5800,7 +5801,9 @@
         continue;
       }
       const node = nd;
-      const misfits = unfit(node, set, projected);
+      const movedTo = moved.get(node.id);
+      const parent = movedTo !== void 0 ? await figma.getNodeByIdAsync(movedTo) : node.parent;
+      const misfits = unfit(node, set, projected, parent);
       if (set.layout && !misfits.length) {
         const l = set.layout;
         projected.set(node.id, { dir: directionAfter(node, set, projected), wrap: l.mode === "absolute" ? false : l.flexWrap !== void 0 ? l.flexWrap === "wrap" : layoutNow(node, projected).wrap });
@@ -6361,7 +6364,8 @@
     const from = node.parent;
     if (!from || !("insertChild" in from)) throw new Error("node " + label(node) + " has no parent to move it from");
     const at = from.children.indexOf(node);
-    const x = node.x, y = node.y;
+    const x = node.x, y = node.y, w = node.width, h = node.height;
+    const sizing2 = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
     if (t.index === void 0) parent.appendChild(node);
     else parent.insertChild(t.index, node);
     const applied = { id: node.id, parentId: parent.id };
@@ -6371,6 +6375,14 @@
       what: "the move of " + label(node),
       restore() {
         from.insertChild(Math.min(at, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
+        if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
+        if (sizing2 && "layoutSizingHorizontal" in node) {
+          const inFlex = !!node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE";
+          const ownFlex = "layoutMode" in node && node.layoutMode !== "NONE";
+          const fits = (m) => m === "FILL" ? inFlex : m === "HUG" ? ownFlex || node.type === "TEXT" : inFlex || ownFlex;
+          if (node.layoutSizingHorizontal !== sizing2.h && fits(sizing2.h)) node.layoutSizingHorizontal = sizing2.h;
+          if (node.layoutSizingVertical !== sizing2.v && fits(sizing2.v)) node.layoutSizingVertical = sizing2.v;
+        }
         if (node.x !== x) node.x = x;
         if (node.y !== y) node.y = y;
       }

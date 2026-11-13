@@ -86,7 +86,7 @@ function directionAfter(node: BaseNode, set: PatchSet, proj?: Projected): Direct
 }
 
 /** Why the node cannot take this patch, field by field (empty when it can). */
-function unfit(node: SceneNode, set: PatchSet, proj: Projected): string[] {
+function unfit(node: SceneNode, set: PatchSet, proj: Projected, parent: BaseNode | null): string[] {
   const out: string[] = [];
   const say = (field: string, m: string): void => { out.push("set." + field + ": " + m); };
   const what = "'" + node.name + "' is a " + node.type;
@@ -117,7 +117,6 @@ function unfit(node: SceneNode, set: PatchSet, proj: Projected): string[] {
       if (l.alignItems === "baseline" && dir === "column") say("layout.alignItems", "\"baseline\" works only in a row; the node is a column");
     }
   }
-  const parent = node.parent;
   for (const axis of ["widthMode", "heightMode"] as const) {
     const m = set[axis];
     if (m === undefined) continue;
@@ -167,7 +166,10 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
   const empty: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
   const projected: Projected = new Map();
 
+  // The new parent each move earlier in the batch gives a node, by node id (a later patch is checked against it).
+  const moved = new Map<string, string>();
   for (const [index, op] of ops.entries()) {
+    if (op.op === "move" && op.nodeId !== undefined && op.parentId !== undefined) moved.set(op.nodeId, op.parentId);
     if (op.op !== "patch") continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
     const set = op.set;
@@ -178,7 +180,10 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); continue; }
     const node = nd;
-    const misfits = unfit(node, set, projected);
+    // Its parent as an earlier move of the batch leaves it.
+    const movedTo = moved.get(node.id);
+    const parent = movedTo !== undefined ? await figma.getNodeByIdAsync(movedTo) : node.parent;
+    const misfits = unfit(node, set, projected, parent);
     // What this patch leaves the node's auto-layout as, for the checks of later ops of the batch.
     if (set.layout && !misfits.length) {
       const l = set.layout;

@@ -75,7 +75,9 @@ export function applyMove(t: MoveTarget): Change {
   const from = node.parent;
   if (!from || !("insertChild" in from)) throw new Error("node " + label(node) + " has no parent to move it from");
   const at = from.children.indexOf(node);
-  const x = node.x, y = node.y;
+  const x = node.x, y = node.y, w = node.width, h = node.height;
+  // How its size is decided (reparenting can change it: a FILL child leaving auto-layout becomes fixed).
+  const sizing = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
   if (t.index === undefined) parent.appendChild(node);
   else parent.insertChild(t.index, node);
   const applied: AppliedWrite = { id: node.id, parentId: parent.id };
@@ -85,6 +87,14 @@ export function applyMove(t: MoveTarget): Change {
     what: "the move of " + label(node),
     restore() {
       from.insertChild(Math.min(at, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
+      if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
+      if (sizing && "layoutSizingHorizontal" in node) {
+        const inFlex = !!node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE";
+        const ownFlex = "layoutMode" in node && node.layoutMode !== "NONE";
+        const fits = (m: string): boolean => (m === "FILL" ? inFlex : m === "HUG" ? ownFlex || node.type === "TEXT" : inFlex || ownFlex);
+        if (node.layoutSizingHorizontal !== sizing.h && fits(sizing.h)) node.layoutSizingHorizontal = sizing.h;
+        if (node.layoutSizingVertical !== sizing.v && fits(sizing.v)) node.layoutSizingVertical = sizing.v;
+      }
       if (node.x !== x) node.x = x;
       if (node.y !== y) node.y = y;
     },

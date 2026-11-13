@@ -135,12 +135,16 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     list.splice(Math.min(at, list.length), 0, c);
     n.children = list;
     c.parent = n;
+    // Out of auto-layout, a FILL child becomes fixed (as in Figma).
+    if (n.layoutMode === undefined || n.layoutMode === "NONE") for (const k of ["layoutSizingHorizontal", "layoutSizingVertical"]) if (c[k] === "FILL") c[k] = "FIXED";
   };
   const appendTo = (n: FakeNode) => (c: FakeNode): void => {
     const old = parentOf(c);
     if (old) old.children = kids(old).filter((k) => k !== c);
     n.children = [...kids(n), c];
     c.parent = n;
+    // Out of auto-layout, a FILL child becomes fixed (as in Figma).
+    if (old && (n.layoutMode === undefined || n.layoutMode === "NONE")) for (const k of ["layoutSizingHorizontal", "layoutSizingVertical"]) if (c[k] === "FILL") c[k] = "FIXED";
   };
   const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
     const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], loadAsync: async () => { pageLoads.push(id); } };
@@ -1506,6 +1510,20 @@ export const cases: Case[] = [{
     ok("[PATCH-MORE] auto-layout turned on, then a child set to fill in the same batch: accepted and applied (" + (dep.error ?? "") + ")",
       dep.ok === true && node("inner", m)?.layoutSizingHorizontal === "FILL");
     const reversed = await w.api.applyWrites([{ op: "patch", nodeId: m.outer ?? "", set: { layout: { mode: "absolute" } } }, { op: "patch", nodeId: m.inner ?? "", set: { heightMode: "fill" } }]);
+    // A move earlier in the batch gives the node its parent for the checks: moved into an auto-layout frame, then fill.
+    const pair = await w.api.applyWrites([{ op: "createTree", tree: { name: "Flex", handle: "flex", layout: { display: "flex" } } }, { op: "createTree", tree: { name: "Loose", handle: "loose" } }]);
+    const flexId = pair.applied[0]?.handles?.flex ?? "", looseId = pair.applied[1]?.handles?.loose ?? "";
+    const moveFill = await w.api.applyWrites([{ op: "move", nodeId: looseId, parentId: flexId }, { op: "patch", nodeId: looseId, set: { widthMode: "fill" } }]);
+    const loose = w.alive().find((n) => n.id === looseId);
+    ok("[PATCH-MORE] moved into an auto-layout frame, then set to fill, in one batch: accepted (" + (moveFill.error ?? "") + ")",
+      moveFill.ok === true && loose?.layoutSizingHorizontal === "FILL" && parentOf(loose)?.id === flexId);
+    // Moved back out (a later op fails): its parent, size and sizing go back as they were.
+    const sizeBefore = JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]);
+    w.trap.add("cornerRadius");
+    const out = await w.api.applyWrites([{ op: "move", nodeId: looseId, parentId: h.spare }, fail]);
+    w.trap.clear();
+    ok("[PATCH-MORE] a move put back restores the node's parent, size and sizing (" + JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]) + ")",
+      out.ok === false && JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]) === sizeBefore);
     ok("[PATCH-MORE] …and auto-layout turned off, then a child set to fill: refused up front", reversed.ok === false && /"fill" needs a parent with auto-layout/.test(reversed.error ?? "") && reversed.failedAt === 1);
   },
 }, {
