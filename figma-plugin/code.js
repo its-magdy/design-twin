@@ -1736,7 +1736,13 @@
       else if (s.op === "setFill") parts.push("node " + (s.target || "?") + ": the fill becomes " + (s.newFill || "?"));
       else if (s.op === "setText") parts.push("node " + (s.target || "?") + ': the text becomes "' + (s.newText !== void 0 ? s.newText : "") + '"');
       else parts.push(s.op + " " + (s.target || ""));
-      if ((s.op === "createFrame" || s.op === "createText") && s.newFill) parts.push("fill " + s.newFill);
+      if (s.op === "createFrame") {
+        if (o.width && o.height) parts.push(o.width + "\xD7" + o.height);
+        if (o.layoutMode) parts.push((o.layoutMode === "HORIZONTAL" ? "row" : "column") + " auto-layout" + (o.itemSpacing != null ? ", gap " + o.itemSpacing : ""));
+        if (o.padding) parts.push("padding " + o.padding.join(" "));
+      }
+      if (s.op === "createText" && o.fontSize) parts.push("size " + o.fontSize);
+      if ((s.op === "createFrame" || s.op === "createText") && o.fill) parts.push("fill " + o.fill);
       return parts.join(", ");
     });
   }

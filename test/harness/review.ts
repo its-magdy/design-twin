@@ -86,7 +86,7 @@ export const cases: Case[] = [{
     ok("[REVIEW] the write waits: a card is up and the file is untouched", card !== undefined && untouched(w));
     ok("[REVIEW] the card shows one plain line per op — commands.ts reviewLines, built from the dry run's preview",
       JSON.stringify(card?.lines) === JSON.stringify(reviewLines(BATCH)) && card?.lines?.length === 2 &&
-      /creates a frame 'Card'/.test(card.lines[0] ?? "") && /text becomes "new"/.test(card.lines[1] ?? "") && card.waitMs === REVIEW_WAIT_MS);
+      card.lines[0] === "creates a frame 'Card' — new node on the current page, fill #ff0000" && /text becomes "new"/.test(card.lines[1] ?? "") && card.waitMs === REVIEW_WAIT_MS);
     // An answer for a card that is not up is ignored.
     await w.send({ type: "review-answer", id: "review-nope", apply: true });
     ok("[REVIEW] an answer naming another card changes nothing", untouched(w));
@@ -99,6 +99,11 @@ export const cases: Case[] = [{
     await w.send({ type: "review-answer", id: String(card?.id), apply: false });
     ok("[REVIEW] a late second answer changes nothing", w.created.length === 1);
 
+    // Every field a create sets is on its line (the live check found the fill missing).
+    const made = reviewLines([{ op: "createFrame", name: "Row", width: 200, height: 40, layoutMode: "HORIZONTAL", itemSpacing: 8, padding: [1, 2, 3, 4], fill: "#00ff00", parentId: "1:2" }, { op: "createText", text: "Hello", fontSize: 18, fill: "#111111" }]);
+    ok("[REVIEW] a create's line names its size, auto-layout, padding and fill; a text's its size and fill",
+      made[0] === "creates a frame 'Row' — new node under 1:2, 200×40, row auto-layout, gap 8, padding 1 2 3 4, fill #00ff00"
+      && made[1] === "creates a text \"Hello\" — new node on the current page, size 18, fill #111111");
     // A createTree and a patch show exactly the dry run's `change` sentence.
     const ops: WriteOp[] = [{ op: "createTree", tree: { name: "Panel", children: [{ text: "Hi" }] } }, { op: "patch", nodeId: "t:1", set: { name: "Title" } }];
     const lines = reviewLines(ops);
