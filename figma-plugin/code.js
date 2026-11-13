@@ -6433,7 +6433,11 @@
       return (_a = movedTo.get(x.id)) != null ? _a : x.parent;
     };
     const under = (x) => {
-      for (let p = x; p; p = up(p)) if (p.id === n.id) return true;
+      const seen = /* @__PURE__ */ new Set();
+      for (let p = x; p && !seen.has(p.id); p = up(p)) {
+        if (p.id === n.id) return true;
+        seen.add(p.id);
+      }
       return false;
     };
     const candidates = [...nodesBelow(n), ...[...moves.values()].flatMap((m) => nodesBelow(m.node))];

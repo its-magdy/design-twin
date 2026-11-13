@@ -1588,6 +1588,13 @@ export const cases: Case[] = [{
     await step("wrapping turned on, then a row gap given with display", [{ op: "patch", nodeId: id(4, "wrap"), set: { layout: { flexWrap: "wrap" } } }, { op: "patch", nodeId: id(4, "wrap"), set: { layout: { display: "flex", rowGap: 10 } } }]);
     const single = await w.api.applyWrites([{ op: "patch", nodeId: id(4, "wrap"), set: { layout: { display: "flex", columnGap: 4 } } }]);
     ok("[SEQUENCE] a wrapping row given display and a cross-axis gap alone: the wrap it has counts", single.ok === false && /columnGap: is the main-axis gap in a wrapping row/.test(single.error ?? ""));
+    // Two moves that nest nodes in each other, beside a delete: the second move is refused when it runs, the first put back.
+    const loop = await w.api.applyWrites([{ op: "createTree", tree: { name: "LA", handle: "la" } }, { op: "createTree", tree: { name: "LB", handle: "lb" } }, { op: "createTree", tree: { name: "LD", handle: "ld" } }]);
+    const la = loop.applied[0]?.handles?.la ?? "", lb = loop.applied[1]?.handles?.lb ?? "", ld = loop.applied[2]?.handles?.ld ?? "";
+    const cyc = await w.api.applyWrites([{ op: "move", nodeId: la, parentId: lb }, { op: "move", nodeId: lb, parentId: la }, { op: "delete", nodeId: ld }]);
+    ok("[SEQUENCE] two moves nesting nodes in each other: refused at the second, the first put back, nothing deleted (" + (cyc.error ?? "") + ")",
+      cyc.ok === false && cyc.failedAt === 1 && /inside the node/.test(cyc.error ?? "") && parentOf(w.alive().find((n) => n.id === la))?.id === w.pages.current.id
+      && (await w.figma.getNodeByIdAsync(ld)) !== null);
     void h;
   },
 }, {
