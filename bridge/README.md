@@ -1113,6 +1113,11 @@ refused up front. The reply is `{id, parentId}` for a move and `{id, deleted: tr
 instead of one per node, and the nodes stay bound. Only this file's own sources can be changed: a variable, style or
 component that lives in another library file is refused, naming the library when Figma says which (it does for a
 variable; for a style or a component only the file's library registry, document plugin data `libraryRegistry`, can).
+A library variable the file already uses is found by its key even when its library is no longer enabled (through the
+local variables that alias it and the local styles bound to it): it can be bound in a spec, a patch or a style's
+`tokens` with no import, and a source edit of it is refused as a library's. A file on a Figma plan that allows fewer
+modes than a copied collection has refuses a value for a mode past the limit; the error names the mode and the plan,
+and the batch is put back.
 
 - `setVariable` sets a local variable's value per mode. `values` maps a mode's exact name (or its modeId) to a value as
   the read export's `values` writes one: a hex colour for a colour variable, a number, a string, `true`/`false`, or
@@ -1125,11 +1130,12 @@ variable; for a style or a component only the file's library registry, document 
   | Kind | Fields |
   |---|---|
   | paint | `paints`: `[{type: "solid", color, opacity?, tokens?: {color: variable}}]`, replacing the paints |
-  | text | `font` (family), `weight` (style name), `size`, `lineHeight` (`{unit: "px" \| "percent", value}` or `{unit: "auto"}`), `letterSpacing` (`{unit: "px" \| "percent", value}`), `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent` |
+  | text | `font` (family), `weight` (style name), `size`, `lineHeight` (`{unit: "px" \| "percent", value}` or `{unit: "auto"}`), `letterSpacing` (`{unit: "px" \| "percent", value}`), `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent`; `tokens` (a field — `fontFamily`, `fontStyle`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `paragraphSpacing`, `paragraphIndent` — → a variable's name, key or id; `null` unbinds and keeps the value; bound after the raw values) |
   | effect | `effects`: `[{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?}]` and `[{type: "layer_blur" \| "background_blur", radius}]`, replacing the effects |
   | any | `name`, `description` |
 
-  The style's fonts (now and after) must load. The reply is `{id}`.
+  The style's fonts (now and after) must load (when its font is bound to a variable an earlier op of the batch changes,
+  they are checked when the edit applies). The reply is `{id}`.
 - A `patch` of a main component (or of a layer inside one) is a source edit too: every instance follows. A layer
   inside a library component is refused.
 

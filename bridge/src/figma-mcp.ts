@@ -851,7 +851,7 @@ registerTool(
       "layout (partial; {mode:'absolute'} removes auto-layout), box{w?,h?}, widthMode/heightMode('fill'|'hug'|'fixed'), autoResize, tokens (null unbinds), props (an instance's). " +
       "{op:'move', nodeId, parentId, index?} | {op:'delete', nodeId} — only nodes this plugin session created; deletes run last. " +
       "Source edits — change once, every user follows: {op:'setVariable', variable, values{mode: v}|value} (v: hex, number, string, bool or {aliasOf}) | " +
-      "{op:'setStyle', style, set} (set: paints | font, weight, size, lineHeight, letterSpacing, case, decoration, paragraphSpacing, paragraphIndent | effects; name, description); " +
+      "{op:'setStyle', style, set} (set: paints | font, weight, size, lineHeight, letterSpacing, case, decoration, paragraphSpacing, paragraphIndent, tokens | effects; name, description); " +
       "a patch of a main component changes its instances. A library's variable, style or component is refused, naming the library; the dry run's `affects` counts what follows. " +
       "A name (collection, mode, page, component, variable, style) that matches nothing or several things, a font the file lacks, or a node that lacks a field refuses the whole batch before anything runs, with candidates. " +
       "A batch lands whole: if an op fails, every change the batch made is put back (listed as `restored`) — and the designer's one Cmd-Z undoes a whole batch. " +
