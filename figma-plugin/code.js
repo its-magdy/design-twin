@@ -6291,21 +6291,26 @@
   var label = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
   var holds = (node, foreign) => "node " + label(node) + " holds " + label(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
-  function instanceAround(n) {
-    for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
+  var fileParent = (n) => n.parent;
+  function instanceAround(n, up = fileParent) {
+    for (let p = n; p; p = up(p)) if (p.type === "INSTANCE") return p;
     return null;
   }
-  function within(n, of) {
-    for (let p = n; p; p = p.parent) if (p.id === of.id) return true;
+  function within(n, of, up = fileParent) {
+    for (let p = n; p; p = up(p)) if (p.id === of.id) return true;
     return false;
   }
   async function resolveStructureOps(ops) {
-    var _a, _b;
+    var _a;
     const moves = /* @__PURE__ */ new Map();
     const deletes = /* @__PURE__ */ new Map();
     const problems = [];
     const kidsOf = /* @__PURE__ */ new Map();
     const parentOf = /* @__PURE__ */ new Map();
+    const up = (n) => {
+      var _a2;
+      return (_a2 = parentOf.get(n.id)) != null ? _a2 : n.parent;
+    };
     const childIds = (p) => {
       let list = kidsOf.get(p.id);
       if (!list) {
@@ -6351,12 +6356,12 @@
         bad("parent " + label(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
-      const inst = instanceAround(pd);
+      const inst = instanceAround(pd, up);
       if (inst) {
         bad("parent " + label(pd) + " is " + (inst === pd ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children");
         continue;
       }
-      if (within(pd, node)) {
+      if (within(pd, node, up)) {
         bad("parent " + label(pd) + " is " + (pd.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself");
         continue;
       }
@@ -6368,14 +6373,15 @@
         continue;
       }
       moves.set(index, { node, parent: pd, index: op.index });
-      const fromId = (_a = parentOf.get(node.id)) != null ? _a : node.parent ? node.parent.id : null;
-      const from = fromId !== null ? (_b = kidsOf.get(fromId)) != null ? _b : node.parent && node.parent.id === fromId ? childIds(node.parent) : null : null;
+      const fromNode = parentOf.get(node.id);
+      const fromId = fromNode ? fromNode.id : node.parent ? node.parent.id : null;
+      const from = fromId !== null ? (_a = kidsOf.get(fromId)) != null ? _a : node.parent && node.parent.id === fromId ? childIds(node.parent) : null : null;
       if (from) {
         const at = from.indexOf(node.id);
         if (at >= 0) from.splice(at, 1);
       }
       into.splice(op.index === void 0 ? into.length : Math.min(op.index, into.length), 0, node.id);
-      parentOf.set(node.id, pd.id);
+      parentOf.set(node.id, pd);
     }
     return { moves, deletes, problems };
   }

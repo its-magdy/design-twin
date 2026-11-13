@@ -1523,6 +1523,12 @@ export const cases: Case[] = [{
     const two = await w.api.applyWrites([{ op: "move", nodeId: aId, parentId: dId, index: 0 }, { op: "move", nodeId: bId, parentId: dId, index: 1 }]);
     ok("[PATCH-MORE] two moves into one empty parent: the second's index counts the first (" + (two.error ?? "") + ")",
       two.ok === true && kids(w.alive().find((n) => n.id === dId)).map((k) => k.id).join() === aId + "," + bId);
+    // A child moved out of its parent, then the parent moved into it: valid in that order.
+    const nest = await w.api.applyWrites([{ op: "createTree", tree: { name: "Outer2", handle: "o", children: [{ name: "Inner2", handle: "i" }] } }]);
+    const oId = nest.applied[0]?.handles?.o ?? "", iId = nest.applied[0]?.handles?.i ?? "";
+    const swap = await w.api.applyWrites([{ op: "move", nodeId: iId, parentId: w.pages.current.id ?? "" }, { op: "move", nodeId: oId, parentId: iId }]);
+    ok("[PATCH-MORE] a child moved out, then its old parent moved into it, in one batch: accepted (" + (swap.error ?? "") + ")",
+      swap.ok === true && parentOf(w.alive().find((n) => n.id === oId))?.id === iId);
     // Moved back out (a later op fails): its parent, size and sizing go back as they were.
     const sizeBefore = JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]);
     w.trap.add("cornerRadius");
