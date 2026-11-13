@@ -31,6 +31,20 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` takes a `createTree` spec from disk: `treeFile` is a path to a JSON file with the spec, inside the
+  directory the MCP server runs in. The server reads it into the op before anything else, so it is checked, previewed
+  and applied exactly like the same spec inline; a missing file or one that is not JSON is refused with nothing
+  changed. The CLI still has no write command.
+- A `createTree` spec root can carry a `key`. The plugin stores it on the nodes it builds, and the same key sent again
+  updates that result in place instead of building a second one: matched nodes keep their ids and only the fields that
+  differ from the last spec are set (so the designer's own edits to other fields stay), added nodes are built, dropped
+  ones removed, and a node whose type, component or font changed is built anew in its place. The reply lists only what
+  changed (each updated node's id and fields, counts built and removed, new handles), or `unchanged: true`. A node to
+  be removed that holds a layer the designer added refuses the batch. The write-cost suite has a seventh job, a new
+  screen plus the fix round its check finds: 1,532 tokens for the four ops, 1,406 with a tree and a `patch`, 1,699
+  with the spec kept in a file and re-sent by key (the file's first write counts the whole spec as the agent's output;
+  the fix itself is an edit of the file and a 25-token reply). `figma_write`'s definition grew by 61 tokens
+  (1,332 → 1,393).
 - The plugin window has a **Review each write** checkbox under **Allow edits**, off by default. When it is on, each
   `figma_write` batch waits on a card in the window that lists what it will do in plain words (the dry run's
   description), and runs only when the designer presses **Apply**. **Reject** leaves the file untouched, and the reason

@@ -1,4 +1,4 @@
-// The write plane's cost meter: what each of the six jobs of the design record costs an agent, in tokens and round
+// The write plane's cost meter: what each of the six jobs of the design record (and a new screen's fix round) costs an agent, in tokens and round
 // trips, through each route (docs/write-plane-spec.md decision 21). No live Figma.
 //   bun test/write-cost.test.ts            measure, print the table, check every route against baseline.json
 //   bun test/write-cost.test.ts --record   measure and write the numbers to test/write-cost/baseline.json
@@ -28,7 +28,7 @@ import type { ListPagesReply, WhoamiReply } from "../bridge/src/commands.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
 import { estimateTokens, Ledger, PHASES, type Cost } from "./write-cost/meter.ts";
 import { JOBS, type AnyJob, type JobId, type Fixture } from "./write-cost/jobs.ts";
-import { BASELINE, ROUTES, type Route, type RouteRun, type Reply, type Session } from "./write-cost/routes.ts";
+import { BASELINE, fileTool, ROUTES, type Route, type RouteRun, type Reply, type Session } from "./write-cost/routes.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const RECORD = process.argv.includes("--record");
@@ -113,9 +113,16 @@ void (async () => {
         await world.allowEdits();
         const ledger = new Ledger();
         const session: Session = {
+          dir,
           async call(tool, args, phase) {
             const r = replyText(await client.callTool({ name: tool, arguments: args }));
             ledger.record(tool, args, phase, r.text, r.isError);
+            return r;
+          },
+          file(tool, args, phase) {
+            const r = fileTool(tool, args);
+            ledger.record(tool, args, phase, r.text, r.isError);
+            if (r.isError) throw new Error(`${tool} failed: ${r.text}`);
             return r;
           },
         };

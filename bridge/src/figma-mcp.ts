@@ -150,6 +150,7 @@ import { compactJsonWithin } from "./json-size.ts";
 import { screenOutline } from "./outline.ts";
 import type { OutlineLevel, OutlineSource } from "./outline.ts";
 import { findMapFile } from "./project-layout.ts";
+import { loadSpecFiles } from "./spec-file.ts";
 import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
@@ -732,6 +733,8 @@ const writeOpShape = z.object({
   // createTree: the spec is checked by tree-spec.ts checkTree (the dry run, the wire check and the plugin all run it),
   // not spelled out here — a recursive schema would cost every tool listing its size (spec decision 19).
   tree: z.record(z.string(), z.unknown()).optional(),
+  // createTree: the same spec as a JSON file, read by this server into `tree` before anything else (spec-file.ts).
+  treeFile: z.string().optional(),
   page: z.string().optional(),
   // patch: the fields to change, checked by patch-spec.ts checkPatch at the same three places as a tree spec.
   set: z.record(z.string(), z.unknown()).optional(),
@@ -799,13 +802,14 @@ registerTool(
       "{op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text} | " +
       "{op:'setVariableMode', nodeId, collection, mode} (collection: a variable collection's exact name, id or key; mode: a mode's exact name or modeId — e.g. a frame's Theme to Dark) | " +
       "{op:'clearVariableMode', nodeId, collection} (back to the mode the node inherits) | " +
-      "{op:'createTree', tree, page?} — a whole screen in ONE op: `tree` is a nested node in the read export's field names, defaults omitted, no ids: " +
+      "{op:'createTree', tree|treeFile, page?} — a whole screen in ONE op (`treeFile`: a path to the same spec as JSON, read by this server): `tree` is a nested node in the read export's field names, defaults omitted, no ids: " +
       "{type?('FRAME'|'TEXT'|'INSTANCE', TEXT when it has text), name?, handle?, box?{w,h}, layout?{display:'flex', flexDirection:'row'|'column', gap?, padding?[t,r,b,l], justifyContent?, alignItems?, flexWrap?}, " +
       "widthMode?/heightMode?('fill'|'hug'), grow?, alignSelf?, absolute?, x?, y?, fills?[{type:'solid', color:#hex}], strokes?{colors,weight,align}, radius?, opacity?, clip?, hidden?, " +
       "text?, font?{family, weight(style name), size, color, align, lineHeight{unit,value}}, autoResize?, children?[...]}. " +
       "Prefer the design system: {component, props?} is an instance; paint tokens:{color: variable}; tokens?{itemSpacing|padding*|*Radius|…: variable}; styles?{text}. Exact name, key or id; library items are imported. " +
       "It lands on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
       "the reply is the root id, counts, and ids only for nodes given a `handle`. A read field a write cannot set is refused by name. " +
+      "A root `key` (a stable name) makes a re-send update that result in place (same ids) instead of adding one; its reply lists only what changed. " +
       "{op:'patch', nodeId, set} changes an existing node: `set` takes the same field names, only those given change — name, hidden(bool), opacity, text, styles{text}, fills, strokes, radius, " +
       "layout (partial; {mode:'absolute'} removes auto-layout), box{w?,h?}, widthMode/heightMode('fill'|'hug'|'fixed'), autoResize, tokens (null unbinds), props (an instance's). " +
       "{op:'move', nodeId, parentId, index?} | {op:'delete', nodeId} — only nodes this plugin session created; deletes run last. " +
@@ -836,14 +840,18 @@ registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   guarded(async (a, extra) => {
+    // A spec given by path is read into the op first, so it meets every check below exactly as the same spec inline.
+    const loaded = loadSpecFiles(a.ops || [], (p, what) => assertInsideCwd(p, what));
+    if ("error" in loaded) return errorResult(loaded.error + ". Nothing was changed.");
+    const ops = loaded.ops;
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
-    if (a.dryRun) return textResult(previewWrites(a.ops || [], await readWriteSettings(a)));
+    if (a.dryRun) return textResult(previewWrites(ops, await readWriteSettings(a)));
     // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
     // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
     // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write
     // nobody is waiting for. A batch already running is not stopped by it (writes have no cancel point).
-    const r = await ask("write", { ops: a.ops || [] }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    const r = await ask("write", { ops }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
     // Refused whole — the designer has not consented ("Allow edits" off), rejected the batch on the review card, or
     // nobody reviewed it: nothing was tried, so there is no op index and nothing to clean up. The answer is the
     // PERSON's, so say exactly what they did or must do (and pass on their reason) rather than "write failed".

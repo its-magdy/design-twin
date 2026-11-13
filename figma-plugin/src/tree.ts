@@ -32,6 +32,8 @@ import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-matc
 import { checkTree, fontOf, isTreeSpec, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
 import { resolveRefs, treeUses, type RefResolution, type ResolvedRefs } from "./tree-refs";
 import { markCreated } from "./session";
+import { readIndex, stampNode, writeIndex } from "./keyed-store";
+import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
@@ -40,6 +42,8 @@ export interface TreeTarget {
   page: PageNode;
   summary: TreeSummary;
   refs: ResolvedRefs;
+  /** set when the spec's key names a result the file already holds: the op updates it in place (keyed.ts) */
+  update?: KeyedUpdate | undefined;
 }
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
@@ -139,8 +143,10 @@ function resolvePage(ref: string | undefined): { ok: PageNode } | { error: strin
  */
 export async function buildTree(t: TreeTarget, consent: () => void): Promise<Change> {
   // Handles are the agent's own strings: a Map, so one called "__proto__" is a key like any other.
-  const made: Made = { frames: 0, texts: 0, instances: 0, handles: new Map<string, string>(), refs: t.refs, styled: [] };
+  const made = newMade(t.refs);
   const root = figma.createFrame();
+  const key = t.spec.key;
+  const indexWas = key !== undefined ? readIndex(key) : "";
   root.visible = false; // built to the side: nothing shows until the whole tree is in place
   try {
     applyFrame(root, t.spec, null, made);
@@ -153,20 +159,70 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     root.x = x;
     root.y = y;
     root.visible = t.spec.hidden !== true;
+    // A keyed spec leaves its key and each node's own spec on the nodes, and the root's id under the key on the
+    // document, so the same key sent again finds this result and updates it (keyed.ts).
+    if (key !== undefined) {
+      for (const [n, s] of made.pairs) stampNode(n, key, s);
+      writeIndex(key, root.id);
+    }
     markCreated(root);
   } catch (e) {
     try { root.remove(); } catch { /* already gone */ }
     throw e;
   }
-  const applied: AppliedWrite = { id: root.id, created: made.instances ? { frames: made.frames, texts: made.texts, instances: made.instances } : { frames: made.frames, texts: made.texts } };
+  const applied: AppliedWrite = { id: root.id, created: createdCount(made) };
+  if (key !== undefined) applied.key = key;
   if (made.handles.size) applied.handles = handleRecord(made.handles);
   if (t.summary.unbound) applied.unbound = t.summary.unbound;
   return {
     applied,
     kind: "created tree",
     what: "the tree '" + root.name + "' (" + root.id + ")",
-    restore() { root.remove(); },
+    restore() {
+      root.remove();
+      if (key !== undefined && readIndex(key) === root.id) writeIndex(key, indexWas);
+    },
   };
+}
+
+/** What a build made, as the reply counts it (`instances` only when it made any). */
+export function createdCount(made: Made): { frames: number; texts: number; instances?: number } {
+  return made.instances ? { frames: made.frames, texts: made.texts, instances: made.instances } : { frames: made.frames, texts: made.texts };
+}
+
+/** An empty build record over the resolved names `refs`. */
+export function newMade(refs: ResolvedRefs): Made {
+  return { frames: 0, texts: 0, instances: 0, handles: new Map<string, string>(), refs, styled: [], pairs: [] };
+}
+
+/**
+ * Build `spec` (a whole subtree) as the last child of the frame `parent`, with the names resolved in `made.refs`: a node
+ * a keyed re-send adds or builds anew (keyed.ts). Its texts' styles are set before it returns (the one await; `consent`
+ * is checked after each). Throws, leaving nothing behind, when Figma refuses a value.
+ */
+export async function buildSubtree(spec: TreeNodeSpec, parent: FrameNode, made: Made, consent: () => void): Promise<SceneNode> {
+  const kind = nodeKind(spec);
+  const first = made.pairs.length;
+  const styledFrom = made.styled.length;
+  let node: SceneNode | null = null;
+  try {
+    if (kind === "TEXT") { const t = figma.createText(); node = t; applyText(t, spec, parent, made); }
+    else if (kind === "INSTANCE") node = applyInstance(spec, parent, made);
+    else { const f = figma.createFrame(); node = f; applyFrame(f, spec, parent, made); }
+    for (const [text, style] of made.styled.slice(styledFrom)) {
+      await text.setTextStyleIdAsync(style.id);
+      consent();
+    }
+  } catch (e) {
+    // An instance is made only once its component resolved: before that there is nothing to remove.
+    const made0 = made.pairs[first];
+    const n = node || (made0 ? made0[0] : null);
+    if (n) { try { n.remove(); } catch { /* already gone */ } }
+    throw e;
+  }
+  if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
+  markCreated(node);
+  return node;
 }
 
 /** The handles as a reply record, own properties all ("__proto__" included: defineProperty, not assignment). */
@@ -199,7 +255,7 @@ function placement(page: PageNode, root: FrameNode, spec: TreeNodeSpec): { x: nu
   };
 }
 
-interface Made {
+export interface Made {
   frames: number;
   texts: number;
   instances: number;
@@ -207,6 +263,8 @@ interface Made {
   refs: ResolvedRefs;
   /** the texts that name a text style, set once every node is made (it awaits) */
   styled: Array<[TextNode, TextStyle]>;
+  /** every node made, with the spec it was made from (a keyed spec stamps each with its own fields) */
+  pairs: Array<[SceneNode, TreeNodeSpec]>;
 }
 type Parent = FrameNode;
 type Built = FrameNode | TextNode | InstanceNode;
@@ -291,6 +349,7 @@ function sizing(n: Built, s: TreeNodeSpec): void {
 
 function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: Made): void {
   made.frames++;
+  made.pairs.push([f, s]);
   if (parent) parent.appendChild(f);
   f.fills = paints(s.fills, s.tokens && s.tokens.fills, made);
   f.clipsContent = s.clip === true;
@@ -350,21 +409,24 @@ function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: 
 }
 
 /** An instance of the component the spec named (resolved by tree-refs.ts), with its property values. */
-function applyInstance(s: TreeNodeSpec, parent: Parent, made: Made): void {
+function applyInstance(s: TreeNodeSpec, parent: Parent, made: Made): InstanceNode {
   const r = made.refs.instances.get(s);
   if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
   made.instances++;
   const inst = r.main.createInstance();
+  made.pairs.push([inst, s]);
   parent.appendChild(inst);
   if (Object.keys(r.props).length) inst.setProperties(r.props);
   if (s.box) inst.resize(s.box.w, s.box.h);
   common(inst, s, parent, made);
   sizing(inst, s);
   bindNumbers(inst, s, made);
+  return inst;
 }
 
 function applyText(t: TextNode, s: TreeNodeSpec, parent: Parent, made: Made): void {
   made.texts++;
+  made.pairs.push([t, s]);
   parent.appendChild(t);
   const font = s.font || {};
   const styleRef = s.styles && s.styles.text;

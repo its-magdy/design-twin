@@ -8,6 +8,7 @@ import { editsAllowed, editsAllowedNow } from "./edits";
 import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
+import { applyUpdate, removalsOf, resolveKeyed } from "./keyed";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
@@ -193,6 +194,9 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
     case "createTree": {
       if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
       consent();
+      // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
+      // one by one, as they land.
+      if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
       const change = await buildTree(tree, consent);
       changes.push(change);
       return change.applied;
@@ -300,9 +304,11 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const resolveBatch = async () => {
     const modes = await resolveModeOps(list);
     const trees = await resolveTreeOps(list);
+    // A createTree whose key names a result the file holds becomes an update of it (keyed.ts).
+    const keyed = await resolveKeyed(list, trees.targets);
     const patches = await resolvePatchOps(list);
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     return { modes, trees, patches, structure, problems };
   };
   let { modes, trees, patches, structure, problems } = await resolveBatch();
@@ -395,6 +401,20 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
       const r = await fail(i, op, e);
       const gone = rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true).length;
       return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
+    }
+  }
+  // The nodes a keyed re-send no longer has (or built anew) go last, with the deletes: a removed node cannot be brought back.
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try {
+      for (const n of removalsOf(t.update)) {
+        if (n.removed) continue;
+        consent();
+        n.remove();
+      }
+    } catch (e) {
+      return fail(i, op, e);
     }
   }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);

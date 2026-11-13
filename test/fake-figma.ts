@@ -83,7 +83,7 @@ export interface FakeFigma {
   commitUndo(): void;
   currentPage: FakePage;
   fileKey: string;
-  root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData?: (key: string) => string };
+  root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData: (key: string) => string; setPluginData: (key: string, value: string) => void };
   loadAllPagesAsync(): Promise<void>;
   /** Absent unless a case passes one: the plugin's reads must not need them (a read leaves the view alone). */
   setCurrentPageAsync?(page: FakePage): Promise<void>;
@@ -348,6 +348,8 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const undo = { commits: 0 };
   const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
+  // The document's own plugin data: what the plugin sets reads back; anything else is what the scene says (or "").
+  const rootData = new Map<string, string>();
   const teamLibrary = delta.teamLibrary ?? base.teamLibrary;
 
   const figma: FakeFigma = {
@@ -362,7 +364,8 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     root: {
       name: file.name ?? "", documentColorProfile: file.colorProfile ?? "",
       children: delta.pages ?? base.pages ?? [],
-      ...(rootPluginData ? { getPluginData: rootPluginData } : {}),
+      getPluginData: (k) => rootData.get(k) ?? (rootPluginData ? rootPluginData(k) : ""),
+      setPluginData: (k, v) => { if (v === "") rootData.delete(k); else rootData.set(k, v); },
     },
     loadAllPagesAsync: async () => {},
     getImageByHash: (hash) => scene.images[hash] ?? null,

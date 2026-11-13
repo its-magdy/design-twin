@@ -490,7 +490,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 - Destruction is limited to the session's own nodes. A write may create anywhere and overwrite the properties of any
   node (`patch`), but `move` and `delete` work only on nodes this plugin session created
   (`figma-plugin/src/session.ts`: an in-memory list, empty each time the plugin window opens, never written to the
-  file), and a delete is refused when anything below the node is not the session's own.
+  file), and a delete is refused when anything below the node is not the session's own. The one exception is a keyed
+  `createTree` re-send (`figma-plugin/src/keyed.ts`): it removes nodes of its own earlier result that the new spec drops,
+  across sessions, because the result's nodes carry the key in this plugin's own plugin data; a node that holds a layer
+  without that key (the designer's) refuses the batch instead. A spec given by path (`treeFile`) is read by the MCP
+  server, inside the directory it runs in, and reaches the plugin as an inline spec.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).

@@ -381,8 +381,19 @@ export interface AppliedWrite {
   /** createTree / patch: the raw values where a variable or text style could stand (colours, spacing, radii, stroke
    *  weights, a tree's texts without a style); absent when none */
   unbound?: number;
-  /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did) */
+  /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did). A keyed re-send lists
+   *  only the handles that are new: on a node it built, or given to a node that had none. */
   handles?: Record<string, string>;
+  /** createTree with a `key`: the key the result is stored under */
+  key?: string;
+  /** createTree, a keyed re-send: each node updated in place — its id, its handle, the spec fields that changed */
+  changed?: Array<{ id: string; handle?: string; fields: string[] }>;
+  /** createTree, a keyed re-send: how many nodes the spec no longer has (or built anew) were removed */
+  removed?: number;
+  /** createTree, a keyed re-send: how many frames had their layers put in a new order (and gained none) */
+  reordered?: number;
+  /** createTree, a keyed re-send: the spec is the one sent last time, so nothing changed */
+  unchanged?: true;
   collection?: string;
   from?: string;
   to?: string;
@@ -663,6 +674,9 @@ export function writeOpError(o: unknown, i: number): string | null {
     opt(o, "index", isIndex, "a whole number ≥ 0", `${at}.index`),
   ]);
   if (typeErr !== null) return typeErr;
+  // A spec path is read by figma_write (spec-file.ts), which hands the plugin the spec itself: one that arrives here
+  // came round the MCP server.
+  if (o.treeFile !== undefined) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
   const missing = missingWriteFields(op, o);
   if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
   if (op === "createTree") {

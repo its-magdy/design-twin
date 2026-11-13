@@ -18,13 +18,20 @@
 // Adding a route (a later ticket): write its `jobs` entries (the jobs it has a cheaper way for) and add it to ROUTES.
 // The suite runs it on the same fixtures, checks the file afterwards, and prints its cost beside the baseline; record
 // its numbers with `bun test/write-cost.test.ts --record`.
+import fs from "node:fs";
+import path from "node:path";
 import type { Phase } from "./meter.ts";
 import { isFrame, type Briefs, type JobId, type Kit, type Want, type WantFill } from "./jobs.ts";
 import { BRAND } from "./jobs.ts";
 
 export interface Reply { text: string; isError: boolean }
-/** The agent's side of the MCP connection: one tool call, measured. */
-export interface Session { call(tool: string, args: Record<string, unknown>, phase: Phase): Promise<Reply> }
+/** The agent's side of the MCP connection: one tool call, measured. `file` is the agent's own file tool (Write, Edit)
+ *  on the directory the MCP server runs in (`dir`): measured like a tool call, its reply the tool's usual line. */
+export interface Session {
+  call(tool: string, args: Record<string, unknown>, phase: Phase): Promise<Reply>;
+  file(tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }, phase: Phase): Reply;
+  dir: string;
+}
 export type RouteRun<J extends JobId> = (s: Session, brief: Briefs[J]) => Promise<void>;
 export interface Route {
   /** the route's name in the table and in baseline.json */
@@ -161,6 +168,11 @@ export const fourOp: Route = {
       }
       await patch(s, ops);
     },
+    "fix-round": async (s, b) => {
+      const [root] = await buildLevels(s, [{ want: b.want }]);
+      const hit = root === undefined ? [] : (await readOutline(s, root, "verify")).filter((n) => n.text === b.wrong);
+      for (const chunk of chunks(hit.map((n) => ({ op: "setText", nodeId: n.id, text: b.right })), MAX_OPS)) appliedIds(must(await s.call("figma_write", { ops: chunk }, "fix"), "figma_write"));
+    },
     "repeated-part": async (s, b) => {
       // The part sits inside an instance: the instance's line names its main component, whose outline has the part.
       const part = (await readOutline(s, b.screenId, "find")).find((n) => n.name === b.part);
@@ -255,9 +267,52 @@ export const patchById: Route = {
       const hit = (await readOutline(s, b.screenId, "find")).filter((n) => n.text === b.wrong);
       await patch(s, hit.map((n) => ({ op: "patch", nodeId: n.id, set: { text: b.right } })));
     },
+    // The screen as one tree, its check the outline read, the fix a patch of the node the outline names.
+    "fix-round": async (s, b) => {
+      const [root] = await buildTrees(s, [b.want]);
+      const hit = root === undefined ? [] : (await readOutline(s, root, "verify")).filter((n) => n.text === b.wrong);
+      if (!hit.length) throw new Error("the check found nothing to fix");
+      appliedIds(must(await s.call("figma_write", { ops: hit.map((n) => ({ op: "patch", nodeId: n.id, set: { text: b.right } })) }, "fix"), "figma_write"));
+    },
   },
 };
 
+// ---- spec from disk, re-sent in place (#167): the agent keeps the screen's spec in a file (one Write), lands it by
+// path, and fixes it by editing the file (one small Edit) and sending the same path again. The spec carries a key, so
+// the second send updates the screen it built (same ids) and replies with only what changed. The file's Write is
+// counted as the agent's output; a spec a script produced would not cost even that.
+export const keyedFile: Route = {
+  name: "keyed-file",
+  ticket: "#167",
+  jobs: {
+    "fix-round": async (s, b) => {
+      const file = "settings.spec.json";
+      const filePath = path.join(s.dir, file);
+      s.file("Write", { file_path: filePath, content: JSON.stringify({ key: "settings", ...treeOf(b.want) }) }, "write");
+      const [root] = appliedIds(must(await s.call("figma_write", { ops: [{ op: "createTree", treeFile: file }] }, "write"), "figma_write"));
+      const hit = root === undefined ? [] : (await readOutline(s, root, "verify")).filter((n) => n.text === b.wrong);
+      if (!hit.length) throw new Error("the check found nothing to fix");
+      s.file("Edit", { file_path: filePath, old_string: b.wrong, new_string: b.right }, "fix");
+      const r = JSON.parse(must(await s.call("figma_write", { ops: [{ op: "createTree", treeFile: file }] }, "fix"), "figma_write")) as { applied?: Array<{ id?: string; changed?: Array<{ fields: string[] }> }> };
+      const fixed = r.applied?.[0];
+      if (!fixed || fixed.id !== root || fixed.changed?.length !== hit.length) throw new Error(`the re-send did not update the screen in place: ${JSON.stringify(r).slice(0, 300)}`);
+    },
+  },
+};
+
+/** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
+export function fileTool(tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
+  if (tool === "Write") {
+    fs.writeFileSync(args.file_path, args.content ?? "");
+    return { text: `File created successfully at: ${args.file_path}`, isError: false };
+  }
+  const was = fs.readFileSync(args.file_path, "utf8");
+  const from = args.old_string ?? "";
+  if (!from || was.split(from).length !== 2) return { text: "String to replace not found exactly once", isError: true };
+  fs.writeFileSync(args.file_path, was.replace(from, args.new_string ?? ""));
+  return { text: `The file ${args.file_path} has been updated.`, isError: false };
+}
+
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile];
 export const BASELINE = fourOp.name;

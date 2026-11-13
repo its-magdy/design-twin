@@ -903,6 +903,7 @@
   ];
   var MAX_TREE_NODES = 500;
   var MAX_TREE_DEPTH = 40;
+  var MAX_KEY_LENGTH = 200;
   var DEFAULT_FONT = { family: "Inter", weight: "Regular" };
   var NOT_YET = { refuse: "" };
   var refuse = (why) => ({ refuse: why });
@@ -1082,6 +1083,8 @@
     // "__proto__" is refused: Figma's own main-thread → UI message copy drops a key of that name (seen live), so the
     // reply could not carry it back however the plugin builds it.
     handle: (v) => typeof v !== "string" || v.length === 0 ? "must be a non-empty string" : v === "__proto__" ? "'__proto__' cannot be a handle (Figma's message passing drops that key); pick another name" : null,
+    // Stored on the node as plugin data (an entry is capped at 100 kB by Figma; a key is far below it).
+    key: (v) => typeof v !== "string" || !v.trim() ? "must be a non-empty string" : v.length > MAX_KEY_LENGTH ? "must be at most " + MAX_KEY_LENGTH + " characters" : null,
     id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
     hidden: trueOnly,
     x: num,
@@ -1319,6 +1322,7 @@
       const say = (msg) => {
         problems.push(path + ": " + msg);
       };
+      if (!isRoot && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
       if (kind === "TEXT") {
         if (typeof n.text !== "string") say("a TEXT node needs `text`");
         for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
@@ -1435,6 +1439,7 @@
     const parts = [
       "creates frame '" + (spec.name || "Frame") + "'" + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + ") " + where
     ];
+    if (spec.key !== void 0) parts.push("key '" + spec.key + "': when the file already holds this key's earlier result, that result is updated in place instead (same ids, only the fields that differ from the spec sent last time) and the reply lists only what changed");
     if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
     if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
     const { components, variables, textStyles } = s.refs;
@@ -1521,6 +1526,7 @@
     type: "a node's type cannot change",
     children: "a patch changes one node; change each child by its own id (or `move` a node this session created)",
     handle: "a handle names a node a createTree op creates",
+    key: "a key names a createTree result; send its spec again to update it",
     id: "the node is named by the op's `nodeId`",
     component: "swapping an instance's component cannot be written yet; set its `props`",
     x: "a patch does not move a node; `move` changes its parent",
@@ -1773,9 +1779,9 @@
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
   var isNum2 = (v) => typeof v === "number";
-  function opt(a, key, ok, what, label2 = key) {
+  function opt(a, key, ok, what, label3 = key) {
     const v = a[key];
-    return v === void 0 || ok(v) ? null : `\`${label2}\` is not ${what}`;
+    return v === void 0 || ok(v) ? null : `\`${label3}\` is not ${what}`;
   }
   function first(errs) {
     for (const e of errs) if (e !== null) return e;
@@ -1804,6 +1810,7 @@
       opt(o, "index", isIndex, "a whole number \u2265 0", `${at}.index`)
     ]);
     if (typeErr !== null) return typeErr;
+    if (o.treeFile !== void 0) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
     const missing = missingWriteFields(op, o);
     if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {
@@ -5500,6 +5507,315 @@
     return null;
   }
 
+  // ../bridge/src/tree-diff.ts
+  var EXTRA_FIELDS = ["x", "y", "absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout"];
+  function ownSpec(s) {
+    const out = {};
+    for (const k of Object.keys(s)) {
+      const v = s[k];
+      if (k !== "children" && v !== void 0) out[k] = v;
+    }
+    return out;
+  }
+  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  function canonical(v) {
+    if (v === void 0) return "undefined";
+    if (v === null || typeof v !== "object") return JSON.stringify(v);
+    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+    const o = v;
+    return "{" + Object.keys(o).filter((k) => o[k] !== void 0).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
+  }
+  var same = (a, b) => canonical(a) === canonical(b);
+  function without(o, keys) {
+    if (!isObj2(o)) return void 0;
+    const out = {};
+    for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
+    return Object.keys(out).length ? out : void 0;
+  }
+  function compared(s, kind) {
+    const out = {};
+    for (const k of Object.keys(s)) {
+      const v = s[k];
+      if (v === void 0 || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key") continue;
+      if (k === "box") {
+        out.box = without(v, ["x", "y"]);
+        continue;
+      }
+      if (k === "font") {
+        out.font = without(v, ["weightValue"]);
+        continue;
+      }
+      if (k === "layout") {
+        out.layout = without(v, ["width", "height"]);
+        continue;
+      }
+      out[k] = v;
+    }
+    if (kind === "FRAME") {
+      const size2 = sizeOf(s);
+      if (size2) out.box = size2;
+    }
+    return out;
+  }
+  function sizeOf(s) {
+    if (s.box) return { w: s.box.w, h: s.box.h };
+    const l = s.layout;
+    if (!l || l.width === void 0 && l.height === void 0) return void 0;
+    return { ...l.width !== void 0 ? { w: l.width } : {}, ...l.height !== void 0 ? { h: l.height } : {} };
+  }
+  function rebuildReason(kind, a, b, changed) {
+    if (nodeKind(a) !== kind) return "its type changed";
+    if (kind === "INSTANCE") {
+      if (a.component !== b.component) return "its component changed";
+      if (changed.indexOf("name") >= 0 && b.name === void 0) return "its name was dropped";
+      if (changed.indexOf("box") >= 0 && b.box === void 0) return "its size was dropped";
+      const gone = Object.keys(a.props || {}).filter((k) => !b.props || !(k in b.props));
+      if (gone.length) return "a property it set was dropped";
+    }
+    if (kind === "TEXT") {
+      for (const f of ["font", "truncate", "maxLines", "widthMode", "heightMode"]) if (changed.indexOf(f) >= 0) return "`" + f + "` changed";
+      if (changed.indexOf("styles") >= 0 && !(b.styles && b.styles.text !== void 0)) return "its text style was dropped";
+      if (changed.indexOf("strokes") >= 0 && a.strokes && a.strokes.align !== void 0 && !(b.strokes && b.strokes.align !== void 0)) return "its stroke alignment was dropped";
+    }
+    return null;
+  }
+  var SIDES2 = ["top", "right", "bottom", "left"];
+  function translate(kind, a, b, changed) {
+    const set = {};
+    const tokens = {};
+    const extras = [];
+    const fields = [];
+    const has2 = (f) => changed.indexOf(f) >= 0;
+    const touch = (f) => {
+      if (fields.indexOf(f) < 0) fields.push(f);
+    };
+    const bt = b.tokens || {};
+    const at = a.tokens || {};
+    if (has2("name")) {
+      set.name = b.name !== void 0 ? b.name : kind === "TEXT" ? b.text || "" : "Frame";
+      touch("name");
+    }
+    if (has2("hidden")) {
+      set.hidden = b.hidden === true;
+      touch("hidden");
+    }
+    if (has2("opacity")) {
+      set.opacity = b.opacity !== void 0 ? b.opacity : 1;
+      touch("opacity");
+    }
+    if (has2("text") && b.text !== void 0) {
+      set.text = b.text;
+      touch("text");
+    }
+    if (has2("styles") && b.styles && b.styles.text !== void 0) {
+      set.styles = { text: b.styles.text };
+      touch("styles");
+    }
+    if (has2("props") && b.props) {
+      set.props = b.props;
+      touch("props");
+    }
+    if (has2("layout") && kind === "FRAME") {
+      set.layout = layoutOf(b);
+      touch("layout");
+    }
+    if (has2("radius")) {
+      const r = b.radius;
+      set.radius = r === void 0 ? 0 : typeof r === "number" ? r : { tl: r.tl || 0, tr: r.tr || 0, br: r.br || 0, bl: r.bl || 0 };
+      touch("radius");
+    }
+    if (has2("box") || kind === "TEXT" && has2("autoResize")) {
+      if (kind === "TEXT") {
+        if (b.box) set.box = { w: b.box.w, h: b.box.h };
+        set.autoResize = b.autoResize !== void 0 ? b.autoResize : b.box ? "none" : "width_and_height";
+        if (has2("box")) touch("box");
+        if (has2("autoResize")) touch("autoResize");
+      } else {
+        const size2 = kind === "FRAME" ? sizeOf(b) : b.box;
+        const box = {};
+        if (size2 && size2.w !== void 0 && b.widthMode === void 0) box.w = size2.w;
+        if (size2 && size2.h !== void 0 && b.heightMode === void 0) box.h = size2.h;
+        if (!size2 && b.widthMode === void 0 && b.heightMode === void 0) {
+          box.w = 100;
+          box.h = 100;
+        }
+        if (box.w !== void 0 || box.h !== void 0) {
+          set.box = box;
+          touch("box");
+        }
+      }
+    }
+    for (const axis of ["widthMode", "heightMode"]) {
+      if (!has2(axis)) continue;
+      const m = b[axis];
+      set[axis] = m !== void 0 ? m : "fixed";
+      touch(axis);
+    }
+    if (kind !== "INSTANCE" && (has2("fills") || !same(at.fills, bt.fills))) {
+      if (b.fills) set.fills = b.fills;
+      else if (bt.fills !== void 0) tokens.fills = bt.fills;
+      else set.fills = kind === "TEXT" ? [{ type: "solid", color: b.font && b.font.color !== void 0 ? b.font.color : "#000000" }] : [];
+      touch("fills");
+    }
+    if (kind !== "INSTANCE" && (has2("strokes") || !same(at.strokes, bt.strokes))) {
+      const sa = a.strokes || {};
+      const sb = b.strokes || {};
+      const st = {};
+      if (sb.colors) st.colors = sb.colors;
+      else if (bt.strokes === void 0) st.colors = [];
+      if (st.colors !== void 0 && st.colors.length && bt.strokes !== void 0) tokens.strokes = bt.strokes;
+      else if (st.colors === void 0) tokens.strokes = bt.strokes !== void 0 ? bt.strokes : null;
+      if (sb.weight !== void 0) st.weight = sb.weight;
+      else if (sa.weight !== void 0) st.weight = 1;
+      if (kind === "FRAME" && (sb.weights !== void 0 || sa.weights !== void 0)) {
+        const w = {};
+        for (const side of SIDES2) {
+          const v = sb.weights && sb.weights[side];
+          if (v !== void 0) w[side] = v;
+          else if (sa.weights && sa.weights[side] !== void 0) w[side] = 1;
+        }
+        if (Object.keys(w).length) st.weights = w;
+      }
+      if (sb.align !== void 0) st.align = sb.align;
+      else if (sa.align !== void 0) st.align = "inside";
+      if (Object.keys(st).length) set.strokes = st;
+      touch("strokes");
+    }
+    const numberChanged = NUMBER_TOKEN_FIELDS.filter((k) => at[k] !== bt[k]);
+    if (numberChanged.length) touch("tokens");
+    for (const k of numberChanged) tokens[k] = bt[k] !== void 0 ? bt[k] : null;
+    if (Object.keys(set).length || numberChanged.length) {
+      for (const k of NUMBER_TOKEN_FIELDS) if (bt[k] !== void 0) tokens[k] = bt[k];
+    }
+    if (Object.keys(tokens).length) set.tokens = tokens;
+    for (const f of EXTRA_FIELDS) {
+      if (!has2(f)) continue;
+      if ((f === "x" || f === "y") && b[f] === void 0) continue;
+      if ((f === "clip" || f === "sizeLimits" || f === "strokesInLayout") && kind !== "FRAME") continue;
+      extras.push(f);
+      touch(f);
+    }
+    return { set, extras, fields };
+  }
+  function layoutOf(b) {
+    const l = b.layout;
+    if (!l || l.display !== "flex") return { mode: "absolute" };
+    const column = l.flexDirection === "column";
+    const out = {
+      display: "flex",
+      flexDirection: column ? "column" : "row",
+      gap: l.gap !== void 0 ? l.gap : 0,
+      padding: l.padding ? l.padding : [0, 0, 0, 0],
+      justifyContent: l.justifyContent !== void 0 ? l.justifyContent : "flex-start",
+      alignItems: l.alignItems !== void 0 ? l.alignItems : "flex-start",
+      flexWrap: l.flexWrap === "wrap" ? "wrap" : "nowrap",
+      reverseZ: l.reverseZ === true
+    };
+    if (l.flexWrap === "wrap") {
+      if (column) out.columnGap = l.columnGap !== void 0 ? l.columnGap : 0;
+      else out.rowGap = l.rowGap !== void 0 ? l.rowGap : 0;
+      out.alignContent = l.alignContent !== void 0 ? l.alignContent : "auto";
+    }
+    return out;
+  }
+  function match(olds, news) {
+    const out = news.map(() => null);
+    const used = /* @__PURE__ */ new Set();
+    news.forEach((n, i) => {
+      if (n.handle === void 0) return;
+      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.handle === n.handle);
+      if (j >= 0) {
+        out[i] = olds[j] || null;
+        used.add(j);
+      }
+    });
+    const count2 = (list, name, of) => list.filter((x) => of(x) === name).length;
+    news.forEach((n, i) => {
+      if (out[i] || n.name === void 0) return;
+      if (count2(news, n.name, (x) => x.name) !== 1 || count2(olds, n.name, (o) => o.spec.name) !== 1) return;
+      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.name === n.name && o.spec.handle === void 0);
+      if (j >= 0) {
+        out[i] = olds[j] || null;
+        used.add(j);
+      }
+    });
+    let next = 0;
+    news.forEach((n, i) => {
+      if (out[i]) return;
+      while (next < olds.length && (used.has(next) || olds[next] && olds[next].spec.handle !== void 0)) next++;
+      const o = olds[next];
+      if (!o) return;
+      if (n.name !== void 0 && o.spec.name !== void 0 && n.name !== o.spec.name) return;
+      out[i] = o;
+      used.add(next);
+      next++;
+    });
+    return out;
+  }
+  function planUpdate(old, spec) {
+    const plan = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [] };
+    visit(old, spec, "tree", plan);
+    return plan;
+  }
+  function visit(old, spec, path, plan) {
+    const kind = nodeKind(spec) || "FRAME";
+    const a = compared(old.spec, kind);
+    const b = compared(spec, kind);
+    const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
+    if (changed.length) {
+      const t = translate(kind, old.spec, spec, changed);
+      if (t.fields.length) plan.updates.push({ ref: old.ref, spec, fields: t.fields, set: Object.keys(t.set).length ? t.set : null, extras: t.extras, path });
+    }
+    if (!same(old.spec, ownSpec(spec))) plan.stamps.push({ ref: old.ref, spec: ownSpec(spec) });
+    if (spec.handle !== void 0 && spec.handle !== old.spec.handle) plan.handles.push({ handle: spec.handle, ref: old.ref });
+    if (kind !== "FRAME") return;
+    const news = spec.children || [];
+    const pairs = match(old.children, news);
+    const order = [];
+    let built = false;
+    news.forEach((n, i) => {
+      const at = path + ".children[" + i + "]";
+      const o = pairs[i];
+      const why = o ? replaceReason(o, n) : null;
+      if (o && why === null) {
+        visit(o, n, at, plan);
+        order.push({ ref: o.ref });
+        return;
+      }
+      order.push({ build: plan.builds.length });
+      plan.builds.push({ parent: old.ref, spec: n, replaces: o ? o.ref : null, path: at });
+      built = true;
+    });
+    const kept = new Set(pairs.filter((p) => p !== null).map((p) => p.ref));
+    for (const o of old.children) if (!kept.has(o.ref)) plan.removals.push(o.ref);
+    const before = old.children.filter((o) => kept.has(o.ref)).map((o) => o.ref);
+    const after = order.filter((e) => "ref" in e && kept.has(e.ref)).map((e) => e.ref);
+    const reordered = before.some((r, i) => r !== after[i]);
+    if (built || reordered) plan.orders.push({ parent: old.ref, order });
+  }
+  function replaceReason(o, n) {
+    const kind = nodeKind(n) || "FRAME";
+    const a = compared(o.spec, kind);
+    const b = compared(n, kind);
+    const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
+    return rebuildReason(kind, o.spec, n, changed);
+  }
+
+  // src/keyed-store.ts
+  var KEY_DATA = "dtwin.key";
+  var SPEC_DATA = "dtwin.spec";
+  var indexEntry = (key) => "dtwin.key:" + key;
+  function stampNode(n, key, spec) {
+    n.setPluginData(KEY_DATA, key);
+    n.setPluginData(SPEC_DATA, JSON.stringify(ownSpec(spec)));
+  }
+  function readIndex(key) {
+    return figma.root.getPluginData(indexEntry(key));
+  }
+  function writeIndex(key, id) {
+    figma.root.setPluginData(indexEntry(key), id);
+  }
+
   // src/tree.ts
   var PLACE_GAP = 100;
   async function resolveTreeOps(ops) {
@@ -5582,8 +5898,10 @@
     return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
   }
   async function buildTree(t, consent2) {
-    const made = { frames: 0, texts: 0, instances: 0, handles: /* @__PURE__ */ new Map(), refs: t.refs, styled: [] };
+    const made = newMade(t.refs);
     const root = figma.createFrame();
+    const key = t.spec.key;
+    const indexWas = key !== void 0 ? readIndex(key) : "";
     root.visible = false;
     try {
       applyFrame(root, t.spec, null, made);
@@ -5596,6 +5914,10 @@
       root.x = x;
       root.y = y;
       root.visible = t.spec.hidden !== true;
+      if (key !== void 0) {
+        for (const [n, s] of made.pairs) stampNode(n, key, s);
+        writeIndex(key, root.id);
+      }
       markCreated(root);
     } catch (e) {
       try {
@@ -5604,7 +5926,8 @@
       }
       throw e;
     }
-    const applied = { id: root.id, created: made.instances ? { frames: made.frames, texts: made.texts, instances: made.instances } : { frames: made.frames, texts: made.texts } };
+    const applied = { id: root.id, created: createdCount(made) };
+    if (key !== void 0) applied.key = key;
     if (made.handles.size) applied.handles = handleRecord(made.handles);
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
     return {
@@ -5613,8 +5936,50 @@
       what: "the tree '" + root.name + "' (" + root.id + ")",
       restore() {
         root.remove();
+        if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
       }
     };
+  }
+  function createdCount(made) {
+    return made.instances ? { frames: made.frames, texts: made.texts, instances: made.instances } : { frames: made.frames, texts: made.texts };
+  }
+  function newMade(refs2) {
+    return { frames: 0, texts: 0, instances: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, styled: [], pairs: [] };
+  }
+  async function buildSubtree(spec, parent, made, consent2) {
+    const kind = nodeKind(spec);
+    const first2 = made.pairs.length;
+    const styledFrom = made.styled.length;
+    let node = null;
+    try {
+      if (kind === "TEXT") {
+        const t = figma.createText();
+        node = t;
+        applyText(t, spec, parent, made);
+      } else if (kind === "INSTANCE") node = applyInstance(spec, parent, made);
+      else {
+        const f = figma.createFrame();
+        node = f;
+        applyFrame(f, spec, parent, made);
+      }
+      for (const [text, style] of made.styled.slice(styledFrom)) {
+        await text.setTextStyleIdAsync(style.id);
+        consent2();
+      }
+    } catch (e) {
+      const made0 = made.pairs[first2];
+      const n = node || (made0 ? made0[0] : null);
+      if (n) {
+        try {
+          n.remove();
+        } catch {
+        }
+      }
+      throw e;
+    }
+    if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
+    markCreated(node);
+    return node;
   }
   function handleRecord(m) {
     const out = {};
@@ -5710,6 +6075,7 @@
   }
   function applyFrame(f, s, parent, made) {
     made.frames++;
+    made.pairs.push([f, s]);
     if (parent) parent.appendChild(f);
     f.fills = paints2(s.fills, s.tokens && s.tokens.fills, made);
     f.clipsContent = s.clip === true;
@@ -5770,15 +6136,18 @@
     if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
     made.instances++;
     const inst = r.main.createInstance();
+    made.pairs.push([inst, s]);
     parent.appendChild(inst);
     if (Object.keys(r.props).length) inst.setProperties(r.props);
     if (s.box) inst.resize(s.box.w, s.box.h);
     common(inst, s, parent, made);
     sizing(inst, s);
     bindNumbers(inst, s, made);
+    return inst;
   }
   function applyText(t, s, parent, made) {
     made.texts++;
+    made.pairs.push([t, s]);
     parent.appendChild(t);
     const font = s.font || {};
     const styleRef = s.styles && s.styles.text;
@@ -5989,7 +6358,6 @@
       }
       return p;
     };
-    const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
     for (const [index, op] of ops.entries()) {
       if (op.op !== "patch") continue;
       const later = changesBefore(ops, index);
@@ -6007,77 +6375,81 @@
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
       }
-      if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page");
-        continue;
-      }
-      const node = nd;
-      const fit = unfit(node, set);
-      const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
-      for (const m of misfits) bad(m);
-      if (node.type === "TEXT") {
-        for (const f of await fontsToKeep(node)) {
-          const err = await loadFont(f);
-          if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
-        }
-      }
-      let props = null;
-      if (set.props && node.type === "INSTANCE") {
-        const main = await node.getMainComponentAsync();
-        if (!main) {
-          bad("set.props: the instance '" + node.name + "' has no main component to read its properties from");
-          continue;
-        }
-        const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
-        let defs;
-        try {
-          defs = (owner || main).componentPropertyDefinitions;
-        } catch {
-          defs = {};
-        }
-        const mapped = mapProps(set.props, defs, (owner || main).name);
-        if ("errors" in mapped) {
-          for (const e of mapped.errors) bad("set.props: " + e);
-          continue;
-        }
-        if (!later) {
-          const v = await variantProblem(node, mapped.ok);
-          if (v) {
-            bad(v);
-            continue;
-          }
-        }
-        props = mapped.ok;
-      }
-      const bound = /* @__PURE__ */ new Map();
-      for (const k of NUMBER_TOKEN_FIELDS) {
-        const id = boundId(node, k);
-        if (!id || bound.has(id)) continue;
-        let v = null;
-        try {
-          v = await figma.variables.getVariableByIdAsync(id);
-        } catch {
-          v = null;
-        }
-        if (v) bound.set(id, v);
-      }
-      if (misfits.length) continue;
-      targets.set(index, { node, set, unbound: checkPatch(set).summary.unbound, props, refs: empty, bound });
+      const target = await resolvePatchNode(nd, set, later, loadFont, bad);
+      if (target) targets.set(index, target);
     }
     const r = await resolveRefs(uses, loadFont);
     problems.push(...r.problems);
     for (const t of targets.values()) t.refs = r.refs;
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
-  function canonical(v) {
+  async function resolvePatchNode(nd, set, later, loadFont, bad) {
+    if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
+      bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page");
+      return null;
+    }
+    const node = nd;
+    const fit = unfit(node, set);
+    const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
+    for (const m of misfits) bad(m);
+    if (node.type === "TEXT") {
+      for (const f of await fontsToKeep(node)) {
+        const err = await loadFont(f);
+        if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
+      }
+    }
+    let props = null;
+    if (set.props && node.type === "INSTANCE") {
+      const main = await node.getMainComponentAsync();
+      if (!main) {
+        bad("set.props: the instance '" + node.name + "' has no main component to read its properties from");
+        return null;
+      }
+      const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
+      let defs;
+      try {
+        defs = (owner || main).componentPropertyDefinitions;
+      } catch {
+        defs = {};
+      }
+      const mapped = mapProps(set.props, defs, (owner || main).name);
+      if ("errors" in mapped) {
+        for (const e of mapped.errors) bad("set.props: " + e);
+        return null;
+      }
+      if (!later) {
+        const v = await variantProblem(node, mapped.ok);
+        if (v) {
+          bad(v);
+          return null;
+        }
+      }
+      props = mapped.ok;
+    }
+    const bound = /* @__PURE__ */ new Map();
+    for (const k of NUMBER_TOKEN_FIELDS) {
+      const id = boundId(node, k);
+      if (!id || bound.has(id)) continue;
+      let v = null;
+      try {
+        v = await figma.variables.getVariableByIdAsync(id);
+      } catch {
+        v = null;
+      }
+      if (v) bound.set(id, v);
+    }
+    if (misfits.length) return null;
+    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() }, bound };
+  }
+  function canonical2(v) {
     if (v === void 0) return "undefined";
     if (v === null || typeof v !== "object") return JSON.stringify(v);
-    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
-    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(getF(v, k))).join(",") + "}";
+    if (Array.isArray(v)) return "[" + v.map(canonical2).join(",") + "]";
+    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical2(getF(v, k))).join(",") + "}";
   }
-  var same = (a, b) => a === b || canonical(a) === canonical(b);
+  var same2 = (a, b) => a === b || canonical2(a) === canonical2(b);
   function putBack(n, k, v) {
-    if (!same(getF(n, k), v)) setF(n, k, v);
+    if (!same2(getF(n, k), v)) setF(n, k, v);
   }
   var LAYOUT_PROPS = [
     "layoutMode",
@@ -6228,7 +6600,7 @@
         for (const [k, v] of nodeProps) putBack(t, k, v);
         return;
       }
-      if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) {
+      if (same2(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) {
         for (const [k, v] of nodeProps) putBack(t, k, v);
         return;
       }
@@ -6250,7 +6622,7 @@
           if (want === void 0 || want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0) continue;
           const got = call(t, "getRange" + suffix, [s, e]);
           if ((got === null || got === void 0) && (want === null || want === void 0)) continue;
-          if (!same(got, want)) call(t, "setRange" + suffix, [s, e, want]);
+          if (!same2(got, want)) call(t, "setRange" + suffix, [s, e, want]);
         }
         if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) {
           if (all) await t.setFillStyleIdAsync(r.fillStyleId);
@@ -6306,8 +6678,8 @@
         if ([...was].some(([k, v]) => shown2(k) !== v)) n.setProperties(old);
       });
     }
-    const LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
-    const limitsTouched = LIMITS.some((k) => tok[k] !== void 0);
+    const LIMITS2 = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
+    const limitsTouched = LIMITS2.some((k) => tok[k] !== void 0);
     const sizeTouched = set.box !== void 0 || set.widthMode !== void 0 || set.heightMode !== void 0 || set.layout !== void 0 || set.props !== void 0 || set.autoResize !== void 0 || set.text !== void 0 || set.styles !== void 0 || tok.width !== void 0 || tok.height !== void 0 || limitsTouched;
     if (set.layout) {
       const props = keep(n, LAYOUT_PROPS);
@@ -6332,7 +6704,7 @@
       const w = t.node.width, h = t.node.height;
       const sizing2 = keep(n, ["layoutSizingHorizontal", "layoutSizingVertical"]);
       const auto = keep(n, ["textAutoResize"]);
-      const limits = limitsTouched ? keep(n, LIMITS) : [];
+      const limits = limitsTouched ? keep(n, LIMITS2) : [];
       steps.push(() => {
         for (const [k, v] of limits) putBack(n, k, v);
         if ((n.width !== w || n.height !== h) && "resize" in n) n.resize(w, h);
@@ -6364,7 +6736,7 @@
     if (set.opacity !== void 0 || tok.opacity !== void 0) plain.push(...keep(n, ["opacity"]));
     if (set.hidden !== void 0) plain.push(...keep(n, ["visible"]));
     if (set.name !== void 0) plain.push(...keep(n, ["name"]));
-    const geometry = ["width", "height", ...LIMITS];
+    const geometry = ["width", "height", ...LIMITS2];
     for (const k of Object.keys(tok)) if (geometry.indexOf(k) < 0 && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
     steps.push(() => {
       for (const [k, v] of plain) putBack(n, k, v);
@@ -6528,10 +6900,249 @@
     return change;
   }
 
-  // src/structure.ts
+  // src/keyed.ts
+  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var label = (n) => "'" + n.name + "' (" + n.id + ")";
+  async function findResult(key) {
+    const id = readIndex(key);
+    if (!id) return null;
+    const n = await figma.getNodeByIdAsync(id);
+    if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
+    let p = n.parent;
+    while (p && p.type !== "PAGE") p = p.parent;
+    if (!p || p.type !== "PAGE") return null;
+    await p.loadAsync();
+    return n;
+  }
+  function readOld(n, key) {
+    let spec;
+    try {
+      spec = JSON.parse(n.getPluginData(SPEC_DATA));
+    } catch {
+      return null;
+    }
+    if (!isObj3(spec)) return null;
+    const children = [];
+    if (n.type === "FRAME") {
+      for (const c of n.children) {
+        if (c.getPluginData(KEY_DATA) !== key) continue;
+        const o = readOld(c, key);
+        if (o) children.push(o);
+      }
+    }
+    return { ref: n, spec, children };
+  }
+  function foreignIn(n, key) {
+    if (n.getPluginData(KEY_DATA) !== key) return n;
+    if (n.type !== "FRAME") return null;
+    for (const c of n.children) {
+      const f = foreignIn(c, key);
+      if (f) return f;
+    }
+    return null;
+  }
+  async function resolveKeyed(ops, targets) {
+    const problems = [];
+    const seen = /* @__PURE__ */ new Map();
+    const loaded3 = /* @__PURE__ */ new Map();
+    const loadFont = (f) => {
+      const k = f.family + "|" + f.style;
+      let p = loaded3.get(k);
+      if (!p) {
+        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
+        loaded3.set(k, p);
+      }
+      return p;
+    };
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree" || !isObj3(op.tree) || typeof op.tree.key !== "string") continue;
+      const key = op.tree.key;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const first2 = seen.get(key);
+      if (first2 !== void 0) {
+        bad("tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
+        continue;
+      }
+      seen.set(key, index);
+      const t = targets.get(index);
+      if (!t) continue;
+      const root = await findResult(key);
+      if (!root) continue;
+      if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
+        bad("tree.key '" + key + "': its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+        continue;
+      }
+      const old = readOld(root, key);
+      if (!old) {
+        bad("tree.key '" + key + "': the spec stored on its result " + label(root) + " cannot be read; give the spec another key to build it again");
+        continue;
+      }
+      const plan = planUpdate(old, t.spec);
+      const before = problems.length;
+      for (const b of plan.builds) {
+        if (!b.replaces) continue;
+        const f = foreignIn(b.replaces, key);
+        if (f) bad(b.path + ": " + label(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label(f) + ", which this key did not build; move that layer out first");
+      }
+      for (const r of plan.removals) {
+        const f = foreignIn(r, key);
+        if (f) bad("tree.key '" + key + "': " + label(r) + " is no longer in the spec, but it holds " + label(f) + ", which this key did not build; move that layer out, or keep the node in the spec");
+      }
+      const patches = /* @__PURE__ */ new Map();
+      for (const [i, u] of plan.updates.entries()) {
+        if (!u.set) continue;
+        const say = (m) => bad(u.path + " (" + label(u.ref) + "): " + m);
+        const checked = checkPatch(u.set);
+        if (checked.problems.length) {
+          for (const m of checked.problems) say(m);
+          continue;
+        }
+        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
+        if (!p) continue;
+        p.refs = t.refs;
+        patches.set(i, p);
+      }
+      if (problems.length === before) t.update = { key, root, plan, patches };
+    }
+    return { problems };
+  }
+  function removalsOf(u) {
+    const out = u.plan.removals.slice();
+    for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
+    return out;
+  }
+  var ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" };
+  var LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
+  var EXTRA_ORDER = ["absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout", "x", "y"];
+  function applyExtras(n, s, fields) {
+    const kept = [];
+    const put = (k, v) => {
+      if (!(k in n)) return;
+      const was = Reflect.get(n, k);
+      if (was === v) return;
+      kept.push([k, was]);
+      if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
+    };
+    const parent = n.parent;
+    const onPage = !parent || parent.type === "PAGE";
+    const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
+    for (const f of EXTRA_ORDER) {
+      if (fields.indexOf(f) < 0) continue;
+      if (f === "absolute" && inFlex) put("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
+      else if (f === "grow" && inFlex) put("layoutGrow", s.grow !== void 0 ? s.grow : 0);
+      else if (f === "alignSelf" && inFlex) put("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
+      else if (f === "clip") put("clipsContent", s.clip === true);
+      else if (f === "sizeLimits") for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
+      else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
+      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put(f, s[f]);
+    }
+    return {
+      applied: { id: n.id },
+      kind: "updated node",
+      what: "the place and clipping of " + label(n),
+      restore() {
+        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+      }
+    };
+  }
+  function arrange(parent, want) {
+    for (const [i, n] of want.entries()) {
+      if (n.parent !== parent) continue;
+      if (parent.children[i] !== n) parent.insertChild(i, n);
+    }
+  }
+  function applyOrder(o, built) {
+    const parent = o.parent;
+    const was = parent.children.slice();
+    const nodes = [];
+    for (const e of o.order) {
+      const n = "ref" in e ? e.ref : built[e.build];
+      if (n && n.parent === parent) nodes.push(n);
+    }
+    const slots = was.map((c, i) => nodes.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
+    const want = was.slice();
+    slots.forEach((slot, k) => {
+      const n = nodes[k];
+      if (n) want[slot] = n;
+    });
+    arrange(parent, want);
+    return {
+      applied: { id: parent.id },
+      kind: "reordered frame",
+      what: "the order of the layers in " + label(parent),
+      restore() {
+        arrange(parent, was.filter((c) => c.parent === parent));
+      }
+    };
+  }
+  function restamp(stamps, key) {
+    const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
+    for (const s of stamps) stampNode(s.ref, key, s.spec);
+    return {
+      applied: {},
+      kind: "stored spec",
+      what: "the spec stored on " + stamps.length + " node(s)",
+      restore() {
+        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
+      }
+    };
+  }
+  async function applyUpdate(t, u, consent2, allowed2, changes) {
+    const { plan, key } = u;
+    const changed = [];
+    for (const [i, up] of plan.updates.entries()) {
+      const p = u.patches.get(i);
+      if (p) {
+        consent2();
+        await applyPatch(p, consent2, allowed2, changes);
+      }
+      if (up.extras.length) {
+        consent2();
+        changes.push(applyExtras(up.ref, up.spec, up.extras));
+      }
+      changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
+    }
+    const made = newMade(t.refs);
+    const built = [];
+    for (const b of plan.builds) {
+      consent2();
+      const from = made.pairs.length;
+      const n = await buildSubtree(b.spec, b.parent, made, consent2);
+      for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() {
+        n.remove();
+      } });
+      built.push(n);
+    }
+    for (const o of plan.orders) {
+      consent2();
+      changes.push(applyOrder(o, built));
+    }
+    if (plan.stamps.length) {
+      consent2();
+      changes.push(restamp(plan.stamps, key));
+    }
+    const applied = { id: u.root.id, key };
+    if (changed.length) applied.changed = changed;
+    if (plan.builds.length) applied.created = createdCount(made);
+    const removed = removalsOf(u).length;
+    if (removed) applied.removed = removed;
+    const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
+    if (reordered) applied.reordered = reordered;
+    const handles = {};
+    for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
+    for (const [h, id] of made.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
+    if (Object.keys(handles).length) applied.handles = handles;
+    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles) applied.unchanged = true;
+    return applied;
+  }
+
+  // src/structure.ts
+  var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
-  var holds = (node, foreign) => "node " + label(node) + " holds " + label(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
+  var holds = (node, foreign) => "node " + label2(node) + " holds " + label2(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
   function instanceAround(n) {
     for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
     return null;
@@ -6542,10 +7153,10 @@
   }
   function placeProblem(node, parent, index) {
     const inst = instanceAround(parent);
-    if (inst) return "parent " + label(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children";
-    if (within(parent, node)) return "parent " + label(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+    if (inst) return "parent " + label2(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label2(inst)) + ", which cannot take new children";
+    if (within(parent, node)) return "parent " + label2(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
     const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
-    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label2(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
     return null;
   }
   async function resolveStructureOps(ops, changesBefore2) {
@@ -6564,12 +7175,12 @@
         continue;
       }
       if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad(label(nd) + " is a " + nd.type + "; " + NOT_OURS);
+        bad(label2(nd) + " is a " + nd.type + "; " + NOT_OURS);
         continue;
       }
       const node = nd;
       if (!createdThisSession(node.id)) {
-        bad("node " + label(node) + ": " + NOT_OURS);
+        bad("node " + label2(node) + ": " + NOT_OURS);
         continue;
       }
       if (op.op === "delete") {
@@ -6587,7 +7198,7 @@
         continue;
       }
       if (pd.type === "DOCUMENT" || !("insertChild" in pd)) {
-        bad("parent " + label(pd) + " is a " + pd.type + ", which cannot have children");
+        bad("parent " + label2(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
@@ -6611,7 +7222,7 @@
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
-    if (!from || !("insertChild" in from)) throw new Error("node " + label(node) + " has no parent to move it from");
+    if (!from || !("insertChild" in from)) throw new Error("node " + label2(node) + " has no parent to move it from");
     const at = from.children.indexOf(node);
     const x = node.x, y = node.y, w = node.width, h = node.height;
     const sizing2 = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
@@ -6621,7 +7232,7 @@
     return {
       applied,
       kind: "moved node",
-      what: "the move of " + label(node),
+      what: "the move of " + label2(node),
       restore() {
         from.insertChild(Math.min(at, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
         if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
@@ -6820,6 +7431,7 @@
       case "createTree": {
         if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
         consent();
+        if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
         const change = await buildTree(tree, consent);
         changes.push(change);
         return change.applied;
@@ -6901,9 +7513,10 @@
     const resolveBatch = async () => {
       const modes2 = await resolveModeOps(list);
       const trees2 = await resolveTreeOps(list);
+      const keyed = await resolveKeyed(list, trees2.targets);
       const patches2 = await resolvePatchOps(list);
       const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
-      const problems2 = [...modes2.problems, ...trees2.problems, ...patches2.problems, ...structure2.problems, ...deleteConflicts(list, structure2.deletes, structure2.moves)].sort((a, b) => a.index - b.index);
+      const problems2 = [...modes2.problems, ...trees2.problems, ...keyed.problems, ...patches2.problems, ...structure2.problems, ...deleteConflicts(list, structure2.deletes, structure2.moves)].sort((a, b) => a.index - b.index);
       return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, problems: problems2 };
     };
     let { modes, trees, patches, structure, problems } = await resolveBatch();
@@ -6977,6 +7590,19 @@
         const r = await fail(i, op, e);
         const gone = rows.filter((a) => a !== void 0 && a.deleted === true).length;
         return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
+      }
+    }
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
+        for (const n of removalsOf(t.update)) {
+          if (n.removed) continue;
+          consent();
+          n.remove();
+        }
+      } catch (e) {
+        return fail(i, op, e);
       }
     }
     const done = rows.filter((a) => a !== void 0);
@@ -7156,10 +7782,10 @@
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post2 = (m) => figma.ui.postMessage(m);
-  async function runExport(label2, collect, toFiles) {
+  async function runExport(label3, collect, toFiles) {
     let r;
     try {
-      r = await serializeRun(collect, { source: "ui", label: label2 });
+      r = await serializeRun(collect, { source: "ui", label: label3 });
     } catch (e) {
       post2({ type: "error", message: errMsg(e) });
       return;

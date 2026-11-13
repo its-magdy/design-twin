@@ -100,6 +100,8 @@ const SUITE_FILES: readonly string[] = [
   "daemon-auth.test.ts", "daemon-sock.test.ts", "mcp-share.test.ts", "mcp-smoke.test.ts", "mcp-tools.test.ts", "client-presence.test.ts", "mcp-lifecycle.test.ts", "mcp-delivery.test.ts", "json-size.test.ts", "outline.test.ts",
   // the write plane's cost meter (boots the MCP server; no live Figma)
   "write-cost.test.ts",
+  // a tree spec from disk and a keyed re-send's plan (pure)
+  "write-keyed.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];

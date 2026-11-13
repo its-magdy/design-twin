@@ -87,10 +87,16 @@ export function canvas(): Canvas {
     }
     return { type: "SOLID", visible: true, color: f, opacity: 1 };
   };
-  const adopt = (parent: CNode, child: CNode): void => {
+  const adopt = (parent: CNode, child: CNode, at?: number): void => {
     if (child.parent?.children) child.parent.children.splice(child.parent.children.indexOf(child), 1);
     child.parent = parent;
-    (parent.children ??= []).push(child);
+    const list = (parent.children ??= []);
+    list.splice(at === undefined ? list.length : Math.min(at, list.length), 0, child);
+  };
+  // This plugin's own data on a node (a keyed spec stamps every node it builds): "" when unset, as in Figma.
+  const pluginData = (): Pick<CNode, "getPluginData" | "setPluginData"> => {
+    const data = new Map<string, string>();
+    return { getPluginData: (k: string) => data.get(k) ?? "", setPluginData: (k: string, v: string) => { if (v === "") data.delete(k); else data.set(k, v); } };
   };
   const box = (n: CNode) => ({ x: Number(n.x), y: Number(n.y), width: Number(n.width), height: Number(n.height) });
   // What every node carries for the read: no dev resources, and a reference render that is one fixed tiny byte string.
@@ -112,6 +118,9 @@ export function canvas(): Canvas {
       primaryAxisSizingMode: "FIXED", counterAxisSizingMode: "FIXED",
       resize(w: number, h: number) { n.width = w; n.height = h; },
       appendChild(c: CNode) { adopt(n, c); },
+      insertChild(at: number, c: CNode) { adopt(n, c, at); },
+      remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
+      ...pluginData(),
       get absoluteBoundingBox() { return box(n); },
     };
     nodes[id] = n;
@@ -135,6 +144,7 @@ export function canvas(): Canvas {
       textAutoResize: "WIDTH_AND_HEIGHT", textAlignHorizontal: "LEFT", textAlignVertical: "TOP",
       lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE",
       getRangeAllFontNames: () => Object.freeze([FONT]), // frozen, as Figma's
+      ...pluginData(),
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
     });
     Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter
@@ -187,7 +197,7 @@ export function canvas(): Canvas {
     nodes, pages, variables,
     page(name) {
       const id = nextId();
-      const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, loadAsync: async () => {},
+      const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, insertChild(at: number, ch: CNode) { adopt(p, ch, at); }, loadAsync: async () => {},
         findAllWithCriteria: (c: { types: string[] }) => findAll(p, c.types) };
       nodes[id] = p;
       pages.push(p);

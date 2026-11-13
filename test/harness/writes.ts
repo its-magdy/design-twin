@@ -177,6 +177,11 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
       boundVariables: {},
     };
+    // This plugin's own data on the node (a keyed spec stamps every node it builds); "" when unset, as in Figma.
+    const data = new Map<string, string>();
+    fields.getPluginData = (k: string) => data.get(k) ?? "";
+    fields.setPluginData = (k: string, v: string) => { if (v === "") data.delete(k); else data.set(k, v); };
+    fields.getPluginDataKeys = () => [...data.keys()];
     // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {
       const bound = isNode(fields.boundVariables) ? { ...fields.boundVariables } : {};
@@ -1673,6 +1678,130 @@ export const cases: Case[] = [{
     const r2 = await pending2;
     ok("[REVIEW-RESOLVE] a node removed during review: refused whole, the error says the file changed while it waited",
       r2.ok === false && r2.applied.length === 0 && /the file changed while the write waited for review/.test(r2.error ?? ""));
+  },
+}, {
+  name: "keyed tree spec: the same key sent again updates the result in place and replies with only what changed",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const spec = (over: (s: Record<string, unknown> & { children: Array<Record<string, unknown>> }) => void = () => {}): Record<string, unknown> => {
+      const s = {
+        key: "settings", name: "Settings", handle: "root", box: { w: 390, h: 844 }, fills: [{ type: "solid", color: "#ffffff" }],
+        layout: { display: "flex", flexDirection: "column", gap: 16 },
+        children: [
+          { text: "Hello", name: "Title", handle: "title", font: { size: 24 } },
+          { name: "Card", layout: { display: "flex", flexDirection: "column", padding: [8, 8, 8, 8] }, children: [{ text: "A", name: "A" }, { text: "B", name: "B" }] },
+          { component: "Button", handle: "btn", props: { Label: "Go" } },
+        ] as Array<Record<string, unknown>>,
+      };
+      over(s);
+      return s;
+    };
+    const send = (tree: Record<string, unknown>, more: Array<{ op: string } & Record<string, unknown>> = []): Promise<WriteResult> => w.api.applyWrites([{ op: "createTree", tree }, ...more]);
+    const screens = (): FakeNode[] => kids(w.pages.current).filter((n) => n.name === "Settings");
+    const card = (): FakeNode | undefined => byName(screens()[0], "Card");
+
+    const r1 = await send(spec());
+    const a1 = r1.applied[0];
+    const root = screens()[0];
+    ok("[KEYED] the first send builds the screen, and says its key", r1.ok === true && a1?.key === "settings" && a1.id === root?.id && JSON.stringify(a1.created) === JSON.stringify({ frames: 2, texts: 3, instances: 1 }));
+    const title = byName(root, "Title");
+    const btn = kids(root)[2]; // an instance is named after its variant
+    const alive1 = w.alive().length;
+
+    const r2 = await send(spec());
+    ok("[KEYED] the same spec sent again: one result, not two; the reply is the root, the key and `unchanged`",
+      r2.ok === true && screens().length === 1 && w.alive().length === alive1 && JSON.stringify(r2.applied) === JSON.stringify([{ id: root?.id, key: "settings", unchanged: true }]));
+
+    // A fix round: the title's text, the gap, a child dropped and one added, a property of the instance.
+    const commits = w.undo.commits;
+    const r3 = await send(spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) t.text = "Hello there";
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }];
+      if (b) b.props = { Label: "Stop" };
+    }));
+    const a3 = r3.applied[0];
+    const cNode = byName(card(), "C");
+    ok("[KEYED] a fix round updates the same nodes (same ids), and builds and removes only what the spec added and dropped",
+      r3.ok === true && screens().length === 1 && screens()[0] === root && byName(root, "Title") === title && kids(root)[2] === btn && btn !== undefined &&
+      title?.characters === "Hello there" && num(root, "itemSpacing") === 24 && byName(card(), "B") === undefined && cNode?.characters === "C" &&
+      kids(card()).map((k) => k.name).join() === "A,C" && JSON.stringify(btn?.props) === JSON.stringify({ "Label#1:0": "Stop" }));
+    ok("[KEYED] its reply lists only what changed: each updated node and its fields, what was built and removed, the new handle's id",
+      JSON.stringify(a3) === JSON.stringify({
+        id: root?.id, key: "settings",
+        changed: [{ id: root?.id, handle: "root", fields: ["layout"] }, { id: title?.id, handle: "title", fields: ["text"] }, { id: btn?.id, handle: "btn", fields: ["props"] }],
+        created: { frames: 0, texts: 1 }, removed: 1, handles: { c: cNode?.id },
+      }));
+    ok("[KEYED] a fix round is one undo step", w.undo.commits === commits + 2);
+
+    // The fix round's spec again: nothing to do.
+    const fixed = spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) t.text = "Hello there";
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }];
+      if (b) b.props = { Label: "Stop" };
+    });
+    ok("[KEYED] the fixed spec sent again is unchanged (what was stored is what was applied)", (await send(fixed)).applied[0]?.unchanged === true);
+
+    // A batch that fails after the update puts all of it back: values, built nodes, the stored spec.
+    const textBefore = title?.characters;
+    const failed = await send(spec((s) => {
+      const [t, c] = s.children;
+      if (t) t.text = "Never";
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }, { text: "D", name: "D" }];
+    }), [{ op: "createFrame", parentId: "missing:1" }]);
+    ok("[KEYED] a later op failing puts the update back: the text, the built node; nothing removed yet",
+      failed.ok === false && failed.failedAt === 1 && title?.characters === textBefore && byName(card(), "D") === undefined && byName(card(), "C") === cNode && byName(card(), "C")?.removed === false);
+    ok("[KEYED] …and the stored spec: the fixed spec is still unchanged", (await send(fixed)).applied[0]?.unchanged === true);
+
+    // What cannot change in place is built anew: a text's font. Its new id comes back by its handle.
+    const r4 = await send(spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) { t.text = "Hello there"; t.font = { size: 32 }; }
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }];
+      if (b) b.props = { Label: "Stop" };
+    }));
+    const title2 = byName(root, "Title");
+    ok("[KEYED] a font change builds the text anew in its place and removes the old one",
+      r4.ok === true && title2 !== undefined && title2 !== title && title?.removed === true && kids(root).indexOf(title2) === 0 && num(title2, "fontSize") === 32 &&
+      JSON.stringify(r4.applied[0]) === JSON.stringify({ id: root?.id, key: "settings", created: { frames: 0, texts: 1 }, removed: 1, handles: { title: title2.id } }));
+
+    // A layer the designer added inside the result stays, in its place, through a reorder.
+    const mine = w.figma.createFrame?.();
+    if (mine) { mine.name = "Designer note"; const ins = card()?.insertChild; if (callable(ins)) ins(1, mine); }
+    const swapped = spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) { t.text = "Hello there"; t.font = { size: 32 }; }
+      if (c) c.children = [{ text: "C", name: "C", handle: "c" }, { text: "A", name: "A" }];
+      if (b) b.props = { Label: "Stop" };
+    });
+    const r5 = await send(swapped);
+    ok("[KEYED] children in a new order: reordered in place, the designer's own layer keeps its slot",
+      r5.ok === true && kids(card()).map((k) => k.name).join() === "C,Designer note,A" && JSON.stringify(r5.applied[0]) === JSON.stringify({ id: root?.id, key: "settings", reordered: 1 }));
+
+    // Dropping a node that holds the designer's layer is refused whole: a re-send removes only what it built.
+    const dropCard = spec((s) => { s.children = s.children.filter((c) => c.name !== "Card"); });
+    const refusedDrop = await send(dropCard);
+    ok("[KEYED] dropping a node that holds a layer the key did not build: refused, naming both, nothing changed",
+      refusedDrop.ok === false && refusedDrop.applied.length === 0 && /'Card' \([^)]+\) is no longer in the spec, but it holds 'Designer note'/.test(refusedDrop.error ?? "") && card() !== undefined);
+
+    // Two ops with one key, and a key whose result is on another page, are refused.
+    const twice = await w.api.applyWrites([{ op: "createTree", tree: swapped }, { op: "createTree", tree: swapped }]);
+    ok("[KEYED] one key twice in a batch: refused", twice.ok === false && /tree\.key 'settings' is also the key of ops\[0\]/.test(twice.error ?? ""));
+    const elsewhere = await w.api.applyWrites([{ op: "createTree", tree: swapped, page: "Screens" }]);
+    ok("[KEYED] a page other than the result's: refused (an update stays where the result is)", elsewhere.ok === false && /is on page 'Page 1', not 'Screens'/.test(elsewhere.error ?? ""));
+
+    // The result deleted: the key builds a new one, and the next send updates that one.
+    const drop = root?.remove;
+    if (callable(drop)) drop();
+    const r6 = await send(swapped);
+    const root2 = screens()[0];
+    ok("[KEYED] once the result is deleted, the key builds it again", r6.ok === true && screens().length === 1 && root2 !== root && r6.applied[0]?.created !== undefined && r6.applied[0].id === root2?.id);
+    ok("[KEYED] …and the next send updates the new one", JSON.stringify((await send(swapped)).applied) === JSON.stringify([{ id: root2?.id, key: "settings", unchanged: true }]));
   },
 }];
 
