@@ -966,6 +966,13 @@ node has), and a batch with any problem is refused whole, every problem listed. 
 if one fails partway, everything the batch already did is put back — values restored, nodes it created removed, moved
 nodes returned to their parent and place — and listed as `restored`. Deletes run last, once everything else has landed,
 because a deleted node cannot be brought back. The batch is one Cmd-Z step for the designer.
+A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
+sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
+runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's
+auto-layout on and then fills a child is accepted, and one that cannot work fails there and is put back whole. Names
+(components, variables, text styles, pages, collections) always resolve against the file as it is before the batch:
+renaming a component and naming it by its new name, or changing a component and relying on that change in a
+`createTree` instance, takes two calls.
 
 `setVariableMode` sets a node's explicit mode for one variable collection, so a dark or brand version of a screen is
 the same frame with one op; `clearVariableMode` puts the node back on the mode it inherits from its parent.

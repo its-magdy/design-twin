@@ -26,34 +26,38 @@ const NOT_OURS = "this plugin session did not create it; a write moves or delete
 const holds = (node: BaseNode, foreign: BaseNode): string => "node " + label(node) + " holds " + label(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
 
 /** The instance `n` is part of (itself, or one above it), or null. */
-/** A node's parent: as an earlier move of the batch leaves it (`moved`), else the file's. */
-type ParentOf = (n: BaseNode) => BaseNode | null;
-const fileParent: ParentOf = (n) => n.parent;
-function instanceAround(n: BaseNode, up: ParentOf = fileParent): BaseNode | null {
-  for (let p: BaseNode | null = n; p; p = up(p)) if (p.type === "INSTANCE") return p;
+function instanceAround(n: BaseNode): BaseNode | null {
+  for (let p: BaseNode | null = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
   return null;
 }
 /** `n` is `of` or below it. */
-function within(n: BaseNode, of: BaseNode, up: ParentOf = fileParent): boolean {
-  for (let p: BaseNode | null = n; p; p = up(p)) if (p.id === of.id) return true;
+function within(n: BaseNode, of: BaseNode): boolean {
+  for (let p: BaseNode | null = n; p; p = p.parent) if (p.id === of.id) return true;
   return false;
 }
+/** What is wrong with moving `node` into `parent` at `index` in the file as it is now (null when nothing): the parent is
+ *  not in an instance, not the node or below it, and the index fits its children. */
+function placeProblem(node: SceneNode, parent: BaseNode & ChildrenMixin, index: number | undefined): string | null {
+  const inst = instanceAround(parent);
+  if (inst) return "parent " + label(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children";
+  if (within(parent, node)) return "parent " + label(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+  const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
+  if (index !== undefined && index > room) return "index " + index + " is past the end: " + label(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+  return null;
+}
 
-/** Resolve every move and delete op of a batch against the file and this session. */
-export async function resolveStructureOps(ops: readonly WriteOp[]): Promise<{ moves: Map<number, MoveTarget>; deletes: Map<number, DeleteTarget>; problems: OpProblem[] }> {
+/**
+ * Resolve every move and delete op of a batch against the file and this session. What can only change by an earlier
+ * op of the same batch — where a node sits, what a parent holds, what a delete takes with it — is checked here when no
+ * earlier op could have changed it (`changesBefore`), and otherwise right before the op runs (applyMove, the deletes'
+ * own check in writes.ts), against the file as the earlier ops left it.
+ */
+export async function resolveStructureOps(ops: readonly WriteOp[], changesBefore: (index: number) => boolean): Promise<{ moves: Map<number, MoveTarget>; deletes: Map<number, DeleteTarget>; problems: OpProblem[] }> {
   const moves = new Map<number, MoveTarget>();
   const deletes = new Map<number, DeleteTarget>();
   const problems: OpProblem[] = [];
-  // Each parent's children (by id) and each node's parent as the moves before an op leave them: a second move into the
-  // same parent sees the first one there.
-  const kidsOf = new Map<string, string[]>();
-  const parentOf = new Map<string, BaseNode>();
-  const up: ParentOf = (n) => parentOf.get(n.id) ?? n.parent;
-  const childIds = (p: BaseNode): string[] => {
-    let list = kidsOf.get(p.id);
-    if (!list) { list = "children" in p ? p.children.map((c) => c.id) : []; kidsOf.set(p.id, list); }
-    return list;
-  };
+  // Deletes run after every other op, so any other op in the batch can change what a delete takes with it.
+  const others = ops.some((o) => o.op !== "delete" && o.op !== "setVariableMode" && o.op !== "clearVariableMode");
   for (const [index, op] of ops.entries()) {
     if (op.op !== "move" && op.op !== "delete") continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
@@ -63,7 +67,7 @@ export async function resolveStructureOps(ops: readonly WriteOp[]): Promise<{ mo
     const node = nd;
     if (!createdThisSession(node.id)) { bad("node " + label(node) + ": " + NOT_OURS); continue; }
     if (op.op === "delete") {
-      const foreign = foreignBelow(node);
+      const foreign = others ? null : foreignBelow(node);
       if (foreign) { bad(holds(node, foreign)); continue; }
       deletes.set(index, { node });
       continue;
@@ -71,28 +75,28 @@ export async function resolveStructureOps(ops: readonly WriteOp[]): Promise<{ mo
     const pd = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
     if (!pd) { bad("no parent with id '" + String(op.parentId) + "' (invalid or removed)"); continue; }
     if (pd.type === "DOCUMENT" || !("insertChild" in pd)) { bad("parent " + label(pd) + " is a " + pd.type + ", which cannot have children"); continue; }
-    const inst = instanceAround(pd, up);
-    if (inst) { bad("parent " + label(pd) + " is " + (inst === pd ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children"); continue; }
-    if (within(pd, node, up)) { bad("parent " + label(pd) + " is " + (pd.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself"); continue; }
     if (pd.type === "PAGE") await pd.loadAsync(); // dynamic-page: before its children are read or it is appended to
-    const into = childIds(pd);
-    const room = into.filter((id) => id !== node.id).length;
-    if (op.index !== undefined && op.index > room) { bad("index " + op.index + " is past the end: " + label(pd) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)"); continue; }
+    if (!changesBefore(index)) {
+      const wrong = placeProblem(node, pd, op.index);
+      if (wrong) { bad(wrong); continue; }
+    }
     moves.set(index, { node, parent: pd, index: op.index });
-    // Where it now is, for the moves after this one.
-    const fromNode = parentOf.get(node.id);
-    const fromId = fromNode ? fromNode.id : node.parent ? node.parent.id : null;
-    const from = fromId !== null ? kidsOf.get(fromId) ?? (node.parent && node.parent.id === fromId ? childIds(node.parent) : null) : null;
-    if (from) { const at = from.indexOf(node.id); if (at >= 0) from.splice(at, 1); }
-    into.splice(op.index === undefined ? into.length : Math.min(op.index, into.length), 0, node.id);
-    parentOf.set(node.id, pd);
   }
   return { moves, deletes, problems };
+}
+
+/** A delete's own check, right before the deletes run: nothing below the node is another's (an earlier op of the
+ *  batch may have changed what is below it). Throws. */
+export function checkDelete(t: DeleteTarget): void {
+  const foreign = foreignBelow(t.node);
+  if (foreign) throw new Error(holds(t.node, foreign));
 }
 
 /** Move a resolved node, keeping where it was. */
 export function applyMove(t: MoveTarget): Change {
   const { node, parent } = t;
+  const wrong = placeProblem(node, parent, t.index); // the file as the earlier ops of the batch left it
+  if (wrong) throw new Error(wrong);
   const from = node.parent;
   if (!from || !("insertChild" in from)) throw new Error("node " + label(node) + " has no parent to move it from");
   const at = from.children.indexOf(node);
@@ -124,8 +128,7 @@ export function applyMove(t: MoveTarget): Change {
 
 /** Delete a resolved node (checked again: an op of this batch may have put a node below it). Cannot be undone. */
 export function applyDelete(t: DeleteTarget): AppliedWrite {
-  const foreign = foreignBelow(t.node);
-  if (foreign) throw new Error(holds(t.node, foreign));
+  checkDelete(t);
   const id = t.node.id;
   t.node.remove();
   return { id, deleted: true };

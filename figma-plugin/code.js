@@ -5681,81 +5681,105 @@
   var has = (node, k) => k in node;
   var isFlex2 = (n) => !!n && "layoutMode" in n && n.layoutMode !== "NONE";
   var SPACING_FIELDS = ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "counterAxisSpacing"];
-  function layoutNow(node, proj) {
-    const p = node && proj ? proj.get(node.id) : void 0;
-    if (p) return p;
+  function layoutNow(node) {
     const mode = node && "layoutMode" in node ? node.layoutMode : "NONE";
     return { dir: mode === "VERTICAL" ? "column" : mode === "HORIZONTAL" ? "row" : "none", wrap: !!node && "layoutWrap" in node && node.layoutWrap === "WRAP" };
   }
-  function directionAfter(node, set, proj) {
+  function directionAfter(node, set) {
     const l = set.layout;
     if (l && l.mode === "absolute") return "none";
     if (l && l.flexDirection) return l.flexDirection;
-    const now = layoutNow(node, proj).dir;
+    const now = layoutNow(node).dir;
     if (now !== "none") return now;
     return l && l.display === "flex" ? "row" : "none";
   }
-  function unfit(node, set, proj, parent) {
-    const out = [];
-    const say = (field, m) => {
-      out.push("set." + field + ": " + m);
+  function unfit(node, set) {
+    const kind = [];
+    const state = [];
+    const say = (list) => (field, m) => {
+      list.push("set." + field + ": " + m);
     };
+    const fixed = say(kind), now = say(state);
     const what = "'" + node.name + "' is a " + node.type;
-    for (const f of ["text", "styles", "autoResize"]) if (set[f] !== void 0 && node.type !== "TEXT") say(f, "only on a TEXT node; " + what);
-    if (set.props !== void 0 && node.type !== "INSTANCE") say("props", "only on an INSTANCE node; " + what);
-    if (set.fills !== void 0 && !has(node, "fills")) say("fills", what + ", which has no fills");
+    for (const f of ["text", "styles", "autoResize"]) if (set[f] !== void 0 && node.type !== "TEXT") fixed(f, "only on a TEXT node; " + what);
+    if (set.props !== void 0 && node.type !== "INSTANCE") fixed("props", "only on an INSTANCE node; " + what);
+    if (set.fills !== void 0 && !has(node, "fills")) fixed("fills", what + ", which has no fills");
     if (set.strokes !== void 0) {
-      if (!has(node, "strokes")) say("strokes", what + ", which has no strokes");
-      else if (set.strokes.weights !== void 0 && !has(node, "strokeTopWeight")) say("strokes.weights", "per-side weights are not on a " + node.type + "; use `strokes.weight`");
+      if (!has(node, "strokes")) fixed("strokes", what + ", which has no strokes");
+      else if (set.strokes.weights !== void 0 && !has(node, "strokeTopWeight")) fixed("strokes.weights", "per-side weights are not on a " + node.type + "; use `strokes.weight`");
     }
-    if (set.radius !== void 0 && !has(node, "cornerRadius")) say("radius", what + ", which has no corner radius");
-    else if (set.radius !== void 0 && node.type === "VECTOR") say("radius", "a vector's corner radius is set per vertex, which a patch cannot put back yet");
-    else if (typeof set.radius === "object" && !has(node, "topLeftRadius")) say("radius", what + ", which has no per-corner radius; give one number");
-    if (set.opacity !== void 0 && !has(node, "opacity")) say("opacity", what + ", which has no opacity");
-    if (set.box !== void 0 && !has(node, "resize")) say("box", what + ", which cannot be resized");
-    const flexAfter = directionAfter(node, set, proj) !== "none";
+    if (set.radius !== void 0 && !has(node, "cornerRadius")) fixed("radius", what + ", which has no corner radius");
+    else if (set.radius !== void 0 && node.type === "VECTOR") fixed("radius", "a vector's corner radius is set per vertex, which a patch cannot put back yet");
+    else if (typeof set.radius === "object" && !has(node, "topLeftRadius")) fixed("radius", what + ", which has no per-corner radius; give one number");
+    if (set.opacity !== void 0 && !has(node, "opacity")) fixed("opacity", what + ", which has no opacity");
+    if (set.box !== void 0 && !has(node, "resize")) fixed("box", what + ", which cannot be resized");
+    const flexAfter = directionAfter(node, set) !== "none";
     const l = set.layout;
     if (l) {
-      if (!has(node, "layoutMode")) say("layout", what + ", which cannot have auto-layout (a frame, component or instance can)");
+      if (!has(node, "layoutMode")) fixed("layout", what + ", which cannot have auto-layout (a frame, component or instance can)");
       else if (l.mode === void 0 && l.display === void 0 && !flexAfter) {
         const fields = Object.keys(l).filter((k) => l[k] !== void 0);
-        say("layout", "'" + node.name + "' has no auto-layout, so " + fields.map((k) => "`layout." + k + "`").join(", ") + ' would do nothing; add `display: "flex"`');
+        now("layout", "'" + node.name + "' has no auto-layout, so " + fields.map((k) => "`layout." + k + "`").join(", ") + ' would do nothing; add `display: "flex"`');
       } else if (flexAfter) {
-        const wraps = l.flexWrap === "wrap" || l.flexWrap === void 0 && layoutNow(node, proj).wrap && l.display === void 0;
-        for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0 && !wraps) say("layout." + k, 'needs wrapping: give `flexWrap: "wrap"` (the node does not wrap)');
-        const dir = directionAfter(node, set, proj);
-        if (wraps && (dir === "column" ? l.rowGap : l.columnGap) !== void 0) say("layout." + (dir === "column" ? "rowGap" : "columnGap"), "is the main-axis gap in a wrapping " + dir + "; use `gap`");
-        if (l.alignItems === "baseline" && dir === "column") say("layout.alignItems", '"baseline" works only in a row; the node is a column');
+        const wraps = l.flexWrap === "wrap" || l.flexWrap === void 0 && layoutNow(node).wrap;
+        for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0 && !wraps) now("layout." + k, 'needs wrapping: give `flexWrap: "wrap"` (the node does not wrap)');
+        const dir = directionAfter(node, set);
+        if (wraps && (dir === "column" ? l.rowGap : l.columnGap) !== void 0) now("layout." + (dir === "column" ? "rowGap" : "columnGap"), "is the main-axis gap in a wrapping " + dir + "; use `gap`");
+        if (l.alignItems === "baseline" && dir === "column") now("layout.alignItems", '"baseline" works only in a row; the node is a column');
       }
     }
     for (const axis of ["widthMode", "heightMode"]) {
       const m = set[axis];
       if (m === void 0) continue;
       if (!has(node, "layoutSizingHorizontal")) {
-        say(axis, what + ", which has no sizing mode");
+        fixed(axis, what + ", which has no sizing mode");
         continue;
       }
       if (m === "fill") {
-        if (layoutNow(parent, proj).dir === "none") say(axis, `"fill" needs a parent with auto-layout; '` + node.name + "''s parent has none");
-        else if ("layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE") say(axis, '"fill" is not on an absolutely positioned child (it is out of the auto-layout flow)');
+        if (layoutNow(node.parent).dir === "none") now(axis, `"fill" needs a parent with auto-layout; '` + node.name + "''s parent has none");
+        else if ("layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE") now(axis, '"fill" is not on an absolutely positioned child (it is out of the auto-layout flow)');
       }
-      if (m === "hug" && node.type !== "TEXT" && !flexAfter) say(axis, `"hug" needs auto-layout on the node (or a TEXT); '` + node.name + '\' has none \u2014 add `layout: {display: "flex"}`');
+      if (m === "hug" && node.type !== "TEXT" && !flexAfter) now(axis, `"hug" needs auto-layout on the node (or a TEXT); '` + node.name + '\' has none \u2014 add `layout: {display: "flex"}`');
     }
     const t = set.tokens || {};
     for (const k of Object.keys(t)) {
       if (t[k] === void 0) continue;
       if (k === "fills" || k === "strokes") {
-        if (!has(node, k)) say("tokens." + k, what + ", which has no " + k);
+        if (!has(node, k)) fixed("tokens." + k, what + ", which has no " + k);
         continue;
       }
       if (!has(node, k)) {
-        say("tokens." + k, what + ", which has no `" + k + "` to bind");
+        fixed("tokens." + k, what + ", which has no `" + k + "` to bind");
         continue;
       }
-      if (t[k] !== null && SPACING_FIELDS.indexOf(k) >= 0 && !flexAfter) say("tokens." + k, "needs auto-layout on the node; '" + node.name + "' has none");
+      if (t[k] !== null && SPACING_FIELDS.indexOf(k) >= 0 && !flexAfter) now("tokens." + k, "needs auto-layout on the node; '" + node.name + "' has none");
     }
-    if (t.fills === null && set.fills === void 0 && node.type === "TEXT" && node.fills === figma.mixed) say("tokens.fills", "the text's paints differ from run to run; give `fills` to replace them instead");
-    return out;
+    if (t.fills === null && set.fills === void 0 && node.type === "TEXT" && node.fills === figma.mixed) now("tokens.fills", "the text's paints differ from run to run; give `fills` to replace them instead");
+    return { kind, state };
+  }
+  async function variantProblem(node, props) {
+    const main = await node.getMainComponentAsync();
+    const owner = main && main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
+    if (!main || !owner) return null;
+    let defs;
+    try {
+      defs = owner.componentPropertyDefinitions;
+    } catch {
+      defs = {};
+    }
+    const shown2 = variantFor(owner, main, props, defs);
+    return "missing" in shown2 ? "set.props: component '" + owner.name + "' has no variant " + shown2.missing : null;
+  }
+  async function checkBeforeApply(t) {
+    const problems = unfit(t.node, t.set).state;
+    if (t.props && t.node.type === "INSTANCE") {
+      const v = await variantProblem(t.node, t.props);
+      if (v) problems.push(v);
+    }
+    if (problems.length) throw new Error(problems.join("; ") + " (checked right before this op ran, after the earlier ops of the batch)");
+  }
+  function changesBefore(ops, index) {
+    return ops.slice(0, index).some((o) => o.op !== "setVariableMode" && o.op !== "clearVariableMode" && o.op !== "delete");
   }
   function fontsOf(t) {
     const len = t.characters.length;
@@ -5777,11 +5801,9 @@
       return p;
     };
     const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
-    const projected = /* @__PURE__ */ new Map();
-    const moved = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
-      if (op.op === "move" && op.nodeId !== void 0 && op.parentId !== void 0) moved.set(op.nodeId, op.parentId);
       if (op.op !== "patch") continue;
+      const later = changesBefore(ops, index);
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
       };
@@ -5801,13 +5823,8 @@
         continue;
       }
       const node = nd;
-      const movedTo = moved.get(node.id);
-      const parent = movedTo !== void 0 ? await figma.getNodeByIdAsync(movedTo) : node.parent;
-      const misfits = unfit(node, set, projected, parent);
-      if (set.layout && !misfits.length) {
-        const l = set.layout;
-        projected.set(node.id, { dir: directionAfter(node, set, projected), wrap: l.mode === "absolute" ? false : l.flexWrap !== void 0 ? l.flexWrap === "wrap" : layoutNow(node, projected).wrap });
-      }
+      const fit = unfit(node, set);
+      const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
       for (const m of misfits) bad(m);
       if (node.type === "TEXT") {
         for (const f of await fontsToKeep(node)) {
@@ -5834,10 +5851,10 @@
           for (const e of mapped.errors) bad("set.props: " + e);
           continue;
         }
-        if (owner) {
-          const shown2 = variantFor(owner, main, mapped.ok, defs);
-          if ("missing" in shown2) {
-            bad("set.props: component '" + owner.name + "' has no variant " + shown2.missing);
+        if (!later) {
+          const v = await variantProblem(node, mapped.ok);
+          if (v) {
+            bad(v);
             continue;
           }
         }
@@ -6266,6 +6283,7 @@
     }
   }
   async function applyPatch(t, consent2, allowed2, changes) {
+    await checkBeforeApply(t);
     const restore = await snapshot(t);
     consent2();
     const applied = { id: t.node.id };
@@ -6291,34 +6309,27 @@
   var label = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
   var holds = (node, foreign) => "node " + label(node) + " holds " + label(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
-  var fileParent = (n) => n.parent;
-  function instanceAround(n, up = fileParent) {
-    for (let p = n; p; p = up(p)) if (p.type === "INSTANCE") return p;
+  function instanceAround(n) {
+    for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
     return null;
   }
-  function within(n, of, up = fileParent) {
-    for (let p = n; p; p = up(p)) if (p.id === of.id) return true;
+  function within(n, of) {
+    for (let p = n; p; p = p.parent) if (p.id === of.id) return true;
     return false;
   }
-  async function resolveStructureOps(ops) {
-    var _a;
+  function placeProblem(node, parent, index) {
+    const inst = instanceAround(parent);
+    if (inst) return "parent " + label(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children";
+    if (within(parent, node)) return "parent " + label(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+    const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
+    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+    return null;
+  }
+  async function resolveStructureOps(ops, changesBefore2) {
     const moves = /* @__PURE__ */ new Map();
     const deletes = /* @__PURE__ */ new Map();
     const problems = [];
-    const kidsOf = /* @__PURE__ */ new Map();
-    const parentOf = /* @__PURE__ */ new Map();
-    const up = (n) => {
-      var _a2;
-      return (_a2 = parentOf.get(n.id)) != null ? _a2 : n.parent;
-    };
-    const childIds = (p) => {
-      let list = kidsOf.get(p.id);
-      if (!list) {
-        list = "children" in p ? p.children.map((c) => c.id) : [];
-        kidsOf.set(p.id, list);
-      }
-      return list;
-    };
+    const others = ops.some((o) => o.op !== "delete" && o.op !== "setVariableMode" && o.op !== "clearVariableMode");
     for (const [index, op] of ops.entries()) {
       if (op.op !== "move" && op.op !== "delete") continue;
       const bad = (message) => {
@@ -6339,7 +6350,7 @@
         continue;
       }
       if (op.op === "delete") {
-        const foreign = foreignBelow(node);
+        const foreign = others ? null : foreignBelow(node);
         if (foreign) {
           bad(holds(node, foreign));
           continue;
@@ -6356,37 +6367,26 @@
         bad("parent " + label(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
-      const inst = instanceAround(pd, up);
-      if (inst) {
-        bad("parent " + label(pd) + " is " + (inst === pd ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children");
-        continue;
-      }
-      if (within(pd, node, up)) {
-        bad("parent " + label(pd) + " is " + (pd.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself");
-        continue;
-      }
       if (pd.type === "PAGE") await pd.loadAsync();
-      const into = childIds(pd);
-      const room = into.filter((id) => id !== node.id).length;
-      if (op.index !== void 0 && op.index > room) {
-        bad("index " + op.index + " is past the end: " + label(pd) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)");
-        continue;
+      if (!changesBefore2(index)) {
+        const wrong = placeProblem(node, pd, op.index);
+        if (wrong) {
+          bad(wrong);
+          continue;
+        }
       }
       moves.set(index, { node, parent: pd, index: op.index });
-      const fromNode = parentOf.get(node.id);
-      const fromId = fromNode ? fromNode.id : node.parent ? node.parent.id : null;
-      const from = fromId !== null ? (_a = kidsOf.get(fromId)) != null ? _a : node.parent && node.parent.id === fromId ? childIds(node.parent) : null : null;
-      if (from) {
-        const at = from.indexOf(node.id);
-        if (at >= 0) from.splice(at, 1);
-      }
-      into.splice(op.index === void 0 ? into.length : Math.min(op.index, into.length), 0, node.id);
-      parentOf.set(node.id, pd);
     }
     return { moves, deletes, problems };
   }
+  function checkDelete(t) {
+    const foreign = foreignBelow(t.node);
+    if (foreign) throw new Error(holds(t.node, foreign));
+  }
   function applyMove(t) {
     const { node, parent } = t;
+    const wrong = placeProblem(node, parent, t.index);
+    if (wrong) throw new Error(wrong);
     const from = node.parent;
     if (!from || !("insertChild" in from)) throw new Error("node " + label(node) + " has no parent to move it from");
     const at = from.children.indexOf(node);
@@ -6415,8 +6415,7 @@
     };
   }
   function applyDelete(t) {
-    const foreign = foreignBelow(t.node);
-    if (foreign) throw new Error(holds(t.node, foreign));
+    checkDelete(t);
     const id = t.node.id;
     t.node.remove();
     return { id, deleted: true };
@@ -6673,7 +6672,7 @@
     const modes = await resolveModeOps(list);
     const trees = await resolveTreeOps(list);
     const patches = await resolvePatchOps(list);
-    const structure = await resolveStructureOps(list);
+    const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
     const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     const firstProblem = problems[0];
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
@@ -6711,6 +6710,15 @@
       if (op.op === "delete") continue;
       try {
         rows[i] = await applyWrite(op, { mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i) }, changes);
+      } catch (e) {
+        return fail(i, op, e);
+      }
+    }
+    for (const [i, t] of structure.deletes) {
+      const op = list[i];
+      if (!op) continue;
+      try {
+        checkDelete(t);
       } catch (e) {
         return fail(i, op, e);
       }

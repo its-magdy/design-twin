@@ -1315,8 +1315,16 @@ export const cases: Case[] = [{
     has(/ops\[1\] \(patch\): set\.tokens\.itemSpacing: 'email' is a TEXT, which has no `itemSpacing` to bind/, "a field the node does not have");
     has(/ops\[2\] \(patch\): set\.text: only on a TEXT node; 'Card' is a FRAME/, "a text field on a frame");
     has(/ops\[2\] \(patch\): set\.props: only on an INSTANCE node/, "props on a frame");
-    has(/ops\[3\] \(patch\): set\.layout: 'Spare' has no auto-layout, so `layout\.gap` would do nothing; add `display: "flex"`/, "a gap on a frame without auto-layout");
-    has(/ops\[3\] \(patch\): set\.heightMode: "hug" needs auto-layout on the node/, "hug without auto-layout");
+    // A check that reads the file's state (auto-layout here) runs up front for the first op that could see it; after an
+    // op that could change it, right before the op applies (below).
+    ok("[PATCH-REFUSE] after other ops, a state check is not made up front", !/ops\[3\]/.test(err));
+    const alone = (await w.api.applyWrites([{ op: "patch", nodeId: h.spare, set: { layout: { gap: 4 }, heightMode: "hug" } }])).error ?? "";
+    ok("[PATCH-REFUSE] a gap on a frame without auto-layout", /ops\[0\] \(patch\): set\.layout: 'Spare' has no auto-layout, so `layout\.gap` would do nothing; add `display: "flex"`/.test(alone));
+    ok("[PATCH-REFUSE] hug without auto-layout", /ops\[0\] \(patch\): set\.heightMode: "hug" needs auto-layout on the node/.test(alone));
+    const late = await w.api.applyWrites([{ op: "patch", nodeId: h.card, set: { name: "First" } }, { op: "patch", nodeId: h.spare, set: { layout: { gap: 4 } } }]);
+    ok("[PATCH-REFUSE] …and after another op, the same check right before the op runs: the batch fails there and is put back",
+      late.ok === false && late.failedAt === 1 && /has no auto-layout/.test(late.error ?? "") && /checked right before this op ran/.test(late.error ?? "")
+      && (late.restored ?? []).length === 1 && p.node("card")?.name === "Card");
     has(/ops\[4\] \(patch\): set\.props: property 'Size' of 'Button' has no value "Huge"/, "a variant value the component lacks");
     has(/ops\[4\] \(patch\): set\.props: component 'Button' has no property 'Labl'; closest: 'Label'/, "a property the component lacks");
     has(/ops\[5\] \(patch\): no node with id 'gone:1'/, "a missing node");
@@ -1543,6 +1551,44 @@ export const cases: Case[] = [{
     ok("[PATCH-MORE] a move put back restores the node's parent, size and sizing (" + JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]) + ")",
       out.ok === false && JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]) === sizeBefore);
     ok("[PATCH-MORE] …and auto-layout turned off, then a child set to fill: refused up front", reversed.ok === false && /"fill" needs a parent with auto-layout/.test(reversed.error ?? "") && reversed.failedAt === 1);
+  },
+}, {
+  name: "a batch is checked as it runs: an op that depends on an earlier one is checked against what that op left",
+  async run() {
+    const RED = [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], BLUE = [{ type: "SOLID", color: { r: 0, g: 0, b: 1 } }];
+    const mixed = runText("mx:1", [{ text: "ab", fills: RED }, { text: "cd", fills: BLUE }]);
+    const p = await patchWorld({ "mx:1": mixed });
+    const { w, h } = p;
+    const made = await w.api.applyWrites([
+      { op: "createTree", tree: { name: "Empty", handle: "empty" } },
+      { op: "createTree", tree: { name: "Mover", handle: "mover" } },
+      { op: "createTree", tree: { name: "A", handle: "a", children: [{ name: "B", handle: "b" }] } },
+      { op: "createTree", tree: { name: "Chips", handle: "chips", layout: { display: "flex" }, children: [{ component: "Chip", handle: "chip" }] } },
+      { op: "createTree", tree: { name: "Wrapper", handle: "wrap", layout: { display: "flex" } } },
+    ]);
+    const id = (i: number, k: string): string => made.applied[i]?.handles?.[k] ?? "?";
+    const step = async (what: string, ops: Array<{ op: string } & Record<string, unknown>>): Promise<WriteResult> => {
+      const r = await w.api.applyWrites(ops);
+      ok("[SEQUENCE] " + what + " (" + (r.error ?? "ok") + ")", r.ok === true);
+      return r;
+    };
+    await step("a create into an empty frame, then a move to index 1 of it", [{ op: "createFrame", name: "First", parentId: id(0, "empty") }, { op: "move", nodeId: id(1, "mover"), parentId: id(0, "empty"), index: 1 }]);
+    // B, which holds a node the session did not make, moved out of A; then A deleted (nothing foreign is below it then).
+    const foreign = await w.figma.getNodeByIdAsync("1:2");
+    const b = w.alive().find((n) => n.id === id(2, "b"));
+    if (foreign && b && typeof b.appendChild === "function") (b.appendChild as (c: FakeNode) => void)(foreign);
+    await step("a child holding a foreign node moved out, then its old parent deleted", [{ op: "move", nodeId: id(2, "b"), parentId: w.pages.current.id ?? "" }, { op: "delete", nodeId: id(2, "a") }]);
+    await step("a text's mixed paints replaced, then unbound", [{ op: "patch", nodeId: "mx:1", set: { fills: [{ type: "solid", color: "#00ff00" }] } }, { op: "patch", nodeId: "mx:1", set: { tokens: { fills: null } } }]);
+    await step("a sparse variant set: Large/On, then Size Large again (checked from Large/On, not the file's Small/Off)",
+      [{ op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Large", Tone: "On" } } }, { op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Large" } } }]);
+    await step("a variant with auto-layout picked, then hug", [{ op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Large", Tone: "On" } } }, { op: "patch", nodeId: id(3, "chip"), set: { widthMode: "hug" } }]);
+    const back = await w.api.applyWrites([{ op: "patch", nodeId: id(3, "chip"), set: { props: { Size: "Small", Tone: "Off" } } }, { op: "patch", nodeId: id(3, "chip"), set: { widthMode: "hug" } }]);
+    ok("[SEQUENCE] …and the flat variant picked, then hug: refused right before it runs, the variant put back",
+      back.ok === false && back.failedAt === 1 && /"hug" needs auto-layout/.test(back.error ?? "") && (back.restored ?? []).length === 1);
+    await step("wrapping turned on, then a row gap given with display", [{ op: "patch", nodeId: id(4, "wrap"), set: { layout: { flexWrap: "wrap" } } }, { op: "patch", nodeId: id(4, "wrap"), set: { layout: { display: "flex", rowGap: 10 } } }]);
+    const single = await w.api.applyWrites([{ op: "patch", nodeId: id(4, "wrap"), set: { layout: { display: "flex", columnGap: 4 } } }]);
+    ok("[SEQUENCE] a wrapping row given display and a cross-axis gap alone: the wrap it has counts", single.ok === false && /columnGap: is the main-axis gap in a wrapping row/.test(single.error ?? ""));
+    void h;
   },
 }, {
   name: "patch: 'Allow edits' turned off partway — a stopped patch is still reported, and a put-back stops where it was",

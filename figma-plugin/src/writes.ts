@@ -6,9 +6,9 @@ import { EDITS_OFF_MESSAGE, writeOpError, type AppliedWrite, type WriteOp, type 
 import { editsAllowed, editsAllowedNow } from "./edits";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
-import { applyPatch, keepText, resolvePatchOps, type PatchTarget } from "./patch";
+import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
-import { applyDelete, applyMove, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
+import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
 import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 
@@ -296,7 +296,7 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const modes = await resolveModeOps(list);
   const trees = await resolveTreeOps(list);
   const patches = await resolvePatchOps(list);
-  const structure = await resolveStructureOps(list);
+  const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
   const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
@@ -348,6 +348,13 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     } catch (e) {
       return fail(i, op, e);
     }
+  }
+  // Every delete is checked before the first one runs: a deleted node cannot be brought back, so a check that fails
+  // must fail while the batch can still be put back whole.
+  for (const [i, t] of structure.deletes) {
+    const op = list[i];
+    if (!op) continue;
+    try { checkDelete(t); } catch (e) { return fail(i, op, e); }
   }
   for (const [i, t] of structure.deletes) {
     const op = list[i];
