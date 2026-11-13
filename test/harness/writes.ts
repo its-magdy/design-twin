@@ -1883,6 +1883,13 @@ export const cases: Case[] = [{
     const dropped = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest", name: "Nest" } }]);
     ok("[KEYED-SAFE] dropping a frame with two nodes inside reports removed: 3", dropped.ok === true && dropped.applied[0]?.removed === 3);
 
+    // A node of a dropped frame moved out later in the same batch survives, and is not counted as removed.
+    const nest2 = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest2", name: "Nest2", children: [{ name: "Outer2", children: [{ name: "Keep", handle: "keep" }] }] } }]);
+    const keepId = nest2.applied[0]?.handles?.keep ?? "";
+    const moved = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest2", name: "Nest2" } }, { op: "move", nodeId: keepId, parentId: rootNode()?.id ?? "" }]);
+    ok("[KEYED-SAFE] a node moved out of a dropped frame by a later op survives and is not counted in `removed`",
+      moved.ok === true && moved.applied[0]?.removed === 1 && byName(rootNode(), "Keep")?.removed === false);
+
     // A spec whose own fields cannot be stored on a node: refused before anything is built.
     const before = w.alive().length;
     const huge = await w.api.applyWrites([{ op: "createTree", tree: { key: "huge", name: "Huge", children: [{ text: "x".repeat(120000) }] } }]);

@@ -7045,6 +7045,16 @@
     for (const h of u.plan.handles) out.add(h.ref.id);
     return out;
   }
+  function removalCount(u) {
+    let n = 0;
+    const count2 = (x) => {
+      if (x.removed) return;
+      if (x.getPluginData(KEY_DATA) === u.key) n++;
+      if (x.type === "FRAME") for (const c of x.children) count2(c);
+    };
+    for (const x of removalsOf(u)) count2(x);
+    return n;
+  }
   function removalsOf(u) {
     const out = u.plan.removals.slice();
     for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
@@ -7198,12 +7208,7 @@
     const applied = { id: u.root.id, key };
     if (changed.length) applied.changed = changed;
     if (plan.builds.length) applied.created = createdCount(made);
-    let removed = 0;
-    const count2 = (n) => {
-      if (n.getPluginData(KEY_DATA) === u.key) removed++;
-      if (n.type === "FRAME") for (const c of n.children) count2(c);
-    };
-    for (const n of removalsOf(u)) count2(n);
+    const removed = removalCount(u);
     if (removed) applied.removed = removed;
     const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
     if (reordered) applied.reordered = reordered;
@@ -7689,6 +7694,12 @@
     for (const [i, t] of trees.targets) {
       const op = list[i];
       if (!op || !t.update) continue;
+      const row = rows[i];
+      if (row) {
+        const n = removalCount(t.update);
+        if (n) row.removed = n;
+        else delete row.removed;
+      }
       try {
         for (const n of removalsOf(t.update)) {
           if (n.removed) continue;

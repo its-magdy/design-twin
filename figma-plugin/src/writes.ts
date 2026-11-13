@@ -8,7 +8,7 @@ import { editsAllowed, editsAllowedNow } from "./edits";
 import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
-import { applyUpdate, checkRemoval, removalsOf, resolveKeyed, touchedBy } from "./keyed";
+import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
@@ -414,6 +414,9 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   for (const [i, t] of trees.targets) {
     const op = list[i];
     if (!op || !t.update) continue;
+    // The reply counts what is removed now, after every other op (a later op may have moved a node out).
+    const row = rows[i];
+    if (row) { const n = removalCount(t.update); if (n) row.removed = n; else delete row.removed; }
     try {
       for (const n of removalsOf(t.update)) {
         if (n.removed) continue;

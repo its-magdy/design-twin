@@ -189,6 +189,19 @@ export function touchedBy(u: KeyedUpdate): Set<string> {
   return out;
 }
 
+/** How many nodes of the result the removals take: the removed ones and what this key built below them, as the file
+ *  is now (an instance is one node). */
+export function removalCount(u: KeyedUpdate): number {
+  let n = 0;
+  const count = (x: SceneNode): void => {
+    if (x.removed) return;
+    if (x.getPluginData(KEY_DATA) === u.key) n++;
+    if (x.type === "FRAME") for (const c of x.children) count(c);
+  };
+  for (const x of removalsOf(u)) count(x);
+  return n;
+}
+
 /** The nodes an update removes once its batch has landed: the ones the new spec dropped, and the ones built anew. */
 export function removalsOf(u: KeyedUpdate): SceneNode[] {
   const out = u.plan.removals.slice();
@@ -351,13 +364,8 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const applied: AppliedWrite = { id: u.root.id, key };
   if (changed.length) applied.changed = changed;
   if (plan.builds.length) applied.created = createdCount(made);
-  // Every node of the result that goes: the removed ones and what this key built below them (an instance is one node).
-  let removed = 0;
-  const count = (n: SceneNode): void => {
-    if (n.getPluginData(KEY_DATA) === u.key) removed++;
-    if (n.type === "FRAME") for (const c of n.children) count(c);
-  };
-  for (const n of removalsOf(u)) count(n);
+  // Counted again right before the removals run (writes.ts), after the rest of the batch: a later op may move a node out.
+  const removed = removalCount(u);
   if (removed) applied.removed = removed;
   const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
   if (reordered) applied.reordered = reordered;
