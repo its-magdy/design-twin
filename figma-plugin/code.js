@@ -8052,11 +8052,23 @@
         const tok = set.tokens || {};
         const fam = tok.fontFamily ? t.refs.variables.get(tok.fontFamily) : void 0;
         const sty = tok.fontStyle ? t.refs.variables.get(tok.fontStyle) : void 0;
-        if (fam || sty) {
-          const families = fam ? await stringValues(fam) : [st.fontName.family];
-          const styles = sty ? await stringValues(sty) : [st.fontName.style];
-          if (fam && !sty) styles.push(st.fontName.style);
+        const weight = tok.fontWeight !== void 0 && tok.fontWeight !== null;
+        if (fam || sty || weight) {
+          const families = [st.fontName.family];
+          const styles = [st.fontName.style];
+          for (const x of fam ? await stringValues(fam) : []) if (families.indexOf(x) < 0) families.push(x);
+          for (const x of sty ? await stringValues(sty) : []) if (styles.indexOf(x) < 0) styles.push(x);
+          if (weight) {
+            let available = [];
+            try {
+              available = await figma.listAvailableFontsAsync();
+            } catch {
+              available = [];
+            }
+            for (const f of available) if (families.indexOf(f.fontName.family) >= 0 && styles.indexOf(f.fontName.style) < 0) styles.push(f.fontName.style);
+          }
           for (const family of families) for (const style of styles) {
+            if (family === st.fontName.family && style === st.fontName.style) continue;
             try {
               await figma.loadFontAsync({ family, style });
             } catch {

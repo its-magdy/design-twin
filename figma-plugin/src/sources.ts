@@ -534,13 +534,26 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
       // Binding the family or the style to a variable switches the style to the font its values name: those fonts are
       // loaded first (every mode's, crossed with the other half), best effort — Figma refuses the binding if the one it
       // needs is missing, and the batch is put back.
+      // The current family and style stay among the candidates: each binding lands on its own, so the font in between
+      // (the new family with the old style, or the reverse) is needed too. A weight names no style, so binding one loads
+      // every style the file has of those families.
       const fam = tok.fontFamily ? t.refs.variables.get(tok.fontFamily) : undefined;
       const sty = tok.fontStyle ? t.refs.variables.get(tok.fontStyle) : undefined;
-      if (fam || sty) {
-        const families = fam ? await stringValues(fam) : [st.fontName.family];
-        const styles = sty ? await stringValues(sty) : [st.fontName.style];
-        if (fam && !sty) styles.push(st.fontName.style);
-        for (const family of families) for (const style of styles) { try { await figma.loadFontAsync({ family, style }); } catch { /* not this one */ } }
+      const weight = tok.fontWeight !== undefined && tok.fontWeight !== null;
+      if (fam || sty || weight) {
+        const families = [st.fontName.family];
+        const styles = [st.fontName.style];
+        for (const x of fam ? await stringValues(fam) : []) if (families.indexOf(x) < 0) families.push(x);
+        for (const x of sty ? await stringValues(sty) : []) if (styles.indexOf(x) < 0) styles.push(x);
+        if (weight) {
+          let available: Font[] = [];
+          try { available = await figma.listAvailableFontsAsync(); } catch { available = []; }
+          for (const f of available) if (families.indexOf(f.fontName.family) >= 0 && styles.indexOf(f.fontName.style) < 0) styles.push(f.fontName.style);
+        }
+        for (const family of families) for (const style of styles) {
+          if (family === st.fontName.family && style === st.fontName.style) continue; // loaded already
+          try { await figma.loadFontAsync({ family, style }); } catch { /* not this one */ }
+        }
       }
       for (const k of Object.keys(tok) as TextStyleTokenField[]) {
         const ref = tok[k];
