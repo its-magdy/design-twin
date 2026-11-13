@@ -22,7 +22,7 @@
 // were built and removed, the ids of new handles — `unchanged: true` when the spec is the one sent last time.
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { checkPatch } from "../../bridge/src/patch-spec.ts";
-import { planUpdate, type ChildOrder, type ExtraField, type OldNode, type Plan } from "../../bridge/src/tree-diff.ts";
+import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type OldNode, type Plan } from "../../bridge/src/tree-diff.ts";
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { KEY_DATA, readIndex, SPEC_DATA, stampNode } from "./keyed-store";
 import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
@@ -70,6 +70,28 @@ function readOld(n: SceneNode, key: string): OldNode<SceneNode> | null {
   return { ref: n, spec, children };
 }
 
+/** Figma's cap on one plugin data entry (100 kB), less room for the key. */
+const MAX_STAMP_BYTES = 99000;
+/** `s`'s size in UTF-8 bytes. */
+function utf8Bytes(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) { n += 4; i++; }
+    else n += 3;
+  }
+  return n;
+}
+/** Every node of a keyed spec whose own fields are too big to store on it, by path. */
+function oversized(s: TreeNodeSpec, path: string, out: string[]): string[] {
+  const bytes = utf8Bytes(JSON.stringify(ownSpec(s)));
+  if (bytes > MAX_STAMP_BYTES) out.push(path + ": its own fields are " + bytes + " bytes, more than a keyed spec can store on a node (" + MAX_STAMP_BYTES + "); shorten its text, or leave out the key");
+  (s.children || []).forEach((c, i) => oversized(c, path + ".children[" + i + "]", out));
+  return out;
+}
+
 /** The first layer at or below `n` (not inside an instance) that `key` did not build, or null. */
 function foreignIn(n: SceneNode, key: string): SceneNode | null {
   if (n.getPluginData(KEY_DATA) !== key) return n;
@@ -108,6 +130,9 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     seen.set(key, index);
     const t = targets.get(index);
     if (!t) continue; // refused for its page or fonts already
+    // Checked before anything is built: a stamp that cannot be stored would fail the batch partway.
+    const big = oversized(t.spec, "tree", []);
+    if (big.length) { for (const m of big) bad(m); continue; }
     const root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
     if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
@@ -145,6 +170,14 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
   return { problems };
 }
 
+/** Throws when a node an update is about to remove now holds a layer its key did not build (one an op of the same batch,
+ *  or the designer, put there since the batch was checked): it is run on every removal before the first one. */
+export function checkRemoval(u: KeyedUpdate, n: SceneNode): void {
+  if (n.removed) return;
+  const f = foreignIn(n, u.key);
+  if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
+}
+
 /** The nodes an update removes once its batch has landed: the ones the new spec dropped, and the ones built anew. */
 export function removalsOf(u: KeyedUpdate): SceneNode[] {
   const out = u.plan.removals.slice();
@@ -154,39 +187,70 @@ export function removalsOf(u: KeyedUpdate): SceneNode[] {
 
 const ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" } as const;
 const LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;
-/** The order the direct fields are set in: the place in the flow before the position. */
-const EXTRA_ORDER: readonly ExtraField[] = ["absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout", "x", "y"];
+/** The direct fields that place a node in its parent's flow: set before its patch (a `fill` needs the node back in the
+ *  flow first). The rest after it (they can need the auto-layout the patch turns on). */
+export const PLACE_FIELDS: readonly ExtraField[] = ["absolute", "grow", "alignSelf"];
+const AFTER_FIELDS: readonly ExtraField[] = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
 
-/** Set the direct fields of a kept node from its new spec, keeping what they replace. */
-function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[]): Change {
+/** The variable a number field of `n` is bound to (its id), or null. */
+function boundTo(n: SceneNode, k: string): string | null {
+  const bv: unknown = "boundVariables" in n ? n.boundVariables : undefined;
+  const a: unknown = isObj(bv) ? bv[k] : undefined;
+  return isObj(a) && typeof a.id === "string" ? a.id : null;
+}
+
+/**
+ * Set the direct fields `fields` (those of `only`) of a kept node from its new spec. Its Change is on `changes` before
+ * the first field is set, so one that throws partway is put back with the batch. A size limit is set raw, then bound
+ * again to the variable the new spec names (`variables`: the batch's resolved ones); its restore binds back the ones it
+ * had.
+ */
+function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[], only: readonly ExtraField[], variables: ReadonlyMap<string, Variable>, changes: Change[]): void {
+  const todo = only.filter((f) => fields.indexOf(f) >= 0);
+  if (!todo.length) return;
   const kept: Array<[string, unknown]> = [];
+  const bound: Array<[(typeof LIMITS)[number], string | null]> = todo.indexOf("sizeLimits") >= 0 ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+  changes.push({
+    applied: { id: n.id },
+    kind: "updated node",
+    what: "the place, clipping or size limits of " + label(n),
+    async restore() {
+      for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+      for (const [k, id] of bound) {
+        if (boundTo(n, k) === id) continue;
+        const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+        n.setBoundVariable(k, v);
+      }
+    },
+  });
   const put = (k: string, v: unknown): void => {
     if (!(k in n)) return;
     const was: unknown = Reflect.get(n, k);
     if (was === v) return;
-    kept.push([k, was]);
+    // Recorded once it is set: a setter that throws changed nothing to put back.
     if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
+    kept.push([k, was]);
   };
   const parent = n.parent;
   const onPage = !parent || parent.type === "PAGE";
   const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
-  for (const f of EXTRA_ORDER) {
-    if (fields.indexOf(f) < 0) continue;
+  for (const f of todo) {
     // The place in an auto-layout flow means nothing outside one (and Figma refuses some of it there).
     if (f === "absolute" && inFlex) put("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
     else if (f === "grow" && inFlex) put("layoutGrow", s.grow !== undefined ? s.grow : 0);
     else if (f === "alignSelf" && inFlex) put("layoutAlign", s.alignSelf !== undefined ? ALIGN_SELF[s.alignSelf] : "INHERIT");
     else if (f === "clip") put("clipsContent", s.clip === true);
-    else if (f === "sizeLimits") for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== undefined ? s.sizeLimits[k] : null);
-    else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
+    else if (f === "sizeLimits") {
+      for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== undefined ? s.sizeLimits[k] : null);
+      // A raw limit unbinds its variable: the ones the new spec names are bound again.
+      for (const k of LIMITS) {
+        const ref = s.tokens && s.tokens[k];
+        const v = ref !== undefined ? variables.get(ref) : undefined;
+        if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
+      }
+    } else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
     else if ((f === "x" || f === "y") && s[f] !== undefined && (onPage || !inFlex || s.absolute === true)) put(f, s[f]);
   }
-  return {
-    applied: { id: n.id },
-    kind: "updated node",
-    what: "the place and clipping of " + label(n),
-    restore() { for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v); },
-  };
 }
 
 /** Put `parent`'s children in `want` order (each a child of it), node by node from the first place. */
@@ -219,16 +283,16 @@ function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[]): Chan
   };
 }
 
-/** Store the new own spec on every kept node whose spec changed; put back the old ones on restore. */
-function restamp(stamps: Plan<SceneNode>["stamps"], key: string): Change {
+/** Store the new own spec on every kept node whose spec changed; its Change (on `changes` first) puts the old back. */
+function restamp(stamps: Plan<SceneNode>["stamps"], key: string, changes: Change[]): void {
   const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)] as const);
-  for (const s of stamps) stampNode(s.ref, key, s.spec);
-  return {
+  changes.push({
     applied: {},
     kind: "stored spec",
     what: "the spec stored on " + stamps.length + " node(s)",
     restore() { for (const [n, v] of was) n.setPluginData(SPEC_DATA, v); },
-  };
+  });
+  for (const s of stamps) stampNode(s.ref, key, s.spec);
 }
 
 /**
@@ -240,8 +304,9 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const changed: NonNullable<AppliedWrite["changed"]> = [];
   for (const [i, up] of plan.updates.entries()) {
     const p = u.patches.get(i);
+    if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes); }
     if (p) { consent(); await applyPatch(p, consent, allowed, changes); }
-    if (up.extras.length) { consent(); changes.push(applyExtras(up.ref, up.spec, up.extras)); }
+    if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
     changed.push({ id: up.ref.id, ...(up.spec.handle !== undefined ? { handle: up.spec.handle } : {}), fields: up.fields });
   }
   const made = newMade(t.refs);
@@ -250,12 +315,13 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     consent();
     const from = made.pairs.length;
     const n = await buildSubtree(b.spec, b.parent as FrameNode, made, consent);
-    for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
+    // On the list before it is stamped: a stamp that throws removes it with the batch.
     changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
+    for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
     built.push(n);
   }
   for (const o of plan.orders) { consent(); changes.push(applyOrder(o, built)); }
-  if (plan.stamps.length) { consent(); changes.push(restamp(plan.stamps, key)); }
+  if (plan.stamps.length) { consent(); restamp(plan.stamps, key, changes); }
 
   const applied: AppliedWrite = { id: u.root.id, key };
   if (changed.length) applied.changed = changed;

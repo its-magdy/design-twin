@@ -167,7 +167,7 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
   }
   // The size: a frame's from `box` or `layout.width`/`height` (an axis a sizing mode decides is left to it); a text's with
   // how its box follows the text; an instance's from `box`.
-  if (has("box") || (kind === "TEXT" && has("autoResize"))) {
+  if (has("box") || (kind === "TEXT" && has("autoResize")) || (kind !== "TEXT" && (has("widthMode") || has("heightMode")))) {
     if (kind === "TEXT") {
       if (b.box) set.box = { w: b.box.w, h: b.box.h };
       set.autoResize = b.autoResize !== undefined ? b.autoResize : b.box ? "none" : "width_and_height";
@@ -176,10 +176,12 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
     } else {
       const size = kind === "FRAME" ? sizeOf(b) : b.box;
       const box: { w?: number; h?: number } = {};
-      if (size && size.w !== undefined && b.widthMode === undefined) box.w = size.w;
-      if (size && size.h !== undefined && b.heightMode === undefined) box.h = size.h;
+      // An axis is sized when its size changed, or when a sizing mode that decided it was dropped (the spec's size
+      // then applies again, as in a fresh build).
+      if (size && size.w !== undefined && b.widthMode === undefined && (has("box") || has("widthMode"))) box.w = size.w;
+      if (size && size.h !== undefined && b.heightMode === undefined && (has("box") || has("heightMode"))) box.h = size.h;
       // No size at all, and no sizing mode: a new frame's own (100 × 100).
-      if (!size && b.widthMode === undefined && b.heightMode === undefined) { box.w = 100; box.h = 100; }
+      if (has("box") && !size && b.widthMode === undefined && b.heightMode === undefined) { box.w = 100; box.h = 100; }
       if (box.w !== undefined || box.h !== undefined) { set.box = box; touch("box"); }
     }
   }
@@ -213,7 +215,8 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
       for (const side of SIDES) {
         const v = sb.weights && sb.weights[side];
         if (v !== undefined) w[side] = v;
-        else if (sa.weights && sa.weights[side] !== undefined) w[side] = 1;
+        // A side the new spec drops takes the even weight, as a fresh build leaves it.
+        else if (sa.weights && sa.weights[side] !== undefined) w[side] = sb.weight !== undefined ? sb.weight : 1;
       }
       if (Object.keys(w).length) st.weights = w;
     }

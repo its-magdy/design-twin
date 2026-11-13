@@ -1803,6 +1803,47 @@ export const cases: Case[] = [{
     ok("[KEYED] once the result is deleted, the key builds it again", r6.ok === true && screens().length === 1 && root2 !== root && r6.applied[0]?.created !== undefined && r6.applied[0].id === root2?.id);
     ok("[KEYED] …and the next send updates the new one", JSON.stringify((await send(swapped)).applied) === JSON.stringify([{ id: root2?.id, key: "settings", unchanged: true }]));
   },
+}, {
+  name: "keyed tree spec: removals cannot take other ops' nodes, direct fields roll back, limits keep their variables, oversized stamps refused",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const base = (kids: Array<Record<string, unknown>>): Record<string, unknown> =>
+      ({ key: "k", name: "Box", box: { w: 400, h: 400 }, layout: { display: "flex", flexDirection: "column" }, children: kids });
+    const first = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 } }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    const ids = first.applied[0]?.handles ?? {};
+    const rootNode = (): FakeNode | undefined => kids(w.pages.current).find((n) => n.name === "Box");
+    const child = (name: string): FakeNode | undefined => byName(rootNode(), name);
+
+    // An op that builds into (or names) a node the re-send removes: refused up front, nothing changed.
+    const into = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "B", handle: "b", box: { w: 50, h: 50 } }]) }, { op: "createFrame", name: "Late", parentId: ids.a }]);
+    ok("[KEYED-SAFE] an op naming a node the re-send removes is refused up front (it would be deleted with it)",
+      first.ok === true && into.ok === false && into.failedAt === 1 && /is removed by the keyed re-send in ops\[0\]/.test(into.error ?? "") && child("A") !== undefined && kids(child("A")).length === 0);
+
+    // A direct field that throws: the ones set before it are put back with the batch.
+    w.trap.add("clipsContent");
+    const trapped = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, absolute: true, clip: true }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    w.trap.clear();
+    ok("[KEYED-SAFE] a direct field that throws: the batch fails and the position set before it is put back",
+      trapped.ok === false && child("A")?.layoutPositioning === "AUTO" && trapped.applied.length === 0);
+
+    // Absolute back into the flow, filling: the position is cleared before the sizing patch is checked.
+    const abs = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, absolute: true }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    const fill = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, widthMode: "fill" }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    ok("[KEYED-SAFE] an absolute child turned into a filling one is accepted", abs.ok === true && fill.ok === true && child("A")?.layoutPositioning === "AUTO" && child("A")?.layoutSizingHorizontal === "FILL");
+
+    // A size limit changed while its variable binding stays: still bound afterwards.
+    const lim = (minWidth: number): Record<string, unknown> => base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, widthMode: "fill" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, sizeLimits: { minWidth, maxWidth: 900 }, tokens: { minWidth: "size/min" } }]);
+    const l1 = await w.api.applyWrites([{ op: "createTree", tree: lim(10) }]);
+    const l2 = await w.api.applyWrites([{ op: "createTree", tree: lim(20) }]);
+    const bv = child("B")?.boundVariables as Record<string, { id?: string }> | undefined;
+    ok("[KEYED-SAFE] a changed size limit keeps the variable the spec still binds it to", l1.ok === true && l2.ok === true && bv?.minWidth?.id === "VariableID:30:5" && num(child("B"), "maxWidth") === 900);
+
+    // A spec whose own fields cannot be stored on a node: refused before anything is built.
+    const before = w.alive().length;
+    const huge = await w.api.applyWrites([{ op: "createTree", tree: { key: "huge", name: "Huge", children: [{ text: "x".repeat(120000) }] } }]);
+    ok("[KEYED-SAFE] a node too big to store its spec on: refused up front, nothing built",
+      huge.ok === false && /tree\.children\[0\]: its own fields are \d+ bytes, more than a keyed spec can store/.test(huge.error ?? "") && w.alive().length === before);
+  },
 }];
 
 /** A fake node's method, typed for a call. */

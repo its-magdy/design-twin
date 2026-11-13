@@ -8,7 +8,7 @@ import { editsAllowed, editsAllowedNow } from "./edits";
 import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
-import { applyUpdate, removalsOf, resolveKeyed } from "./keyed";
+import { applyUpdate, checkRemoval, removalsOf, resolveKeyed } from "./keyed";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
@@ -308,7 +308,8 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     const keyed = await resolveKeyed(list, trees.targets);
     const patches = await resolvePatchOps(list);
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+      ...removalConflicts(list, trees.targets, structure.moves)].sort((a, b) => a.index - b.index);
     return { modes, trees, patches, structure, problems };
   };
   let { modes, trees, patches, structure, problems } = await resolveBatch();
@@ -404,6 +405,12 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     }
   }
   // The nodes a keyed re-send no longer has (or built anew) go last, with the deletes: a removed node cannot be brought back.
+  // Each is checked again first (it must still hold only what its key built), while the batch can still be put back.
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try { for (const n of removalsOf(t.update)) checkRemoval(t.update, n); } catch (e) { return fail(i, op, e); }
+  }
   for (const [i, t] of trees.targets) {
     const op = list[i];
     if (!op || !t.update) continue;
@@ -426,6 +433,28 @@ function reviewRefusal(o: ReviewOutcome): WriteResult {
   if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...(o.reason !== undefined ? { reason: o.reason } : {}) };
   if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
   return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
+}
+
+/** An op that names a node a keyed re-send of the same batch removes (it, or anything below it), as a parent or a target:
+ *  the removal runs last, so the op would act on a node about to go. Refused up front, like a delete conflict. */
+function removalConflicts(list: readonly WriteOp[], targets: ReadonlyMap<number, TreeTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+  const gone = new Map<string, number>();
+  for (const [i, t] of targets) {
+    if (!t.update) continue;
+    for (const n of removalsOf(t.update)) for (const id of idsDeletedWith(n, moves)) if (!gone.has(id)) gone.set(id, i);
+  }
+  const out: OpProblem[] = [];
+  if (!gone.size) return out;
+  for (const [index, op] of list.entries()) {
+    for (const k of ["nodeId", "parentId"] as const) {
+      const id = op[k];
+      const by = id === undefined ? undefined : gone.get(id);
+      if (by === undefined || by === index) continue;
+      out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+      break;
+    }
+  }
+  return out;
 }
 
 /** An op that names a node a delete of the same batch removes (it, or anything below it), as a parent or a target:

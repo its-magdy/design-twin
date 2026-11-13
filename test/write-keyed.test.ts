@@ -194,6 +194,18 @@ console.log("\nthe plan of a re-send:");
   at(s11, 1).handle = "card";
   const p11 = planUpdate(old(base), s11);
   check("a new handle on a kept node: no update, the handle listed, the spec stored", p11.updates.length === 0 && JSON.stringify(p11.handles) === JSON.stringify([{ handle: "card", ref: "root/Card" }]) && p11.stamps.length === 1);
+
+  // A dropped per-side weight goes to the even weight the spec still gives (a fresh build's), not to 1.
+  const sides: TreeNodeSpec = { ...clone(base), strokes: { colors: ["#000000"], weight: 2, weights: { top: 4 } } };
+  const even = clone(sides);
+  even.strokes = { colors: ["#000000"], weight: 2 };
+  check("a dropped side weight takes the spec's even weight", JSON.stringify(planUpdate(old(sides), even).updates[0]?.set?.strokes) === JSON.stringify({ colors: ["#000000"], weight: 2, weights: { top: 2 } }));
+  // A sizing mode dropped while the size stays: the spec's size applies again.
+  const hug: TreeNodeSpec = { ...clone(base), widthMode: "hug", box: { w: 300, h: 200 } };
+  const fixed = clone(hug);
+  delete fixed.widthMode;
+  const pf = planUpdate(old(hug), fixed).updates[0];
+  check("a dropped `hug` sizes the axis to the spec's box again", JSON.stringify(pf?.set) === JSON.stringify({ box: { w: 300 }, widthMode: "fixed" }) && pf?.fields.join() === "box,widthMode");
 }
 
 fs.rmSync(dir, { recursive: true, force: true });

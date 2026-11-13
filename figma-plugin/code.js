@@ -5624,7 +5624,7 @@
       set.radius = r === void 0 ? 0 : typeof r === "number" ? r : { tl: r.tl || 0, tr: r.tr || 0, br: r.br || 0, bl: r.bl || 0 };
       touch("radius");
     }
-    if (has2("box") || kind === "TEXT" && has2("autoResize")) {
+    if (has2("box") || kind === "TEXT" && has2("autoResize") || kind !== "TEXT" && (has2("widthMode") || has2("heightMode"))) {
       if (kind === "TEXT") {
         if (b.box) set.box = { w: b.box.w, h: b.box.h };
         set.autoResize = b.autoResize !== void 0 ? b.autoResize : b.box ? "none" : "width_and_height";
@@ -5633,9 +5633,9 @@
       } else {
         const size2 = kind === "FRAME" ? sizeOf(b) : b.box;
         const box = {};
-        if (size2 && size2.w !== void 0 && b.widthMode === void 0) box.w = size2.w;
-        if (size2 && size2.h !== void 0 && b.heightMode === void 0) box.h = size2.h;
-        if (!size2 && b.widthMode === void 0 && b.heightMode === void 0) {
+        if (size2 && size2.w !== void 0 && b.widthMode === void 0 && (has2("box") || has2("widthMode"))) box.w = size2.w;
+        if (size2 && size2.h !== void 0 && b.heightMode === void 0 && (has2("box") || has2("heightMode"))) box.h = size2.h;
+        if (has2("box") && !size2 && b.widthMode === void 0 && b.heightMode === void 0) {
           box.w = 100;
           box.h = 100;
         }
@@ -5672,7 +5672,7 @@
         for (const side of SIDES2) {
           const v = sb.weights && sb.weights[side];
           if (v !== void 0) w[side] = v;
-          else if (sa.weights && sa.weights[side] !== void 0) w[side] = 1;
+          else if (sa.weights && sa.weights[side] !== void 0) w[side] = sb.weight !== void 0 ? sb.weight : 1;
         }
         if (Object.keys(w).length) st.weights = w;
       }
@@ -6932,6 +6932,26 @@
     }
     return { ref: n, spec, children };
   }
+  var MAX_STAMP_BYTES = 99e3;
+  function utf8Bytes(s) {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 128) n += 1;
+      else if (c < 2048) n += 2;
+      else if (c >= 55296 && c <= 56319) {
+        n += 4;
+        i++;
+      } else n += 3;
+    }
+    return n;
+  }
+  function oversized(s, path, out) {
+    const bytes = utf8Bytes(JSON.stringify(ownSpec(s)));
+    if (bytes > MAX_STAMP_BYTES) out.push(path + ": its own fields are " + bytes + " bytes, more than a keyed spec can store on a node (" + MAX_STAMP_BYTES + "); shorten its text, or leave out the key");
+    (s.children || []).forEach((c, i) => oversized(c, path + ".children[" + i + "]", out));
+    return out;
+  }
   function foreignIn(n, key) {
     if (n.getPluginData(KEY_DATA) !== key) return n;
     if (n.type !== "FRAME") return null;
@@ -6968,6 +6988,11 @@
       seen.set(key, index);
       const t = targets.get(index);
       if (!t) continue;
+      const big = oversized(t.spec, "tree", []);
+      if (big.length) {
+        for (const m of big) bad(m);
+        continue;
+      }
       const root = await findResult(key);
       if (!root) continue;
       if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
@@ -7008,6 +7033,11 @@
     }
     return { problems };
   }
+  function checkRemoval(u, n) {
+    if (n.removed) return;
+    const f = foreignIn(n, u.key);
+    if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
+  }
   function removalsOf(u) {
     const out = u.plan.removals.slice();
     for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
@@ -7015,37 +7045,56 @@
   }
   var ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" };
   var LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
-  var EXTRA_ORDER = ["absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout", "x", "y"];
-  function applyExtras(n, s, fields) {
+  var PLACE_FIELDS = ["absolute", "grow", "alignSelf"];
+  var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
+  function boundTo(n, k) {
+    const bv = "boundVariables" in n ? n.boundVariables : void 0;
+    const a = isObj3(bv) ? bv[k] : void 0;
+    return isObj3(a) && typeof a.id === "string" ? a.id : null;
+  }
+  function applyExtras(n, s, fields, only, variables, changes) {
+    const todo = only.filter((f) => fields.indexOf(f) >= 0);
+    if (!todo.length) return;
     const kept = [];
+    const bound = todo.indexOf("sizeLimits") >= 0 ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+    changes.push({
+      applied: { id: n.id },
+      kind: "updated node",
+      what: "the place, clipping or size limits of " + label(n),
+      async restore() {
+        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+        for (const [k, id] of bound) {
+          if (boundTo(n, k) === id) continue;
+          const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+          n.setBoundVariable(k, v);
+        }
+      }
+    });
     const put = (k, v) => {
       if (!(k in n)) return;
       const was = Reflect.get(n, k);
       if (was === v) return;
-      kept.push([k, was]);
       if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
+      kept.push([k, was]);
     };
     const parent = n.parent;
     const onPage = !parent || parent.type === "PAGE";
     const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
-    for (const f of EXTRA_ORDER) {
-      if (fields.indexOf(f) < 0) continue;
+    for (const f of todo) {
       if (f === "absolute" && inFlex) put("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
       else if (f === "grow" && inFlex) put("layoutGrow", s.grow !== void 0 ? s.grow : 0);
       else if (f === "alignSelf" && inFlex) put("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
       else if (f === "clip") put("clipsContent", s.clip === true);
-      else if (f === "sizeLimits") for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
-      else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
+      else if (f === "sizeLimits") {
+        for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
+        for (const k of LIMITS) {
+          const ref2 = s.tokens && s.tokens[k];
+          const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
+          if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
+        }
+      } else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
       else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put(f, s[f]);
     }
-    return {
-      applied: { id: n.id },
-      kind: "updated node",
-      what: "the place and clipping of " + label(n),
-      restore() {
-        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
-      }
-    };
   }
   function arrange(parent, want) {
     for (const [i, n] of want.entries()) {
@@ -7077,30 +7126,34 @@
       }
     };
   }
-  function restamp(stamps, key) {
+  function restamp(stamps, key, changes) {
     const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
-    for (const s of stamps) stampNode(s.ref, key, s.spec);
-    return {
+    changes.push({
       applied: {},
       kind: "stored spec",
       what: "the spec stored on " + stamps.length + " node(s)",
       restore() {
         for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
       }
-    };
+    });
+    for (const s of stamps) stampNode(s.ref, key, s.spec);
   }
   async function applyUpdate(t, u, consent2, allowed2, changes) {
     const { plan, key } = u;
     const changed = [];
     for (const [i, up] of plan.updates.entries()) {
       const p = u.patches.get(i);
+      if (up.extras.length) {
+        consent2();
+        applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
+      }
       if (p) {
         consent2();
         await applyPatch(p, consent2, allowed2, changes);
       }
       if (up.extras.length) {
         consent2();
-        changes.push(applyExtras(up.ref, up.spec, up.extras));
+        applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
       }
       changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
     }
@@ -7110,10 +7163,10 @@
       consent2();
       const from = made.pairs.length;
       const n = await buildSubtree(b.spec, b.parent, made, consent2);
-      for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
       changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() {
         n.remove();
       } });
+      for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
       built.push(n);
     }
     for (const o of plan.orders) {
@@ -7122,7 +7175,7 @@
     }
     if (plan.stamps.length) {
       consent2();
-      changes.push(restamp(plan.stamps, key));
+      restamp(plan.stamps, key, changes);
     }
     const applied = { id: u.root.id, key };
     if (changed.length) applied.changed = changed;
@@ -7516,7 +7569,15 @@
       const keyed = await resolveKeyed(list, trees2.targets);
       const patches2 = await resolvePatchOps(list);
       const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
-      const problems2 = [...modes2.problems, ...trees2.problems, ...keyed.problems, ...patches2.problems, ...structure2.problems, ...deleteConflicts(list, structure2.deletes, structure2.moves)].sort((a, b) => a.index - b.index);
+      const problems2 = [
+        ...modes2.problems,
+        ...trees2.problems,
+        ...keyed.problems,
+        ...patches2.problems,
+        ...structure2.problems,
+        ...deleteConflicts(list, structure2.deletes, structure2.moves),
+        ...removalConflicts(list, trees2.targets, structure2.moves)
+      ].sort((a, b) => a.index - b.index);
       return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, problems: problems2 };
     };
     let { modes, trees, patches, structure, problems } = await resolveBatch();
@@ -7596,6 +7657,15 @@
       const op = list[i];
       if (!op || !t.update) continue;
       try {
+        for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
+      } catch (e) {
+        return fail(i, op, e);
+      }
+    }
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
         for (const n of removalsOf(t.update)) {
           if (n.removed) continue;
           consent();
@@ -7612,6 +7682,25 @@
     if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...o.reason !== void 0 ? { reason: o.reason } : {} };
     if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
     return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
+  }
+  function removalConflicts(list, targets, moves) {
+    const gone = /* @__PURE__ */ new Map();
+    for (const [i, t] of targets) {
+      if (!t.update) continue;
+      for (const n of removalsOf(t.update)) for (const id of idsDeletedWith(n, moves)) if (!gone.has(id)) gone.set(id, i);
+    }
+    const out = [];
+    if (!gone.size) return out;
+    for (const [index, op] of list.entries()) {
+      for (const k of ["nodeId", "parentId"]) {
+        const id = op[k];
+        const by = id === void 0 ? void 0 : gone.get(id);
+        if (by === void 0 || by === index) continue;
+        out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+        break;
+      }
+    }
+    return out;
   }
   function deleteConflicts(list, deletes, moves) {
     const gone = /* @__PURE__ */ new Map();
