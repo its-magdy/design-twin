@@ -437,7 +437,7 @@ export function reviewLines(ops: readonly WriteOp[]): string[] {
     if (s.op === "createFrame") parts.push("creates a frame" + (o.name ? " '" + o.name + "'" : "") + " — " + s.target);
     else if (s.op === "createText") parts.push("creates a text" + (s.newText !== undefined ? " \"" + s.newText + "\"" : "") + " — " + s.target);
     else if (s.op === "setFill") parts.push("node " + (s.target || "?") + ": the fill becomes " + (s.newFill || "?"));
-    else if (s.op === "setText") parts.push("node " + (s.target || "?") + ": the text becomes \"" + (s.newText ?? "") + "\"");
+    else if (s.op === "setText") parts.push("node " + (s.target || "?") + ": the text becomes \"" + (s.newText !== undefined ? s.newText : "") + "\"");
     else parts.push(s.op + " " + (s.target || ""));
     if ((s.op === "createFrame" || s.op === "createText") && s.newFill) parts.push("fill " + s.newFill);
     return parts.join(", ");

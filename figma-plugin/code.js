@@ -1728,14 +1728,13 @@
   }
   function reviewLines(ops) {
     return ops.map((o, i) => {
-      var _a;
       const s = writeOpPreview(o, i);
       if (s.change) return s.change;
       const parts = [];
       if (s.op === "createFrame") parts.push("creates a frame" + (o.name ? " '" + o.name + "'" : "") + " \u2014 " + s.target);
       else if (s.op === "createText") parts.push("creates a text" + (s.newText !== void 0 ? ' "' + s.newText + '"' : "") + " \u2014 " + s.target);
       else if (s.op === "setFill") parts.push("node " + (s.target || "?") + ": the fill becomes " + (s.newFill || "?"));
-      else if (s.op === "setText") parts.push("node " + (s.target || "?") + ': the text becomes "' + ((_a = s.newText) != null ? _a : "") + '"');
+      else if (s.op === "setText") parts.push("node " + (s.target || "?") + ': the text becomes "' + (s.newText !== void 0 ? s.newText : "") + '"');
       else parts.push(s.op + " " + (s.target || ""));
       if ((s.op === "createFrame" || s.op === "createText") && s.newFill) parts.push("fill " + s.newFill);
       return parts.join(", ");
