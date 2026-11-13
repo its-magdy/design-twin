@@ -386,6 +386,10 @@ function fileLookups() {
       const first = exact[0];
       if (first && exact.length === 1) return { ok: first };
       if (isKey(ref)) {
+        // A library variable this file already uses is in the file: found by its key without an import (its library need
+        // not be enabled any more).
+        const inUse = await remoteVariableByKey(ref);
+        if (inUse) return { ok: inUse };
         // A key is exact: a library variable listed with it says its type before the import.
         const listed = (await libraryVariables()).filter((v) => v.key === ref)[0];
         if (listed) libraryTypes.set(ref, listed.resolvedType);
@@ -421,6 +425,37 @@ function fileLookups() {
       return none("text style", ref, m.candidates, "in this file (a library style is named by its key)");
     },
   };
+}
+
+/** The library variables this file uses, reachable from what is local: the variables its local variables alias, the
+ *  ones its local styles are bound to, and every variable of their collections. Read on each call: it runs only for a
+ *  key that matches nothing local. */
+async function remoteVariablesInUse(): Promise<Variable[]> {
+  const ids = new Set<string>();
+  const scan = (v: unknown, depth: number): void => {
+    if (!v || typeof v !== "object" || depth > 5) return;
+    if (Array.isArray(v)) { for (const x of v as unknown[]) scan(x, depth + 1); return; }
+    if (Reflect.get(v, "type") === "VARIABLE_ALIAS") { const id: unknown = Reflect.get(v, "id"); if (typeof id === "string") ids.add(id); return; }
+    for (const k of Object.keys(v)) scan(Reflect.get(v, k), depth + 1);
+  };
+  for (const v of await figma.variables.getLocalVariablesAsync()) scan(v.valuesByMode, 0);
+  const styles: BaseStyle[] = [...(await figma.getLocalPaintStylesAsync()), ...(await figma.getLocalTextStylesAsync()), ...(await figma.getLocalEffectStylesAsync()), ...(await figma.getLocalGridStylesAsync())];
+  for (const st of styles) { scan(Reflect.get(st, "boundVariables"), 0); for (const k of ["paints", "effects", "layoutGrids"]) scan(Reflect.get(st, k), 0); }
+  const out = new Map<string, Variable>();
+  const get = async (id: string): Promise<Variable | null> => { try { return await figma.variables.getVariableByIdAsync(id); } catch { return null; } };
+  const collections = new Set<string>();
+  for (const id of ids) { const v = await get(id); if (v && v.remote) { out.set(v.id, v); collections.add(v.variableCollectionId); } }
+  for (const cid of collections) {
+    let c: VariableCollection | null = null;
+    try { c = await figma.variables.getVariableCollectionByIdAsync(cid); } catch { c = null; }
+    for (const id of c ? c.variableIds : []) if (!out.has(id)) { const v = await get(id); if (v && v.remote) out.set(v.id, v); }
+  }
+  return [...out.values()];
+}
+/** The library variable with key `key` this file already uses, or null. */
+export async function remoteVariableByKey(key: string): Promise<Variable | null> {
+  for (const v of await remoteVariablesInUse()) if (v.key === key) return v;
+  return null;
 }
 
 /** A library component by key: a component, else a component set (consent checked again before the second import). */

@@ -495,6 +495,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   across sessions, because the result's nodes carry the key in this plugin's own plugin data; a node that holds a layer
   without that key (the designer's) refuses the batch instead. A spec given by path (`treeFile`) is read by the MCP
   server, inside the directory it runs in, and reaches the plugin as an inline spec.
+- A source edit reaches further than one node: `setVariable`, `setStyle` and a `patch` of a main component change what
+  every layer using them shows (`figma-plugin/src/sources.ts`). Only this file's own sources can be changed: a
+  variable, style or component that lives in another library file is refused, naming the library when Figma says
+  which. The dry run asks the plugin what each would carry to (the `writeImpact` command, a scene read that needs no
+  Allow edits), so the designer and the agent see the count before anything changes.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).

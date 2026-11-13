@@ -40,6 +40,9 @@ export interface PatchTarget {
   refs: ResolvedRefs;
   /** the variables the node's number fields are bound to before the batch, by id: bound back on restore */
   bound: Map<string, Variable>;
+  /** a text whose fonts were not loaded up front (a variable edit earlier in the batch may change them): applyPatch loads
+   *  them, live, before anything is set */
+  fontsLater?: true;
 }
 
 /** A node field by name: read as unknown and written through its setter. The fields a patch keeps and puts back are
@@ -202,7 +205,10 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     uses.push(...patchUses(index, set));
     const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
-    const target = await resolvePatchNode(nd, set, later, loadFont, bad);
+    // A text's fonts can be bound to variables, so after a variable edit of the batch (sources.ts) the fonts it has when
+    // the patch runs are not known yet: keepText loads them then, and a missing one fails the op (the batch is put back).
+    const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+    const target = await resolvePatchNode(nd, set, later, loadFont, bad, fontsLater);
     if (target) targets.set(index, target);
   }
   const r = await resolveRefs(uses, loadFont);
@@ -217,14 +223,15 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
  * problem goes to `bad`; null when there was one. The target's `refs` are empty: the caller fills them from its own
  * resolution of the patch's names (patchUses → resolveRefs).
  */
-export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void): Promise<PatchTarget | null> {
+export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void, fontsLater = false): Promise<PatchTarget | null> {
   if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); return null; }
   const node = nd;
   const fit = unfit(node, set);
   const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
   for (const m of misfits) bad(m);
-  // A text change keeps the text as it was, run by run, to put back: its fonts must load either way.
-  if (node.type === "TEXT") {
+  // A text change keeps the text as it was, run by run, to put back: its fonts must load either way (`fontsLater`: checked
+  // when it applies, by keepText).
+  if (node.type === "TEXT" && !fontsLater) {
     for (const f of await fontsToKeep(node)) {
       const err = await loadFont(f);
       if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
@@ -253,7 +260,7 @@ export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boole
     if (v) bound.set(id, v);
   }
   if (misfits.length) return null;
-  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() }, bound };
+  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() }, bound, ...(fontsLater && node.type === "TEXT" ? { fontsLater: true as const } : {}) };
 }
 
 // ---------------------------------------------------------------- keeping and putting back
@@ -689,6 +696,13 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
  */
 export async function applyPatch(t: PatchTarget, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<Change> {
   await checkBeforeApply(t);
+  // Every field of a text (its size and resizing included) needs its fonts loaded: the ones it has now, when they were
+  // left to this point.
+  if (t.fontsLater && t.node.type === "TEXT") {
+    for (const f of await fontsToKeep(t.node)) {
+      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+    }
+  }
   const restore = await snapshot(t);
   consent();
   const applied: AppliedWrite = { id: t.node.id };

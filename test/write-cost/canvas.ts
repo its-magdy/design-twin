@@ -228,7 +228,15 @@ export function canvas(): Canvas {
     instance(parent, main, spec) { const f = makeInstance(main, spec); adopt(parent, f); return f; },
     variable(name, hex) {
       const id = `VariableID:1:${Object.keys(variables).length + 1}`;
-      variables[id] = { id, name, resolvedType: "COLOR", variableCollectionId: COLLECTION.id, scopes: ["ALL_FILLS"], codeSyntax: {}, remote: false, valuesByMode: { "1:0": rgb(hex) } };
+      const v: FakeVariable & { setValueForMode(mode: string, value: unknown): void } = {
+        id, name, resolvedType: "COLOR", variableCollectionId: COLLECTION.id, scopes: ["ALL_FILLS"], codeSyntax: {}, remote: false, valuesByMode: { "1:0": rgb(hex) },
+        // A source edit (setVariable): every paint bound to it shows the new value (paintOf reads it live).
+        setValueForMode(mode, value) {
+          if (!COLLECTION.modes.some((m) => m.modeId === mode)) throw new Error(`in Figma: invalid mode ${mode}`);
+          v.valuesByMode = { ...v.valuesByMode, [mode]: value };
+        },
+      };
+      variables[id] = v;
       return id;
     },
     world() {

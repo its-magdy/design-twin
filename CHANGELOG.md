@@ -31,6 +31,22 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can change a design-system source once, and Figma carries the change to everything that uses it.
+  `setVariable` (`variable`, `values` by mode name or id, or `value` for a collection with one mode) sets a local
+  variable's values: a hex colour, a number, a string, a boolean, or `{aliasOf}` another variable (an alias that would
+  make a loop is refused). `setStyle` (`style`, `set`) changes a local paint style's `paints`, a text style's font,
+  weight, size, line height, letter spacing, case, decoration and paragraph spacing, or an effect style's shadows and
+  blurs, plus any style's name and description, in the read export's field names; a text style's `tokens` bind (or,
+  with `null`, unbind) its font, size and spacing fields to variables. A `patch` of a main component, or of
+  a layer inside one, changes every instance. A variable, style or component that lives in another library file is
+  refused, naming the library when Figma says which (it does for variables; for styles and components only the
+  file's library registry can). The dry run now asks the connected plugin how much follows: `affects` counts the
+  layers using the variable or style (directly, through an alias, or through a style bound to it), the styles and
+  aliases bound to a variable, and a main component's instances. On the write-cost suite, the colour update costs 44
+  tokens instead of 4,617 (one call instead of ten, and the 24 nodes stay bound to the variable), and the fault in a
+  repeated part 804 against 793 for `setFill`. A key now also finds a library variable the file already uses when its
+  library is no longer enabled (before, it tried an import that failed). `figma_write`'s definition grew by 174 tokens
+  (1,393 → 1,567).
 - `figma_write` takes a `createTree` spec from disk: `treeFile` is a path to a JSON file with the spec, inside the
   directory the MCP server runs in. The server reads it into the op before anything else, so it is checked, previewed
   and applied exactly like the same spec inline; a missing file or one that is not JSON is refused with nothing

@@ -39,7 +39,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
-import { EDITS_OFF_MESSAGE, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteOp } from "./commands.ts";
+import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -739,6 +739,12 @@ const writeOpShape = z.object({
   // patch: the fields to change, checked by patch-spec.ts checkPatch at the same three places as a tree spec.
   set: z.record(z.string(), z.unknown()).optional(),
   index: z.number().int().min(0).optional(),
+  // setVariable / setStyle (source-spec.ts): the local variable or style, by exact name, key or id. A style's fields go
+  // in `set`; a variable's values in `values` (by mode) or `value` (one mode), checked by checkVariableEdit.
+  variable: z.string().optional(),
+  values: z.record(z.string(), z.unknown()).optional(),
+  value: z.unknown().optional(),
+  style: z.string().optional(),
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
@@ -746,8 +752,23 @@ const writeOpShape = z.object({
 // refused (and `wouldRefuse` says what to ask the designer); null => unknown (no plugin reachable, or one built
 // before the opt-in).
 // `reviewWrites` is its "Review each write" checkbox: true => a real write waits for the designer's Apply or Reject.
-function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWriteSettings) {
+function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWriteSettings, impact: ImpactRead) {
   const steps = ops.map(writeOpPreview);
+  // A source edit's counts (and a refusal only the file can give) come from the plugin, when one answered.
+  if (impact.reply) {
+    for (const s of impact.reply.steps) {
+      const step = steps[s.index];
+      if (!step || step.invalid !== undefined) continue;
+      if (s.affects) step.affects = s.affects;
+      if (s.problem) step.refusedByFile = s.problem;
+    }
+  }
+  const sourceNote = impact.asked
+    ? impact.reply
+      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component. " +
+        (impact.reply.warnings && impact.reply.warnings.length ? "Some pages could not be read, so a count may be low: " + impact.reply.warnings.join("; ") + ". " : "")
+      : "How much a source edit carries to is counted by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see the counts. "
+    : "";
   return {
     dryRun: true,
     applied: false,
@@ -756,11 +777,12 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
     ...counted(steps, "moves"),
     ...counted(steps, "deletes"),
     invalid: steps.filter((s) => "invalid" in s).length,
+    ...(steps.some((s) => s.refusedByFile !== undefined) ? { refusedByFile: steps.filter((s) => s.refusedByFile !== undefined).length } : {}),
     steps,
     editsAllowed,
     ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
     ...(reviewWrites ? { reviewWrites: true } : {}),
-    note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch). " +
+    note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch). " + sourceNote +
       (reviewWrites ? `A real write WAITS (up to ${Math.round(REVIEW_WAIT_MS / 60000)} min) until the designer applies or rejects it in the plugin window. ` : "") +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
@@ -774,6 +796,21 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
 function counted(steps: ReadonlyArray<{ effect: WriteEffect }>, effect: "moves" | "deletes"): Partial<Record<"moves" | "deletes", number>> {
   const n = steps.filter((s) => s.effect === effect).length;
   return n ? { [effect]: n } : {};
+}
+
+// The dry run's count of what a source edit carries to (writeImpact): asked only when the batch has a source edit and
+// one plugin is reachable, never waited for; `asked` false when the batch has none, `reply` null when nothing answered.
+interface ImpactRead { asked: boolean; reply: WriteImpactReply | null; why: string }
+async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | undefined, extra: ToolExtra): Promise<ImpactRead> {
+  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0)) return { asked: false, reply: null, why: "" };
+  // Only a patch that changes a main component is a source edit: the plugin says which, so every patch asks.
+  try {
+    const p = pluginPresence(await route.listClients(), a && a.client);
+    if (p.kind !== "one") return { asked: true, reply: null, why: p.kind === "none" ? "no plugin is connected" : "several plugins are connected; name one with `client`" };
+    return { asked: true, reply: await ask("writeImpact", { ops }, { timeoutMs: TIMEOUTS.list, target: a && a.client, signal: callSignal(extra) }), why: "" };
+  } catch (e) {
+    return { asked: true, reply: null, why: errMsg(e) };
+  }
 }
 
 // The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
@@ -813,9 +850,12 @@ registerTool(
       "{op:'patch', nodeId, set} changes an existing node: `set` takes the same field names, only those given change — name, hidden(bool), opacity, text, styles{text}, fills, strokes, radius, " +
       "layout (partial; {mode:'absolute'} removes auto-layout), box{w?,h?}, widthMode/heightMode('fill'|'hug'|'fixed'), autoResize, tokens (null unbinds), props (an instance's). " +
       "{op:'move', nodeId, parentId, index?} | {op:'delete', nodeId} — only nodes this plugin session created; deletes run last. " +
+      "Source edits — change once, every user follows: {op:'setVariable', variable, values{mode: v}|value} (v: hex, number, string, bool or {aliasOf}) | " +
+      "{op:'setStyle', style, set} (set: paints | font, weight, size, lineHeight, letterSpacing, case, decoration, paragraphSpacing, paragraphIndent, tokens | effects; name, description); " +
+      "a patch of a main component changes its instances. A library's variable, style or component is refused, naming the library; the dry run's `affects` counts what follows. " +
       "A name (collection, mode, page, component, variable, style) that matches nothing or several things, a font the file lacks, or a node that lacks a field refuses the whole batch before anything runs, with candidates. " +
       "A batch lands whole: if an op fails, every change the batch made is put back (listed as `restored`) — and the designer's one Cmd-Z undoes a whole batch. " +
-      "For anything that OVERWRITES (setFill/setText/patch/setVariableMode/clearVariableMode), call once with dryRun:true, show the user the preview, and only then apply. " +
+      "For anything that OVERWRITES (setFill/setText/patch/setVariableMode/clearVariableMode/setVariable/setStyle), call once with dryRun:true, show the user the preview, and only then apply. " +
       "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
       "while it is off a write is refused with that instruction, and a dry run reports editsAllowed:false — " +
       "ask the designer to tick it, then retry. " +
@@ -846,7 +886,7 @@ registerTool(
     const ops = loaded.ops;
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
-    if (a.dryRun) return textResult(previewWrites(ops, await readWriteSettings(a)));
+    if (a.dryRun) return textResult(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)));
     // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
     // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
     // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write

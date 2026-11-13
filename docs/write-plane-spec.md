@@ -6,7 +6,9 @@ auto-layout and text, placement, all or nothing — is built; design-system refe
 component with property values, variables, text styles, library imports under the consent gate — are built; patch by
 id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the whole batch put back when an
 op fails, one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
-result in place and replies with only what changed are built)
+result in place and replies with only what changed are built; source edits — `setVariable` and `setStyle` on this
+file's own variables and paint, text and effect styles, a `patch` of a main component, a library's refused naming the
+library, and the dry run's count of what follows (`writeImpact`) — are built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
