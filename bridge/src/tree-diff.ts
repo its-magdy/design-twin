@@ -169,7 +169,13 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
   // how its box follows the text; an instance's from `box`.
   if (has("box") || (kind === "TEXT" && has("autoResize")) || (kind !== "TEXT" && (has("widthMode") || has("heightMode")))) {
     if (kind === "TEXT") {
-      if (b.box) set.box = { w: b.box.w, h: b.box.h };
+      // An axis a sizing mode decides (`fill`, `hug`) is left to it: resizing it would fix it.
+      if (b.box) {
+        const box: { w?: number; h?: number } = {};
+        if (b.widthMode === undefined) box.w = b.box.w;
+        if (b.heightMode === undefined) box.h = b.box.h;
+        if (box.w !== undefined || box.h !== undefined) set.box = box;
+      }
       set.autoResize = b.autoResize !== undefined ? b.autoResize : b.box ? "none" : "width_and_height";
       if (has("box")) touch("box");
       if (has("autoResize")) touch("autoResize");

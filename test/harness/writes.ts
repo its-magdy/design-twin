@@ -1890,6 +1890,13 @@ export const cases: Case[] = [{
     ok("[KEYED-SAFE] a node moved out of a dropped frame by a later op survives and is not counted in `removed`",
       moved.ok === true && moved.applied[0]?.removed === 1 && byName(rootNode(), "Keep")?.removed === false);
 
+    // A text that fills its row, re-sent with a taller box: it still fills.
+    const fillTree = (h: number): Record<string, unknown> => ({ key: "fillt", name: "FillT", box: { w: 300, h: 100 }, layout: { display: "flex" }, children: [{ text: "T", name: "T", box: { w: 100, h }, widthMode: "fill" }] });
+    await w.api.applyWrites([{ op: "createTree", tree: fillTree(20) }]);
+    const tall = await w.api.applyWrites([{ op: "createTree", tree: fillTree(40) }]);
+    const tNode = byName(kids(w.pages.current).find((n) => n.name === "FillT"), "T");
+    ok("[KEYED-SAFE] a filling text re-sent with a taller box keeps filling", tall.ok === true && tNode?.layoutSizingHorizontal === "FILL" && num(tNode, "height") === 40);
+
     // A spec whose own fields cannot be stored on a node: refused before anything is built.
     const before = w.alive().length;
     const huge = await w.api.applyWrites([{ op: "createTree", tree: { key: "huge", name: "Huge", children: [{ text: "x".repeat(120000) }] } }]);

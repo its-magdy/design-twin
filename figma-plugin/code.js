@@ -5626,7 +5626,12 @@
     }
     if (has2("box") || kind === "TEXT" && has2("autoResize") || kind !== "TEXT" && (has2("widthMode") || has2("heightMode"))) {
       if (kind === "TEXT") {
-        if (b.box) set.box = { w: b.box.w, h: b.box.h };
+        if (b.box) {
+          const box = {};
+          if (b.widthMode === void 0) box.w = b.box.w;
+          if (b.heightMode === void 0) box.h = b.box.h;
+          if (box.w !== void 0 || box.h !== void 0) set.box = box;
+        }
         set.autoResize = b.autoResize !== void 0 ? b.autoResize : b.box ? "none" : "width_and_height";
         if (has2("box")) touch("box");
         if (has2("autoResize")) touch("autoResize");
