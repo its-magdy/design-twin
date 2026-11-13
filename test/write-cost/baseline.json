@@ -98,9 +98,9 @@
       "fix-round": {
         "calls": 5,
         "ops": 2,
-        "out": 885,
-        "in": 814,
-        "total": 1699
+        "out": 855,
+        "in": 783,
+        "total": 1638
       }
     }
   }

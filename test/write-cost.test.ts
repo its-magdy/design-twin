@@ -120,7 +120,7 @@ void (async () => {
             return r;
           },
           file(tool, args, phase) {
-            const r = fileTool(tool, args);
+            const r = fileTool(dir, tool, args);
             ledger.record(tool, args, phase, r.text, r.isError);
             if (r.isError) throw new Error(`${tool} failed: ${r.text}`);
             return r;

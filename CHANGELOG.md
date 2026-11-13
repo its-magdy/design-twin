@@ -41,7 +41,7 @@ list of merged PRs.
   ones removed, and a node whose type, component or font changed is built anew in its place. The reply lists only what
   changed (each updated node's id and fields, counts built and removed, new handles), or `unchanged: true`. A node to
   be removed that holds a layer the designer added refuses the batch. The write-cost suite has a seventh job, a new
-  screen plus the fix round its check finds: 1,532 tokens for the four ops, 1,406 with a tree and a `patch`, 1,699
+  screen plus the fix round its check finds: 1,532 tokens for the four ops, 1,406 with a tree and a `patch`, 1,638
   with the spec kept in a file and re-sent by key (the file's first write counts the whole spec as the agent's output;
   the fix itself is an edit of the file and a 25-token reply). `figma_write`'s definition grew by 61 tokens
   (1,332 → 1,393).
