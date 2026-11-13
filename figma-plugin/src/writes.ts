@@ -127,6 +127,16 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
       const paint = solidPaint(op.color, "setFill color");
       consent();
+      // A text's paints and paint-style links can differ from run to run even when the paints look the same: kept run by
+      // run (keepText loads the fonts that needs).
+      if (nd.type === "TEXT") {
+        const restore = await keepText(nd);
+        consent();
+        nd.fills = [paint];
+        const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+        changes.push(change);
+        return change.applied;
+      }
       const target = nd as SceneNode & MinimalFillsMixin;
       const old = target.fills;
       const oldStyle = target.fillStyleId;

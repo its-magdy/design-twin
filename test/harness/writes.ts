@@ -159,7 +159,8 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     // the node lacks is caught as it would be there.
     const box: FakeNode = type === "TEXT"
       ? { characters: "", fontName: { family: "Inter", style: "Regular" }, fontSize: 12, textAutoResize: "WIDTH_AND_HEIGHT", lineHeight: { unit: "AUTO" },
-          letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", textStyleId: "", fillStyleId: "" }
+          letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", textStyleId: "", fillStyleId: "",
+          leadingTrim: "NONE", hangingPunctuation: false, hangingList: false }
       : { layoutMode: main ? main.layoutMode : "NONE", clipsContent: true, itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
           primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", layoutWrap: "NO_WRAP", counterAxisSpacing: 0, counterAxisAlignContent: "AUTO", itemReverseZIndex: false,
           minWidth: null, maxWidth: null, minHeight: null, maxHeight: null,
@@ -225,7 +226,8 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
         if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");
         fields.textStyleId = id;
         fields.fontName = st.fontName;
-        fields.lineHeight = { unit: "AUTO" }; // a style replaces the formatting it sets
+        fields.lineHeight = { unit: "AUTO" }; // a style replaces the formatting it sets, per node ones included
+        Object.assign(fields, { leadingTrim: "CAP_HEIGHT", hangingPunctuation: true, hangingList: true });
         if (hooks.onStyle) await hooks.onStyle();
       };
     }
@@ -1423,6 +1425,17 @@ export const cases: Case[] = [{
     w.trap.clear();
     ok("[ROLLBACK-2] the batch fails and puts back all seven earlier changes (" + (r.error ?? "") + ")", r.ok === false && r.failedAt === 7 && (r.restored ?? []).length === 7 && r.applied.length === 0);
     ok("[ROLLBACK-2] runs with the same paints from two paint styles: each run's style link is put back", runsOf(twins) === twinsBefore);
+    const legacy = await w.api.applyWrites([{ op: "setFill", nodeId: "rx:3", color: "#00ff00" }, { op: "setFill", nodeId: "gone:5", color: "#fff" }]);
+    ok("[ROLLBACK-2] …and so does setFill on that text", legacy.ok === false && (legacy.restored ?? []).length === 1 && runsOf(twins) === twinsBefore);
+    // An unstyled text given a style: the per-node properties the style replaced (leading trim, hanging punctuation and
+    // list) go back with the rest.
+    const email = p.node("email");
+    const node3 = (): string => JSON.stringify([email?.leadingTrim, email?.hangingPunctuation, email?.hangingList, email?.textStyleId]);
+    const was = node3();
+    w.trap.add("cornerRadius");
+    const styled = await w.api.applyWrites([{ op: "patch", nodeId: h.email, set: { styles: { text: "Heading/H1" } } }, fail]);
+    w.trap.clear();
+    ok("[ROLLBACK-2] a text style's per-node properties are put back too (" + node3() + ")", styled.ok === false && node3() === was);
     ok("[ROLLBACK-2] a style whose font a run overrides: the style's font was loaded up front, so the style and the override both go back", runsOf(overridden) === overriddenBefore);
     ok("[ROLLBACK-2] a size limit bound to a variable that grew the frame: the limit, the binding and the width go back",
       p.node("card")?.width === cardWidth && p.node("card")?.minWidth === null && !(isNode(p.node("card")?.boundVariables) && "minWidth" in (p.node("card")?.boundVariables as object)));

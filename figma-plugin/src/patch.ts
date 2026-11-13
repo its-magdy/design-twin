@@ -231,6 +231,8 @@ const RANGE_PROPS = [
   ["paragraphSpacing", "ParagraphSpacing"], ["paragraphIndent", "ParagraphIndent"], ["listOptions", "ListOptions"], ["listSpacing", "ListSpacing"],
   ["indentation", "Indentation"], ["hyperlink", "Hyperlink"], ["textWrapStyle", "TextWrapStyle"], ["fills", "Fills"],
 ] as const;
+/** A text's own properties a text style also replaces (they are per node, not per range): put back after the runs. */
+const NODE_TEXT_PROPS = ["leadingTrim", "hangingPunctuation", "hangingList"] as const;
 /** Decoration details read null when there is no decoration: nothing to set back. */
 const NULLABLE_ONLY_READ: readonly string[] = ["textDecorationStyle", "textDecorationOffset", "textDecorationThickness", "textDecorationColor", "textDecorationSkipInk"];
 const SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables"] as const;
@@ -290,6 +292,7 @@ export async function keepText(t: TextNode): Promise<Restore> {
   }
   const chars = t.characters;
   const runs: Segment[] = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
+  const nodeProps = keep(t, NODE_TEXT_PROPS).filter(([, v]) => v !== figma.mixed);
   // An empty text: its own properties (the ones it has), its style, paint style and bindings.
   const whole = chars.length ? null : {
     props: keep(t, RANGE_PROPS.map(([f]) => f)).filter(([, v]) => v !== figma.mixed && v !== null),
@@ -314,9 +317,10 @@ export async function keepText(t: TextNode): Promise<Restore> {
         const v = id ? vars.get(id) : null;
         if (v !== undefined) t.setBoundVariable(f, v);
       }
+      for (const [k, v] of nodeProps) putBack(t, k, v);
       return;
     }
-    if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) return;
+    if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) { for (const [k, v] of nodeProps) putBack(t, k, v); return; }
     for (const r of runs) {
       const s = r.start, e = r.end;
       if (t.getRangeTextStyleId(s, e) !== r.textStyleId) { await t.setRangeTextStyleIdAsync(s, e, r.textStyleId); check(); }
@@ -336,6 +340,7 @@ export async function keepText(t: TextNode): Promise<Restore> {
         if (v && haveId !== want.id) t.setRangeBoundVariable(r.start, r.end, f, v);
       } else if (have !== null) t.setRangeBoundVariable(r.start, r.end, f, null);
     }
+    for (const [k, v] of nodeProps) putBack(t, k, v);
   };
 }
 

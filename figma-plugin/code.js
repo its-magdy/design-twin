@@ -5891,6 +5891,7 @@
     ["textWrapStyle", "TextWrapStyle"],
     ["fills", "Fills"]
   ];
+  var NODE_TEXT_PROPS = ["leadingTrim", "hangingPunctuation", "hangingList"];
   var NULLABLE_ONLY_READ = ["textDecorationStyle", "textDecorationOffset", "textDecorationThickness", "textDecorationColor", "textDecorationSkipInk"];
   var SEGMENT_FIELDS = [...RANGE_PROPS.map(([f]) => f), "textStyleId", "fillStyleId", "boundVariables"];
   var TEXT_BINDABLE = ["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent"];
@@ -5946,6 +5947,7 @@
     }
     const chars = t.characters;
     const runs = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
+    const nodeProps = keep(t, NODE_TEXT_PROPS).filter(([, v]) => v !== figma.mixed);
     const whole = chars.length ? null : {
       props: keep(t, RANGE_PROPS.map(([f]) => f)).filter(([, v]) => v !== figma.mixed && v !== null),
       textStyleId: t.textStyleId,
@@ -5980,9 +5982,13 @@
           const v = id ? vars.get(id) : null;
           if (v !== void 0) t.setBoundVariable(f, v);
         }
+        for (const [k, v] of nodeProps) putBack(t, k, v);
         return;
       }
-      if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) return;
+      if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) {
+        for (const [k, v] of nodeProps) putBack(t, k, v);
+        return;
+      }
       for (const r of runs) {
         const s = r.start, e = r.end;
         if (t.getRangeTextStyleId(s, e) !== r.textStyleId) {
@@ -6008,6 +6014,7 @@
           if (v && haveId !== want.id) t.setRangeBoundVariable(r.start, r.end, f, v);
         } else if (have !== null) t.setRangeBoundVariable(r.start, r.end, f, null);
       }
+      for (const [k, v] of nodeProps) putBack(t, k, v);
     };
   }
   function keepStyleLink(n, field) {
@@ -6451,6 +6458,14 @@
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
         const paint = solidPaint(op.color, "setFill color");
         consent();
+        if (nd.type === "TEXT") {
+          const restore = await keepText(nd);
+          consent();
+          nd.fills = [paint];
+          const change2 = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+          changes.push(change2);
+          return change2.applied;
+        }
         const target = nd;
         const old = target.fills;
         const oldStyle = target.fillStyleId;
