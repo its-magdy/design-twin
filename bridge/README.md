@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, all or nothing) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
+| `figma_write` | `ops` (at most 50, applied in order, all or nothing) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -956,7 +956,7 @@ the current page):
 | `setText` | `nodeId`, `text` | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
-| `createTree` | `tree` (one nested node spec, below) | `page` (a page's exact name or id; the current page when absent) |
+| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent) |
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
 | `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
 | `delete` | `nodeId` (a node this plugin session created) | — |
@@ -995,6 +995,7 @@ node: the same field names and values, defaults left out, no ids and no parent r
 | `type` | `FRAME` \| `TEXT` \| `INSTANCE` (default: `INSTANCE` when the node has `component`, `TEXT` when it has `text`, else `FRAME`; the root is a frame) |
 | `name`, `hidden` | as read; `hidden: true` creates the node hidden |
 | `handle` | a name of your own; the reply maps each handle to the created node's id (unique in the spec; not `__proto__`, which Figma's message passing drops) |
+| `key` | the root only: a stable name for the result (at most 200 characters); the same key sent again updates that result in place (below) |
 | `box` | `{w, h}`: the node's size (the read's page-coordinate `x`/`y` in it are accepted and set nothing) |
 | `layout` | `{display: "flex", flexDirection: "row" \| "column", gap, padding: [t, r, b, l], justifyContent, alignItems, flexWrap: "wrap", rowGap, columnGap, alignContent: "space-between", reverseZ}`, or `{mode: "absolute", width, height}` for none (an auto-layout field beside `mode: "absolute"` is refused) |
 | `widthMode`, `heightMode` | `fill` (in an auto-layout parent) \| `hug` (an auto-layout frame, or text); fixed when left out |
@@ -1040,6 +1041,39 @@ and `unbound` only when there are any), plus `warnings` for anything that had no
 read node can be fed back in: what the read writes on an ordinary frame or text is accepted. The dry run says the change in one sentence: the frame, its size and layout,
 the node counts, where it lands, the handles, the fonts, the components, variables and text styles it names, and how
 many raw values stay unbound (it does not read the file, so the names are checked when applied). A spec holds at most 500 nodes.
+
+**A spec from disk.** `treeFile` names a JSON file holding the spec (the value `tree` would have), relative to the
+directory the MCP server was started in and inside it, at most 2 MB. The server reads it into `tree` before anything
+else looks at the batch, so a spec given by path is checked, previewed and applied exactly like the same spec inline,
+and the plugin never sees the path. A missing file, one that is not JSON, a path outside the project, a `treeFile`
+beside a `tree`, or one on another op refuses the whole call with nothing changed. A spec a script produced costs the
+model nothing to send, and a corrected one is sent again by the same path. The CLI has no write command: writes stay on
+the MCP server.
+
+**Re-send updates in place.** A root `key` is stored on the result (as this plugin's own plugin data: the key and each
+node's own spec fields on every node it builds, and the root's id under the key on the document). When a spec with the
+same key comes back and the result is still in the file, it is updated instead of a second one being built:
+
+- each node is matched to the one built from the spec sent last time — by `handle`, then by a `name` unique among its
+  siblings on both sides, then in order (two named nodes pair only when the names are the same);
+- a matched node keeps its id, and only the fields that differ from the spec sent last time are set (through the same
+  code as `patch`, plus `x`/`y`, `absolute`, `grow`, `alignSelf`, `clip`, `sizeLimits` and `strokesInLayout`), so
+  whatever the designer changed by hand in the meantime stays unless the new spec changes that field; a field the new
+  spec drops goes back to what a fresh build leaves it at (no fills on a frame, opacity 1, no auto-layout, …);
+- a node the new spec adds is built in its frame; one it drops is removed; one that changed type or component, or whose
+  change cannot be made in place (a text's `font`, `truncate`, `maxLines` or sizing mode, a dropped text style, an
+  instance's dropped property, name or size), is built anew in the old one's place, which is removed;
+- a frame whose children change order is reordered, and a layer the designer added inside keeps its place.
+
+Removals run last, with the batch's deletes; a node to be removed that holds a layer this key did not build refuses
+the batch (move the layer out, or keep the node in the spec). Everything else is put back like any op's if the batch
+fails, and the update is one Cmd-Z step. `page` must be left out or name the page the result is on. One key may appear
+once per batch. If the result was deleted, the key builds a new one.
+
+The reply lists only what changed: `{id, key, changed: [{id, handle?, fields}], created, removed, reordered, handles}`
+(each part only when there is any; `handles` only for nodes built now or newly given a handle), or
+`{id, key, unchanged: true}` when the spec is the one sent last time. A fix round of one text is a reply of about 25
+tokens.
 
 `patch` changes an existing node by id. `set` names the node's fields the way the read export (and a `createTree` spec)
 names them, and only the fields given change; each is checked with the rule the tree spec uses for the same field:

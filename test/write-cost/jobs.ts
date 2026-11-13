@@ -152,6 +152,8 @@ export interface Briefs {
   "colour-update": { variable: string; from: Hex; to: Hex };
   /** the `part` of the list rows on screen `screenId` shows the wrong colour; it should be `to` in every row */
   "repeated-part": { screenId: string; part: string; to: Hex };
+  /** build `want` on the current page; the check of it then finds the text `wrong`, which should read `right` */
+  "fix-round": { pageId: string; want: Want; wrong: string; right: string };
 }
 export type JobId = keyof Briefs;
 export interface Fixture<J extends JobId> {
@@ -343,6 +345,22 @@ const repeatedPart: Job<"repeated-part"> = {
   },
 };
 
-/** The six jobs, in the design record's order. */
-export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart] as const;
+// A new screen and the fix round its check leads to (docs/write-plane-spec.md decision 21: "verify and fix rounds"): the
+// screen is built with a typo the agent only sees when it reads the result back, and the job is done when the page
+// holds exactly one screen, the right one.
+const fixRound: Job<"fix-round"> = {
+  id: "fix-round", title: "New screen + fix round",
+  what: "the 28-node settings screen built with one wrong text, read back, and the text fixed",
+  fixture() {
+    const f = appFile();
+    const screens = page(f, "Screens");
+    build(f, screens, settingsScreen("Home", "jane@example.com"));
+    const before = new Set(Object.keys(f.c.nodes));
+    const brief = { pageId: screens.id, want: settingsScreen("Settings", "jane@exmaple.com"), wrong: "jane@exmaple.com", right: "jane@example.com" };
+    return { c: f.c, brief, check: () => checkNewScreens(f, screens, [settingsScreen("Settings", brief.right)], before) };
+  },
+};
+
+/** The six jobs, in the design record's order, then the fix round. */
+export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound] as const;
 export type AnyJob = (typeof JOBS)[number];

@@ -189,7 +189,6 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     }
     return p;
   };
-  const empty: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
 
   for (const [index, op] of ops.entries()) {
     if (op.op !== "patch") continue;
@@ -203,47 +202,58 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     uses.push(...patchUses(index, set));
     const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
-    if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); continue; }
-    const node = nd;
-    const fit = unfit(node, set);
-    const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
-    for (const m of misfits) bad(m);
-    // A text change keeps the text as it was, run by run, to put back: its fonts must load either way.
-    if (node.type === "TEXT") {
-      for (const f of await fontsToKeep(node)) {
-        const err = await loadFont(f);
-        if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
-      }
-    }
-    let props: Record<string, string | boolean> | null = null;
-    if (set.props && node.type === "INSTANCE") {
-      const main = await node.getMainComponentAsync();
-      if (!main) { bad("set.props: the instance '" + node.name + "' has no main component to read its properties from"); continue; }
-      const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
-      let defs: ComponentPropertyDefinitions;
-      try { defs = (owner || main).componentPropertyDefinitions; } catch { defs = {}; }
-      const mapped = mapProps(set.props, defs, (owner || main).name);
-      if ("errors" in mapped) { for (const e of mapped.errors) bad("set.props: " + e); continue; }
-      if (!later) { const v = await variantProblem(node, mapped.ok); if (v) { bad(v); continue; } }
-      props = mapped.ok;
-    }
-    // The variables the node's number fields are bound to now: a raw value set by the patch unbinds one, and a
-    // restore binds it back.
-    const bound = new Map<string, Variable>();
-    for (const k of NUMBER_TOKEN_FIELDS) {
-      const id = boundId(node, k);
-      if (!id || bound.has(id)) continue;
-      let v: Variable | null = null;
-      try { v = await figma.variables.getVariableByIdAsync(id); } catch { v = null; }
-      if (v) bound.set(id, v);
-    }
-    if (misfits.length) continue;
-    targets.set(index, { node, set, unbound: checkPatch(set).summary.unbound, props, refs: empty, bound });
+    const target = await resolvePatchNode(nd, set, later, loadFont, bad);
+    if (target) targets.set(index, target);
   }
   const r = await resolveRefs(uses, loadFont);
   problems.push(...r.problems);
   for (const t of targets.values()) t.refs = r.refs;
   return { targets, problems, imports: r.imports, importCount: r.importCount };
+}
+
+/**
+ * Resolve one patch against its node: the node is a layer the patch's fields fit (`later`: the checks that read the file
+ * as it is now wait for checkBeforeApply), the fonts a text change keeps load, the instance's properties map. Every
+ * problem goes to `bad`; null when there was one. The target's `refs` are empty: the caller fills them from its own
+ * resolution of the patch's names (patchUses → resolveRefs).
+ */
+export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void): Promise<PatchTarget | null> {
+  if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); return null; }
+  const node = nd;
+  const fit = unfit(node, set);
+  const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
+  for (const m of misfits) bad(m);
+  // A text change keeps the text as it was, run by run, to put back: its fonts must load either way.
+  if (node.type === "TEXT") {
+    for (const f of await fontsToKeep(node)) {
+      const err = await loadFont(f);
+      if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
+    }
+  }
+  let props: Record<string, string | boolean> | null = null;
+  if (set.props && node.type === "INSTANCE") {
+    const main = await node.getMainComponentAsync();
+    if (!main) { bad("set.props: the instance '" + node.name + "' has no main component to read its properties from"); return null; }
+    const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
+    let defs: ComponentPropertyDefinitions;
+    try { defs = (owner || main).componentPropertyDefinitions; } catch { defs = {}; }
+    const mapped = mapProps(set.props, defs, (owner || main).name);
+    if ("errors" in mapped) { for (const e of mapped.errors) bad("set.props: " + e); return null; }
+    if (!later) { const v = await variantProblem(node, mapped.ok); if (v) { bad(v); return null; } }
+    props = mapped.ok;
+  }
+  // The variables the node's number fields are bound to now: a raw value set by the patch unbinds one, and a
+  // restore binds it back.
+  const bound = new Map<string, Variable>();
+  for (const k of NUMBER_TOKEN_FIELDS) {
+    const id = boundId(node, k);
+    if (!id || bound.has(id)) continue;
+    let v: Variable | null = null;
+    try { v = await figma.variables.getVariableByIdAsync(id); } catch { v = null; }
+    if (v) bound.set(id, v);
+  }
+  if (misfits.length) return null;
+  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() }, bound };
 }
 
 // ---------------------------------------------------------------- keeping and putting back

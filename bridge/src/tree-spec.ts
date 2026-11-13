@@ -98,6 +98,9 @@ export interface TreeNodeSpec {
   name?: string;
   /** A name the reply maps to the created node's id. Unique within the spec. */
   handle?: string;
+  /** The root only: a stable name for the result. The plugin stores it on the root it builds; a spec sent again with
+   *  the same key updates that result in place (tree-diff.ts) and replies with only what changed. */
+  key?: string;
   hidden?: true;
   /** The root: page coordinates (placed beside the existing frames when absent). A child: relative to its parent,
    *  for a child of a frame without auto-layout or an `absolute` one. */
@@ -132,6 +135,8 @@ export interface TreeNodeSpec {
 /** The most nodes one spec may hold, and how deep it may nest: a screen is far below both, a runaway is not. */
 export const MAX_TREE_NODES = 500;
 export const MAX_TREE_DEPTH = 40;
+/** The longest `key` a spec root may carry. */
+export const MAX_KEY_LENGTH = 200;
 /** The font a text node gets when its spec names none (Figma's own default for a new text node). */
 export const DEFAULT_FONT = { family: "Inter", weight: "Regular" } as const;
 
@@ -317,12 +322,14 @@ const propsCheck: Check = (v) => {
 const DS_REF = "binding a text field to a variable cannot be written yet; name a text style in `styles.text`";
 
 /** Every IrNode field, and whether a tree spec may carry it. `children` and `type` are checked by the walk. */
-const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule } = {
+const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule; key: Rule } = {
   type: str, children: (v) => (Array.isArray(v) ? null : "must be a list of nodes"),
   name: str,
   // "__proto__" is refused: Figma's own main-thread → UI message copy drops a key of that name (seen live), so the
   // reply could not carry it back however the plugin builds it.
   handle: (v) => (typeof v !== "string" || v.length === 0 ? "must be a non-empty string" : v === "__proto__" ? "'__proto__' cannot be a handle (Figma's message passing drops that key); pick another name" : null),
+  // Stored on the node as plugin data (an entry is capped at 100 kB by Figma; a key is far below it).
+  key: (v) => (typeof v !== "string" || !v.trim() ? "must be a non-empty string" : v.length > MAX_KEY_LENGTH ? "must be at most " + MAX_KEY_LENGTH + " characters" : null),
   id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
   hidden: trueOnly,
   x: num, y: num,
@@ -496,6 +503,7 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
     const isRoot = parentFlex === null;
     const flex = isFlex(n);
     const say = (msg: string): void => { problems.push(path + ": " + msg); };
+    if (!isRoot && n.key !== undefined) say("`key` names a whole result, so only the root carries it");
     if (kind === "TEXT") {
       if (typeof n.text !== "string") say("a TEXT node needs `text`");
       for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== undefined) say("`" + k + "` is not on a TEXT node");
@@ -613,6 +621,7 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
     "creates frame '" + (spec.name || "Frame") + "'" + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") +
       " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + ") " + where,
   ];
+  if (spec.key !== undefined) parts.push("key '" + spec.key + "': when the file already holds this key's earlier result, that result is updated in place instead (same ids, only the fields that differ from the spec sent last time) and the reply lists only what changed");
   if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
   if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
   const { components, variables, textStyles } = s.refs;

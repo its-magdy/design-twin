@@ -122,6 +122,7 @@ const NOT_PATCHED: Readonly<Record<string, string>> = {
   type: "a node's type cannot change",
   children: "a patch changes one node; change each child by its own id (or `move` a node this session created)",
   handle: "a handle names a node a createTree op creates",
+  key: "a key names a createTree result; send its spec again to update it",
   id: "the node is named by the op's `nodeId`",
   component: "swapping an instance's component cannot be written yet; set its `props`",
   x: "a patch does not move a node; `move` changes its parent", y: "a patch does not move a node; `move` changes its parent",

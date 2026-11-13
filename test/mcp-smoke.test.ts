@@ -377,11 +377,12 @@ void (async () => {
     // checkbox's state and refuses a write the way writes.ts does while it is off.
     let editsOn = false;
     let failWith: WriteResult | null = null; // set to make the next writes fail the way writes.ts reports it
+    let lastWrite: unknown = null; // the args of the last write the plugin got
     let reviewOn = false; // "Review each write" as whoami reports it
     let holdWrite = false; // the write waits for a review nobody answers (review.ts)
     const editsPlugin = fakePlugin(8789, { token: "smoke-test-token", hello: { instanceId: "fig-edits", file: "Edits File" }, unhandled: HANG, on: {
       whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn }),
-      write: (): WriteResult | typeof HANG => holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }),
+      write: (a): WriteResult | typeof HANG => { lastWrite = a; return holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }); },
     } });
     await editsPlugin.opened;
     const card = [{ op: "createFrame", name: "Card" }];
@@ -397,6 +398,28 @@ void (async () => {
     ok("[EDITS] dryRun with edits on reports editsAllowed:true and no refusal", dryOn.editsAllowed === true && dryOn.wouldRefuse === undefined);
     const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
     ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
+    // A spec by path (spec-file.ts): the server reads it, so the plugin gets the spec itself, exactly as if sent inline;
+    // the dry run is the inline one's; a missing file or one that is not JSON is refused before anything is asked.
+    const keyedSpec = { key: "card", name: "Card", children: [{ text: "Hi", handle: "hi" }] };
+    fs.mkdirSync(path.join(CWD, "specs"), { recursive: true });
+    fs.writeFileSync(path.join(CWD, "specs", "card.json"), JSON.stringify(keyedSpec, null, 2));
+    fs.writeFileSync(path.join(CWD, "specs", "broken.json"), "{");
+    const byPath = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "createTree", treeFile: "specs/card.json" }] } });
+    ok("[SPEC-FILE] a spec by path reaches the plugin as the spec itself (no path), and is applied",
+      !byPath.isError && JSON.stringify(lastWrite) === JSON.stringify({ ops: [{ op: "createTree", tree: keyedSpec }] }));
+    const dryPath = firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", treeFile: "specs/card.json" }] } }));
+    const dryInline = firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", tree: keyedSpec }] } }));
+    ok("[SPEC-FILE] its dry run is the same spec's inline dry run", dryPath === dryInline && /key 'card'/.test(dryPath));
+    lastWrite = null;
+    const missingFile = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "createTree", treeFile: "specs/nope.json" }] } });
+    const brokenFile = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createTree", treeFile: "specs/broken.json" }] } });
+    const outsideFile = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "createTree", treeFile: "../elsewhere.json" }] } });
+    ok("[SPEC-FILE] a missing file, one that is not JSON, and one outside the project are refused, and the plugin is never asked",
+      missingFile.isError === true && /^ops\[0\]\.treeFile: no file at .*nope\.json\. Nothing was changed\.$/.test(firstText(missingFile))
+      && brokenFile.isError === true && /broken\.json is not valid JSON/.test(firstText(brokenFile))
+      && outsideFile.isError === true && /ops\[0\]\.treeFile must stay inside the directory this server was started in/.test(firstText(outsideFile))
+      && lastWrite === null);
+
     // A createTree reply through the real bridge path (plugin socket → bridge → tool text): handles named after
     // Object.prototype members arrive as own keys with their ids.
     const handles: Record<string, string> = Object.fromEntries([["constructor", "1:9"], ["toString", "1:10"], ["hasOwnProperty", "1:11"]]);

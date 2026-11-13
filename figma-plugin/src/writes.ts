@@ -8,6 +8,7 @@ import { editsAllowed, editsAllowedNow } from "./edits";
 import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
+import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
@@ -193,6 +194,9 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move }: Resolved, ch
     case "createTree": {
       if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
       consent();
+      // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
+      // one by one, as they land.
+      if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
       const change = await buildTree(tree, consent);
       changes.push(change);
       return change.applied;
@@ -300,9 +304,12 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const resolveBatch = async () => {
     const modes = await resolveModeOps(list);
     const trees = await resolveTreeOps(list);
+    // A createTree whose key names a result the file holds becomes an update of it (keyed.ts).
+    const keyed = await resolveKeyed(list, trees.targets);
     const patches = await resolvePatchOps(list);
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
-    const problems = [...modes.problems, ...trees.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+      ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     return { modes, trees, patches, structure, problems };
   };
   let { modes, trees, patches, structure, problems } = await resolveBatch();
@@ -385,6 +392,12 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     if (!op) continue;
     try { checkDelete(t); } catch (e) { return fail(i, op, e); }
   }
+  // …and so is every node a keyed re-send removes (it must still hold only what its key built), before any delete runs.
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try { for (const n of removalsOf(t.update)) checkRemoval(t.update, n); } catch (e) { return fail(i, op, e); }
+  }
   for (const [i, t] of structure.deletes) {
     const op = list[i];
     if (!op) continue;
@@ -397,6 +410,23 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
       return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
     }
   }
+  // The nodes a keyed re-send no longer has (or built anew) go last, with the deletes: a removed node cannot be brought back.
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    // The reply counts what is removed now, after every other op (a later op may have moved a node out).
+    const row = rows[i];
+    if (row) { const n = removalCount(t.update); if (n) row.removed = n; else delete row.removed; }
+    try {
+      for (const n of removalsOf(t.update)) {
+        if (n.removed) continue;
+        consent();
+        n.remove();
+      }
+    } catch (e) {
+      return fail(i, op, e);
+    }
+  }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
   return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}) };
 }
@@ -406,6 +436,46 @@ function reviewRefusal(o: ReviewOutcome): WriteResult {
   if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...(o.reason !== undefined ? { reason: o.reason } : {}) };
   if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
   return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
+}
+
+/** A delete that takes a node a keyed re-send of the same batch changes, builds in or reorders (its result's root
+ *  included): deletes run last, so the re-send's reply would name what is about to go. Refused up front. */
+function keyedDeleteConflicts(targets: ReadonlyMap<number, TreeTarget>, deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+  const out: OpProblem[] = [];
+  for (const [i, t] of targets) {
+    if (!t.update) continue;
+    const touched = touchedBy(t.update);
+    for (const [d, del] of deletes) {
+      for (const id of idsDeletedWith(del.node, moves)) {
+        if (!touched.has(id)) continue;
+        out.push({ index: d, op: "delete", message: "it deletes '" + id + "', part of the result the keyed re-send in ops[" + i + "] updates (deletes run after every other op); drop one of the two" });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** An op that names a node a keyed re-send of the same batch removes (it, or anything below it), as a parent or a target:
+ *  the removal runs last, so the op would act on a node about to go. Refused up front, like a delete conflict. */
+function removalConflicts(list: readonly WriteOp[], targets: ReadonlyMap<number, TreeTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+  const gone = new Map<string, number>();
+  for (const [i, t] of targets) {
+    if (!t.update) continue;
+    for (const n of removalsOf(t.update)) for (const id of idsDeletedWith(n, moves)) if (!gone.has(id)) gone.set(id, i);
+  }
+  const out: OpProblem[] = [];
+  if (!gone.size) return out;
+  for (const [index, op] of list.entries()) {
+    for (const k of ["nodeId", "parentId"] as const) {
+      const id = op[k];
+      const by = id === undefined ? undefined : gone.get(id);
+      if (by === undefined || by === index) continue;
+      out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+      break;
+    }
+  }
+  return out;
 }
 
 /** An op that names a node a delete of the same batch removes (it, or anything below it), as a parent or a target:

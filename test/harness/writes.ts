@@ -177,6 +177,11 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
       boundVariables: {},
     };
+    // This plugin's own data on the node (a keyed spec stamps every node it builds); "" when unset, as in Figma.
+    const data = new Map<string, string>();
+    fields.getPluginData = (k: string) => data.get(k) ?? "";
+    fields.setPluginData = (k: string, v: string) => { if (v === "") data.delete(k); else data.set(k, v); };
+    fields.getPluginDataKeys = () => [...data.keys()];
     // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {
       const bound = isNode(fields.boundVariables) ? { ...fields.boundVariables } : {};
@@ -1673,6 +1678,230 @@ export const cases: Case[] = [{
     const r2 = await pending2;
     ok("[REVIEW-RESOLVE] a node removed during review: refused whole, the error says the file changed while it waited",
       r2.ok === false && r2.applied.length === 0 && /the file changed while the write waited for review/.test(r2.error ?? ""));
+  },
+}, {
+  name: "keyed tree spec: the same key sent again updates the result in place and replies with only what changed",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const spec = (over: (s: Record<string, unknown> & { children: Array<Record<string, unknown>> }) => void = () => {}): Record<string, unknown> => {
+      const s = {
+        key: "settings", name: "Settings", handle: "root", box: { w: 390, h: 844 }, fills: [{ type: "solid", color: "#ffffff" }],
+        layout: { display: "flex", flexDirection: "column", gap: 16 },
+        children: [
+          { text: "Hello", name: "Title", handle: "title", font: { size: 24 } },
+          { name: "Card", layout: { display: "flex", flexDirection: "column", padding: [8, 8, 8, 8] }, children: [{ text: "A", name: "A" }, { text: "B", name: "B" }] },
+          { component: "Button", handle: "btn", props: { Label: "Go" } },
+        ] as Array<Record<string, unknown>>,
+      };
+      over(s);
+      return s;
+    };
+    const send = (tree: Record<string, unknown>, more: Array<{ op: string } & Record<string, unknown>> = []): Promise<WriteResult> => w.api.applyWrites([{ op: "createTree", tree }, ...more]);
+    const screens = (): FakeNode[] => kids(w.pages.current).filter((n) => n.name === "Settings");
+    const card = (): FakeNode | undefined => byName(screens()[0], "Card");
+
+    const r1 = await send(spec());
+    const a1 = r1.applied[0];
+    const root = screens()[0];
+    ok("[KEYED] the first send builds the screen, and says its key", r1.ok === true && a1?.key === "settings" && a1.id === root?.id && JSON.stringify(a1.created) === JSON.stringify({ frames: 2, texts: 3, instances: 1 }));
+    const title = byName(root, "Title");
+    const btn = kids(root)[2]; // an instance is named after its variant
+    const alive1 = w.alive().length;
+
+    const r2 = await send(spec());
+    ok("[KEYED] the same spec sent again: one result, not two; the reply is the root, the key and `unchanged`",
+      r2.ok === true && screens().length === 1 && w.alive().length === alive1 && JSON.stringify(r2.applied) === JSON.stringify([{ id: root?.id, key: "settings", unchanged: true }]));
+
+    // A fix round: the title's text, the gap, a child dropped and one added, a property of the instance.
+    const commits = w.undo.commits;
+    const r3 = await send(spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) t.text = "Hello there";
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }];
+      if (b) b.props = { Label: "Stop" };
+    }));
+    const a3 = r3.applied[0];
+    const cNode = byName(card(), "C");
+    ok("[KEYED] a fix round updates the same nodes (same ids), and builds and removes only what the spec added and dropped",
+      r3.ok === true && screens().length === 1 && screens()[0] === root && byName(root, "Title") === title && kids(root)[2] === btn && btn !== undefined &&
+      title?.characters === "Hello there" && num(root, "itemSpacing") === 24 && byName(card(), "B") === undefined && cNode?.characters === "C" &&
+      kids(card()).map((k) => k.name).join() === "A,C" && JSON.stringify(btn?.props) === JSON.stringify({ "Label#1:0": "Stop" }));
+    ok("[KEYED] its reply lists only what changed: each updated node and its fields, what was built and removed, the new handle's id",
+      JSON.stringify(a3) === JSON.stringify({
+        id: root?.id, key: "settings",
+        changed: [{ id: root?.id, handle: "root", fields: ["layout"] }, { id: title?.id, handle: "title", fields: ["text"] }, { id: btn?.id, handle: "btn", fields: ["props"] }],
+        created: { frames: 0, texts: 1 }, removed: 1, handles: { c: cNode?.id },
+      }));
+    ok("[KEYED] a fix round is one undo step", w.undo.commits === commits + 2);
+
+    // The fix round's spec again: nothing to do.
+    const fixed = spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) t.text = "Hello there";
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }];
+      if (b) b.props = { Label: "Stop" };
+    });
+    ok("[KEYED] the fixed spec sent again is unchanged (what was stored is what was applied)", (await send(fixed)).applied[0]?.unchanged === true);
+
+    // A batch that fails after the update puts all of it back: values, built nodes, the stored spec.
+    const textBefore = title?.characters;
+    const failed = await send(spec((s) => {
+      const [t, c] = s.children;
+      if (t) t.text = "Never";
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }, { text: "D", name: "D" }];
+    }), [{ op: "createFrame", parentId: "missing:1" }]);
+    ok("[KEYED] a later op failing puts the update back: the text, the built node; nothing removed yet",
+      failed.ok === false && failed.failedAt === 1 && title?.characters === textBefore && byName(card(), "D") === undefined && byName(card(), "C") === cNode && byName(card(), "C")?.removed === false);
+    ok("[KEYED] …and the stored spec: the fixed spec is still unchanged", (await send(fixed)).applied[0]?.unchanged === true);
+
+    // What cannot change in place is built anew: a text's font. Its new id comes back by its handle.
+    const r4 = await send(spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) { t.text = "Hello there"; t.font = { size: 32 }; }
+      if (c) c.children = [{ text: "A", name: "A" }, { text: "C", name: "C", handle: "c" }];
+      if (b) b.props = { Label: "Stop" };
+    }));
+    const title2 = byName(root, "Title");
+    ok("[KEYED] a font change builds the text anew in its place and removes the old one",
+      r4.ok === true && title2 !== undefined && title2 !== title && title?.removed === true && kids(root).indexOf(title2) === 0 && num(title2, "fontSize") === 32 &&
+      JSON.stringify(r4.applied[0]) === JSON.stringify({ id: root?.id, key: "settings", created: { frames: 0, texts: 1 }, removed: 1, handles: { title: title2.id } }));
+
+    // A layer the designer added inside the result stays, in its place, through a reorder.
+    const mine = w.figma.createFrame?.();
+    if (mine) { mine.name = "Designer note"; const ins = card()?.insertChild; if (callable(ins)) ins(1, mine); }
+    const swapped = spec((s) => {
+      s.layout = { display: "flex", flexDirection: "column", gap: 24 };
+      const [t, c, b] = s.children;
+      if (t) { t.text = "Hello there"; t.font = { size: 32 }; }
+      if (c) c.children = [{ text: "C", name: "C", handle: "c" }, { text: "A", name: "A" }];
+      if (b) b.props = { Label: "Stop" };
+    });
+    const r5 = await send(swapped);
+    ok("[KEYED] children in a new order: reordered in place, the designer's own layer keeps its slot",
+      r5.ok === true && kids(card()).map((k) => k.name).join() === "C,Designer note,A" && JSON.stringify(r5.applied[0]) === JSON.stringify({ id: root?.id, key: "settings", reordered: 1 }));
+
+    // Dropping a node that holds the designer's layer is refused whole: a re-send removes only what it built.
+    const dropCard = spec((s) => { s.children = s.children.filter((c) => c.name !== "Card"); });
+    const refusedDrop = await send(dropCard);
+    ok("[KEYED] dropping a node that holds a layer the key did not build: refused, naming both, nothing changed",
+      refusedDrop.ok === false && refusedDrop.applied.length === 0 && /'Card' \([^)]+\) is no longer in the spec, but it holds 'Designer note'/.test(refusedDrop.error ?? "") && card() !== undefined);
+
+    // Two ops with one key, and a key whose result is on another page, are refused.
+    const twice = await w.api.applyWrites([{ op: "createTree", tree: swapped }, { op: "createTree", tree: swapped }]);
+    ok("[KEYED] one key twice in a batch: refused", twice.ok === false && /tree\.key 'settings' is also the key of ops\[0\]/.test(twice.error ?? ""));
+    const elsewhere = await w.api.applyWrites([{ op: "createTree", tree: swapped, page: "Screens" }]);
+    ok("[KEYED] a page other than the result's: refused (an update stays where the result is)", elsewhere.ok === false && /is on page 'Page 1', not 'Screens'/.test(elsewhere.error ?? ""));
+
+    // The result deleted: the key builds a new one, and the next send updates that one.
+    const drop = root?.remove;
+    if (callable(drop)) drop();
+    const r6 = await send(swapped);
+    const root2 = screens()[0];
+    ok("[KEYED] once the result is deleted, the key builds it again", r6.ok === true && screens().length === 1 && root2 !== root && r6.applied[0]?.created !== undefined && r6.applied[0].id === root2?.id);
+    ok("[KEYED] …and the next send updates the new one", JSON.stringify((await send(swapped)).applied) === JSON.stringify([{ id: root2?.id, key: "settings", unchanged: true }]));
+  },
+}, {
+  name: "keyed tree spec: removals cannot take other ops' nodes, direct fields roll back, limits keep their variables, oversized stamps refused",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const base = (kids: Array<Record<string, unknown>>): Record<string, unknown> =>
+      ({ key: "k", name: "Box", box: { w: 400, h: 400 }, layout: { display: "flex", flexDirection: "column" }, children: kids });
+    const first = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 } }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    const ids = first.applied[0]?.handles ?? {};
+    const rootNode = (): FakeNode | undefined => kids(w.pages.current).find((n) => n.name === "Box");
+    const child = (name: string): FakeNode | undefined => byName(rootNode(), name);
+
+    // An op that builds into (or names) a node the re-send removes: refused up front, nothing changed.
+    const into = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "B", handle: "b", box: { w: 50, h: 50 } }]) }, { op: "createFrame", name: "Late", parentId: ids.a }]);
+    ok("[KEYED-SAFE] an op naming a node the re-send removes is refused up front (it would be deleted with it)",
+      first.ok === true && into.ok === false && into.failedAt === 1 && /is removed by the keyed re-send in ops\[0\]/.test(into.error ?? "") && child("A") !== undefined && kids(child("A")).length === 0);
+
+    // A direct field that throws: the ones set before it are put back with the batch.
+    w.trap.add("clipsContent");
+    const trapped = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, absolute: true, clip: true }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    w.trap.clear();
+    ok("[KEYED-SAFE] a direct field that throws: the batch fails and the position set before it is put back",
+      trapped.ok === false && child("A")?.layoutPositioning === "AUTO" && trapped.applied.length === 0);
+
+    // Absolute back into the flow, filling: the position is cleared before the sizing patch is checked.
+    const abs = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, absolute: true }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    const fill = await w.api.applyWrites([{ op: "createTree", tree: base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, widthMode: "fill" }, { name: "B", handle: "b", box: { w: 50, h: 50 } }]) }]);
+    ok("[KEYED-SAFE] an absolute child turned into a filling one is accepted", abs.ok === true && fill.ok === true && child("A")?.layoutPositioning === "AUTO" && child("A")?.layoutSizingHorizontal === "FILL");
+
+    // A size limit changed while its variable binding stays: still bound afterwards.
+    const lim = (minWidth: number): Record<string, unknown> => base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, widthMode: "fill" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, sizeLimits: { minWidth, maxWidth: 900 }, tokens: { minWidth: "size/min" } }]);
+    const l1 = await w.api.applyWrites([{ op: "createTree", tree: lim(10) }]);
+    const l2 = await w.api.applyWrites([{ op: "createTree", tree: lim(20) }]);
+    const bv = child("B")?.boundVariables as Record<string, { id?: string }> | undefined;
+    ok("[KEYED-SAFE] a changed size limit keeps the variable the spec still binds it to", l1.ok === true && l2.ok === true && bv?.minWidth?.id === "VariableID:30:5" && num(child("B"), "maxWidth") === 900);
+
+    // A limit change put back with its batch: the size the limit's variable gave the node goes back too.
+    const limTree = (extra: Record<string, unknown>): Record<string, unknown> =>
+      ({ key: "lim", name: "Lim", box: { w: 400, h: 100 }, layout: { display: "flex" }, children: [{ name: "C", box: { w: 50, h: 50 }, ...extra }] });
+    await w.api.applyWrites([{ op: "createTree", tree: limTree({ sizeLimits: { maxWidth: 900 } }) }]);
+    const cNode = (): FakeNode | undefined => byName(kids(w.pages.current).find((n) => n.name === "Lim"), "C");
+    const wBefore = num(cNode(), "width");
+    const limFail = await w.api.applyWrites([{ op: "createTree", tree: limTree({ sizeLimits: { minWidth: 10, maxWidth: 900 }, tokens: { minWidth: "size/min" } }) }, { op: "createFrame", parentId: "missing:1" }]);
+    const bvC = cNode()?.boundVariables as Record<string, unknown> | undefined;
+    ok("[KEYED-SAFE] a size-limit change put back: the limit, its binding and the size it caused", limFail.ok === false && wBefore === 50 && num(cNode(), "width") === 50 && bvC?.minWidth === undefined && cNode()?.minWidth === null);
+    const sized = (extra: Record<string, unknown>): Record<string, unknown> => base([{ name: "A", handle: "a", box: { w: 50, h: 50 }, widthMode: "fill" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, ...extra }]);
+
+    // A node built anew takes the place of the one it replaces; a designer's layer between keeps its own.
+    const note = w.figma.createFrame?.();
+    if (note) { note.name = "Note"; const ins = rootNode()?.insertChild; if (callable(ins)) ins(1, note); }
+    const swap = await w.api.applyWrites([{ op: "createTree", tree: sized({ sizeLimits: { maxWidth: 900 } }) }]);
+    const asText = await w.api.applyWrites([{ op: "createTree", tree: base([{ text: "A", name: "A", handle: "a" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, sizeLimits: { maxWidth: 900 } }]) }]);
+    ok("[KEYED-SAFE] a node built anew takes its predecessor's slot; the designer's layer keeps its own",
+      swap.ok === true && asText.ok === true && kids(rootNode()).map((k) => String(k.name) + ":" + String(k.type)).join() === "A:TEXT,Note:FRAME,B:FRAME");
+
+    // Explicit deletes wait until every removal is checked: a removal refused late leaves every delete undone.
+    const spare = await w.api.applyWrites([{ op: "createFrame", name: "Spare" }]);
+    const spareId = spare.applied[0]?.id ?? "";
+    const spareNode = w.made.find((n) => n.id === spareId);
+    w.hooks.onStyle = async () => {
+      // While the batch awaits a text style, the designer drops a layer into a node the re-send is about to remove.
+      const layer = w.figma.createFrame?.();
+      const target = byName(rootNode(), "B");
+      if (layer && target) { layer.name = "Dropped in"; const add = target.appendChild; if (callable(add)) add(layer); }
+    };
+    const late = await w.api.applyWrites([{ op: "createTree", tree: base([{ text: "A", name: "A", handle: "a" }, { text: "Styled", name: "S", styles: { text: "Body" } }]) }, { op: "delete", nodeId: spareId }]);
+    w.hooks.onStyle = undefined;
+    ok("[KEYED-SAFE] a removal refused after the build: the batch fails and the explicit delete never ran",
+      late.ok === false && /now holds 'Dropped in'/.test(late.error ?? "") && spareNode?.removed === false && byName(rootNode(), "S") === undefined);
+
+    // A delete of a result the same batch re-sends: refused up front (the reply would name nodes about to go).
+    const boxId = rootNode()?.id ?? "";
+    const both = await w.api.applyWrites([{ op: "createTree", tree: base([{ text: "A", name: "A", handle: "a" }, { name: "B", handle: "b", box: { w: 50, h: 50 }, sizeLimits: { maxWidth: 900 } }, { name: "New", handle: "new" }]) }, { op: "delete", nodeId: boxId }]);
+    ok("[KEYED-SAFE] deleting the result a keyed re-send in the same batch updates: refused up front, nothing changed",
+      both.ok === false && both.failedAt === 1 && /part of the result the keyed re-send in ops\[0\] updates/.test(both.error ?? "") && byName(rootNode(), "New") === undefined && rootNode()?.removed === false);
+
+    // `removed` counts every node of the result that goes, not only the top of what was dropped.
+    await w.api.applyWrites([{ op: "createTree", tree: { key: "nest", name: "Nest", children: [{ name: "Outer", children: [{ name: "Inner" }, { text: "T" }] }] } }]);
+    const dropped = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest", name: "Nest" } }]);
+    ok("[KEYED-SAFE] dropping a frame with two nodes inside reports removed: 3", dropped.ok === true && dropped.applied[0]?.removed === 3);
+
+    // A node of a dropped frame moved out later in the same batch survives, and is not counted as removed.
+    const nest2 = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest2", name: "Nest2", children: [{ name: "Outer2", children: [{ name: "Keep", handle: "keep" }] }] } }]);
+    const keepId = nest2.applied[0]?.handles?.keep ?? "";
+    const moved = await w.api.applyWrites([{ op: "createTree", tree: { key: "nest2", name: "Nest2" } }, { op: "move", nodeId: keepId, parentId: rootNode()?.id ?? "" }]);
+    ok("[KEYED-SAFE] a node moved out of a dropped frame by a later op survives and is not counted in `removed`",
+      moved.ok === true && moved.applied[0]?.removed === 1 && byName(rootNode(), "Keep")?.removed === false);
+
+    // A text that fills its row, re-sent with a taller box: it still fills.
+    const fillTree = (h: number): Record<string, unknown> => ({ key: "fillt", name: "FillT", box: { w: 300, h: 100 }, layout: { display: "flex" }, children: [{ text: "T", name: "T", box: { w: 100, h }, widthMode: "fill" }] });
+    await w.api.applyWrites([{ op: "createTree", tree: fillTree(20) }]);
+    const tall = await w.api.applyWrites([{ op: "createTree", tree: fillTree(40) }]);
+    const tNode = byName(kids(w.pages.current).find((n) => n.name === "FillT"), "T");
+    ok("[KEYED-SAFE] a filling text re-sent with a taller box keeps filling", tall.ok === true && tNode?.layoutSizingHorizontal === "FILL" && num(tNode, "height") === 40);
+
+    // A spec whose own fields cannot be stored on a node: refused before anything is built.
+    const before = w.alive().length;
+    const huge = await w.api.applyWrites([{ op: "createTree", tree: { key: "huge", name: "Huge", children: [{ text: "x".repeat(120000) }] } }]);
+    ok("[KEYED-SAFE] a node too big to store its spec on: refused up front, nothing built",
+      huge.ok === false && /tree\.children\[0\]: its own fields are \d+ bytes, more than a keyed spec can store/.test(huge.error ?? "") && w.alive().length === before);
   },
 }];
 

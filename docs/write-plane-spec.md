@@ -5,7 +5,8 @@ node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built;
 auto-layout and text, placement, all or nothing — is built; design-system references in it — instances of a named
 component with property values, variables, text styles, library imports under the consent gate — are built; patch by
 id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the whole batch put back when an
-op fails, one undo per batch — is built)
+op fails, one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
+result in place and replies with only what changed are built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -131,7 +132,8 @@ screens.
 21. **A measured budget.** A fixture suite measures total tokens (spec out, reply in, verify and fix
     rounds) and round trips for each job in the table above, against the fake plugin, with the four-op
     path as the baseline. It is `test/write-cost.test.ts` (`bun test/write-cost.test.ts`); the recorded numbers are in
-    `test/write-cost/baseline.json`, and a new route is added to `test/write-cost/routes.ts`.
+    `test/write-cost/baseline.json`, and a new route is added to `test/write-cost/routes.ts`. Its seventh job is a new
+    screen and the fix round its check leads to.
 
 ## Build order
 
