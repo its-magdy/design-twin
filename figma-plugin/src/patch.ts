@@ -359,7 +359,13 @@ export async function keepText(t: TextNode): Promise<Restore> {
     if (same(t.getStyledTextSegments([...SEGMENT_FIELDS]), runs)) { for (const [k, v] of nodeProps) putBack(t, k, v); return; }
     for (const r of runs) {
       const s = r.start, e = r.end;
-      if (t.getRangeTextStyleId(s, e) !== r.textStyleId) { await t.setRangeTextStyleIdAsync(s, e, r.textStyleId); check(); }
+      // A run that is the whole text takes its style through the node's own setter: the range setter marks the link
+      // as an override of the style (seen live), the node setter does not.
+      const all = s === 0 && e === t.characters.length;
+      if (t.getRangeTextStyleId(s, e) !== r.textStyleId) {
+        if (all) await t.setTextStyleIdAsync(r.textStyleId); else await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
+        check();
+      }
       for (const [f, suffix] of RANGE_PROPS) {
         const want: unknown = getF(r, f);
         if (want === undefined || (want === null && NULLABLE_ONLY_READ.indexOf(f) >= 0)) continue;
@@ -369,7 +375,10 @@ export async function keepText(t: TextNode): Promise<Restore> {
         if ((got === null || got === undefined) && (want === null || want === undefined)) continue;
         if (!same(got, want)) call(t, "setRange" + suffix, [s, e, want]);
       }
-      if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) { await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId); check(); }
+      if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) {
+        if (all) await t.setFillStyleIdAsync(r.fillStyleId); else await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId);
+        check();
+      }
     }
     for (const r of runs) for (const f of TEXT_BINDABLE) {
       const want = r.boundVariables && r.boundVariables[f];

@@ -428,7 +428,9 @@ export function textRuns<T extends FakeNode>(node: T): T {
     setRangeTextStyleIdAsync: async (_s: number, _e: number, id: string) => {
       if (typeof n.setTextStyleIdAsync === "function" && id) await (n.setTextStyleIdAsync as (id: string) => Promise<void>)(id);
       else n.textStyleId = id;
-      n.textStyleOverrides = []; // a style (re)applied starts with no overrides
+      // Set through the RANGE setter, a style's link shows up as an override of it (seen live in Figma); the node's own
+      // setTextStyleIdAsync starts with none.
+      n.textStyleOverrides = id ? ["hyperlink"] : [];
     },
     setRangeFillStyleIdAsync: async (_s: number, _e: number, id: string) => { n.fillStyleId = id; },
     getRangeBoundVariable: (_s: number, _e: number, f: string) => bound()[f] ?? null,

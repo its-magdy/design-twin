@@ -234,6 +234,8 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     }
     if (type === "TEXT") {
       fields.setTextStyleIdAsync = async (id: string) => {
+        fields.textStyleOverrides = []; // the node's own setter leaves no override (as in Figma)
+        if (id === "") { fields.textStyleId = ""; return; } // "" detaches the style, keeping the formatting
         const st = KIT_STYLES.find((x) => x.id === id) ?? imported.find((x) => x.id === id);
         if (!st) throw new Error("in Figma: no style " + id);
         if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");

@@ -6021,8 +6021,10 @@
       }
       for (const r of runs) {
         const s = r.start, e = r.end;
+        const all = s === 0 && e === t.characters.length;
         if (t.getRangeTextStyleId(s, e) !== r.textStyleId) {
-          await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
+          if (all) await t.setTextStyleIdAsync(r.textStyleId);
+          else await t.setRangeTextStyleIdAsync(s, e, r.textStyleId);
           check();
         }
         for (const [f, suffix] of RANGE_PROPS) {
@@ -6033,7 +6035,8 @@
           if (!same(got, want)) call(t, "setRange" + suffix, [s, e, want]);
         }
         if (r.fillStyleId && t.getRangeFillStyleId(s, e) !== r.fillStyleId) {
-          await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId);
+          if (all) await t.setFillStyleIdAsync(r.fillStyleId);
+          else await t.setRangeFillStyleIdAsync(s, e, r.fillStyleId);
           check();
         }
       }
