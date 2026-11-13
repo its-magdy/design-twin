@@ -83,6 +83,9 @@ export interface FakeFigma {
   fileKey: string;
   root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData?: (key: string) => string };
   loadAllPagesAsync(): Promise<void>;
+  /** Absent unless a case passes one: the plugin's reads must not need them (a read leaves the view alone). */
+  setCurrentPageAsync?(page: FakePage): Promise<void>;
+  viewport?: { scrollAndZoomIntoView(nodes: FakeNode[]): void };
   getImageByHash(hash: string): FakeImage | null;
   getNodeByIdAsync(id: string): Promise<FakeNode | null>;
   getStyleByIdAsync(id: string): Promise<FakeNode | null>;

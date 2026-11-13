@@ -84,6 +84,9 @@ list of merged PRs.
 
 ### Fixed
 
+- Reading a node by id (`dtwin pull --node`, `figma_export_url`) no longer selects it, scrolls to it or switches pages.
+  Before, an agent's read between two writes left a selection-only undo step, so the first Cmd-Z didn't undo the
+  second write. To see the node, open its link or select it yourself.
 - A GitHub Release's notes keep a nested list item on its own line. Before, a CHANGELOG entry's sub-list was run
   into its parent item as one paragraph (as in 0.1.6's notes, since corrected by hand).
 - The logo reads on every theme: the npm page and the GitHub README now show the wordmark on its own white tile.

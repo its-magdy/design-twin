@@ -4225,7 +4225,7 @@
       screen.pageId = page.id;
     }
     if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
-    const measurements = collectMeasurements(r);
+    const measurements = collectMeasurements(r, page ? [page] : void 0);
     if (measurements) screen.measurements = measurements;
     const out = { screenName: safe(fileBase), screen, variables, assets: r.assets.slice() };
     if (page) {
@@ -4526,13 +4526,6 @@
     if (!nodeId) throw new Error(NO_NODE_ID);
     const node = await findNodeById(nodeId, r.warn);
     r.useReads(autoCss(opts, node));
-    try {
-      const page = pageOf(node);
-      if (page && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
-      if ("visible" in node && node.parent) figma.currentPage.selection = [node];
-      if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node]);
-    } catch (e) {
-    }
     const tree = await rootTree(r, node);
     if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
     return screenResult(r, node.name, node.name, [tree], { page: pageOf(node), nodeId });

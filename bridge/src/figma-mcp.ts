@@ -652,8 +652,8 @@ registerTool(
   "figma_export_url",
   {
     description:
-      "Given a Figma design URL (containing ?node-id=...) or a bare node id, select that node in the " +
-      "open file and read it. Inline it answers with an outline: one line per node, repeated styles hoisted; " +
+      "Given a Figma design URL (containing ?node-id=...) or a bare node id, read that node from the " +
+      "open file (it leaves the designer's selection, viewport and page alone). Inline it answers with an outline: one line per node, repeated styles hoisted; " +
       "layout only or a list of sections when too big, and the first line says which. format:\"json\" returns the raw " +
       "node JSON; writeToDisk:true writes the full JSON export, variables and assets. This is the " +
       "'paste a link and ask about it' path. Requires the file the link points to be OPEN in the Figma " +

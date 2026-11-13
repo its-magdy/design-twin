@@ -200,4 +200,40 @@ export const cases: Case[] = [{
     ok("--expect: that TEXT's spec.width === renderBox.w (32.14, the ink), widthFrom renderBox, no height",
       inkSpec?.width === inkText?.renderBox?.w && inkSpec?.width === 32.14 && inkSpec.widthFrom === "renderBox" && inkSpec.height === undefined);
   },
+}, {
+  // Figma records a selection change in the open undo step, and a write batch commits the undo step before it runs,
+  // so a read that selected the node it read became an undo step of its own between two writes: the designer's
+  // first Cmd-Z after write → read → write only put the selection back. A read by id now changes nothing the
+  // designer sees — not the selection, not the viewport, not the current page.
+  name: "a read by id leaves the selection, the viewport and the current page alone; measurements still come from the node's page",
+  async run() {
+    const mk = (id: string, name: string): FakeNode => ({ type: "FRAME", name, id, visible: true, width: 40, height: 20, layoutMode: "NONE", children: [] });
+    const picked = mk("sv:picked", "Picked");
+    const here = mk("sv:here", "Here");
+    const there = mk("sv:there", "There");
+    const ruler = (pageNode: string) => () => [{ start: { node: { id: pageNode }, side: "LEFT" }, end: { node: { id: pageNode }, side: "RIGHT" }, freeText: pageNode }];
+    const selection = [picked];
+    const pageA = { id: "sv:pa", name: "A", type: "PAGE", selection, children: [picked, here], getMeasurements: ruler("sv:here") };
+    const pageB = { id: "sv:pb", name: "B", type: "PAGE", selection: [], children: [there], getMeasurements: ruler("sv:there") };
+    picked.parent = pageA;
+    here.parent = pageA;
+    there.parent = pageB;
+    const calls: string[] = [];
+    const w = world({ currentPage: pageA, pages: [pageA, pageB], nodes: { "sv:picked": picked, "sv:here": here, "sv:there": there } }, {
+      setCurrentPageAsync: async (p) => { calls.push("page " + String(p.id)); },
+      viewport: { scrollAndZoomIntoView: (ns) => { calls.push("view " + ns.map((n) => String(n.id)).join(",")); } },
+    });
+    const read = (id: string) => w.api.serializeRun(() => w.api.collectNode(id, { css: false, skipAssets: true, measurements: true }),
+      { source: "bridge", label: "exportNode" });
+    const onPage = await read("sv:here");
+    const offPage = await read("sv:there");
+    ok("both reads return their node", onPage.screen.nodes[0]?.id === "sv:here" && offPage.screen.nodes[0]?.id === "sv:there");
+    ok("the selection is untouched — same array, same node", w.figma.currentPage.selection === selection && selection.length === 1 && selection[0] === picked);
+    ok("the current page is untouched", w.figma.currentPage === pageA);
+    ok(`no page switch and no scroll (got ${calls.join("; ") || "none"})`, calls.length === 0);
+    ok("an off-page node's measurements come from ITS page, not the current one",
+      offPage.screen.measurements?.length === 1 && offPage.screen.measurements[0]?.pageId === "sv:pb" && offPage.screen.measurements[0]?.text === "sv:there");
+    ok("an on-page node's measurements come from its page",
+      onPage.screen.measurements?.length === 1 && onPage.screen.measurements[0]?.pageId === "sv:pa");
+  },
 }];

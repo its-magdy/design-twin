@@ -1207,12 +1207,13 @@ open file. Then just paste a Figma link and ask — Claude pulls the node the li
 answers from live data, as many times as you like (free, no per-request cap):
 ```
 you: here's the header — https://figma.com/design/KEY/App?node-id=123-456 — what spacing does it use?
-→ Claude calls figma_export_url(url); the plugin selects node 123:456 and exports it live.
+→ Claude calls figma_export_url(url); the plugin exports node 123:456 live.
 ```
 It reads the **live open file** — it can't fetch a link cold. The file the link points to must be
 open in the Figma desktop app with the plugin running. A URL carries `node-id` in dash form
-(`123-456`); the plugin normalises it to Plugin-API colon form (`123:456`) and switches pages /
-scrolls the node into view so you can see what's being read.
+(`123-456`); the plugin normalises it to Plugin-API colon form (`123:456`). A read by id leaves your
+selection, viewport and current page alone (so an agent reading between two of its writes adds no undo step);
+to see the node, open the link or select it yourself.
 
 Pre-approve tools in `.claude/settings.json`:
 ```
