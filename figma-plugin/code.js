@@ -6300,9 +6300,20 @@
     return false;
   }
   async function resolveStructureOps(ops) {
+    var _a, _b;
     const moves = /* @__PURE__ */ new Map();
     const deletes = /* @__PURE__ */ new Map();
     const problems = [];
+    const kidsOf = /* @__PURE__ */ new Map();
+    const parentOf = /* @__PURE__ */ new Map();
+    const childIds = (p) => {
+      let list = kidsOf.get(p.id);
+      if (!list) {
+        list = "children" in p ? p.children.map((c) => c.id) : [];
+        kidsOf.set(p.id, list);
+      }
+      return list;
+    };
     for (const [index, op] of ops.entries()) {
       if (op.op !== "move" && op.op !== "delete") continue;
       const bad = (message) => {
@@ -6350,12 +6361,21 @@
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
-      const room = pd.children.length - (node.parent && node.parent.id === pd.id ? 1 : 0);
+      const into = childIds(pd);
+      const room = into.filter((id) => id !== node.id).length;
       if (op.index !== void 0 && op.index > room) {
         bad("index " + op.index + " is past the end: " + label(pd) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)");
         continue;
       }
       moves.set(index, { node, parent: pd, index: op.index });
+      const fromId = (_a = parentOf.get(node.id)) != null ? _a : node.parent ? node.parent.id : null;
+      const from = fromId !== null ? (_b = kidsOf.get(fromId)) != null ? _b : node.parent && node.parent.id === fromId ? childIds(node.parent) : null : null;
+      if (from) {
+        const at = from.indexOf(node.id);
+        if (at >= 0) from.splice(at, 1);
+      }
+      into.splice(op.index === void 0 ? into.length : Math.min(op.index, into.length), 0, node.id);
+      parentOf.set(node.id, pd.id);
     }
     return { moves, deletes, problems };
   }

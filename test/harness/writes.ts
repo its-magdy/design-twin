@@ -1517,6 +1517,12 @@ export const cases: Case[] = [{
     const loose = w.alive().find((n) => n.id === looseId);
     ok("[PATCH-MORE] moved into an auto-layout frame, then set to fill, in one batch: accepted (" + (moveFill.error ?? "") + ")",
       moveFill.ok === true && loose?.layoutSizingHorizontal === "FILL" && parentOf(loose)?.id === flexId);
+    // Two moves into one empty parent in a batch: the second sees the first there.
+    const trio = await w.api.applyWrites([{ op: "createTree", tree: { name: "Dest", handle: "d" } }, { op: "createTree", tree: { name: "A", handle: "a" } }, { op: "createTree", tree: { name: "B", handle: "b" } }]);
+    const dId = trio.applied[0]?.handles?.d ?? "", aId = trio.applied[1]?.handles?.a ?? "", bId = trio.applied[2]?.handles?.b ?? "";
+    const two = await w.api.applyWrites([{ op: "move", nodeId: aId, parentId: dId, index: 0 }, { op: "move", nodeId: bId, parentId: dId, index: 1 }]);
+    ok("[PATCH-MORE] two moves into one empty parent: the second's index counts the first (" + (two.error ?? "") + ")",
+      two.ok === true && kids(w.alive().find((n) => n.id === dId)).map((k) => k.id).join() === aId + "," + bId);
     // Moved back out (a later op fails): its parent, size and sizing go back as they were.
     const sizeBefore = JSON.stringify([loose?.width, loose?.layoutSizingHorizontal, parentOf(loose)?.id]);
     w.trap.add("cornerRadius");

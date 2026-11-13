@@ -41,6 +41,15 @@ export async function resolveStructureOps(ops: readonly WriteOp[]): Promise<{ mo
   const moves = new Map<number, MoveTarget>();
   const deletes = new Map<number, DeleteTarget>();
   const problems: OpProblem[] = [];
+  // Each parent's children (by id) and each node's parent as the moves before an op leave them: a second move into the
+  // same parent sees the first one there.
+  const kidsOf = new Map<string, string[]>();
+  const parentOf = new Map<string, string>();
+  const childIds = (p: BaseNode): string[] => {
+    let list = kidsOf.get(p.id);
+    if (!list) { list = "children" in p ? p.children.map((c) => c.id) : []; kidsOf.set(p.id, list); }
+    return list;
+  };
   for (const [index, op] of ops.entries()) {
     if (op.op !== "move" && op.op !== "delete") continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
@@ -62,9 +71,16 @@ export async function resolveStructureOps(ops: readonly WriteOp[]): Promise<{ mo
     if (inst) { bad("parent " + label(pd) + " is " + (inst === pd ? "an instance" : "inside the instance " + label(inst)) + ", which cannot take new children"); continue; }
     if (within(pd, node)) { bad("parent " + label(pd) + " is " + (pd.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself"); continue; }
     if (pd.type === "PAGE") await pd.loadAsync(); // dynamic-page: before its children are read or it is appended to
-    const room = pd.children.length - (node.parent && node.parent.id === pd.id ? 1 : 0);
+    const into = childIds(pd);
+    const room = into.filter((id) => id !== node.id).length;
     if (op.index !== undefined && op.index > room) { bad("index " + op.index + " is past the end: " + label(pd) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)"); continue; }
     moves.set(index, { node, parent: pd, index: op.index });
+    // Where it now is, for the moves after this one.
+    const fromId = parentOf.get(node.id) ?? (node.parent ? node.parent.id : null);
+    const from = fromId !== null ? kidsOf.get(fromId) ?? (node.parent && node.parent.id === fromId ? childIds(node.parent) : null) : null;
+    if (from) { const at = from.indexOf(node.id); if (at >= 0) from.splice(at, 1); }
+    into.splice(op.index === undefined ? into.length : Math.min(op.index, into.length), 0, node.id);
+    parentOf.set(node.id, pd.id);
   }
   return { moves, deletes, problems };
 }
