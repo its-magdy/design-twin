@@ -284,7 +284,7 @@ const call = (t: TextNode, name: string, args: readonly unknown[]): unknown => {
 /** Every font a text needs to be put back as it is now: the fonts it uses, and the fonts of the text styles its runs use
  *  (setting a style back needs the style's font loaded, even where the run overrides it with another). */
 export async function fontsToKeep(t: TextNode): Promise<FontName[]> {
-  const out = fontsOf(t);
+  const out = fontsOf(t).slice(); // a copy: Figma returns its arrays frozen
   const ids = new Set<string>();
   if (t.characters.length) { for (const r of t.getStyledTextSegments(["textStyleId"])) if (r.textStyleId) ids.add(r.textStyleId); }
   else if (typeof t.textStyleId === "string" && t.textStyleId) ids.add(t.textStyleId);

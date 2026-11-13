@@ -10,7 +10,7 @@ import { world } from "./scene.ts";
 
 // The write targets the plane edits.
 const targetsOf = () => {
-  const textTarget: FakeNode = textRuns({ id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => [{ family: "Inter", style: "Regular" }] });
+  const textTarget: FakeNode = textRuns({ id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
   const rectTarget: FakeNode & { fills: Array<{ color: { g: number } }> } = { id: "r:1", type: "RECTANGLE", name: "Box", fills: [] };
   const groupTarget: FakeNode = { id: "g:1", type: "GROUP", name: "Wrap" }; // no `fills`
   const screenTarget = modeNode("f:1", "Screen");
@@ -193,7 +193,7 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     };
     if (type === "TEXT") {
       textRuns(fields);
-      fields.getRangeAllFontNames = () => [fields.fontName];
+      fields.getRangeAllFontNames = () => Object.freeze([fields.fontName]); // frozen, as Figma's
     }
     if (main) {
       fields.mainComponent = main;
@@ -1707,7 +1707,7 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
     get fillStyleId() { return uniform("fillStyleId"); },
     get fills() { return uniform("fills"); },
     set fills(v: unknown) { setRange("fills")(0, chars.length, v); },
-    getRangeAllFontNames: (s: number, e: number) => [...new Set(chars.slice(s, e).map((c) => JSON.stringify(c.fontName)))].map((f) => JSON.parse(f) as unknown),
+    getRangeAllFontNames: (s: number, e: number) => Object.freeze([...new Set(chars.slice(s, e).map((c) => JSON.stringify(c.fontName)))].map((f) => JSON.parse(f) as unknown)),
     getStyledTextSegments: (fields: readonly string[]) => {
       const out: Array<Record<string, unknown>> = [];
       chars.forEach((c, i) => {
@@ -1716,7 +1716,7 @@ function runText(id: string, runs: ReadonlyArray<{ text: string } & Record<strin
         if (last && fields.every((f) => JSON.stringify(last[f]) === JSON.stringify(pick[f]))) { last.end = i + 1; last.characters = text.slice(Number(last.start), i + 1); }
         else out.push({ characters: text[i], start: i, end: i + 1, ...pick });
       });
-      return out;
+      return Object.freeze(out.map((o) => Object.freeze(o))); // frozen, as Figma's
     },
     getRangeTextStyleId: (s: number, e: number) => uniform("textStyleId", s, e),
     getRangeFillStyleId: (s: number, e: number) => uniform("fillStyleId", s, e),

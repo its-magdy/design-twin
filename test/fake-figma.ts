@@ -421,7 +421,7 @@ export function textRuns<T extends FakeNode>(node: T): T {
       if (!chars.length) return [];
       const seg: Record<string, unknown> = { start: 0, end: chars.length, characters: chars };
       for (const f of fields) seg[f] = f === "boundVariables" ? bound() : read(f);
-      return [seg];
+      return Object.freeze([Object.freeze(seg)]); // Figma's arrays and segments are frozen
     },
     getRangeTextStyleId: () => n.textStyleId ?? "",
     getRangeFillStyleId: () => n.fillStyleId ?? "",

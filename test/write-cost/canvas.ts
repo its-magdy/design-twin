@@ -134,7 +134,7 @@ export function canvas(): Canvas {
       fontSize: spec.size ?? 16, fontName: FONT, fills: [paintOf(spec.fill ?? { r: 0, g: 0, b: 0 })],
       textAutoResize: "WIDTH_AND_HEIGHT", textAlignHorizontal: "LEFT", textAlignVertical: "TOP",
       lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE",
-      getRangeAllFontNames: () => [FONT],
+      getRangeAllFontNames: () => Object.freeze([FONT]), // frozen, as Figma's
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
     });
     Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter

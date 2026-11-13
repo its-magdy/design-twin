@@ -5931,7 +5931,7 @@
     return Reflect.apply(fn, t, args);
   };
   async function fontsToKeep(t) {
-    const out = fontsOf(t);
+    const out = fontsOf(t).slice();
     const ids = /* @__PURE__ */ new Set();
     if (t.characters.length) {
       for (const r of t.getStyledTextSegments(["textStyleId"])) if (r.textStyleId) ids.add(r.textStyleId);
