@@ -135,7 +135,8 @@ async function screenResult(r: Run, title: string, fileBase: string, nodes: IrNo
   const page = origin && origin.page;
   if (page) { screen.page = page.name; screen.pageId = page.id; }
   if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
-  const measurements = collectMeasurements(r);
+  // From the page the screen is ON, which a read by id never makes current (collectNodeTree).
+  const measurements = collectMeasurements(r, page ? [page] : undefined);
   if (measurements) screen.measurements = measurements;
   // Repeated at the TOP level as well as inside `screen`: write-out.ts routes the file into
   // pages/<page>/ before it has a reason to open the screen doc, and the MCP path hands the same
@@ -550,13 +551,12 @@ async function collectNodeTree(rawId: string, opts?: CollectOpts): Promise<Scree
   if (!nodeId) throw new Error(NO_NODE_ID);
   const node = await findNodeById(nodeId, r.warn);
   r.useReads(autoCss(opts, node)); // single-node export → auto-enable the CSS oracle when the tree is small
-  // Bring it into view so you can see what's being read. Best-effort.
-  try {
-    const page = pageOf(node);
-    if (page && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
-    if ("visible" in node && node.parent) figma.currentPage.selection = [node];
-    if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node]);
-  } catch (e) {}
+  // Deliberately NOT brought into view: no page switch, no selection, no scroll. Every read by id is a
+  // CLI/MCP request (the plugin window has no by-id read), often an agent's between two of its own writes —
+  // and Figma records a selection change in the open undo step, which applyWrites' commitUndo() then
+  // closes as a step of its own, so the designer's next Cmd-Z only put the selection back (#194). Nothing
+  // below needs the node's page to be current: findNodeById loads it, and screenResult reads measurements
+  // from the node's own page.
   const tree = await rootTree(r, node as SceneNode);
   if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
   return screenResult(r, node.name, node.name, [tree], { page: pageOf(node), nodeId });
