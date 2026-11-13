@@ -188,7 +188,7 @@ export const cases: Case[] = [{
     const e = bad.error ?? "";
     ok("[SOURCE] refused whole, every problem listed: unknown mode (closest Light), `value` on two modes, wrong type, unknown name (closest)",
       !bad.ok && bad.failedAt === 0 && /no mode 'Ligth'; closest: 'Light'/.test(e) && /`value` sets the only mode.*has 2/.test(e)
-      && /a number variable takes a number/.test(e) && /'brand\/primray' matches no variable.*closest: 'brand\/primary'/.test(e)
+      && /a number variable takes a number/.test(e) && /'brand\/primray' matches no local variable.*closest: 'brand\/primary'/.test(e)
       && JSON.stringify([w.primary.valuesByMode, w.gap.valuesByMode]) === before);
     const shape = argsShapeError("write", { ops: [{ op: "setVariable", variable: "x", values: { A: 1 }, value: 2 }] });
     ok("[SOURCE] the wire refuses `values` with `value`, and no values at all", /not both/.test(shape ?? "") && /missing values/.test(argsShapeError("write", { ops: [{ op: "setVariable", variable: "x" }] }) ?? ""));
@@ -205,6 +205,8 @@ export const cases: Case[] = [{
     ok("[SOURCE] a library variable the file uses, by id: refused, naming its library", !byId.ok && /lives in the library 'Core Library'/.test(byId.error ?? ""));
     const byKey = await write(w, [{ op: "setVariable", variable: KEY("c"), value: "#ffffff" }]);
     ok("[SOURCE] by key: refused, naming its library", !byKey.ok && /lives in the library 'Core Library'/.test(byKey.error ?? ""));
+    const unlisted = await write(w, [{ op: "setVariable", variable: KEY("d"), value: "#ffffff" }]);
+    ok("[SOURCE] a key no local variable and no enabled library has: refused, saying a library's variable cannot be named here", !unlisted.ok && /no local variable has the key .*its library cannot be named/.test(unlisted.error ?? ""));
     const style = await write(w, [{ op: "setStyle", style: "S:remote,", set: { paints: [{ type: "solid", color: "#ffffff" }] } }]);
     ok("[SOURCE] a library style by id: refused (Figma names no library for a style)", !style.ok && /paint style 'Core\/Brand' lives in another library file/.test(style.error ?? ""));
     const comp = await write(w, [{ op: "patch", nodeId: "9:3", set: { name: "Spot" } }]);

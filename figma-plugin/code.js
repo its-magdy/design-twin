@@ -7519,7 +7519,7 @@
         if (isKey2(ref2)) {
           const lib2 = (await libraryVariables()).filter((v) => v.key === ref2)[0];
           if (lib2) return { error: libraryOwned("variable '" + lib2.name + "'", lib2.libraryName) };
-          return { error: "no variable of this file has the key '" + ref2 + "'" };
+          return { error: "no local variable has the key '" + ref2 + "'; if it is a library's variable (the read marks those `remote`), it is changed in that library \u2014 this file's enabled libraries do not list it, so its library cannot be named" };
         }
         const m = matchByName(ref2, all, (v) => v.name);
         if (m.kind === "one") return { ok: m.item };
@@ -7529,7 +7529,7 @@
           const names = lib.map((v) => v.libraryName).filter((n, i, a) => a.indexOf(n) === i);
           return { error: names.length === 1 ? libraryOwned("variable '" + ref2 + "'", names[0] === void 0 ? null : names[0]) : "variable '" + ref2 + "' is not in this file; libraries " + quoteList(names) + " have one by that name \u2014 a library's variable is changed in that library" };
         }
-        return { error: "variable '" + ref2 + "' matches no variable of this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+        return { error: "variable '" + ref2 + "' matches no local variable of this file (a library's variable is changed in that library)" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
       },
       async style(ref2, kind) {
         const all = await localStyles();

@@ -113,7 +113,8 @@ function sourceLookups() {
       if (isKey(ref)) {
         const lib = (await libraryVariables()).filter((v) => v.key === ref)[0];
         if (lib) return { error: libraryOwned("variable '" + lib.name + "'", lib.libraryName) };
-        return { error: "no variable of this file has the key '" + ref + "'" };
+        // A library variable the file uses but whose library is not enabled here: Figma lists it nowhere a plugin can name.
+        return { error: "no local variable has the key '" + ref + "'; if it is a library's variable (the read marks those `remote`), it is changed in that library — this file's enabled libraries do not list it, so its library cannot be named" };
       }
       const m = matchByName(ref, all, (v) => v.name);
       if (m.kind === "one") return { ok: m.item };
@@ -123,7 +124,7 @@ function sourceLookups() {
         const names = lib.map((v) => v.libraryName).filter((n, i, a) => a.indexOf(n) === i);
         return { error: names.length === 1 ? libraryOwned("variable '" + ref + "'", names[0] === undefined ? null : names[0]) : "variable '" + ref + "' is not in this file; libraries " + quoteList(names) + " have one by that name — a library's variable is changed in that library" };
       }
-      return { error: "variable '" + ref + "' matches no variable of this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+      return { error: "variable '" + ref + "' matches no local variable of this file (a library's variable is changed in that library)" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
     },
     async style(ref: string, kind: StyleKindName | null): Promise<{ ok: PaintStyle | TextStyle | EffectStyle } | { error: string }> {
       const all = await localStyles();
