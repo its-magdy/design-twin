@@ -1738,7 +1738,8 @@
       else parts.push(s.op + " " + (s.target || ""));
       if (s.op === "createFrame") {
         if (o.width && o.height) parts.push(o.width + "\xD7" + o.height);
-        if (o.layoutMode) parts.push((o.layoutMode === "HORIZONTAL" ? "row" : "column") + " auto-layout" + (o.itemSpacing != null ? ", gap " + o.itemSpacing : ""));
+        if (o.layoutMode) parts.push((o.layoutMode === "HORIZONTAL" ? "row" : "column") + " auto-layout");
+        if (o.itemSpacing != null) parts.push("gap " + o.itemSpacing);
         if (o.padding) parts.push("padding " + o.padding.join(" "));
       }
       if (s.op === "createText" && o.fontSize) parts.push("size " + o.fontSize);

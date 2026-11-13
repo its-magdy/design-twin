@@ -104,6 +104,8 @@ export const cases: Case[] = [{
     ok("[REVIEW] a create's line names its size, auto-layout, padding and fill; a text's its size and fill",
       made[0] === "creates a frame 'Row' — new node under 1:2, 200×40, row auto-layout, gap 8, padding 1 2 3 4, fill #00ff00"
       && made[1] === "creates a text \"Hello\" — new node on the current page, size 18, fill #111111");
+    ok("[REVIEW] a gap given without auto-layout is still on the line (the plugin sets it), a gap of 0 too",
+      reviewLines([{ op: "createFrame", name: "Card", itemSpacing: 0 }])[0] === "creates a frame 'Card' — new node on the current page, gap 0");
     // A createTree and a patch show exactly the dry run's `change` sentence.
     const ops: WriteOp[] = [{ op: "createTree", tree: { name: "Panel", children: [{ text: "Hi" }] } }, { op: "patch", nodeId: "t:1", set: { name: "Title" } }];
     const lines = reviewLines(ops);
