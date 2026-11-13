@@ -6655,7 +6655,7 @@
       if (v) bound.set(id, v);
     }
     if (misfits.length) return null;
-    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() }, bound };
+    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
   }
   function canonical2(v) {
     if (v === void 0) return "undefined";
@@ -7095,6 +7095,15 @@
   }
   async function applyPatch(t, consent2, allowed2, changes) {
     await checkBeforeApply(t);
+    if (t.fontsLater && t.node.type === "TEXT") {
+      for (const f of await fontsToKeep(t.node)) {
+        try {
+          await figma.loadFontAsync(f);
+        } catch {
+          throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
+        }
+      }
+    }
     const restore = await snapshot(t);
     consent2();
     const applied = { id: t.node.id };

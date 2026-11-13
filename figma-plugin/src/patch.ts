@@ -40,6 +40,9 @@ export interface PatchTarget {
   refs: ResolvedRefs;
   /** the variables the node's number fields are bound to before the batch, by id: bound back on restore */
   bound: Map<string, Variable>;
+  /** a text whose fonts were not loaded up front (a variable edit earlier in the batch may change them): applyPatch loads
+   *  them, live, before anything is set */
+  fontsLater?: true;
 }
 
 /** A node field by name: read as unknown and written through its setter. The fields a patch keeps and puts back are
@@ -257,7 +260,7 @@ export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boole
     if (v) bound.set(id, v);
   }
   if (misfits.length) return null;
-  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() }, bound };
+  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() }, bound, ...(fontsLater && node.type === "TEXT" ? { fontsLater: true as const } : {}) };
 }
 
 // ---------------------------------------------------------------- keeping and putting back
@@ -693,6 +696,13 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
  */
 export async function applyPatch(t: PatchTarget, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<Change> {
   await checkBeforeApply(t);
+  // Every field of a text (its size and resizing included) needs its fonts loaded: the ones it has now, when they were
+  // left to this point.
+  if (t.fontsLater && t.node.type === "TEXT") {
+    for (const f of await fontsToKeep(t.node)) {
+      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+    }
+  }
   const restore = await snapshot(t);
   consent();
   const applied: AppliedWrite = { id: t.node.id };

@@ -138,7 +138,7 @@ function sourceWorld() {
       setBoundVariableForPaint: (p: FakeNode, field: string, v: FakeVariable | null) => ({ ...p, boundVariables: v ? { [field]: alias(v.id) } : {} }),
     },
   });
-  return { ...w, caption, spare, primary, accent, gap, cta, beta, paintStyle, textStyle, effectStyle, divider, row, avatarDot, stuck, brand };
+  return { ...w, loadedFonts: () => loaded, caption, spare, primary, accent, gap, cta, beta, paintStyle, textStyle, effectStyle, divider, row, avatarDot, stuck, brand };
 }
 type SourceWorld = ReturnType<typeof sourceWorld>;
 
@@ -289,6 +289,12 @@ export const cases: Case[] = [{
     await w.allowEdits();
     const r = await write(w, [{ op: "setVariable", variable: "font/family", value: "Inter" }, { op: "patch", nodeId: "2:8", set: { text: "Hello" } }]);
     ok("[SOURCE] a text on a font the file lacks, switched by the variable to one it has, is patched", r.ok && w.caption.characters === "Hello");
+    // Back on a missing family, then a patch that only resizes it: the fonts still load first (Figma needs them).
+    await write(w, [{ op: "setVariable", variable: "font/family", value: "Times" }]);
+    const resize = await write(w, [{ op: "setVariable", variable: "font/family", value: "Inter" }, { op: "patch", nodeId: "2:8", set: { autoResize: "height" } }]);
+    ok("[SOURCE] a resize-only text patch after a variable edit loads the text's live fonts before it sets anything", resize.ok && w.loadedFonts().has("Inter|Regular") && w.caption.textAutoResize === "HEIGHT");
+    const missing = await write(w, [{ op: "setVariable", variable: "font/family", value: "Comic" }, { op: "patch", nodeId: "2:8", set: { autoResize: "height" } }]);
+    ok("[SOURCE] …and one whose live font is missing fails, putting the batch back", !missing.ok && missing.failedAt === 1 && /font 'Comic Regular', which is not available/.test(missing.error ?? "") && same(w.caption.fontName, { family: "Inter", style: "Regular" }));
     const alone = await write(w, [{ op: "patch", nodeId: "2:8", set: { text: "Hey" } }, { op: "setVariable", variable: "font/family", value: "Times" }]);
     ok("[SOURCE] …and the same text on a missing font with no variable edit before it is still refused up front", alone.ok
       && (await write(w, [{ op: "patch", nodeId: "2:8", set: { text: "x" } }])).error?.includes("Times Regular") === true && w.caption.characters === "Hey");
