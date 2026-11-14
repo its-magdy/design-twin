@@ -176,6 +176,7 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
     if (Array.isArray(cols) && new Set(cols).size !== cols.length) { say(path + ".columns: names a property twice"); return []; }
     const rows = n.rows;
     if (!Array.isArray(rows) || !rows.length) { say(at + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name → value)")); return []; }
+    if (n.props !== undefined && !isObj(n.props)) { say(path + ".props: must be an object of property name → value (the values every row shares)"); return []; }
     const base = isObj(n.props) ? n.props : {};
     const out: unknown[] = [];
     rows.forEach((row, i) => {

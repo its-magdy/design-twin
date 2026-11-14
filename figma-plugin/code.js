@@ -1028,6 +1028,10 @@
         say(at2 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
         return [];
       }
+      if (n.props !== void 0 && !isObj(n.props)) {
+        say(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
+        return [];
+      }
       const base = isObj(n.props) ? n.props : {};
       const out = [];
       rows.forEach((row, i) => {
@@ -1507,7 +1511,7 @@
     alignSelf: NODE_RULES.alignSelf
   };
   var NOT_ON_CLONE = {
-    type: "a copy is the kind its source is; leave `type` out",
+    type: "a copy's type is its source's, so the field is refused",
     children: "a copy's layers come from its source; change them with `edits` (a layer's name or id \u2192 its fields)"
   };
   function placeProblems(n, parentFlex, say, warn) {
@@ -7293,17 +7297,24 @@
       places.push({ target: e, path: p });
     }
     const copy2 = r.source.clone();
-    copy2.setPluginData(KEY_DATA, "");
-    copy2.setPluginData(SPEC_DATA, "");
-    restamp(copy2, null, true);
-    if (r.self) patches.push({ target: r.self, node: copy2 });
-    for (const { target, path } of places) {
-      const n = at(copy2, path);
-      if (!n) {
-        copy2.remove();
-        throw new Error("the copy of " + label(r.source) + " has no layer where " + label(target.node) + " is");
+    const from = patches.length;
+    try {
+      copy2.setPluginData(KEY_DATA, "");
+      copy2.setPluginData(SPEC_DATA, "");
+      restamp(copy2, null, true);
+      if (r.self) patches.push({ target: r.self, node: copy2 });
+      for (const { target, path } of places) {
+        const n = at(copy2, path);
+        if (!n) throw new Error("the copy of " + label(r.source) + " has no layer where " + label(target.node) + " is");
+        patches.push({ target, node: n });
       }
-      patches.push({ target, node: n });
+    } catch (e) {
+      patches.length = from;
+      try {
+        copy2.remove();
+      } catch {
+      }
+      throw e;
     }
     return copy2;
   }
@@ -7425,11 +7436,12 @@
     const made = newMade(t.refs, t.clones);
     const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : void 0;
     const root = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
-    const shown3 = rootCopy ? root.visible : t.spec.hidden !== true;
     const key = t.spec.key;
     const indexWas = key !== void 0 ? readIndex(key) : "";
-    root.visible = false;
+    let shown3 = true;
     try {
+      shown3 = rootCopy ? root.visible : t.spec.hidden !== true;
+      root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
       await finish(made, 0, 0, consent2);
       const { x, y } = placement(t.page, root, t.spec);
@@ -7499,8 +7511,16 @@
     const r = made.copies.get(s);
     if (!r) throw new Error("the copy of '" + String(s.clone) + "' was not resolved before the batch ran");
     const copy2 = copyOf(r, s, made);
-    parent.appendChild(copy2);
-    place(copy2, s, parent);
+    try {
+      parent.appendChild(copy2);
+      place(copy2, s, parent);
+    } catch (e) {
+      try {
+        copy2.remove();
+      } catch {
+      }
+      throw e;
+    }
     return copy2;
   }
   async function buildSubtree(spec, parent, made, consent2) {
@@ -7798,7 +7818,7 @@
   }
   function foreignIn(n, key) {
     if (n.getPluginData(KEY_DATA) !== key) return n;
-    if (n.type !== "FRAME") return null;
+    if (n.type === "INSTANCE" || !("children" in n)) return null;
     for (const c of n.children) {
       const f = foreignIn(c, key);
       if (f) return f;
@@ -7896,7 +7916,7 @@
     const count2 = (x) => {
       if (x.removed) return;
       if (x.getPluginData(KEY_DATA) === u.key) n++;
-      if (x.type === "FRAME") for (const c of x.children) count2(c);
+      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
     };
     for (const x of removalsOf(u)) count2(x);
     return n;

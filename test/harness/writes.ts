@@ -183,7 +183,10 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     // This plugin's own data on the node (a keyed spec stamps every node it builds); "" when unset, as in Figma.
     const data = new Map<string, string>();
     fields.getPluginData = (k: string) => data.get(k) ?? "";
-    fields.setPluginData = (k: string, v: string) => { if (v === "") data.delete(k); else data.set(k, v); };
+    fields.setPluginData = (k: string, v: string) => {
+      if (trap.has("setPluginData")) throw new Error("in Figma: cannot set plugin data on " + String(fields.name));
+      if (v === "") data.delete(k); else data.set(k, v);
+    };
     fields.getPluginDataKeys = () => [...data.keys()];
     // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {

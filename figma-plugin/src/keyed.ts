@@ -95,7 +95,8 @@ function oversized(s: TreeNodeSpec, path: string, out: string[]): string[] {
 /** The first layer at or below `n` (not inside an instance) that `key` did not build, or null. */
 function foreignIn(n: SceneNode, key: string): SceneNode | null {
   if (n.getPluginData(KEY_DATA) !== key) return n;
-  if (n.type !== "FRAME") return null;
+  // Every container but an instance (whose layers are its component's): a copy brings groups and other containers in.
+  if (n.type === "INSTANCE" || !("children" in n)) return null;
   for (const c of n.children) {
     const f = foreignIn(c, key);
     if (f) return f;
@@ -196,7 +197,7 @@ export function removalCount(u: KeyedUpdate): number {
   const count = (x: SceneNode): void => {
     if (x.removed) return;
     if (x.getPluginData(KEY_DATA) === u.key) n++;
-    if (x.type === "FRAME") for (const c of x.children) count(c);
+    if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count(c);
   };
   for (const x of removalsOf(u)) count(x);
   return n;

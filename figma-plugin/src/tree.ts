@@ -167,11 +167,12 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
   // A copy as the root (a screen like an existing one): the source's copy, made where Figma makes a new frame.
   const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : undefined;
   const root: SceneNode = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
-  const shown = rootCopy ? root.visible : t.spec.hidden !== true;
   const key = t.spec.key;
   const indexWas = key !== undefined ? readIndex(key) : "";
-  root.visible = false; // built to the side: nothing shows until the whole tree is in place
+  let shown = true;
   try {
+    shown = rootCopy ? root.visible : t.spec.hidden !== true;
+    root.visible = false; // built to the side: nothing shows until the whole tree is in place
     if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
     await finish(made, 0, 0, consent);
     const { x, y } = placement(t.page, root, t.spec);
@@ -253,8 +254,14 @@ function applyClone(s: TreeNodeSpec, parent: Parent, made: Made): SceneNode {
   const r = made.copies.get(s);
   if (!r) throw new Error("the copy of '" + String(s.clone) + "' was not resolved before the batch ran");
   const copy = copyOf(r, s, made);
-  parent.appendChild(copy);
-  place(copy, s, parent);
+  // Until it is in `parent`, removing the tree's root would not take it: a throw here removes it.
+  try {
+    parent.appendChild(copy);
+    place(copy, s, parent);
+  } catch (e) {
+    try { copy.remove(); } catch { /* already gone */ }
+    throw e;
+  }
   return copy;
 }
 

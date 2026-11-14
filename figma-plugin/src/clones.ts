@@ -187,14 +187,22 @@ export function makeCopy(r: CloneTarget, patches: CopyPatch[]): SceneNode {
     places.push({ target: e, path: p });
   }
   const copy = r.source.clone();
-  copy.setPluginData(KEY_DATA, "");
-  copy.setPluginData(SPEC_DATA, "");
-  restamp(copy, null, true);
-  if (r.self) patches.push({ target: r.self, node: copy });
-  for (const { target, path } of places) {
-    const n = at(copy, path);
-    if (!n) { copy.remove(); throw new Error("the copy of " + label(r.source) + " has no layer where " + label(target.node) + " is"); }
-    patches.push({ target, node: n });
+  const from = patches.length;
+  // Not yet in the tree, so nothing else would take it away: a throw from here on removes it here.
+  try {
+    copy.setPluginData(KEY_DATA, "");
+    copy.setPluginData(SPEC_DATA, "");
+    restamp(copy, null, true);
+    if (r.self) patches.push({ target: r.self, node: copy });
+    for (const { target, path } of places) {
+      const n = at(copy, path);
+      if (!n) throw new Error("the copy of " + label(r.source) + " has no layer where " + label(target.node) + " is");
+      patches.push({ target, node: n });
+    }
+  } catch (e) {
+    patches.length = from;
+    try { copy.remove(); } catch { /* already gone */ }
+    throw e;
   }
   return copy;
 }

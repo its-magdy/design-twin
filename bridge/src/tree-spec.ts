@@ -526,7 +526,7 @@ const CLONE_RULES: Readonly<Record<string, Rule>> = {
 };
 /** A copy's own fields that are not a patch, and why. */
 const NOT_ON_CLONE: Readonly<Record<string, string>> = {
-  type: "a copy is the kind its source is; leave `type` out",
+  type: "a copy's type is its source's, so the field is refused",
   children: "a copy's layers come from its source; change them with `edits` (a layer's name or id → its fields)",
 };
 

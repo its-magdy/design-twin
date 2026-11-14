@@ -124,6 +124,15 @@ export const cases: Case[] = [{
     ok("[CLONE-CHECK] Figma refusing a copy's edit partway: the tree and its copy are removed, the earlier op put back, the source untouched",
       partway.ok === false && partway.failedAt === 1 && partway.restored?.length === 1 && alive().length === count && w.cloned.at(-1)?.id === sourceId
       && all(alive().find((n) => n.id === sourceId)).every((n) => n.opacity === 1));
+    // Figma refusing something between clone() and the copy's place in the tree (its stamps cleared): the copy is removed
+    // too, not left on the page.
+    for (const tree of [{ clone: sourceId }, { name: "Holder", children: [{ clone: sourceId }] }]) {
+      w.trap.add("setPluginData");
+      const early = await api.applyWrites([{ op: "createTree", tree }]);
+      w.trap.delete("setPluginData");
+      ok("[CLONE-CHECK] Figma refusing the copy before it is in the tree (" + (tree.clone ? "the root" : "a child") + "): no copy is left on the page",
+        early.ok === false && alive().length === count);
+    }
     // The wire check and the dry run say the same.
     const bad = { op: "createTree", tree: { clone: "Order 1" } };
     ok("[CLONE-CHECK] the wire check and the dry run refuse the same spec, by path",
@@ -155,6 +164,19 @@ export const cases: Case[] = [{
     ok("[CLONE-KEYED] …and with its edit changed: the copy is made again in its place, the old one removed",
       changed.ok === true && changed.applied[0]?.id === one.applied[0]?.id && changed.applied[0]?.handles?.c === copyB?.id && copyB?.id !== copyA
       && kids(pair).length === 2 && all(copyB).find((n) => n.name === "Title")?.characters === "Copy B" && !alive().some((n) => n.id === copyA));
+
+    // A copy brings containers a spec does not build (a group): a layer the designer puts in one is still theirs, so a
+    // re-send that drops the copy refuses instead of removing it.
+    const grouped = await api.applyWrites([{ op: "createTree", tree: { name: "Group source", children: [{ name: "Inner", children: [{ text: "a" }] }] } }]);
+    const inner = kids(alive().find((n) => n.id === grouped.applied[0]?.id))[0];
+    if (inner) inner.type = "GROUP";
+    const withGroup = (keep: boolean): Record<string, unknown> => ({ key: "grouped", name: "G", children: keep ? [{ clone: must(inner?.id, "group"), handle: "g" }] : [] });
+    const g1 = await api.applyWrites([{ op: "createTree", tree: withGroup(true) }]);
+    const copyG = alive().find((n) => n.id === g1.applied[0]?.handles?.g);
+    const designer = await api.applyWrites([{ op: "createText", text: "mine", parentId: must(copyG?.id, "copied group") }]);
+    const g2 = await api.applyWrites([{ op: "createTree", tree: withGroup(false) }]);
+    ok("[CLONE-KEYED] a designer's layer inside a copied group: a re-send that drops the copy refuses, and the layer stays",
+      copyG?.type === "GROUP" && designer.ok === true && g2.ok === false && /which this key did not build/.test(g2.error ?? "") && alive().some((n) => n.id === designer.applied[0]?.id));
 
     // One batch, one undo step: the checkpoints around a copy's batch, as around any other.
     const commits = w.undo.commits;
@@ -195,6 +217,7 @@ export const cases: Case[] = [{
       { component: "Button", columns: ["Label"], rows: [{ Label: "A" }] },
       { component: "Button", columns: ["Label", "Label"], rows: [["A", "B"]] },
       { name: "F", columns: ["Label"] },
+      { component: "Button", props: 7, rows: [{ Label: "A" }] },
     ] }).problems;
     ok("[ROWS] the table's shape is checked with the spec: on an instance only, no handle, one value per column, a non-empty list",
       JSON.stringify(shape) === JSON.stringify([
@@ -206,6 +229,7 @@ export const cases: Case[] = [{
         "tree.children[4].rows[0]: must be a list of 1 value, one per column ('Label')",
         "tree.children[5].columns: names a property twice",
         "tree.children[6].columns: names the values of each row in `rows`, which this node does not have",
+        "tree.children[7].props: must be an object of property name → value (the values every row shares)",
       ]));
     const rowProblem = checkTree({ layout: { display: "flex" }, children: [{ text: "x" }, { component: "Button", rows: [{ Label: "A" }, { Label: "B" }], grow: 2 }] }).problems;
     ok("[ROWS] a problem of the instances the rows make is named at each row", JSON.stringify(rowProblem) === JSON.stringify(["tree.children[1].rows[0].grow must be 0 or 1", "tree.children[1].rows[1].grow must be 0 or 1"]));
