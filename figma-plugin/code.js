@@ -9570,6 +9570,7 @@
       made = true;
     }
     const c = coll;
+    applied.id = c.id;
     const ids = [];
     for (const [i, m] of t.modes.entries()) {
       if (m.modeId !== null) {
@@ -9591,7 +9592,6 @@
       added.push({ id, name: m.name });
       ids.push(id);
     }
-    applied.id = c.id;
     for (const r of t.rows) {
       if (r.existing) continue;
       consent2();
