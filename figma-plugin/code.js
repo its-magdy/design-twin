@@ -9470,10 +9470,6 @@
       if (found === null) continue;
       const chain = [from];
       for (let k = found; k !== void 0 && k !== from; k = back.get(k)) chain.splice(1, 0, k);
-      if (chain.every((k) => {
-        const r = byKey.get(k);
-        return r !== void 0 && r.op === start.op && !r.existing;
-      })) continue;
       const label4 = async (k) => {
         const r = byKey.get(k);
         if (r) return "'" + r.name + "'";
@@ -9504,17 +9500,20 @@
     return { r: c.r, g: c.g, b: c.b, a: c.a === void 0 ? 1 : c.a };
   }
   var copyValue = (x) => x && typeof x === "object" ? JSON.parse(JSON.stringify(x)) : x;
+  var isAliasValue = (x) => typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS";
   var placeholder = (type) => type === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : type === "FLOAT" ? 0 : type === "BOOLEAN" ? false : "";
   function modeRefused(what, e) {
     const msg = errMsg(e);
     return new Error("Figma refused " + what + ": " + msg + (/limit/i.test(msg) ? " (this file's Figma plan limits how many modes a collection has; send fewer modes, or move the file to a plan with more)" : ""));
   }
-  function applyVariables(t, refs2, consent2, changes) {
+  function applyVariables(t, refs2, consent2, changes, clear, start) {
+    var _a;
     let coll = t.collection;
     let made = false;
     const added = [];
     const createdVars = [];
     const kept = [];
+    const cleared = [];
     const applied = {};
     const change = {
       applied,
@@ -9527,24 +9526,46 @@
         if (made && coll) {
           check();
           coll.remove();
-          return;
+        } else {
+          for (const k of kept.slice().reverse()) {
+            check();
+            if (k.value !== void 0) k.v.setValueForMode(k.modeId, k.value);
+          }
+          for (const v of createdVars.slice().reverse()) {
+            check();
+            v.remove();
+          }
+          for (const m of added.slice().reverse()) {
+            check();
+            if (coll) coll.removeMode(m.id);
+          }
         }
-        for (const k of kept.slice().reverse()) {
+        for (const k of cleared.slice().reverse()) {
           check();
-          if (k.value !== void 0) k.v.setValueForMode(k.modeId, k.value);
-        }
-        for (const v of createdVars.slice().reverse()) {
-          check();
-          v.remove();
-        }
-        for (const m of added.slice().reverse()) {
-          check();
-          if (coll) coll.removeMode(m.id);
+          k.v.setValueForMode(k.modeId, k.value);
         }
       }
     };
     changes.push(change);
     consent2();
+    for (const other of clear) {
+      for (const r of other.rows) {
+        const v = r.existing;
+        if (!v) continue;
+        other.modes.forEach((m, j) => {
+          if (m.modeId === null || r.values[j] === void 0) return;
+          const old = copyValue(v.valuesByMode[m.modeId]);
+          if (!isAliasValue(old) || old === void 0) return;
+          consent2();
+          try {
+            v.setValueForMode(m.modeId, placeholder(r.type));
+          } catch (e) {
+            throw modeRefused("the value of '" + r.name + "' for mode '" + m.name + "'", e);
+          }
+          cleared.push({ v, modeId: m.modeId, value: old });
+        });
+      }
+    }
     if (!coll) {
       coll = figma.variables.createVariableCollection(t.name);
       made = true;
@@ -9585,7 +9606,7 @@
     for (const r of t.rows) {
       const v = r.variable;
       if (!v) throw new Error("variable '" + r.name + "' was not made");
-      before.set(r, r.existing ? JSON.stringify(v.valuesByMode) : "");
+      before.set(r, r.existing ? (_a = start.get(r.existing)) != null ? _a : JSON.stringify(v.valuesByMode) : "");
       t.modes.forEach((m, j) => {
         const id = ids[j];
         if (id !== void 0 && r.values[j] !== void 0) cells.push({ r, v, modeId: id, mode: m.name, cell: j });
@@ -9602,7 +9623,6 @@
       }
       kept.push({ v: c2.v, modeId: c2.modeId, value: old });
     };
-    const isAliasValue = (x) => typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS";
     const aliasCells = [];
     for (const c2 of cells) {
       const value = c2.r.values[c2.cell];
@@ -9672,9 +9692,16 @@
   }
   async function applyCreates(res, consent2, changes) {
     const rows = /* @__PURE__ */ new Map();
-    for (const [index, t] of [...res.targets].sort((a, b) => a[0] - b[0])) {
+    const ordered = [...res.targets].sort((a, b) => a[0] - b[0]);
+    const tables = ordered.map(([, t]) => t).filter((t) => t.kind === "variables");
+    const start = /* @__PURE__ */ new Map();
+    for (const t of tables) for (const r of t.rows) if (r.existing) start.set(r.existing, JSON.stringify(r.existing.valuesByMode));
+    let first2 = true;
+    for (const [index, t] of ordered) {
       try {
-        rows.set(index, t.kind === "variables" ? applyVariables(t, res.refs, consent2, changes) : await applyStyles(t, res.refs, consent2, changes));
+        const clear = t.kind === "variables" && first2 ? tables : [];
+        if (t.kind === "variables") first2 = false;
+        rows.set(index, t.kind === "variables" ? applyVariables(t, res.refs, consent2, changes, clear, start) : await applyStyles(t, res.refs, consent2, changes));
       } catch (e) {
         throw new CreateFailed(index, e);
       }

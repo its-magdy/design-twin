@@ -219,12 +219,35 @@ export const cases: Case[] = [{
     // Through a variable outside the table: x (another collection) aliases b, b aliases a; a → x with b made a value.
     const w = await createWorld();
     const one = await write(w, [
-      { op: "createVariables", collection: "Inner", variables: [["p", "number", 1], ["q", "number", { aliasOf: "p" }]] },
+      { op: "createVariables", collection: "Inner", variables: [["p", "number", 1], ["q", "number", { aliasOf: "p" }], ["tail", "number", 5]] },
       { op: "createVariables", collection: "Outer", variables: [["x", "number", { aliasOf: "q" }]] },
     ]);
-    const flip = await write(w, [{ op: "createVariables", collection: "Inner", variables: [["p", "number", { aliasOf: "x" }], ["q", "number", 5]] }]);
-    const p = w.byName("p"), x = w.byName("x");
-    ok("[LOOPS] p → x lands while x still aliases q, which the same table makes a value", one.ok && flip.ok && p !== undefined && x !== undefined && same(Object.values(p.valuesByMode), [alias(x.id)]));
+    const flip = await write(w, [{ op: "createVariables", collection: "Inner", variables: [["p", "number", { aliasOf: "x" }], ["q", "number", { aliasOf: "tail" }]] }]);
+    const p = w.byName("p"), q = w.byName("q"), x = w.byName("x"), tail = w.byName("tail");
+    ok("[LOOPS] p → x lands while x still aliases q, whose alias to p the same table replaces", one.ok && flip.ok && p !== undefined && q !== undefined && x !== undefined && tail !== undefined
+      && same(Object.values(p.valuesByMode), [alias(x.id)]) && same(Object.values(q.valuesByMode), [alias(tail.id)]));
+    // Across tables: a table's new alias meets an alias a later table of the batch replaces.
+    const pre = await write(w, [
+      { op: "createVariables", collection: "TA", variables: [["ta", "number", 1]] },
+      { op: "createVariables", collection: "TB", variables: [["tb", "number", { aliasOf: "ta" }]] },
+    ]);
+    const tb = w.byName("tb"), ta = w.byName("ta");
+    const cross = await write(w, [
+      { op: "createVariables", collection: "TA", variables: [["ta", "number", { aliasOf: tb?.id ?? "" }]] },
+      { op: "createVariables", collection: "TB", variables: [["tb", "number", 2]] },
+    ]);
+    ok("[LOOPS] ta → tb lands while tb still aliases ta, which a later table of the batch makes a value", pre.ok && cross.ok && ta !== undefined && tb !== undefined
+      && same(Object.values(ta.valuesByMode), [alias(tb.id)]) && same(Object.values(tb.valuesByMode), [2]));
+    const crossBack = await write(w, [
+      { op: "createVariables", collection: "TA", variables: [["ta", "number", 3]] },
+      { op: "createVariables", collection: "TB", variables: [["tb", "number", { aliasOf: "ta" }]] },
+      { op: "patch", nodeId: "8:1", set: { fills: [{ type: "solid", color: "#000000" }] } },
+    ]);
+    ok("[LOOPS] such a batch that fails is put back: both aliases as they were", !crossBack.ok && ta !== undefined && tb !== undefined
+      && same(Object.values(ta.valuesByMode), [alias(tb.id)]) && same(Object.values(tb.valuesByMode), [2]));
+    // A loop across modes among new rows only: a → b in one mode, b → a in the other. Refused before anything runs.
+    const modal = await write(w, [{ op: "createVariables", collection: "Modal", modes: ["Light", "Dark"], variables: [["ma", "number", { aliasOf: "mb" }, 1], ["mb", "number", 2, { aliasOf: "ma" }]] }]);
+    ok("[LOOPS] a loop only across modes, between new rows of one table, is refused whole", !modal.ok && /'ma' → 'mb' → 'ma' make a loop|'mb' → 'ma' → 'mb' make a loop/.test(modal.error ?? "") && w.collNamed("Modal").length === 0);
     // Another mode: in both modes s → r, and the table makes r → s → t; Dark's old s → r must not meet Light's new r → s.
     const two = await write(w, [{ op: "createVariables", collection: "Modes", modes: ["Light", "Dark"], variables: [["r", "number", 1, 1], ["s", "number", { aliasOf: "r" }, { aliasOf: "r" }], ["t", "number", 2, 2]] }]);
     const re = await write(w, [{ op: "createVariables", collection: "Modes", modes: ["Light", "Dark"], variables: [["r", "number", { aliasOf: "s" }, { aliasOf: "s" }], ["s", "number", { aliasOf: "t" }, { aliasOf: "t" }], ["t", "number", 2, 2]] }]);

@@ -367,8 +367,8 @@ async function loops(targets: ReadonlyMap<number, CreateTarget>, rows: readonly 
     if (found === null) continue;
     const chain: string[] = [from];
     for (let k: string | undefined = found; k !== undefined && k !== from; k = back.get(k)) chain.splice(1, 0, k);
-    // Inside one table only: the shape check's, per mode.
-    if (chain.every((k) => { const r = byKey.get(k); return r !== undefined && r.op === start.op && !r.existing; })) continue;
+    // Every mode's aliases count together (a in one mode → b, b in another → a is a loop too), so a loop only the new
+    // rows of one table make is refused here as well, though the shape check, per mode, passed it.
     const label = async (k: string): Promise<string> => {
       const r = byKey.get(k);
       if (r) return "'" + r.name + "'";
@@ -401,6 +401,8 @@ function cellValue(v: SourceValue, target: Target | undefined, refs: ResolvedRef
 /** A value as Figma holds it, copied (an RGBA or an alias object is frozen, and a later change must not reach it). */
 const copyValue = (x: VariableValue | undefined): VariableValue | undefined => (x && typeof x === "object" ? JSON.parse(JSON.stringify(x)) as VariableValue : x);
 
+const isAliasValue = (x: VariableValue | undefined): boolean => typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS";
+
 /** A plain value of a type, held for a moment by a cell whose alias is being replaced. */
 const placeholder = (type: VariableResolvedDataType): VariableValue =>
   type === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : type === "FLOAT" ? 0 : type === "BOOLEAN" ? false : "";
@@ -413,27 +415,48 @@ function modeRefused(what: string, e: unknown): Error {
 
 /** Run one createVariables op: the collection and its modes, the variables, then every value. The Change removes what it
  *  made and sets back what it replaced; a failure partway is put back by the batch through the same Change. */
-function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => void, changes: Change[]): AppliedWrite {
+function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => void, changes: Change[], clear: readonly VariablesTarget[], start: ReadonlyMap<Variable, string>): AppliedWrite {
   let coll = t.collection;
   let made = false;
   const added: Array<{ id: string; name: string }> = [];
   const createdVars: Variable[] = [];
   const kept: Array<{ v: Variable; modeId: string; value: VariableValue | undefined }> = [];
+  /** the aliases of the batch's tables dropped before this one ran (`clear`), put back after everything else */
+  const cleared: Array<{ v: Variable; modeId: string; value: VariableValue }> = [];
   const applied: AppliedWrite = {};
   const change: Change = {
     applied, kind: "created variable table", what: "the variables of the collection '" + t.name + "'",
     restore(allowed) {
       const check = (): void => { if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off"); };
-      if (made && coll) { check(); coll.remove(); return; }
-      // Every value written, new variables' too, set back newest first: each step back is a state the apply passed
-      // through, so none makes an alias loop.
-      for (const k of kept.slice().reverse()) { check(); if (k.value !== undefined) k.v.setValueForMode(k.modeId, k.value); }
-      for (const v of createdVars.slice().reverse()) { check(); v.remove(); }
-      for (const m of added.slice().reverse()) { check(); if (coll) coll.removeMode(m.id); }
+      if (made && coll) { check(); coll.remove(); }
+      else {
+        // Every value written, new variables' too, set back newest first: each step back is a state the apply passed
+        // through, so none makes an alias loop.
+        for (const k of kept.slice().reverse()) { check(); if (k.value !== undefined) k.v.setValueForMode(k.modeId, k.value); }
+        for (const v of createdVars.slice().reverse()) { check(); v.remove(); }
+        for (const m of added.slice().reverse()) { check(); if (coll) coll.removeMode(m.id); }
+      }
+      for (const k of cleared.slice().reverse()) { check(); k.v.setValueForMode(k.modeId, k.value); }
     },
   };
   changes.push(change);
   consent();
+  // Every alias an existing variable holds in a mode some table of the batch sets is dropped first (a plain placeholder
+  // of its type), so an old alias a later table replaces cannot close a loop with a new alias an earlier one sets.
+  for (const other of clear) {
+    for (const r of other.rows) {
+      const v = r.existing;
+      if (!v) continue;
+      other.modes.forEach((m, j) => {
+        if (m.modeId === null || r.values[j] === undefined) return;
+        const old = copyValue(v.valuesByMode[m.modeId]);
+        if (!isAliasValue(old) || old === undefined) return;
+        consent();
+        try { v.setValueForMode(m.modeId, placeholder(r.type)); } catch (e) { throw modeRefused("the value of '" + r.name + "' for mode '" + m.name + "'", e); }
+        cleared.push({ v, modeId: m.modeId, value: old });
+      });
+    }
+  }
   if (!coll) { coll = figma.variables.createVariableCollection(t.name); made = true; }
   const c = coll;
   const ids: string[] = [];
@@ -467,7 +490,7 @@ function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => v
   for (const r of t.rows) {
     const v = r.variable;
     if (!v) throw new Error("variable '" + r.name + "' was not made");
-    before.set(r, r.existing ? JSON.stringify(v.valuesByMode) : "");
+    before.set(r, r.existing ? start.get(r.existing) ?? JSON.stringify(v.valuesByMode) : "");
     t.modes.forEach((m, j) => { const id = ids[j]; if (id !== undefined && r.values[j] !== undefined) cells.push({ r, v, modeId: id, mode: m.name, cell: j }); });
     // A new variable in a collection whose other modes the table leaves out: its first value there too.
     if (!r.existing && r.values[0] !== undefined) for (const id of t.unlisted) cells.push({ r, v, modeId: id, mode: "", cell: 0 });
@@ -482,7 +505,6 @@ function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => v
     try { c.v.setValueForMode(c.modeId, value); } catch (e) { throw modeRefused("the value of '" + c.r.name + "' for mode '" + (c.mode || "the default") + "'", e); }
     kept.push({ v: c.v, modeId: c.modeId, value: old });
   };
-  const isAliasValue = (x: VariableValue | undefined): boolean => typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS";
   const aliasCells: Cell[] = [];
   for (const c of cells) {
     const value = c.r.values[c.cell];
@@ -557,9 +579,20 @@ async function applyStyles(t: StylesTarget, refs: ResolvedRefs, consent: () => v
  */
 export async function applyCreates(res: CreateResolution, consent: () => void, changes: Change[]): Promise<Map<number, AppliedWrite>> {
   const rows = new Map<number, AppliedWrite>();
-  for (const [index, t] of [...res.targets].sort((a, b) => a[0] - b[0])) {
+  const ordered = [...res.targets].sort((a, b) => a[0] - b[0]);
+  // Before any table sets an alias, every alias any table of the batch replaces on an existing variable is dropped (a
+  // plain placeholder of its type), so an old alias a later table replaces cannot close a loop with a new alias an
+  // earlier one sets. The first variable table does it, as the first thing its Change puts back last.
+  const tables = ordered.map(([, t]) => t).filter((t): t is VariablesTarget => t.kind === "variables");
+  // Each existing variable's values before anything runs, for "unchanged" (the clearing changes them first).
+  const start = new Map<Variable, string>();
+  for (const t of tables) for (const r of t.rows) if (r.existing) start.set(r.existing, JSON.stringify(r.existing.valuesByMode));
+  let first = true;
+  for (const [index, t] of ordered) {
     try {
-      rows.set(index, t.kind === "variables" ? applyVariables(t, res.refs, consent, changes) : await applyStyles(t, res.refs, consent, changes));
+      const clear = t.kind === "variables" && first ? tables : [];
+      if (t.kind === "variables") first = false;
+      rows.set(index, t.kind === "variables" ? applyVariables(t, res.refs, consent, changes, clear, start) : await applyStyles(t, res.refs, consent, changes));
     } catch (e) {
       throw new CreateFailed(index, e);
     }
