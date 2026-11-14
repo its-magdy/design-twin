@@ -221,6 +221,10 @@ export const cases: Case[] = [{
         { Size: "Large", "Label#1:0": "Pay" }, { Size: "Medium", "Label#1:0": "Save" }, { Size: "Large", "Label#1:0": "Cancel", "Icon#1:1": true },
         { "Label#1:0": "Back", "Icon#1:1": false }, { "Label#1:0": "Next", "Icon#1:1": true },
       ]) && kids(root).slice(1, 4).every((n) => n.layoutSizingHorizontal === "FILL"));
+    const oddRows = await api.applyWrites([{ op: "createTree", tree: { children: [{ component: "Odd", columns: ["__proto__"], rows: [["On"], ["Off"]] }] } }]);
+    const oddKids = kids(alive().find((n) => n.id === oddRows.applied[0]?.id));
+    ok("[ROWS] a property named \"__proto__\" is set like any other", oddRows.ok === true && oddKids.length === 2
+      && oddKids.every((n, i) => isNode(n.props) && Object.prototype.hasOwnProperty.call(n.props, "__proto__") && Object.getOwnPropertyDescriptor(n.props, "__proto__")?.value === ["On", "Off"][i]));
     const dry = writeOpPreview({ op: "createTree", tree: { children: [{ component: "Button", rows: [{ Label: "A" }, { Label: "B" }] }] } }, 0);
     ok("[ROWS] the dry run counts the rows' instances", /with 3 nodes \(1 frame, 0 texts, 2 instances\)/.test(dry.change ?? ""));
     const count = alive().length;

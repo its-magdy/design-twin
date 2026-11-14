@@ -6163,6 +6163,9 @@
     refs2.instances.set(node, { main, props: mapped.ok });
     return null;
   }
+  function putOwn(o, k, v) {
+    Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
   function variantFor(set, start, props, defs) {
     const want = {};
     const from = start.variantProperties || {};
@@ -6171,7 +6174,7 @@
       if (!d || d.type !== "VARIANT") continue;
       const given2 = props[k];
       const v = typeof given2 === "string" ? given2 : from[k];
-      if (v !== void 0) want[k] = v;
+      if (v !== void 0) putOwn(want, k, v);
     }
     const given = Object.keys(want).some((k) => typeof props[k] === "string");
     const matches = (c) => {
@@ -6227,7 +6230,7 @@
         errors.push("property '" + name + "' of '" + component + "' swaps a nested instance, which a write cannot set yet");
         continue;
       }
-      ok[key] = value;
+      putOwn(ok, key, value);
     }
     return errors.length ? { errors } : { ok };
   }

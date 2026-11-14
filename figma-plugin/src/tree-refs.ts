@@ -259,6 +259,12 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   return null;
 }
 
+/** Set `o[k]` as an own property: a property name is the file's or the agent's, and may be "__proto__", which plain
+ *  assignment would turn into a prototype instead of a key. */
+function putOwn<T>(o: Record<string, T>, k: string, v: T): void {
+  Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+}
+
 /** The variant of `set` an instance made from `start` shows once `props` are set: each VARIANT property at its given
  *  value, else at `start`'s. A combination the set does not have is `missing` (as "Size=Large, Tone=Off"): Figma would
  *  keep the instance on another variant, so it is refused rather than built wrong. */
@@ -270,7 +276,7 @@ export function variantFor(set: ComponentSetNode, start: ComponentNode, props: R
     if (!d || d.type !== "VARIANT") continue;
     const given = props[k];
     const v = typeof given === "string" ? given : from[k];
-    if (v !== undefined) want[k] = v;
+    if (v !== undefined) putOwn(want, k, v);
   }
   // No variant value given, or the start already shows them: the instance stays on `start` (two variants can share
   // their values, so the first match need not be the one that is built).
@@ -317,7 +323,7 @@ export function mapProps(given: Readonly<Record<string, string | boolean>>, defs
       errors.push("property '" + name + "' of '" + component + "' swaps a nested instance, which a write cannot set yet");
       continue;
     }
-    ok[key] = value;
+    putOwn(ok, key, value);
   }
   return errors.length ? { errors } : { ok };
 }

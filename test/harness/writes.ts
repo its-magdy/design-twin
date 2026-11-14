@@ -229,7 +229,9 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
         const bound: Record<string, unknown> = isNode(fields.propBound) ? { ...fields.propBound } : {};
         const p: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(given)) {
-          if (isNode(v) && v.type === "VARIABLE_ALIAS") { bound[k] = v; p[k] = "(" + String(v.id) + ")"; } else { delete bound[k]; p[k] = v; }
+          const value = isNode(v) && v.type === "VARIABLE_ALIAS" ? "(" + String(v.id) + ")" : v;
+          if (isNode(v) && v.type === "VARIABLE_ALIAS") bound[k] = v; else delete bound[k];
+          Object.defineProperty(p, k, { value, enumerable: true, writable: true, configurable: true }); // any name, "__proto__" too
         }
         fields.propBound = bound;
         fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
@@ -410,6 +412,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   chip.defaultVariant = chipSmall;
   chip.children = [chipSmall, chipLarge];
   const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
+  // A variant property whose name is "__proto__" (any string is a valid property name in Figma; a variant's key is its name).
+  const odd = comp("6:5", "Odd", { componentPropertyDefinitions: JSON.parse('{"__proto__": {"type": "VARIANT", "defaultValue": "Off", "variantOptions": ["On", "Off"]}}') as Record<string, unknown> });
   // A conflicting set (Figma allows it): two variants with the same values, the first without auto-layout.
   const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, componentPropertyDefinitions: {
     Kind: { type: "VARIANT", defaultValue: "A", variantOptions: ["A"] },
@@ -418,8 +422,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
   twin.defaultVariant = twinFlat;
   twin.children = [twinFlat, twinFlex];
-  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, twin, twinFlat, twinFlex];
-  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, twin], loadAsync: async () => {},
+  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, odd, twin, twinFlat, twinFlex];
+  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, odd, twin], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
   const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
   const library = {
