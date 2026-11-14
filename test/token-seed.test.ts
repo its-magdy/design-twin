@@ -11,7 +11,7 @@ import { toDTCG, toResolver } from "../design-to-code/tokens.ts";
 import type { Variable, VariableValue } from "../bridge/src/doc-types.ts";
 import { checkCreateStyles, checkCreateVariables, MAX_TABLE_ROWS } from "../bridge/src/create-spec.ts";
 import { isResolverDoc, MAX_SEED_COLLECTIONS, MAX_SEED_TOKENS, MAX_SEED_WORK, refProblem, resolverRefs, seedFromDtcg, seedFromResolver, type SeedOutcome, type SeedResult, type SeedRow, type SeedStylesOp, type SeedVariablesOp } from "../bridge/src/token-seed.ts";
-import { inputIndex, loadSeedTokens, nodeSeedIo, readSeedJson, sameFile, seededPreview, seededReply, type SeedIo, type SeedRecord } from "../bridge/src/seed-file.ts";
+import { inputIndex, loadSeedTokens, nodeSeedIo, readSeedJson, seededPreview, seededReply, type SeedIo, type SeedRecord } from "../bridge/src/seed-file.ts";
 import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 import type { WritePreviewStep, WriteResult } from "../bridge/src/commands.ts";
 
@@ -401,6 +401,26 @@ console.log("\nevery token is in a table (perhaps with a `partly` note) or in `u
     same(rowOf(typeClash, "x"), ["x", "number", 1]) && /set 'B' has it too/.test(partOf(typeClash, "x")) && reasonOf(typeClash, "x") === "" && clean(typeClash));
   const valueClash = seedFromResolver(doc({ sets: { A: { sources: [{ x: { $type: "number", $value: 1 } }], ...theme }, B: { sources: [{ x: { $type: "number", $value: 2 } }], ...theme } }, resolutionOrder: order }), new Map());
   check("…and with two numbers, the first is seeded and the second is said", same(rowOf(valueClash, "x"), ["x", "number", 1]) && /set 'B' has it too/.test(partOf(valueClash, "x")) && clean(valueClash));
+  // A style alias is resolved only against the styles seeded: its target turned down (a context makes it a number)
+  // turns it down too, with a true reason, never a style read from the target's raw value.
+  const styleOfRejected = seedFromResolver(doc({ sets: { A: { sources: [{ keep: { $type: "number", $value: 1 }, t: { $type: "typography", $value: { fontFamily: "Inter" } }, s: { $type: "typography", $value: "{t}" } }] } },
+    modifiers: { A: { contexts: { L: [], D: [{ t: { $type: "number", $value: 4 } }] } } } }), new Map());
+  check(`a style alias to a style that is not seeded is not seeded either (${JSON.stringify(res(styleOfRejected))})`,
+    /modifier 'A' gives it \$type 'number'/.test(reasonOf(styleOfRejected, "t")) && reasonOf(styleOfRejected, "s") === "its alias {t} names a token that is not seeded"
+    && stylesOf(styleOfRejected).length === 0 && notesTrue(styleOfRejected) === null && clean(styleOfRejected));
+  const styleOfSeeded = seedFromDtcg(doc({ t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "16px" } }, s: { $type: "typography", $value: "{t}" }, ss: { $type: "typography", $value: "{s}" },
+    sh: { $type: "shadow", $value: "{t}" }, l1: { $type: "typography", $value: "{l2}" }, l2: { $type: "typography", $value: "{l1}" }, n: { $type: "number", $value: 1 }, v: { $type: "typography", $value: "{n}" } }));
+  check(`…an alias to a seeded style of its kind takes its set (through another alias); another kind, a loop and a variable are listed (${JSON.stringify(res(styleOfSeeded))})`,
+    same(stylesOf(styleOfSeeded).find((x) => x.name === "s")?.set, stylesOf(styleOfSeeded).find((x) => x.name === "t")?.set) && same(stylesOf(styleOfSeeded).find((x) => x.name === "ss")?.set, stylesOf(styleOfSeeded).find((x) => x.name === "t")?.set)
+    && /names a typography token, and it is a shadow one/.test(reasonOf(styleOfSeeded, "sh")) && /its aliases loop/.test(reasonOf(styleOfSeeded, "l1")) && /its aliases loop/.test(reasonOf(styleOfSeeded, "l2"))
+    && /names a variable/.test(reasonOf(styleOfSeeded, "v")) && clean(styleOfSeeded));
+  // Two paths of one source make a name, and a later source of the set gives it too: the later value is seeded, and the
+  // note says so (never that the first of the two is).
+  const dupLater = seedFromResolver(doc({ sets: { A: { sources: [{ "a/b": { $type: "number", $value: 1 }, a: { b: { $type: "number", $value: 2 } } }, { "a/b": { $type: "number", $value: 3 } }] } } }), new Map());
+  check(`a name two paths of one source make, overridden by a later source: the later value, and a note that says so (${JSON.stringify(res(dupLater))})`,
+    same(rowOf(dupLater, "a/b"), ["a/b", "number", 3]) && partOf(dupLater, "a/b") === "two paths make this name once joined with '/' in one source; a later source gives it, and that value is read" && clean(dupLater));
+  const dupKept = seedFromResolver(doc({ sets: { A: { sources: [{ "a/b": { $type: "number", $value: 3 } }, { "a/b": { $type: "number", $value: 1 }, a: { b: { $type: "number", $value: 2 } } }] } } }), new Map());
+  check("…and when the source with the two paths is the last, the first of them is read", same(rowOf(dupKept, "a/b"), ["a/b", "number", 1]) && /in one source; the first of them is read$/.test(partOf(dupKept, "a/b")));
   const ctxTwice = seedFromResolver(doc({
     sets: { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } },
     modifiers: {
@@ -764,14 +784,22 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
    *  object under a name is one (a stray); a group's `$root` with a $value is the group's token, one without is the
    *  group; under a token, or under a name no alias could spell, every key (`$root` too) is a step and every token and
    *  stray value is one. */
-  const countTokens = (doc: unknown, into: Set<string>): void => {
+  const countTokens = (doc: unknown, into: Set<string>, vals?: Map<string, unknown[]>): void => {
     const isO = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
     const get = (o: Record<string, unknown>, k: string): unknown => Object.getOwnPropertyDescriptor(o, k)?.value;
     const has = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
     const nm = (p: readonly string[]): string => (p.length ? p.join("/") : "$root");
     const steps = (o: Record<string, unknown>): string[] => Object.keys(o).filter((k) => k === "$root" || !k.startsWith("$"));
+    /** A token's $value, for the style-alias rule (one with $extensions may take its value from a mode: not an alias). */
+    const val = (o: Record<string, unknown>, p: readonly string[]): void => {
+      if (!vals) return;
+      const l = vals.get(nm(p)) ?? [];
+      l.push(has(o, "$extensions") ? null : get(o, "$value"));
+      vals.set(nm(p), l);
+    };
     const all = (v: unknown, p: readonly string[]): void => {
       if (!isO(v) || has(v, "$value")) into.add(nm(p));
+      if (isO(v) && has(v, "$value")) val(v, p);
       if (isO(v)) for (const k of steps(v)) all(get(v, k), [...p, k]);
     };
     const grp = (o: Record<string, unknown>, p: readonly string[]): void => {
@@ -779,7 +807,7 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
       for (const k of Object.keys(o)) {
         const v = get(o, k);
         if (k === "$root") {
-          if (isO(v) && has(v, "$value")) { into.add(nm(p)); for (const kk of steps(v)) all(get(v, kk), [...p, "$root", kk]); }
+          if (isO(v) && has(v, "$value")) { into.add(nm(p)); val(v, p); for (const kk of steps(v)) all(get(v, kk), [...p, "$root", kk]); }
           else if (isO(v)) grp(v, p);
           else into.add(nm(p));
         } else if (k.startsWith("$")) continue;
@@ -790,9 +818,9 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     if (isO(doc)) grp(doc, []);
   };
   /** The same count over a resolver's every set and context (inline sources). */
-  const countResolver = (parsed: unknown): Set<string> => {
+  const countResolver = (parsed: unknown, vals?: Map<string, unknown[]>): Set<string> => {
     const counted = new Set<string>();
-    const walkSources = (v: unknown): void => { if (Array.isArray(v)) for (const s of v) countTokens(s, counted); };
+    const walkSources = (v: unknown): void => { if (Array.isArray(v)) for (const s of v) countTokens(s, counted, vals); };
     /** An own property of parsed JSON ("__proto__" included), or undefined. */
     const at = (o: unknown, k: string): unknown => { const d = typeof o === "object" && o !== null ? Object.getOwnPropertyDescriptor(o, k) : undefined; return d ? (d.value as unknown) : undefined; };
     const keysOf = (o: unknown): string[] => (typeof o === "object" && o !== null ? Object.keys(o) : []);
@@ -803,7 +831,7 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
   };
 
   /** What breaks the invariant in an outcome, or null. */
-  const broken = (o: SeedOutcome, counted: ReadonlySet<string>): string | null => {
+  const broken = (o: SeedOutcome, counted: ReadonlySet<string>, vals?: ReadonlyMap<string, unknown[]>): string | null => {
     // A note that says a target is not seeded when it is, or that tells of a seat move, is false.
     const lie = notesTrue(o);
     if (lie !== null) return lie;
@@ -818,6 +846,13 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     for (const n of seeded) if (!counted.has(n)) return "a seeded name no file gives: " + JSON.stringify(n);
     for (const u of o.unmapped) if (seeded.has(u.token)) return "unmapped but seeded: " + JSON.stringify(u.token);
     for (const u of o.partly) if (!seeded.has(u.token)) return "a partly note on a token not seeded: " + JSON.stringify(u.token);
+    // A style whose every $value is one alias is seeded only if the style it names is.
+    for (const n of styleNames) {
+      const vs = vals?.get(n) ?? [];
+      const targets = new Set(vs.map((v) => (typeof v === "string" && /^\{[^{}]+\}$/.test(v.trim()) ? v.trim().slice(1, -1).split(".").join("/") : null)));
+      const [t] = [...targets];
+      if (vs.length && targets.size === 1 && typeof t === "string" && !styleNames.includes(t)) return "a style seeded from an alias to a style that is not seeded: " + JSON.stringify(n) + " → " + JSON.stringify(t);
+    }
     if (!clean(o)) return "not clean (a note says the wrong collection, or an unmapped entry says it was seeded)";
     if (!valid(o)) return "a table the create checks refuse";
     return null;
@@ -831,8 +866,9 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     const text = withAnchor(group(0, null, true));
     const parsed = JSON.parse(text) as unknown;
     const counted = new Set<string>();
-    countTokens(parsed, counted);
-    const why = broken(seedFromDtcg(parsed), counted);
+    const vals = new Map<string, unknown[]>();
+    countTokens(parsed, counted, vals);
+    const why = broken(seedFromDtcg(parsed), counted, vals);
     if (why) failures.push("dtcg " + why + " in " + text);
   }
   // Resolvers: 1–3 sets (some sharing a collection), 0–2 modifiers per collection, contexts with names only modifiers
@@ -870,7 +906,8 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     const order = [...sets.map(([s]) => j({ $ref: "#/sets/" + s })), ...mods.map(([m]) => j({ $ref: "#/modifiers/" + m }))];
     const text = obj([["sets", obj(sets)], ["modifiers", obj(mods)], ["resolutionOrder", "[" + order.join(",") + "]"]]);
     const parsed = JSON.parse(text) as unknown;
-    const why = broken(seedFromResolver(parsed, new Map()), countResolver(parsed));
+    const vals = new Map<string, unknown[]>();
+    const why = broken(seedFromResolver(parsed, new Map()), countResolver(parsed, vals), vals);
     if (why) failures.push("resolver " + why + " in " + text);
   }
   // Alias chains across names only modifiers give, in several collections: each name a bad value, a good one, an
@@ -990,29 +1027,34 @@ console.log("\nthe files (seed-file.ts):");
   const rootLink = path.join(out, "root-link");
   fs.symlinkSync(dir, rootLink);
   check("…and so is a file when the directory itself is reached through a link", "ops" in loadSeedTokens([{ op: "seedTokens", file: "tokens.dtcg.json" }], (p) => path.resolve(rootLink, p), rootLink));
-  // The bytes read are the file opened, and that file is the one whose real path was checked (the same device and
-  // inode): a path swapped for a link to a file outside between the check and the read cannot be read.
-  check("sameFile: one file is the same device and inode, another file is not", sameFile({ dev: 1, ino: 2 }, { dev: 1, ino: 2 }) && !sameFile({ dev: 1, ino: 2 }, { dev: 1, ino: 3 }) && !sameFile({ dev: 1, ino: 2 }, { dev: 2, ino: 2 })
-    && sameFile(fs.statSync(path.join(dir, "inner.json")), fs.statSync(path.join(dir, "tokens.dtcg.json"))) && !sameFile(fs.statSync(path.join(dir, "tokens.dtcg.json")), fs.statSync(path.join(out, "outside.json"))));
+  // The real path is checked, then opened without following a final link: a file swapped for a link to one outside
+  // between the two is refused (O_NOFOLLOW, where the platform has it), nothing of it read.
   const realDir = fs.realpathSync(dir);
   const outsidePath = path.join(out, "outside.json");
   /** The descriptors opened and closed (Node's calls, counted). */
   let opened = 0, closed = 0;
-  const swapIo: SeedIo = {
-    ...nodeSeedIo,
-    // The path is a link to a file outside when it is opened, and the inside file again when its real path is read.
-    open: (p) => { opened++; return nodeSeedIo.open(p.endsWith("tokens.dtcg.json") ? outsidePath : p); },
-    close: (fd) => { closed++; nodeSeedIo.close(fd); },
-  };
-  const swapped = readSeedJson(path.join(dir, "tokens.dtcg.json"), "ops[0].file", realDir, swapIo);
-  check(`a file swapped for a link to one outside between the open and the check is refused, nothing of it read (${"error" in swapped ? swapped.error : JSON.stringify(swapped.json)})`,
-    "error" in swapped && /tokens\.dtcg\.json changed while it was read \(the file opened is not the one at .*tokens\.dtcg\.json\); seed again/.test(swapped.error) && !JSON.stringify(swapped).includes("secret") && opened === 1 && closed === 1);
+  const counted: SeedIo = { ...nodeSeedIo, open: (p) => { opened++; return nodeSeedIo.open(p); }, close: (fd) => { closed++; nodeSeedIo.close(fd); } };
+  if (fs.constants.O_NOFOLLOW !== undefined) {
+    fs.writeFileSync(path.join(dir, "swap.json"), JSON.stringify({ a: { $type: "number", $value: 1 } }));
+    // Its real path is read while it is a file inside; then it becomes a link to the file outside.
+    const swapIo: SeedIo = { ...counted, realpath: (p) => { const r = nodeSeedIo.realpath(p); fs.rmSync(r); fs.symlinkSync(outsidePath, r); return r; } };
+    const swapped = readSeedJson(path.join(dir, "swap.json"), "ops[0].file", realDir, swapIo);
+    check(`a file swapped for a link to one outside between the check and the open is refused, nothing of it read (${"error" in swapped ? swapped.error : JSON.stringify(swapped.json)})`,
+      "error" in swapped && /swap\.json changed while it was read \(.*swap\.json is now a symbolic link\); seed again/.test(swapped.error) && !JSON.stringify(swapped).includes("secret") && closed === 0);
+  }
   opened = 0; closed = 0;
-  const kept = readSeedJson(path.join(dir, "tokens.dtcg.json"), "ops[0].file", realDir, { ...swapIo, open: (p) => { opened++; return nodeSeedIo.open(p); } });
+  const kept = readSeedJson(path.join(dir, "tokens.dtcg.json"), "ops[0].file", realDir, counted);
   check("…the same file read with nothing swapped is read, its descriptor closed", "json" in kept && opened === 1 && closed === 1);
-  closed = 0;
-  const outRead = readSeedJson(path.join(dir, "link.json"), "ops[0].file", realDir, swapIo);
-  check("…and a refused link closes its descriptor too", "error" in outRead && /leads, through a symbolic link/.test(outRead.error) && closed === 1);
+  opened = 0; closed = 0;
+  const viaLink = readSeedJson(path.join(dir, "inner.json"), "ops[0].file", realDir, counted);
+  check("…a link to a file inside is read through its real path, its descriptor closed", "json" in viaLink && opened === 1 && closed === 1);
+  opened = 0;
+  const outRead = readSeedJson(path.join(dir, "link.json"), "ops[0].file", realDir, counted);
+  check("…and a link that leads out is refused before anything is opened", "error" in outRead && /leads, through a symbolic link/.test(outRead.error) && opened === 0);
+  const dangling = path.join(dir, "dangling.json");
+  fs.symlinkSync(path.join(out, "gone.json"), dangling);
+  const dang = readSeedJson(dangling, "ops[0].file", realDir, counted);
+  check(`a link to nothing says there is no file (${"error" in dang ? dang.error : "read"})`, "error" in dang && /no file at .*dangling\.json$/.test(dang.error));
   const noOpen = readSeedJson(path.join(dir, "tokens"), "ops[0].file", realDir, { ...nodeSeedIo, open: () => { throw new Error("EISDIR"); } });
   check(`a path that cannot be opened (a directory on Windows) says what is there (${"error" in noOpen ? noOpen.error : "read"})`, "error" in noOpen && /tokens is not a file$/.test(noOpen.error));
   fs.rmSync(out, { recursive: true, force: true });

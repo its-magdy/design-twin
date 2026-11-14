@@ -1236,9 +1236,9 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   and a DTCG resolver (`tokens.resolver.json` with its set and context files). Which one is told by the content. CSS
   (`tokens.css`, Tailwind's `theme.css`) and the native token files are refused: a CSS name has lost the `/` grouping.
   Every file read (the resolver and each `$ref`) stays inside the directory the server was started in, with its
-  symbolic links followed (a link inside the directory to a file outside it is refused; the file is opened first, and
-  what is read is the opened file, which must be the one at that real path), is a regular
-  file of at most 2 MB, and is JSON. A `$ref` that is a URL, an absolute path, a pointer into the resolver (`#/…`) or
+  symbolic links followed (a link inside the directory to a file outside it is refused; the real path is then opened
+  without following a final link), is a regular file of at most 2 MB, and is JSON. This guards against a link (or
+  `..`) in the project leading out of it, not against a process that rewrites the project directory while it is read. A `$ref` that is a URL, an absolute path, a pointer into the resolver (`#/…`) or
   has a `#fragment` is refused.
 - Collections and modes: from a resolver, each set is a collection (its `$extensions["figma.com"].collection`, else
   the set's name), and the modifier of that collection gives its modes, the default first. A context file holds only
@@ -1276,7 +1276,7 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   past the limit). A resolver's build reads at most 1,500,000 values (`MAX_SEED_WORK`: a value per mode of each name a
   collection seeds). Past a limit, the seed is refused and the reason says which.
 - Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
-  extended-collection overrides, a name two paths make once joined (the first is seeded), a token a second set or
+  extended-collection overrides, a name two paths make once joined (the first, unless a later source of the set gives it), a token a second set or
   another collection's modifier also gives (the first is seeded), a
   one-mode token whose `$value` differs from its mode's value, a one-mode colour whose mode's opacity differs from its
   own (the mode's is seeded), a group's `$extends` when the group has its own token. `unmapped` holds only tokens in no table.

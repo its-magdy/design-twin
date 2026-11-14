@@ -4,9 +4,10 @@
 // are the create tables' own, and no token value passes through the model.
 //
 // Every file read — the token file, a resolver's every `$ref` — stays inside the directory the server was started in
-// (the `resolve` callback refuses the rest by name; then the file is opened, and its real path, its symbolic links
-// followed, must be inside the directory's real path and be the file opened: the bytes read are that file's), is a
-// regular file, at most MAX_SPEC_FILE_BYTES, and JSON. A `$ref` that is
+// (the `resolve` callback refuses the rest by name; then its real path, its symbolic links followed, must be inside
+// the directory's real path, and that real path is opened without following a final link), is a regular file, at most
+// MAX_SPEC_FILE_BYTES, and JSON. The threat is a static link (or `..`) leading out of the project; a process that
+// rewrites the project directory while it is read is out of scope. A `$ref` that is
 // a URL, an absolute path, a pointer into the resolver or a fragment is refused (token-seed.ts refProblem).
 //
 // The reply to a seeded table is cut to what changed: the rows created or updated (with their ids) and a count of the
@@ -42,21 +43,24 @@ const NOT_READ = /\.(css|scss|sass|less|swift|kt|kts|dart|js|jsx|ts|tsx|mjs|cjs)
 
 /** The file system calls readSeedJson makes: Node's, or a test's (to swap a file between two of them). */
 export interface SeedIo {
-  /** opens a file to read (without blocking on a pipe) and returns its descriptor */
+  realpath(file: string): string;
+  /** opens a file to read without following a final symbolic link (where the platform can) and without blocking on a
+   *  pipe; returns its descriptor */
   open(file: string): number;
   fstat(fd: number): fs.Stats;
-  realpath(file: string): string;
   stat(file: string): fs.Stats;
   /** reads the open file from its start, at most `max` bytes: null when there are more */
   read(fd: number, max: number): Buffer | null;
   close(fd: number): void;
 }
+/** The flags a token file is opened with: O_NOFOLLOW (a final component swapped for a link after the check is refused)
+ *  and O_NONBLOCK (a named pipe is opened without waiting for a writer, then refused as not a file), each where the
+ *  platform has it (Windows has neither). */
+const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
 export const nodeSeedIo: SeedIo = {
-  // O_NONBLOCK: a named pipe is opened without waiting for a writer (then refused as not a file); it does not change
-  // how a regular file reads. Windows has no such flag.
-  open: (file) => fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0)),
-  fstat: (fd) => fs.fstatSync(fd),
   realpath: (file) => fs.realpathSync(file),
+  open: (file) => fs.openSync(file, OPEN_FLAGS),
+  fstat: (fd) => fs.fstatSync(fd),
   stat: (file) => fs.statSync(file),
   read: (fd, max) => {
     const buf = Buffer.alloc(max + 1);
@@ -66,31 +70,36 @@ export const nodeSeedIo: SeedIo = {
   },
   close: (fd) => fs.closeSync(fd),
 };
-/** Are two stats of one file (the same device and inode)? */
-export const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean => a.dev === b.dev && a.ino === b.ino;
+
+/** Is `p` inside directory `root` (or `root` itself), by path segments? */
+function insideDir(root: string, p: string): boolean {
+  const rel = path.relative(root, p);
+  return !(rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel));
+}
 
 /** A JSON file read whole, or why it is not: missing, outside `realRoot` once its links are followed, not a file, too
  *  big, not JSON. `resolve` checks a path by name only, so a symbolic link inside the directory could lead out of it:
- *  the file read is the one the link leads to, and it must be inside the directory's own real path. The file is opened
- *  first and read from that descriptor; its real path must be inside the directory AND be the file opened (the same
- *  device and inode), so a path swapped for a link between the check and the read cannot lead out of it. */
+ *  the path's real path must be inside the directory's own real path, and that real path is what is opened (with
+ *  O_NOFOLLOW where the platform has it, so a final component swapped for a link in between is refused). The threat
+ *  is a link (or `..`) in the project leading out of it; a process rewriting the directory while it is read is not. */
 export function readSeedJson(file: string, at: string, realRoot: string, io: SeedIo = nodeSeedIo): { json: unknown } | { error: string } {
+  let real: string;
+  try { real = io.realpath(file); } catch { return { error: `${at}: no file at ${file}` }; }
+  if (!insideDir(realRoot, real)) {
+    return { error: `${at}: ${file} leads, through a symbolic link, to ${real}, outside the directory this server was started in (${realRoot}); a token file and every $ref it names must be inside it` };
+  }
   let fd: number;
-  try { fd = io.open(file); } catch {
+  try { fd = io.open(real); } catch (e) {
+    const code = e instanceof Error && "code" in e ? (e as NodeJS.ErrnoException).code : undefined;
+    if (code === "ELOOP") return { error: `${at}: ${file} changed while it was read (${real} is now a symbolic link); seed again` };
     // Windows opens no directory: say what is there. Nothing is read from this path.
     let there: fs.Stats | null = null;
-    try { there = io.stat(file); } catch { /* nothing there */ }
+    try { there = io.stat(real); } catch { /* nothing there */ }
     return { error: there === null ? `${at}: no file at ${file}` : !there.isFile() ? `${at}: ${file} is not a file` : `${at}: ${file} could not be opened` };
   }
   try {
-    let opened: fs.Stats, real: string, now: fs.Stats;
-    try { opened = io.fstat(fd); real = io.realpath(file); } catch { return { error: `${at}: no file at ${file}` }; }
-    const rel = path.relative(realRoot, real);
-    if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
-      return { error: `${at}: ${file} leads, through a symbolic link, to ${real}, outside the directory this server was started in (${realRoot}); a token file and every $ref it names must be inside it` };
-    }
-    try { now = io.stat(real); } catch { return { error: `${at}: ${file} changed while it was read (${real} is gone); seed again` }; }
-    if (!sameFile(opened, now)) return { error: `${at}: ${file} changed while it was read (the file opened is not the one at ${real}); seed again` };
+    let opened: fs.Stats;
+    try { opened = io.fstat(fd); } catch { return { error: `${at}: no file at ${file}` }; }
     if (!opened.isFile()) return { error: `${at}: ${file} is not a file` };
     if (opened.size > MAX_SPEC_FILE_BYTES) return { error: `${at}: ${file} is ${opened.size} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
     let bytes: Buffer | null;

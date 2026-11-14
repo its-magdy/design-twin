@@ -128,8 +128,9 @@ interface RawToken { name: string; type: string | null; value: unknown; ext: Obj
  *  `unmapped`, or as a note when its name is seeded): a name reached twice (a key with `/` in it), a name an alias
  *  could not spell and everything under it, a token inside a token, a stray value, a token with no name. A group's
  *  $extends is noted. No subtree is passed over without its tokens listed. Every token met, kept or listed, counts
- *  towards MAX_SEED_TOKENS (`g.met`, shared by every tree of one seed): past it, TooManyTokens stops the walk. */
-function flatten(doc: unknown, g: Gather): Map<string, RawToken> {
+ *  towards MAX_SEED_TOKENS (`g.met`, shared by every tree of one seed): past it, TooManyTokens stops the walk. A name
+ *  two paths make keeps the first and is given to `dup` (a resolver says which value is read once its sources are in). */
+function flatten(doc: unknown, g: Gather, dup: (name: string) => void = (n) => g.part(n, "two paths make this name once joined with '/'; the first is seeded")): Map<string, RawToken> {
   const out = new Map<string, RawToken>();
   /** One more token met (each entry of `unmapped` the walk makes, and each token it keeps or notes). */
   const met = (): void => { if (++g.met > MAX_SEED_TOKENS) throw new TooManyTokens(); };
@@ -151,7 +152,7 @@ function flatten(doc: unknown, g: Gather): Map<string, RawToken> {
     for (const [k, child] of Object.entries(node)) if (step(k)) listAll(child, [...childSegs, k], why, why);
     if (!segs.length) { unmap(name, "a token needs a name"); return; }
     met();
-    if (out.has(name)) { g.part(name, "two paths make this name once joined with '/'; the first is seeded"); return; }
+    if (out.has(name)) { dup(name); return; }
     const t = own(node, "$type");
     out.set(name, { name, type: typeof t === "string" ? t : inherited, value: own(node, "$value"), ext: figmaExt(node) });
   };
@@ -507,18 +508,8 @@ function settle(g: Gather): Coll[] {
 
 /** The style token `s` as a createStyles row, or why it cannot be one. `vars` are the seeded rows by name. */
 function styleOf(s: StyleToken, g: Gather, vars: ReadonlyMap<string, Row>, styles: ReadonlyMap<string, StyleToken>): Parsed<SeedStyle> {
-  // A style token that is an alias of another one takes the value that one is seeded with (its default mode's, which
-  // is not always its $value), else the token's value.
-  let value = s.value;
-  for (let hops = 0, a = aliasName(value); a !== null && hops < 20; hops++, a = aliasName(value)) {
-    const target = a;
-    const st = styles.get(target);
-    const t = g.raw.get(target);
-    if (!st && !t) {
-      return { bad: "its alias {" + target.split("/").join(".") + "} names " + (g.known.has(target) ? "a token that is not seeded" : "no token here") };
-    }
-    value = st ? st.value : t?.value;
-  }
+  // A style token whose value is an alias is resolved by build (the style it names, once seeded), never here.
+  const value = s.value;
   /** A sub-value that names a variable: the row, of the type the field takes, or why not. */
   const bound = (field: string, name: string, want: VariableTypeName): Parsed<Row> => {
     const r = vars.get(name);
@@ -642,12 +633,60 @@ function build(g: Gather): Built {
   const styles: SeedStyle[] = [];
   const styleTokens = new Map<string, StyleToken>();
   for (const s of g.styles) if (!styleTokens.has(s.name)) styleTokens.set(s.name, s);
+  const done = new Map<StyleToken, Parsed<SeedStyle>>();
   for (const s of g.styles) {
-    const st = styleOf(s, g, vars, styleTokens);
+    const st = resolveStyle(s, g, vars, styleTokens, done);
     if ("bad" in st) g.unmapped.push({ token: s.name, reason: st.bad });
     else styles.push(st.ok);
   }
   return { order, vars, styles };
+}
+
+/** Style token `s` as a createStyles row, its aliases followed: a style whose value is `{x}` is seeded only when `x`
+ *  is a style token of its own kind that is itself seeded (its set copied), else listed with the reason. A walk with
+ *  its own list (a long chain does not run out of the call stack); `done` keeps each token's answer. */
+function resolveStyle(s: StyleToken, g: Gather, vars: ReadonlyMap<string, Row>, styles: ReadonlyMap<string, StyleToken>, done: Map<StyleToken, Parsed<SeedStyle>>): Parsed<SeedStyle> {
+  const dotted = (n: string): string => "{" + n.split("/").join(".") + "}";
+  /** The tokens met whose answer waits on the next one's (each aliases the next). */
+  const chain: StyleToken[] = [];
+  const onChain = new Set<StyleToken>();
+  let end: Parsed<SeedStyle> | undefined;
+  for (let cur: StyleToken = s; ;) {
+    const known = done.get(cur);
+    if (known) { end = known; break; }
+    const a = aliasName(cur.value);
+    if (a === null) { end = styleOf(cur, g, vars, styles); done.set(cur, end); break; }
+    const target = styles.get(a);
+    let bad: string | null = null;
+    if (!target) {
+      bad = "its alias " + dotted(a) + " names " + (vars.has(a) ? "a variable (a style's alias names a style token of its kind)" : g.has(a) ? "a token that is not seeded" : "no token here");
+    } else if (target.type !== cur.type) bad = "its alias " + dotted(a) + " names a " + target.type + " token, and it is a " + cur.type + " one";
+    else if (target === cur) bad = "it aliases itself";
+    else if (onChain.has(target)) {
+      const loop = chain.slice(chain.indexOf(target));
+      loop.push(cur);
+      const said = [...loop, target].map((x) => "'" + x.name + "'").join(" → ");
+      for (const x of loop) done.set(x, { bad: "its aliases loop: " + said });
+      chain.length = chain.indexOf(target);
+      end = done.get(target);
+      break;
+    }
+    if (bad !== null) { end = { bad }; done.set(cur, end); break; }
+    chain.push(cur);
+    onChain.add(cur);
+    if (!target) break;
+    cur = target;
+  }
+  // Each token on the chain aliases the next (the last one, the token whose answer is `end`).
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const x = chain[i];
+    if (!x) continue;
+    const next: Parsed<SeedStyle> = end ?? { bad: "unresolved" };
+    const a = aliasName(x.value) ?? "";
+    end = "ok" in next ? { ok: { name: x.name, kind: next.ok.kind, set: structuredClone(next.ok.set) } } : { bad: "its alias " + dotted(a) + " names a token that is not seeded" };
+    done.set(x, end);
+  }
+  return done.get(s) ?? end ?? { bad: "unresolved" };
 }
 
 /** The tables, once every reader has gathered its tokens: one build, and its result is the seed's. */
@@ -888,9 +927,16 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
   /** The tokens of a list of sources, later sources over earlier ones. */
   const tokensOf = (src: readonly unknown[]): Map<string, RawToken> => {
     const out = new Map<string, RawToken>();
-    for (const s of src) {
+    /** the source each kept name came from, and each name two paths of one source make (with that source) */
+    const from = new Map<string, number>();
+    const dups: Array<[string, number]> = [];
+    for (const [i, s] of src.entries()) {
       const tree = isObj(s) && hasOwn(s, "$ref") ? files.get(String(own(s, "$ref"))) : s;
-      for (const [n, t] of flatten(tree, g)) out.set(n, t);
+      for (const [n, t] of flatten(tree, g, (n) => dups.push([n, i]))) { out.set(n, t); from.set(n, i); }
+    }
+    // Said once the sources are in: a later source overrides the source whose two paths made the name.
+    for (const [n, i] of dups) {
+      g.part(n, "two paths make this name once joined with '/' in one source; " + (from.get(n) === i ? "the first of them is read" : "a later source gives it, and that value is read"));
     }
     return out;
   };
