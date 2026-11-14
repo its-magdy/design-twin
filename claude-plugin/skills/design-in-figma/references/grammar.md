@@ -168,7 +168,7 @@ rule for that field.
 | `fills` | replaces the paints (`[]` for none); paints as in a tree spec |
 | `strokes` | any of `colors`, `weight`, `weights`, `align`; only those change (`colors: []` removes them) |
 | `radius` | a number, or any of `{tl, tr, br, bl}` |
-| `layout` | any tree-spec `layout` field, only those change; `flexWrap: "nowrap"`, `alignContent: "auto"`, `reverseZ: false` turn them off; `{mode: "absolute"}` removes auto-layout |
+| `layout` | any tree-spec `layout` field but `width`/`height` (a size is `box`), only those change; `flexWrap: "nowrap"`, `alignContent: "auto"`, `reverseZ: false` turn them off; `{mode: "absolute"}` removes auto-layout |
 | `box` | `{w, h}` or either: a fixed size |
 | `widthMode`, `heightMode` | `fill` \| `hug` \| `fixed` |
 | `tokens` | as in a tree spec; `null` unbinds the field and keeps its value |
