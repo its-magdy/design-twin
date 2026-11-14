@@ -12,7 +12,10 @@ library, and the dry run's count of what follows (`writeImpact`) — are built; 
 `clone` that copies an existing node with its own and its layers' differences (`edits`) — and repetition — an
 instance's `rows` table and the root's named `fragments` placed by `use` — are built; the designing skill
 (`claude-plugin/skills/design-in-figma/`, its grammar in `references/grammar.md`) and the docs for the write surface
-are built)
+are built; starting from nothing — `createVariables` (a collection, its modes and every variable as one table, aliases
+included) and `createStyles` (paint, text and effect styles whose values name variables), a name the file has updated
+in place, both first in a batch so the specs and patches after them name what they make — is built; seeding them from
+code tokens and creating components are not)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -149,7 +152,8 @@ screens.
     rounds) and round trips for each job in the table above, against the fake plugin, with the four-op
     path as the baseline. It is `test/write-cost.test.ts` (`bun test/write-cost.test.ts`); the recorded numbers are in
     `test/write-cost/baseline.json`, and a new route is added to `test/write-cost/routes.ts`. Its seventh job is a new
-    screen and the fix round its check leads to.
+    screen and the fix round its check leads to; its eighth starts from nothing (a token table, then a screen bound to
+    it).
 
 ## Build order
 

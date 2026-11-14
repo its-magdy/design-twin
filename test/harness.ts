@@ -13,7 +13,7 @@ import { thrown, type Case } from "./harness/helpers.ts";
 const AREAS: readonly string[] = [
   // the selection read and what serialize() emits per node
   "screen-read", "layout", "paint-effects", "text", "instances-reactions", "design-system", "motion", "read-misc",
-  "assets", "library-variables", "pages", "writes", "review", "sources", "repeat",
+  "assets", "library-variables", "pages", "writes", "review", "sources", "creates", "repeat",
   "vectors", "manifest-warnings", "geometry", "quick-keys", "page-docs", "library",
   // the bridge side: the run chain, the wire guard, cancel / abandon / liveness
   "progress-cancel", "run-order", "wire-args", "args-shape", "unread", "abandon", "live", "screenshot",

@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Phase } from "./meter.ts";
-import { isFrame, type Briefs, type JobId, type Kit, type Want, type WantFill } from "./jobs.ts";
+import { isFrame, type Briefs, type JobId, type Kit, type Token, type Want, type WantFill } from "./jobs.ts";
 import { BRAND } from "./jobs.ts";
 
 export interface Reply { text: string; isError: boolean }
@@ -137,10 +137,30 @@ async function patch(s: Session, ops: ReadonlyArray<Record<string, unknown>>): P
   for (const chunk of chunks(ops, MAX_OPS)) appliedIds(must(await s.call("figma_write", { ops: chunk }, "write"), "figma_write"));
 }
 
+/** `want` with each token colour as the raw hex it shows in the first mode (the four ops cannot make or bind one). */
+function rawTokens(w: Want, tokens: readonly Token[]): Want {
+  const light = (name: string): string => {
+    for (let t = tokens.find((x) => x.name === name), hops = 0; t && hops < 5; hops++) {
+      const v = t.values[0];
+      if (typeof v === "string") return v;
+      t = typeof v === "object" ? tokens.find((x) => x.name === v.aliasOf) : undefined;
+    }
+    return "#000000";
+  };
+  const fill = w.fill === undefined ? {} : { fill: (typeof w.fill === "string" ? w.fill : light(w.fill.variable)) as `#${string}` };
+  if (!isFrame(w)) return { ...w, ...fill };
+  return { ...w, ...fill, ...(w.children ? { children: w.children.map((k) => rawTokens(k, tokens)) } : {}) };
+}
+
 export const fourOp: Route = {
   name: "four-op",
   ticket: "baseline",
   jobs: {
+    // No variables can be made: the screen is built level by level in the colours the tokens would have shown.
+    "start-from-nothing": async (s, b) => {
+      const [root] = await buildLevels(s, [{ want: rawTokens(b.want, b.tokens) }]);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
     "new-screen": async (s, b) => {
       // A root with no parentId lands on the current page, which is the brief's page.
       const [root] = await buildLevels(s, [{ want: b.want }]);
@@ -371,6 +391,22 @@ export const cloneRepeat: Route = {
   },
 };
 
+// ---- a design system from nothing (#181): the whole token table is one createVariables op (primitives, and the
+// semantic colours aliasing them per mode), and the screen is one createTree in the same figma_write that names those
+// tokens: the ops after a create table resolve what it makes. One write, then the outline read of the new screen.
+export const createTokens: Route = {
+  name: "create-tokens",
+  ticket: "#181",
+  jobs: {
+    "start-from-nothing": async (s, b) => {
+      const table = { op: "createVariables", collection: b.collection, modes: b.modes, variables: b.tokens.map((t) => [t.name, t.type, ...t.values]) };
+      const r = must(await s.call("figma_write", { ops: [table, { op: "createTree", tree: dsTreeOf(b.want, { components: {}, variables: [] }) }] }, "write"), "figma_write");
+      const [, root] = appliedIds(r);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -386,5 +422,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens];
 export const BASELINE = fourOp.name;

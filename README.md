@@ -136,10 +136,10 @@ to your tokens; build-screen reads both, and drift-lint checks the component map
   running. The plugin is not on Figma Community, by design: you import it once as a development plugin.
 - **Bun is required.** The CLI, the MCP server and the Claude Code plugin's scripts run on Bun 1.4.2 or later. Node
   alone won't run them.
-- **Writes are deliberately small.** `figma_write` creates screens and nodes, changes them, and changes this file's
-  own variables, styles and main components, from a fixed set of ops, and only after you tick **Allow edits** in the
-  plugin window. It cannot yet create variables, styles or components (so a file with no design system gets screens
-  of raw values), place images, or change many screens by one rule. It moves and deletes only nodes it created: since
+- **Writes are deliberately small.** `figma_write` creates screens and nodes, changes them, creates variables and
+  styles as one table and changes this file's own variables, styles and main components, from a fixed set of ops, and
+  only after you tick **Allow edits** in the plugin window. It cannot yet create components, seed variables from your
+  code's tokens, place images, or change many screens by one rule. It moves and deletes only nodes it created: since
   the plugin window opened, or in the earlier result of a spec it sends again under the same key.
 - **Build checks vary by stack.** Web builds are measured node by node in Chromium. Native builds are rendered with
   the stack's own tools and compared as images. The generated Swift, Kotlin and Dart token files are not compiled in CI.

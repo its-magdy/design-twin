@@ -12,6 +12,8 @@ import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touc
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
+import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./creates";
+import { setBatchPlan } from "./batch-plan";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
 import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
@@ -238,6 +240,10 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     // Deletes are not run here: gatedWrites runs them after every other op (a deleted node cannot be brought back).
     case "delete":
       throw new Error("delete: deletes run after the rest of the batch");
+    // Nor are the create tables: gatedWrites runs them before every other op (creates.ts applyCreates).
+    case "createVariables":
+    case "createStyles":
+      throw new Error(op.op + ": the create tables run before the rest of the batch");
     default:
       throw new Error("unknown write op: " + op.op);
   }
@@ -287,7 +293,12 @@ function announce(r: WriteResult): void {
   figma.ui.postMessage(m);
 }
 
+// The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
 async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
+  try { return await batchWrites(list); } finally { setBatchPlan(null); }
+}
+
+async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
   const applied: AppliedWrite[] = [];
   // The designer's consent (edits.ts): with "Allow edits" off the whole batch is refused before any op is
   // checked or run, with the refusal named so figma_write can tell the agent to ask the person at the window.
@@ -322,6 +333,10 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   // that cannot take a field, a font that does not load, a node this session did not create — the batch is refused
   // whole, every problem listed in op order.
   const resolveBatch = async () => {
+    // The create tables first (they run first): what they make is the plan the other ops' names resolve against.
+    setBatchPlan(null);
+    const creates = await resolveCreateOps(list);
+    setBatchPlan(creates.plan);
     const modes = await resolveModeOps(list);
     const trees = await resolveTreeOps(list);
     // A createTree whose key names a result the file holds becomes an update of it (keyed.ts).
@@ -330,11 +345,11 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
     // A variable or style edit, and a patch's library check (a library's component cannot be changed here).
     const sources = await resolveSourceOps(list);
-    const problems = [...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+    const problems = [...creates.problems, ...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
       ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
-    return { modes, trees, patches, structure, sources, problems };
+    return { creates, modes, trees, patches, structure, sources, problems };
   };
-  let { modes, trees, patches, structure, sources, problems } = await resolveBatch();
+  let { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
   const firstProblem = problems[0];
   if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
   // The designer's review (review.ts, spec decision 18), when "Review each write" is ticked: here, once the whole batch
@@ -351,29 +366,13 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
     // The designer may have changed the file while the card was up (a node removed, a binding added), so nothing
     // resolved before the wait is used: the batch is resolved again against the file as it is now, and what a
     // failure puts back is what is there now. A batch the file no longer accepts is refused whole, as before review.
-    ({ modes, trees, patches, structure, sources, problems } = await resolveBatch());
+    ({ creates, modes, trees, patches, structure, sources, problems } = await resolveBatch());
     const changed = problems[0];
     if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     // The batch is still one Cmd-Z step of its own: whatever happened while the card was up is not part of it.
     commitUndo();
   }
-  // A library item a spec or patch names by key (or a library variable it names) is imported only now: the whole batch
-  // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
-  // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
-  for (const step of [trees, patches, sources]) {
-    if (!step.importCount) continue;
-    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const { problems: late, revoked } = await step.imports(editsAllowedNow);
-    // Unticked between imports: the ones before stay (an import cannot be put back, and it only makes the item
-    // available), nothing else runs.
-    if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const firstLate = late[0];
-    if (firstLate) {
-      return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
-    }
-  }
-  const warnings = [...trees.targets].reduce<string[]>((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
   const changes: Change[] = [];
   // In op order: each op's applied row, filled as it lands (the deletes last).
   const rows: Array<AppliedWrite | undefined> = list.map(() => undefined);
@@ -399,8 +398,58 @@ async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
       ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
     };
   };
+  // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole.
+  const refuseLate = async (late: OpProblem[]): Promise<WriteResult> => {
+    const firstLate = late[0];
+    const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+    const back = new Set(restored);
+    return {
+      ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
+      ...(firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {}),
+      error: batchRefusal(late) + (failed.length ? "; " + failed.join("; ") : ""),
+      ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
+    };
+  };
+  // Unticked once the create tables ran: nothing more changes, not even to put them back, and the reply says what stays.
+  const revokedAfterCreates = (): WriteResult => ({
+    ok: false, applied: changes.map((c) => c.applied), refused: "edits-off",
+    error: "'Allow edits' was turned off in the Design Twin plugin once this batch's create tables had run: they stay applied (listed in `applied`), and nothing else ran. Tick 'Allow edits' in the plugin window, then retry the rest.",
+  });
+  // The create tables run first (creates.ts), before the other ops' imports: a name they make is what those resolve to.
+  // The library variables the tables themselves name are imported just before them.
+  if (creates.targets.size) {
+    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    if (creates.importCount) {
+      const { problems: late, revoked } = await creates.imports(editsAllowedNow);
+      if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      const firstLate = late[0];
+      if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+    }
+    try {
+      for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;
+    } catch (e) {
+      const at = e instanceof CreateFailed ? e.index : list.findIndex(isCreateOp);
+      const op = list[at];
+      if (op) return fail(at, op, e instanceof CreateFailed ? e.reason : e);
+      throw e;
+    }
+  }
+  // A library item a spec or patch names by key (or a library variable it names) is imported only now: the whole batch
+  // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
+  // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
+  // (A name a create table made resolves here too, as an import: tree-refs.ts.)
+  for (const step of [trees, patches, sources]) {
+    if (!step.importCount) continue;
+    if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    const { problems: late, revoked } = await step.imports(editsAllowedNow);
+    // Unticked between imports: the ones before stay (an import cannot be put back, and it only makes the item
+    // available), nothing else runs.
+    if (revoked) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    if (late.length) return refuseLate(late);
+  }
+  const warnings = [...trees.targets].reduce<string[]>((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
   for (const [i, op] of list.entries()) {
-    if (op.op === "delete") continue;
+    if (op.op === "delete" || isCreateOp(op)) continue;
     try {
       rows[i] = await applyWrite(op, {
         mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i),

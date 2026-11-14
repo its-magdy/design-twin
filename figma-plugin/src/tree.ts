@@ -105,7 +105,7 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     // The copies: each source and the layers its edits name (a text's fonts are loaded when its patch applies after a
     // variable edit of the batch, as a patch op's are).
     const copies = copiesOf(spec, "tree", labels, []);
-    const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+    const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables");
     const clones = copies.length ? await resolveClones(copies, (f) => load(f.family, f.style), bad, fontsLater) : new Map<TreeNodeSpec, CloneTarget>();
     for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
     for (const c of clones.values()) cloneTargets.push(c);

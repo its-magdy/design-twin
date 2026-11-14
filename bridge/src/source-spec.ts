@@ -12,7 +12,8 @@
 //   setStyle     {style, set} — `set` in the read export's style field names (styles.<kind>.json): `paints` for a paint
 //                style; `font`, `weight`, `size`, `lineHeight`, `letterSpacing`, `case`, `decoration`, `paragraphSpacing`,
 //                `paragraphIndent` and `tokens` (a field → variable, null unbinds) for a text style; `effects` for an
-//                effect style; `name` and `description` for any.
+//                effect style (each with the read's `tokens`: a shadow's color, radius, spread, offsetX, offsetY, a
+//                blur's radius → a variable); `name` and `description` for any.
 //
 // Pure and dependency-free (bar pure siblings): the plugin bundle imports it, so it must type-check under
 // figma-plugin/tsconfig.json (ES2019 lib, no Node types).
@@ -23,8 +24,12 @@ import { fillsCheck, hex, isObj, nonNeg, objectProblems, oneOf, ref, refuse, str
 export type SourceValue = string | number | boolean | { aliasOf: string };
 /** A shadow or blur, in the read export's effect fields (effects.ts). */
 export type EffectSpec =
-  | { type: "drop_shadow" | "inner_shadow"; color: string; offset: { x: number; y: number }; radius: number; spread?: number; behindNode?: true }
-  | { type: "layer_blur" | "background_blur"; radius: number };
+  | { type: "drop_shadow" | "inner_shadow"; color: string; offset: { x: number; y: number }; radius: number; spread?: number; behindNode?: true; tokens?: { [K in ShadowTokenField]?: string } }
+  | { type: "layer_blur" | "background_blur"; radius: number; tokens?: { radius?: string } };
+/** The fields of a shadow a variable can be bound to, as the read writes an effect's `tokens` (Figma's
+ *  VariableBindableEffectField): the colour takes a colour variable, the rest a number one. A blur binds its radius. */
+export const SHADOW_TOKEN_FIELDS = ["color", "radius", "spread", "offsetX", "offsetY"] as const;
+export type ShadowTokenField = (typeof SHADOW_TOKEN_FIELDS)[number];
 /** What a setStyle sets. Every field is optional; at least one is given, and they belong to one kind of style. */
 export interface StyleSet {
   name?: string;
@@ -69,17 +74,28 @@ const length = (units: readonly string[], auto: boolean) => (v: unknown): string
   return auto && v.value < 0 ? "value must be ≥ 0" : null;
 };
 
+/** An effect's `tokens`: each of `fields` → a variable's name, key or id. */
+const effectTokens = (fields: readonly string[]) => (v: unknown): string | null => {
+  if (!isObj(v)) return "must be an object of field → variable (" + fields.join(", ") + ")";
+  const keys = Object.keys(v).filter((k) => v[k] !== undefined);
+  if (!keys.length) return "is empty";
+  for (const k of keys) {
+    if (fields.indexOf(k) < 0) { const near = nearestNames(k, fields); return "." + k + ": not a field a variable binds to here" + (near.length ? "; closest: " + quoteList(near) : ""); }
+    if (typeof v[k] !== "string" || !String(v[k]).trim()) return "." + k + " must be a variable's name, key or id";
+  }
+  return null;
+};
 const SHADOW_RULES: Readonly<Record<string, Rule>> = {
   type: oneOf("drop_shadow", "inner_shadow"), color: hex, offset: xy, radius: nonNeg, spread: num,
   behindNode: (v) => (v === true ? null : "must be true (omit it for false)"),
   blendMode: refuse("a shadow's blend mode cannot be written yet"),
-  tokens: refuse("binding an effect's fields to variables cannot be written yet"),
+  tokens: effectTokens(SHADOW_TOKEN_FIELDS),
 };
 const BLUR_RULES: Readonly<Record<string, Rule>> = {
   type: oneOf("layer_blur", "background_blur"), radius: nonNeg,
   blurType: refuse("a progressive blur cannot be written yet"), startOffset: refuse("a progressive blur cannot be written yet"),
   endOffset: refuse("a progressive blur cannot be written yet"), startRadius: refuse("a progressive blur cannot be written yet"),
-  tokens: refuse("binding an effect's fields to variables cannot be written yet"),
+  tokens: effectTokens(["radius"]),
 };
 const effectsCheck = (v: unknown): string | null => {
   if (!Array.isArray(v)) return "must be a list of effects ([] removes them)";
@@ -184,6 +200,7 @@ export function checkStyleSet(set: unknown, path = "set"): { problems: string[];
   const add = (name: unknown): void => { if (typeof name === "string" && summary.variables.indexOf(name) < 0) summary.variables.push(name); };
   if (Array.isArray(set.paints)) for (const p of set.paints) if (isObj(p) && isObj(p.tokens)) add(p.tokens.color);
   if (isObj(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
+  if (Array.isArray(set.effects)) for (const e of set.effects) if (isObj(e) && isObj(e.tokens)) for (const k of Object.keys(e.tokens)) add(e.tokens[k]);
   return { problems, summary };
 }
 
@@ -192,7 +209,9 @@ export function isStyleSet(v: unknown): v is StyleSet {
   return checkStyleSet(v).problems.length === 0;
 }
 
-const valueCheck = (v: unknown): string | null => {
+/** Why `v` is not a variable value as the read export writes one (a hex colour, a number, a string, a boolean or
+ *  `{aliasOf}`), or null. Whether it fits the variable's type is checked where the type is known. */
+export const checkSourceValue = (v: unknown): string | null => {
   if (typeof v === "string" || typeof v === "boolean" || isNum(v)) return null;
   if (isObj(v)) {
     if (v.composed !== undefined) return "a composed colour (a colour and a separate opacity) cannot be written yet";
@@ -221,7 +240,7 @@ export function checkVariableEdit(o: { values?: unknown; value?: unknown }, path
   if (o.values !== undefined && o.value !== undefined) return { problems: [at("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
   if (o.values === undefined && o.value === undefined) return { problems: [(path || "setVariable") + ": missing values — `values: {<mode>: value}`, or `value` for a collection with one mode"], summary };
   if (o.value !== undefined) {
-    const bad = valueCheck(o.value);
+    const bad = checkSourceValue(o.value);
     if (bad !== null) problems.push(at("value") + (bad.startsWith(".") ? "" : ": ") + bad);
     else add(o.value);
     return { problems, summary };
@@ -230,7 +249,7 @@ export function checkVariableEdit(o: { values?: unknown; value?: unknown }, path
   for (const [mode, v] of Object.entries(o.values)) {
     if (v === undefined) continue;
     if (!mode.trim()) { problems.push(at("values") + ": a mode name must not be empty"); continue; }
-    const bad = valueCheck(v);
+    const bad = checkSourceValue(v);
     if (bad !== null) { problems.push(at("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad); continue; }
     summary.modes.push(mode);
     add(v);

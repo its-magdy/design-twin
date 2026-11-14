@@ -409,12 +409,15 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    run last since a deleted node cannot be restored. `applied` lists the changes not put back and the deletes already run, not the imported library
    items (a batch that fails while importing has an empty `applied`). One batch is one
    Cmd-Z step (`commitUndo` before and after).
-   The op table (`bridge/src/commands.ts` `WRITE_OPS`, 12 ops) is read by all three places a write is checked —
+   The op table (`bridge/src/commands.ts` `WRITE_OPS`, 14 ops) is read by all three places a write is checked —
    the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
    bundle imports too: `createTree`'s tree spec (`tree-spec.ts`, with `tree-check.ts`; rows and fragments expanded
-   first by `tree-expand.ts`), `patch` (`patch-spec.ts`), `setVariable` / `setStyle` (`source-spec.ts`). What only the
-   file can answer (names, fonts, pages, a node's kind) is resolved by the plugin before the first op runs
-   (`tree-refs.ts`, `patch.ts`, `sources.ts`). A spec given as `treeFile` is read by the MCP server
+   first by `tree-expand.ts`), `patch` (`patch-spec.ts`), `setVariable` / `setStyle` (`source-spec.ts`),
+   `createVariables` / `createStyles` (`create-spec.ts`). What only the file can answer (names, fonts, pages, a node's
+   kind) is resolved by the plugin before the first op runs (`tree-refs.ts`, `patch.ts`, `sources.ts`, `creates.ts`).
+   The create tables come first in a batch and run first: what they will make is the batch's plan
+   (`figma-plugin/src/batch-plan.ts`), so a later op's name for a new variable or text style resolves, like an import,
+   once they have run. A spec given as `treeFile` is read by the MCP server
    (`spec-file.ts`) and never reaches the plugin as a path. The design record is `docs/write-plane-spec.md`; the
    token cost of each route is measured by `test/write-cost.test.ts`.
 
@@ -521,6 +524,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   variable, style or component that lives in another library file is refused, naming the library when Figma says
   which. The dry run asks the plugin what each would carry to (the `writeImpact` command, a scene read that needs no
   Allow edits), so the designer and the agent see the count before anything changes.
+- A design system from nothing is two tables (`createVariables`, `createStyles`; `figma-plugin/src/creates.ts`). A name
+  the file has is updated in place rather than duplicated (only local collections and styles count; a library's with
+  the same name is left alone), and everything a table made is removed again, with what it changed set back, when any
+  op of the batch fails. The same `writeImpact` dry run says which names each table would create and which it would
+  update.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).

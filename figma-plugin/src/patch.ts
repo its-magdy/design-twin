@@ -207,7 +207,7 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
     // A text's fonts can be bound to variables, so after a variable edit of the batch (sources.ts) the fonts it has when
     // the patch runs are not known yet: keepText loads them then, and a missing one fails the op (the batch is put back).
-    const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+    const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables");
     const target = await resolvePatchNode(nd, set, later, loadFont, bad, fontsLater);
     if (target) targets.set(index, target);
   }

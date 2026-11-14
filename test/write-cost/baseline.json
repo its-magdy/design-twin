@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 977,
+  "toolDefinition": 1101,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -51,6 +51,13 @@
         "out": 710,
         "in": 822,
         "total": 1532
+      },
+      "start-from-nothing": {
+        "calls": 5,
+        "ops": 28,
+        "out": 710,
+        "in": 790,
+        "total": 1500
       }
     },
     "tree-spec": {
@@ -133,6 +140,15 @@
         "out": 155,
         "in": 1618,
         "total": 1773
+      }
+    },
+    "create-tokens": {
+      "start-from-nothing": {
+        "calls": 2,
+        "ops": 2,
+        "out": 959,
+        "in": 859,
+        "total": 1818
       }
     }
   }

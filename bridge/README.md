@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, for a source edit with a plugin connected, what follows it: `affects`) |
+| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, and what a create table would make or update: `plan`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -962,6 +962,8 @@ the current page):
 | `delete` | `nodeId` (a node this plugin session created) | — |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a collection with one mode) | — |
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` (the fields to change, below) | — |
+| `createVariables` | `collection` (a local collection's exact name or id; made when the file has none), `variables` (rows `[name, type, …a value per mode]`, below) | `modes` (the mode names, in the order of each row's values; leave it out for a collection with one mode) |
+| `createStyles` | `styles` (rows `{name, kind: "paint" \| "text" \| "effect", set}`, below) | — |
 
 In Claude Code, the `designtwin` plugin's `design-in-figma` skill tells an agent which op fits which job, the dry-run
 rule, and carries this grammar in a reference file the agent reads only when it is about to write, so the tool's own
@@ -983,7 +985,9 @@ runs right before the op applies, against the file as the earlier ops left it, s
 auto-layout on and then fills a child is accepted, and one that cannot work fails there and is put back (as above). Names
 (components, variables, text styles, pages, collections) always resolve against the file as it is before the batch:
 renaming a component and naming it by its new name, or changing a component and relying on that change in a
-`createTree` instance, takes two calls.
+`createTree` instance, takes two calls. The one exception is what the batch's create tables make (`createVariables`,
+`createStyles`, below): they run before every other op, and the specs and patches after them can name the new
+variables and text styles at once.
 
 `setVariableMode` sets a node's explicit mode for one variable collection, so a dark or brand version of a screen is
 the same frame with one op; `clearVariableMode` puts the node back on the mode it inherits from its parent.
@@ -1171,7 +1175,7 @@ and the batch is put back as far as it can be.
   |---|---|
   | paint | `paints`: `[{type: "solid", color, opacity?, tokens?: {color: variable}}]`, replacing the paints |
   | text | `font` (family), `weight` (style name), `size`, `lineHeight` (`{unit: "px" \| "percent", value}` or `{unit: "auto"}`), `letterSpacing` (`{unit: "px" \| "percent", value}`), `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent`; `tokens` (a field — `fontFamily`, `fontStyle`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `paragraphSpacing`, `paragraphIndent` — → a variable's name, key or id; `null` unbinds and keeps the value; bound after the raw values) |
-  | effect | `effects`: `[{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?}]` and `[{type: "layer_blur" \| "background_blur", radius}]`, replacing the effects |
+  | effect | `effects`: `[{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?, tokens?}]` and `[{type: "layer_blur" \| "background_blur", radius, tokens?}]`, replacing the effects; `tokens` binds a shadow's `color`, `radius`, `spread`, `offsetX`, `offsetY` or a blur's `radius` to a variable |
   | any | `name`, `description` |
 
   The style's fonts (now and after) must load (when its font is bound to a variable an earlier op of the batch changes,
@@ -1186,6 +1190,41 @@ variable, and `affects.instances` a main component's instances. A source edit th
 `refusedByFile` with the reason. With no plugin connected the preview says the counts are missing, rather than
 guessing. If a later op of the batch fails, a source edit is put back with the rest, as far as the batch can be (a
 variable's old values and aliases, a style's paints, effects, fonts and its bound variables).
+
+**A design system from nothing** is two tables, each one op: `createVariables` makes a collection, its modes and every
+variable; `createStyles` makes paint, text and effect styles whose values name variables. Both go before every other
+op of a batch (an op before one is refused), and they run first: a `createTree` or a `patch` after them names a new
+variable or text style by name, so tokens and the screen that uses them can land in one call. A name the file already
+has is updated in place, never duplicated — the collection by its exact local name (its modes matched by name, a
+missing one added), a variable by its name within that collection, a style by its name and kind — and the reply says
+so per row. Only this file's own count: a library's collection or style with the same name is not matched, and a local
+one is made beside it. A new variable that another variable of the file shares a name with (in another collection), or
+that two tables make, is refused for the op that names it, since the name would then match two.
+
+- `createVariables` rows are `[name, type, …values]`: `type` is `color`, `number`, `string` or `boolean` (Figma's
+  COLOR, FLOAT, STRING, BOOLEAN), then one value per entry of `modes`, in that order (one value, and no `modes`, for a
+  collection with one mode: a new one keeps Figma's default mode, an existing one must have one mode). A value is the
+  read export's (`values` in variables.json): a hex colour, a number, a string, `true`/`false`, or
+  `{aliasOf: <variable>}` — a row of the same table (before or after it), a row of an earlier `createVariables` of the
+  batch, or a variable the file (or an enabled library) has, by name, key or id. An alias must hold the same type, and
+  a loop of aliases (inside the table, or through the file's own) is refused. A variable's type cannot change: a row
+  whose name the collection has with another type is refused. A new mode beyond the file plan's limit is refused by
+  Figma; the error names the mode and the plan, and the batch is put back. A new variable takes its first value in an
+  existing mode the table leaves out; the variables the table does not list keep their values (and, in an added mode,
+  start with the default mode's, as Figma does). New variables keep Figma's default scopes. The reply is
+  `{id, result, modesAdded?, rows}`: the collection's id, `created` / `updated` (it gained modes) / `unchanged`, the
+  modes it gained, and per row, in table order, `[variable id, "created" | "updated" | "unchanged"]`.
+- `createStyles` rows are `{name, kind, set}`: `set` takes setStyle's fields for that kind (the table under source
+  edits), naming variables in the read export's form — a paint bound to a variable is `{type: "solid", tokens: {color:
+  <variable>}}` (its `color` may be left out), a text style's fields bound through `tokens`, a shadow's `color`,
+  `radius`, `spread`, `offsetX`, `offsetY` and a blur's `radius` through the effect's `tokens`. `set.name` is refused
+  (the row's `name` names it). A variable may be a row of a `createVariables` earlier in the batch. A new text style
+  starts as Inter Regular. The reply is `{rows}`: per row `[style id, "created" | "updated" | "unchanged"]`.
+
+The dry run (with a plugin connected) gives each create op a `plan`: `create` lists what it would make (`collection
+'…'`, `mode '…'` and the new rows' names) and `update` the names the file has already, changed in place. If any op of
+the batch fails, everything the tables made is removed (the collection, its added modes, the variables, the styles)
+and everything they changed is set back, with the rest of the batch.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:
