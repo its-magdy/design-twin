@@ -1240,13 +1240,16 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   has a `#fragment` is refused.
 - Collections and modes: from a resolver, each set is a collection (its `$extensions["figma.com"].collection`, else
   the set's name), and the modifier of that collection gives its modes, the default first. A context file holds only
-  what differs; the rest comes from the set. From a `tokens.dtcg.json`, the modes are each token's
+  what differs; the rest comes from the set. A token is typed by its set, else (a token only contexts give) by the
+  default context; a context that gives it a `$type` making another kind of variable is refused. A token two
+  collections' modifiers give is seeded by the first that can. From a `tokens.dtcg.json`, the modes are each token's
   `$extensions["figma.com"].modes`, and the collection is `collection`. The default mode goes first (Figma's default):
   the token's `$extensions["figma.com"].defaultMode` (design-to-code writes it), else the one mode whose value is the
   `$value`, else the order of the keys. Tokens with different modes go into one collection per set of modes, named
   `<collection> (<mode> / <mode>)` (a number added when two sets of modes would get the same name); a token with no
-  modes goes into the one-mode collection, and so does a token with one mode, which takes that mode's value (and its
-  `modeOpacity`) for a variable and a style alike. A file is a resolver when it has a `resolutionOrder` list or a set with a
+  modes goes into the one-mode collection, and so does a token with one mode, which takes that mode's value for a
+  variable and a style alike (and, for a colour variable, its `modeOpacity`; a style takes no figma.com opacity, which
+  is listed in `partly`). A file is a resolver when it has a `resolutionOrder` list or a set with a
   `sources` list, so a token tree may have a group or a token named `sets`.
 - Names and values: the path joined with `/` (`color.brand.primary` is `color/brand/primary`), and `{a.b}` is an
   alias of `a/b`. A colour is a hex (an sRGB colour from its components; another colour space only through its `hex`);
@@ -1259,7 +1262,8 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
 - Not seeded, and listed in `unmapped` with the reason: gradient, cubicBezier, duration, border, transition and
   strokeStyle tokens, an unknown `$type`, a value that cannot be read, an alias to a token that is not in the files
   (and a token that aliases one that is not seeded), a loop of aliases, a colour alias with an opacity of its own, a
-  token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`). A
+  token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`), a `$value` on
+  the document root (a token needs a name). A
   description is not carried. A collection over 1,000 variables is refused.
 - Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
   extended-collection overrides, a name two paths make once joined (the first is seeded), a token a second set or

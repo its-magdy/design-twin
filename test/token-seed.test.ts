@@ -29,11 +29,20 @@ const listed = (l: ReadonlyArray<{ token: string }>, name: string): number => l.
 const dtcg = (text: string, collection?: string): SeedOutcome => seedFromDtcg(JSON.parse(text) as unknown, { collection });
 /** Every seeded table passes the create tables' own shape check. */
 /** No name in a table and in `unmapped`; no `partly` note for a name in no table; no row name in two tables. */
+/** …no name both a row and a style; no `unmapped` entry that says the token is seeded; a `partly` note that names the
+ *  collection a token is seeded from names the right one. */
 const clean = (o: SeedOutcome): boolean => {
   if ("error" in o) return true;
   const rows = tables(o).flatMap((t) => t.variables.map((r) => r[0]));
-  const seeded = new Set<string>([...rows, ...stylesOf(o).map((s) => s.name)]);
-  return rows.length === new Set(rows).size && o.unmapped.every((u) => !seeded.has(u.token)) && o.partly.every((u) => seeded.has(u.token));
+  const styleNames = stylesOf(o).map((s) => s.name);
+  const seeded = new Set<string>([...rows, ...styleNames]);
+  const SAYS_SEEDED = /seeded from collection '|seeded once, in collection '|was seeded/;
+  const from = (u: { token: string; reason: string }): boolean => {
+    const m = /seeded (?:from|once, in) collection '([^']+)'/.exec(u.reason);
+    return !m || styleNames.includes(u.token) || tables(o).some((t) => t.collection === m[1] && t.variables.some((r) => r[0] === u.token));
+  };
+  return rows.length === new Set(rows).size && styleNames.length === new Set(styleNames).size && !styleNames.some((s) => rows.includes(s))
+    && o.unmapped.every((u) => !seeded.has(u.token) && !SAYS_SEEDED.test(u.reason)) && o.partly.every((u) => seeded.has(u.token) && from(u));
 };
 const valid = (o: SeedOutcome): boolean => res(o).ops.every((op) => (op.op === "createVariables" ? checkCreateVariables(op).problems.length === 0 : checkCreateStyles(op).problems.length === 0));
 
@@ -381,7 +390,7 @@ console.log("\nevery token is in a table (perhaps with a `partly` note) or in `u
     resolutionOrder: [...order, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }],
   }), new Map());
   check(`a token only modifiers give, in two collections: seeded once, in the first, the other in \`partly\` (${JSON.stringify(tables(ctxTwice).map((t) => t.variables))})`,
-    same(rowOf(ctxTwice, "n"), ["n", "number", 1, 2]) && /modifier 'mb' sets it, and it is in collection 'A'/.test(partOf(ctxTwice, "n")) && clean(ctxTwice));
+    same(rowOf(ctxTwice, "n"), ["n", "number", 1, 2]) && /modifier 'mb' sets it too; it is seeded from collection 'A'/.test(partOf(ctxTwice, "n")) && clean(ctxTwice));
 
   const one = dtcg(`{"n":{"$type":"number","$value":1,"$extensions":{"figma.com":{"modes":{"Only":2}}}},"c":{"$type":"color","$value":"#ffffff","$extensions":{"figma.com":{"modes":{"Only":"#000000"},"modeOpacity":{"Only":50}}}},"t":{"$type":"typography","$value":{"fontFamily":"Inter","fontSize":"16px"},"$extensions":{"figma.com":{"modes":{"Only":{"fontFamily":"Inter","fontSize":"18px"}}}}}}`);
   check(`a token with one mode: its mode's value (and that mode's opacity) for a variable and a style alike, a $value that differs in \`partly\` (${JSON.stringify(res(one))})`,
@@ -402,6 +411,84 @@ console.log("\nevery token is in a table (perhaps with a `partly` note) or in `u
   check("…and a value that is neither a token nor a group, its name seeded the same way", same(rowOf(notNode, "a/b"), ["a/b", "number", 1]) && /neither a token/.test(partOf(notNode, "a/b")) && clean(notNode));
   const empty = dtcg(`{"a":{"":{"$type":"number","$value":1}},"a/":{"$type":"number","$value":2}}`);
   check("…and an empty name", same(rowOf(empty, "a/"), ["a/", "number", 2]) && /an empty name/.test(partOf(empty, "a/")) && clean(empty));
+}
+
+console.log("\nthe default mode types a token, and a name is claimed only once it is seeded:");
+{
+  const doc = (o: object): unknown => JSON.parse(JSON.stringify(o)) as unknown;
+  const core = { Core: { sources: [{ keep: { $type: "number", $value: 1 } }] } };
+  const order = [{ $ref: "#/sets/Core" }, { $ref: "#/modifiers/theme" }];
+  /** A token only modifier `theme` (of Core) gives: `dark` listed first, `light` the default. */
+  const onlyCtx = (dark: object, light: object): SeedOutcome => seedFromResolver(doc({ sets: core,
+    modifiers: { theme: { contexts: { dark: [{ x: dark }], light: [{ x: light }] }, default: "light", $extensions: { "figma.com": { collection: "Core" } } } },
+    resolutionOrder: order }), new Map());
+  const wrong = onlyCtx({ $type: "string", $value: "from-dark" }, { $type: "color", $value: "#ffffff" });
+  check(`a token only contexts give is typed by the default context, not the first one listed; a context of another $type is refused (${JSON.stringify(res(wrong))})`,
+    rowOf(wrong, "x") === undefined && /modifier 'theme' gives it \$type 'string' in context 'dark', and the default context 'light' makes it a color token/.test(reasonOf(wrong, "x"))
+    && same(rowOf(wrong, "keep"), ["keep", "number", 1, 1]) && clean(wrong));
+  const bool = onlyCtx({ $value: "false" }, { $type: "string", $value: "true", $extensions: { "figma.com": { originalType: "boolean" } } });
+  check(`…a default-mode boolean stays a boolean (${JSON.stringify(res(bool))})`, same(rowOf(bool, "x"), ["x", "boolean", true, false]) && clean(bool));
+  const colour = onlyCtx({ $value: "#000000" }, { $type: "color", $value: "#ffffff" });
+  check(`…a $type only the default context gives types it, an untyped earlier context notwithstanding (${JSON.stringify(res(colour))})`, same(rowOf(colour, "x"), ["x", "color", "#ffffff", "#000000"]) && clean(colour));
+  const setTyped = seedFromResolver(doc({ sets: { Core: { sources: [{ x: { $type: "number", $value: 1 }, keep: { $type: "number", $value: 1 } }] } },
+    modifiers: { theme: { contexts: { light: [], dark: [{ x: { $type: "color", $value: "#000000" } }] }, default: "light" } }, resolutionOrder: order }), new Map());
+  check(`a set's token a context gives another $type: refused, saying so (${JSON.stringify(res(setTyped))})`,
+    rowOf(setTyped, "x") === undefined && /gives it \$type 'color' in context 'dark', and its set makes it a number token/.test(reasonOf(setTyped, "x")) && clean(setTyped));
+
+  // An alias to a token only a later collection's modifier gives is typed by that modifier's default context too.
+  const aliasLater = seedFromResolver(doc({
+    sets: { A: { sources: [{ r: { $value: "{n}" } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } },
+    modifiers: { mb: { contexts: { d: [{ n: { $value: 4 } }], l: [{ n: { $type: "number", $value: 3 } }] }, default: "l", $extensions: { "figma.com": { collection: "B" } } } },
+    resolutionOrder: [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }, { $ref: "#/modifiers/mb" }],
+  }), new Map());
+  check(`an alias to a token only a modifier gives takes the default context's type (${JSON.stringify(res(aliasLater))})`,
+    same(rowOf(aliasLater, "r"), ["r", "number", { aliasOf: "n" }]) && same(rowOf(aliasLater, "n"), ["n", "number", 3, 4]) && clean(aliasLater));
+
+  // A collection that cannot seed a token leaves it for a later one.
+  const two = { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } };
+  const twoOrder = [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }];
+  const mb = { contexts: { l: [{ n: { $type: "number", $value: 3 } }], d: [{ n: { $type: "number", $value: 4 } }] }, default: "l", $extensions: { "figma.com": { collection: "B" } } };
+  const noDefault = seedFromResolver(doc({ sets: two, modifiers: {
+    ma: { contexts: { l: [], d: [{ n: { $type: "number", $value: 2 } }] }, default: "l", $extensions: { "figma.com": { collection: "A" } } }, mb }, resolutionOrder: twoOrder }), new Map());
+  check(`a token the first collection has no default value for is seeded by the next, the first's reason in \`partly\` (${JSON.stringify(res(noDefault))})`,
+    same(rowOf(noDefault, "n"), ["n", "number", 3, 4]) && /no value in the default mode 'l' of modifier 'ma'/.test(partOf(noDefault, "n")) && reasonOf(noDefault, "n") === "" && clean(noDefault));
+  const badFirst = seedFromResolver(doc({ sets: two, modifiers: {
+    ma: { contexts: { l: [{ n: { $type: "number", $value: "nine" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } }, mb }, resolutionOrder: twoOrder }), new Map());
+  check(`…and one it cannot read: the next seeds it, the failure said as the first collection's (${JSON.stringify(res(badFirst))})`,
+    same(rowOf(badFirst, "n"), ["n", "number", 3, 4]) && /^in collection 'A': not a number/.test(partOf(badFirst, "n")) && reasonOf(badFirst, "n") === "" && clean(badFirst));
+  const neither = seedFromResolver(doc({ sets: two, modifiers: {
+    ma: { contexts: { l: [{ n: { $type: "number", $value: "nine" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } },
+    mb: { contexts: { l: [{ n: { $type: "number", $value: "ten" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "B" } } } }, resolutionOrder: twoOrder }), new Map());
+  check(`…and neither can: in \`unmapped\` with both reasons, never said to be in a collection (${JSON.stringify(res(neither))})`,
+    rowOf(neither, "n") === undefined && listed(res(neither).unmapped, "n") === 2 && partOf(neither, "n") === "" && clean(neither));
+
+  // A style that aliases another takes the value that one is seeded with (its default mode's), not its $value.
+  const oneModeAlias = dtcg(`{ "t": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "16px" }, "$extensions": { "figma.com": { "modes": { "Only": { "fontFamily": "Inter", "fontSize": "18px" } } } } },
+    "u": { "$type": "typography", "$value": "{t}" } }`);
+  check(`a style aliasing a one-mode style takes the mode's value, as that style does (${JSON.stringify(stylesOf(oneModeAlias))})`,
+    stylesOf(oneModeAlias).find((s) => s.name === "t")?.set.size === 18 && stylesOf(oneModeAlias).find((s) => s.name === "u")?.set.size === 18 && clean(oneModeAlias));
+  const ctxAlias = seedFromResolver(doc({
+    sets: { Core: { sources: [{ t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "16px" } }, u: { $type: "typography", $value: "{t}" } }] } },
+    modifiers: { theme: { contexts: { dark: [], light: [{ t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "18px" } } }] }, default: "light" } }, resolutionOrder: order,
+  }), new Map());
+  check(`…and one whose default context overrides it (${JSON.stringify(stylesOf(ctxAlias))})`,
+    stylesOf(ctxAlias).find((s) => s.name === "t")?.set.size === 18 && stylesOf(ctxAlias).find((s) => s.name === "u")?.set.size === 18 && clean(ctxAlias));
+}
+
+console.log("\na $value on the document root, and opacity:");
+{
+  const root = dtcg(`{ "$type": "color", "$value": "#ff0000", "bg": { "$value": "#00ff00" } }`);
+  check(`a $value on the root is a token with no name; what is under it is inside it (${"error" in root ? root.error : "seeded"})`,
+    "error" in root && /'bg': it is inside token '\$root'.*'\$root': a token needs a name/.test(root.error));
+  const rootOnly = dtcg(`{ "$type": "color", "$value": "#ff0000" }`);
+  check(`…and a file of only that is refused for that reason, not as empty (${"error" in rootOnly ? rootOnly.error : "seeded"})`, "error" in rootOnly && /'\$root': a token needs a name/.test(rootOnly.error));
+  const opac = dtcg(`{ "c": { "$type": "color", "$value": "#000000", "$extensions": { "figma.com": { "modes": { "Only": "#000000" }, "modeOpacity": { "Only": 50 } } } } }`);
+  check(`a one-mode colour whose mode differs only in opacity: the note says the opacity differs (${JSON.stringify(res(opac))})`,
+    same(rowOf(opac, "c"), ["c", "color", "#00000080"]) && /the opacity of its one mode 'Only' differs from its own; the mode's opacity was seeded/.test(partOf(opac, "c")) && !/\$value differs/.test(partOf(opac, "c")));
+  const shadow = dtcg(`{ "s": { "$type": "shadow", "$value": { "color": "#000000", "offsetX": "0px", "offsetY": "1px", "blur": "2px" }, "$extensions": { "figma.com": {
+    "modes": { "Only": { "color": "#000000", "offsetX": "0px", "offsetY": "1px", "blur": "2px" } }, "modeOpacity": { "Only": 50 } } } } }`);
+  check(`a style's figma.com opacity is not applied, and said (${JSON.stringify(res(shadow))})`,
+    same(stylesOf(shadow).find((s) => s.name === "s")?.set.effects?.map((e) => ("color" in e ? e.color : null)), ["#000000"]) && /a style takes no figma\.com opacity/.test(partOf(shadow, "s")) && !/the mode's opacity was seeded/.test(partOf(shadow, "s")) && clean(shadow));
 }
 
 // ---------------------------------------------------------------- the files
