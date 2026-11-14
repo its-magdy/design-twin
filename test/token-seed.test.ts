@@ -491,6 +491,254 @@ console.log("\na $value on the document root, and opacity:");
     same(stylesOf(shadow).find((s) => s.name === "s")?.set.effects?.map((e) => ("color" in e ? e.color : null)), ["#000000"]) && /a style takes no figma\.com opacity/.test(partOf(shadow, "s")) && !/the mode's opacity was seeded/.test(partOf(shadow, "s")) && clean(shadow));
 }
 
+console.log("\nround 5: every skip path lists what is under it, and a seat is taken only by a collection that seeds it:");
+{
+  const doc = (o: object): unknown => JSON.parse(JSON.stringify(o)) as unknown;
+  const rootGroup = dtcg(`{ "$root": { "a": { "$type": "color", "$value": "#ffffff" } } }`);
+  check(`a $root with no $value is read as the group itself (${JSON.stringify(res(rootGroup))})`, same(rowOf(rootGroup, "a"), ["a", "color", "#ffffff"]) && res(rootGroup).unmapped.length === 0 && clean(rootGroup));
+  const rootTok = dtcg(`{ "$type": "number", "$value": 1, "$root": { "$value": 2, "c": { "$value": 3 } }, "bg": { "$value": 4 } }`);
+  check(`a token document root: its $root token, that one's child and its other child are each listed (${"error" in rootTok ? rootTok.error : "seeded"})`,
+    "error" in rootTok && /'\$root': it is inside token '\$root'.*'\$root\/c': it is inside token '\$root'.*'bg': it is inside token '\$root'.*and 1 more/.test(rootTok.error));
+  const nested = dtcg(`{ "color": { "$type": "color", "$value": "#ffffff", "$root": { "$value": "#000000" } }, "g": { "$type": "number", "$root": { "$value": 1, "c": { "$value": 2 } }, "d": { "$value": 3 } }, "h": { "$root": 5, "x": { "$type": "number", "$value": 1 } } }`);
+  check(`a $root inside a token is listed; a group's own token's child is inside it; a $root that is no node is listed (${JSON.stringify(res(nested))})`,
+    same(rowOf(nested, "color"), ["color", "color", "#ffffff"]) && /inside token 'color'/.test(reasonOf(nested, "color/$root"))
+    && same(rowOf(nested, "g"), ["g", "number", 1]) && /inside token 'g'/.test(reasonOf(nested, "g/$root/c")) && same(rowOf(nested, "g/d"), ["g/d", "number", 3])
+    && /its \$root is neither a token/.test(reasonOf(nested, "h")) && same(rowOf(nested, "h/x"), ["h/x", "number", 1]) && clean(nested));
+  const badSeg = dtcg(`{ "a.b": { "c": { "$type": "color", "$value": "#ffffff" }, "d": { "e": { "$type": "number", "$value": 1 } } }, "": { "$type": "number", "$value": 1, "f": { "$value": 2 } }, "ok": { "$type": "number", "$value": 1 } }`);
+  check(`a name no alias could spell: every token under it is listed, the group itself not (${JSON.stringify(res(badSeg))})`,
+    /under 'a\.b', which has a name with '\.'/.test(reasonOf(badSeg, "a.b/c")) && /under 'a\.b'/.test(reasonOf(badSeg, "a.b/d/e")) && reasonOf(badSeg, "a.b") === ""
+    && /an empty name/.test(reasonOf(badSeg, "")) && /under '', which has an empty name/.test(reasonOf(badSeg, "/f")) && same(rowOf(badSeg, "ok"), ["ok", "number", 1]) && clean(badSeg));
+
+  // A collection that cannot seed a name leaves no type, value or claim behind: the next one seeds it, whatever the order.
+  const typedBy = (mbFirst: boolean): SeedOutcome => {
+    const ma = { contexts: { l: [{ z: { $type: "color", $value: "nope" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } };
+    const mb = { contexts: { l: [{ z: { $type: "number", $value: 4 } }], d: [{ z: { $type: "number", $value: 5 } }] }, default: "l", $extensions: { "figma.com": { collection: "B" } } };
+    return seedFromResolver(doc({
+      sets: { A: { sources: [{ a: { $value: "{z}" }, keep: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } },
+      modifiers: { ma, mb },
+      resolutionOrder: [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }, ...(mbFirst ? [{ $ref: "#/modifiers/mb" }, { $ref: "#/modifiers/ma" }] : [{ $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }])],
+    }), new Map());
+  };
+  for (const mbFirst of [false, true]) {
+    const o = typedBy(mbFirst);
+    check(`an alias to a token a failing collection tried first takes the type of the one that seeds it (modifiers ${mbFirst ? "mb, ma" : "ma, mb"}: ${JSON.stringify(res(o))})`,
+      same(rowOf(o, "z"), ["z", "number", 4, 5]) && same(rowOf(o, "a"), ["a", "number", { aliasOf: "z" }, { aliasOf: "z" }]) && /^in collection 'A': not a colour/.test(partOf(o, "z")) && reasonOf(o, "a") === "" && clean(o) && valid(o));
+  }
+  const two = { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } };
+  const twoOrder = [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }];
+  const pair = (inA: object, inB: object, inBd: object): SeedOutcome => seedFromResolver(doc({ sets: two, modifiers: {
+    ma: { contexts: { l: [inA], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } },
+    mb: { contexts: { l: [inB], d: [inBd] }, default: "l", $extensions: { "figma.com": { collection: "B" } } } }, resolutionOrder: twoOrder }), new Map());
+  const style = pair({ t: { $type: "typography", $value: { fontSize: "{missing}" } } }, { t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "18px" } } }, {});
+  check(`a style the first collection cannot make is made by the next (${JSON.stringify(res(style))})`,
+    stylesOf(style).find((s) => s.name === "t")?.set.size === 18 && /^in collection 'A': fontSize names \{missing\}/.test(partOf(style, "t")) && reasonOf(style, "t") === "" && clean(style));
+  const dropped = pair({ n: { $type: "number", $value: "{missing}" } }, { n: { $type: "number", $value: 3 } }, { n: { $type: "number", $value: 4 } });
+  check(`…and a row the alias check drops (${JSON.stringify(res(dropped))})`,
+    same(rowOf(dropped, "n"), ["n", "number", 3, 4]) && /^in collection 'A': its alias \{missing\} names no token here/.test(partOf(dropped, "n")) && reasonOf(dropped, "n") === "" && clean(dropped));
+
+  // The one-mode opacity note is said only of a colour whose seeded cell carries that opacity.
+  const op = dtcg(`{ "base": { "$type": "color", "$value": "#000000" },
+    "n": { "$type": "number", "$value": 2, "$extensions": { "figma.com": { "modes": { "Only": 2 }, "modeOpacity": { "Only": 30 }, "opacity": 50 } } },
+    "s": { "$type": "string", "$value": "x", "$extensions": { "figma.com": { "modes": { "Only": "x" }, "modeOpacity": { "Only": 30 } } } },
+    "c": { "$type": "color", "$value": "{base}", "$extensions": { "figma.com": { "modes": { "Only": "{base}" }, "modeOpacity": { "Only": 100 }, "opacity": 40 } } },
+    "k": { "$type": "color", "$value": "#000000", "$extensions": { "figma.com": { "modes": { "Only": "#000000" }, "modeOpacity": { "Only": 50 } } } } }`);
+  check(`no opacity note on a number, a string, or a colour alias seeded bare; one on a colour that takes it (${JSON.stringify(res(op))})`,
+    same(rowOf(op, "n"), ["n", "number", 2]) && same(rowOf(op, "s"), ["s", "string", "x"]) && same(rowOf(op, "c"), ["c", "color", { aliasOf: "base" }])
+    && ["n", "s", "c"].every((k) => partOf(op, k) === "") && same(rowOf(op, "k"), ["k", "color", "#00000080"]) && /the mode's opacity was seeded/.test(partOf(op, "k")) && clean(op));
+}
+
+// ---------------------------------------------------------------- the invariant, over many random files
+console.log("\nrandom token files: every token in exactly one table or in `unmapped`:");
+{
+  /** mulberry32: a seeded PRNG, so the cases are the same every run. */
+  const prng = (seed: number): (() => number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  let rnd = prng(182);
+  const chance = (p: number): boolean => rnd() < p;
+  const pick = <T>(xs: readonly T[]): T => { const x = xs[Math.floor(rnd() * xs.length)]; if (x === undefined) throw new Error("pick: empty"); return x; };
+  // Documents are written as JSON text, so "__proto__" is a key like any other (as JSON.parse makes it).
+  const j = (v: unknown): string => JSON.stringify(v);
+  const obj = (entries: ReadonlyArray<readonly [string, string]>): string => {
+    const seen = new Set<string>();
+    return "{" + entries.filter(([k]) => (seen.has(k) ? false : (seen.add(k), true))).map(([k, v]) => j(k) + ":" + v).join(",") + "}";
+  };
+  const KEYS = ["a", "b", "c", "x", "a/b", "b/c", "", " ", "p.q", "{q}", "r}", "__proto__", "constructor", "toString"];
+  const TYPES = ["color", "number", "dimension", "string", "boolean", "fontFamily", "fontWeight", "typography", "shadow", "duration", "gradient", "cubicBezier", "wobble"];
+  const REFS = ["{a}", "{b}", "{a.b}", "{b.c}", "{x}", "{a.a}", "{c.x}", "{missing}", "{__proto__}", "{constructor}", "{t}", "{n}", "{z}"];
+  const ref = (): string => j(pick(REFS));
+  const valueOf = (type: string | null): string => {
+    if (chance(0.2)) return ref();
+    switch (type ?? pick(TYPES)) {
+      case "color": return pick([j("#ffffff"), j("#00000080"), j("red"), j({ colorSpace: "srgb", components: [1, 0, 0] }), j({ colorSpace: "display-p3", components: [1, 0, 0] })]);
+      case "number": return pick(["1", "2.5", j("nine")]);
+      case "dimension": return pick([j("4px"), j("1rem"), j({ value: 2, unit: "px" }), j("3pt")]);
+      case "string": return pick([j("s"), "3"]);
+      case "boolean": return pick(["true", j("false"), j("maybe")]);
+      case "fontFamily": return pick([j("Inter"), j(["Inter", "sans-serif"]), "1"]);
+      case "fontWeight": return pick(["700", j("bold"), j("heavyish")]);
+      case "typography": return obj([["fontFamily", pick([j("Inter"), ref()])], ["fontSize", pick([j("16px"), ref()])], ...(chance(0.5) ? [["lineHeight", pick(["1.5", ref()])] as const] : [])]);
+      case "shadow": {
+        const layer = (): string => obj([["color", pick([j("#000000"), ref()])], ["offsetX", j("0px")], ["offsetY", pick([j("1px"), ref()])], ["blur", j("2px")]]);
+        return chance(0.3) ? "[" + layer() + "," + layer() + "]" : layer();
+      }
+      default: return pick(["1", j({}), "[]"]);
+    }
+  };
+  const MODES = ["L", "D", "__proto__"];
+  const token = (depth: number, inherited: string | null): string => {
+    const own: string | null = chance(0.6) ? pick(TYPES) : null;
+    const type = own ?? inherited;
+    const e: Array<readonly [string, string]> = [];
+    if (own !== null) e.push(["$type", j(own)]);
+    e.push(["$value", valueOf(type)]);
+    if (chance(0.4)) {
+      const f: Array<readonly [string, string]> = [];
+      if (chance(0.7)) {
+        const ms = chance(0.5) ? [pick(MODES)] : [pick(MODES), pick(MODES)];
+        f.push(["modes", obj(ms.map((m) => [m, valueOf(type)] as const))]);
+        if (chance(0.4)) f.push(["modeOpacity", obj(ms.filter(() => chance(0.7)).map((m) => [m, pick(["50", "100", j("{x}")])] as const))]);
+        if (chance(0.3)) f.push(["defaultMode", j(pick(MODES))]);
+      }
+      if (chance(0.3)) f.push(["opacity", pick(["50", "100", j("{x}")])]);
+      if (chance(0.1)) f.push(["originalType", j("boolean")]);
+      e.push(["$extensions", obj([["figma.com", obj(f)]])]);
+    }
+    // A token with children, a $root among them.
+    if (depth < 3 && chance(0.15)) e.push([pick(KEYS), node(depth + 1, type)]);
+    if (depth < 3 && chance(0.08)) e.push(["$root", node(depth + 1, type)]);
+    return obj(e);
+  };
+  const group = (depth: number, inherited: string | null, root = false): string => {
+    const own: string | null = chance(0.3) ? pick(TYPES) : null;
+    const type = own ?? inherited;
+    const e: Array<readonly [string, string]> = [];
+    if (own !== null) e.push(["$type", j(own)]);
+    if (chance(0.04)) e.push(["$extends", j("{a}")]);
+    if (root && chance(0.08)) e.push(["$value", valueOf(type)]);
+    if (chance(0.15)) e.push(["$root", chance(0.6) ? token(depth + 1, type) : chance(0.7) ? group(depth + 1, type) : "5"]);
+    const n = 1 + Math.floor(rnd() * 3);
+    for (let i = 0; i < n; i++) e.push([pick(KEYS), node(depth + 1, type)]);
+    return obj(e);
+  };
+  const node = (depth: number, inherited: string | null): string => (chance(0.08) ? pick(["3", j("loose"), "null"]) : depth < 3 && chance(0.35) ? group(depth, inherited) : token(depth, inherited));
+
+  const withAnchor = (tree: string): string => (chance(0.85) ? "{" + j("keep") + ":" + j({ $type: "number", $value: 1 }) + (tree === "{}" ? "" : ",") + tree.slice(1) : tree);
+  /** An independent count of a DTCG tree's tokens, by name: a node with a $value is a token; a value that is not an
+   *  object under a name is one (a stray); a group's `$root` with a $value is the group's token, one without is the
+   *  group; under a token, or under a name no alias could spell, every key (`$root` too) is a step and every token and
+   *  stray value is one. */
+  const countTokens = (doc: unknown, into: Set<string>): void => {
+    const isO = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+    const get = (o: Record<string, unknown>, k: string): unknown => Object.getOwnPropertyDescriptor(o, k)?.value;
+    const has = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+    const nm = (p: readonly string[]): string => (p.length ? p.join("/") : "$root");
+    const steps = (o: Record<string, unknown>): string[] => Object.keys(o).filter((k) => k === "$root" || !k.startsWith("$"));
+    const all = (v: unknown, p: readonly string[]): void => {
+      if (!isO(v) || has(v, "$value")) into.add(nm(p));
+      if (isO(v)) for (const k of steps(v)) all(get(v, k), [...p, k]);
+    };
+    const grp = (o: Record<string, unknown>, p: readonly string[]): void => {
+      if (has(o, "$value")) { all(o, p); return; }
+      for (const k of Object.keys(o)) {
+        const v = get(o, k);
+        if (k === "$root") {
+          if (isO(v) && has(v, "$value")) { into.add(nm(p)); for (const kk of steps(v)) all(get(v, kk), [...p, "$root", kk]); }
+          else if (isO(v)) grp(v, p);
+          else into.add(nm(p));
+        } else if (k.startsWith("$")) continue;
+        else if (isO(v) && !has(v, "$value") && k.trim() && !/[.{}]/.test(k)) grp(v, [...p, k]);
+        else all(v, [...p, k]);
+      }
+    };
+    if (isO(doc)) grp(doc, []);
+  };
+
+  /** What breaks the invariant in an outcome, or null. */
+  const broken = (o: SeedOutcome, counted: ReadonlySet<string>): string | null => {
+    if ("error" in o) return counted.size && /it holds no tokens/.test(o.error) ? "refused as holding no tokens: " + o.error : null;
+    const rows = tables(o).flatMap((t) => t.variables.map((r) => r[0]));
+    const styleNames = stylesOf(o).map((s) => s.name);
+    const seeded = new Set<string>([...rows, ...styleNames]);
+    const unm = new Set(o.unmapped.map((u) => u.token));
+    if (rows.length !== new Set(rows).size) return "a row in two tables";
+    if (styleNames.length !== new Set(styleNames).size || styleNames.some((s) => rows.includes(s))) return "a name twice among the styles and rows";
+    for (const n of counted) if (seeded.has(n) === unm.has(n)) return (seeded.has(n) ? "seeded and unmapped: " : "neither seeded nor unmapped: ") + JSON.stringify(n);
+    for (const n of seeded) if (!counted.has(n)) return "a seeded name no file gives: " + JSON.stringify(n);
+    for (const u of o.unmapped) if (seeded.has(u.token)) return "unmapped but seeded: " + JSON.stringify(u.token);
+    for (const u of o.partly) if (!seeded.has(u.token)) return "a partly note on a token not seeded: " + JSON.stringify(u.token);
+    if (!clean(o)) return "not clean (a note says the wrong collection, or an unmapped entry says it was seeded)";
+    if (!valid(o)) return "a table the create checks refuse";
+    return null;
+  };
+  const failures: string[] = [];
+  const t0 = performance.now();
+  let cases = 0;
+  rnd = prng(182);
+  for (let i = 0; i < 2500; i++, cases++) {
+    // Most files hold one token that always seeds, so the outcome is tables (where every list is checked), not a refusal.
+    const text = withAnchor(group(0, null, true));
+    const parsed = JSON.parse(text) as unknown;
+    const counted = new Set<string>();
+    countTokens(parsed, counted);
+    const why = broken(seedFromDtcg(parsed), counted);
+    if (why) failures.push("dtcg " + why + " in " + text);
+  }
+  // Resolvers: 1–3 sets (some sharing a collection), 0–2 modifiers per collection, contexts with names only modifiers
+  // give, and the same names across collections.
+  const NAMES = ["a", "b", "n", "z", "t", "__proto__", "g/x"];
+  const rTok = (inherited: string | null = null): string => {
+    const type = chance(0.7) ? pick(["number", "color", "typography", "string", "duration"]) : null;
+    const e: Array<readonly [string, string]> = [];
+    if (type !== null) e.push(["$type", j(type)]);
+    e.push(["$value", type === null && chance(0.6) ? j("{" + pick(NAMES).split("/").join(".") + "}") : valueOf(type ?? inherited)]);
+    if (chance(0.1)) e.push(["$extensions", obj([["figma.com", obj([["opacity", "50"]])]])]);
+    return obj(e);
+  };
+  const rTree = (): string => {
+    const n = Math.floor(rnd() * 3);
+    const e: Array<readonly [string, string]> = [];
+    for (let i = 0; i < n; i++) e.push([pick(NAMES), chance(0.1) ? group(2, null) : rTok()]);
+    return obj(e);
+  };
+  for (let i = 0; i < 2500; i++, cases++) {
+    const setNames = ["A", "B", "__proto__"].filter(() => chance(0.6));
+    if (!setNames.length) setNames.push("A");
+    const collOf = new Map<string, string>(setNames.map((s) => [s, chance(0.2) ? "Theme" : s]));
+    const sets = setNames.map((s, si) => [s, obj([["sources", "[" + Array.from({ length: 1 + Math.floor(rnd() * 2) }, (_, k) => (si === 0 && k === 0 ? withAnchor(rTree()) : rTree())).join(",") + "]"],
+      ...(collOf.get(s) !== s ? [["$extensions", obj([["figma.com", obj([["collection", j(collOf.get(s))]])]])] as const] : [])])] as const);
+    const mods: Array<readonly [string, string]> = [];
+    for (const c of new Set(collOf.values())) {
+      for (let m = Math.floor(rnd() * 3); m > 0; m--) {
+        const ctxNames = chance(0.5) ? [pick(MODES)] : [pick(MODES), pick(MODES)];
+        const ext = chance(0.75) ? [["$extensions", obj([["figma.com", obj([["collection", j(chance(0.9) ? c : "Elsewhere")]])]])] as const] : [];
+        mods.push(["m" + mods.length, obj([["contexts", obj(ctxNames.map((k) => [k, "[" + (chance(0.8) ? rTree() : "") + "]"] as const))],
+          ...(chance(0.8) ? [["default", j(pick(MODES))] as const] : []), ...ext])]);
+      }
+    }
+    const order = [...sets.map(([s]) => j({ $ref: "#/sets/" + s })), ...mods.map(([m]) => j({ $ref: "#/modifiers/" + m }))];
+    const text = obj([["sets", obj(sets)], ["modifiers", obj(mods)], ["resolutionOrder", "[" + order.join(",") + "]"]]);
+    const parsed = JSON.parse(text) as unknown;
+    const counted = new Set<string>();
+    const walkSources = (v: unknown): void => { if (Array.isArray(v)) for (const s of v) countTokens(s, counted); };
+    /** An own property of parsed JSON ("__proto__" included), or undefined. */
+    const at = (o: unknown, k: string): unknown => { const d = typeof o === "object" && o !== null ? Object.getOwnPropertyDescriptor(o, k) : undefined; return d ? (d.value as unknown) : undefined; };
+    const keysOf = (o: unknown): string[] => (typeof o === "object" && o !== null ? Object.keys(o) : []);
+    const setsV = at(parsed, "sets"), modsV = at(parsed, "modifiers");
+    for (const s of keysOf(setsV)) walkSources(at(at(setsV, s), "sources"));
+    for (const m of keysOf(modsV)) { const ctx = at(at(modsV, m), "contexts"); for (const k of keysOf(ctx)) walkSources(at(ctx, k)); }
+    const why = broken(seedFromResolver(parsed, new Map()), counted);
+    if (why) failures.push("resolver " + why + " in " + text);
+  }
+  const ms = performance.now() - t0;
+  console.log(`  (${cases} random files in ${Math.round(ms)} ms)`);
+  check(`${cases} random token files and resolvers: every token the test's own walk counts is in one table or in \`unmapped\`, never both, no row twice, every \`partly\` name seeded (${failures.length} not${failures.length ? ": " + failures.slice(0, 3).join(" | ") : ""})`, failures.length === 0);
+  check(`…in under 3 s (${Math.round(ms)} ms)`, ms < 3000);
+}
+
 // ---------------------------------------------------------------- the files
 console.log("\nthe files (seed-file.ts):");
 {

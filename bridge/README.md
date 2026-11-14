@@ -1262,13 +1262,14 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
 - Not seeded, and listed in `unmapped` with the reason: gradient, cubicBezier, duration, border, transition and
   strokeStyle tokens, an unknown `$type`, a value that cannot be read, an alias to a token that is not in the files
   (and a token that aliases one that is not seeded), a loop of aliases, a colour alias with an opacity of its own, a
-  token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`), a `$value` on
-  the document root (a token needs a name). A
-  description is not carried. A collection over 1,000 variables is refused.
+  token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`; a `$root`
+  with no `$value` is read as the group itself), a `$value` on the document root (a token needs a name), a name that is
+  empty or has `.`, `{` or `}` in it, and every token under such a name. A description is not carried. A collection over 1,000 variables is refused.
 - Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
   extended-collection overrides, a name two paths make once joined (the first is seeded), a token a second set or
-  another collection's modifier also gives (the first is seeded), a one-mode token whose `$value` differs from its
-  mode's value, a group's `$extends` when the group has its own token. `unmapped` holds only tokens in no table.
+  another collection's modifier also gives (the first is seeded; why an earlier collection could not is listed too), a
+  one-mode token whose `$value` differs from its mode's value, a one-mode colour whose mode's opacity differs from its
+  own (the mode's is seeded), a group's `$extends` when the group has its own token. `unmapped` holds only tokens in no table.
 - The reply puts one entry at the op's own index: `{seeded: file, tables, unmapped?, partly?}`. Each table is
   `{collection, id, result, modesAdded?, created?, updated?, unchanged}` (or `{styles: true, …}`), where `created` and
   `updated` list `[name, id]` and `unchanged` counts the rest. A second identical seed reports nothing created or
