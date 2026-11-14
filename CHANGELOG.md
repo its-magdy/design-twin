@@ -31,6 +31,15 @@ list of merged PRs.
 
 ### Added
 
+- A seventh Claude Code skill, `/designtwin:design-in-figma`, for designing in the open Figma file through
+  `figma_write`. It says which route fits which job (a new screen as one tree spec composed from the file's
+  components, variables and text styles; a copy with only its differences; rows of instances and named fragments; a
+  keyed spec re-sent to update in place, or kept on disk; a patch by id; a variable, style or main component changed
+  once), which jobs have no route yet (a change across many screens by one rule, starting from a file with no design
+  system, capturing a running app, images), and the rule that every batch that overwrites is dry-run and shown to the
+  user first. The full grammar of ops, spec and patch fields, replies and limits is a reference file the skill reads
+  only before a first write, so a session that never writes does not load it. `figma_write`'s own definition is
+  unchanged. The help skill, the READMEs, ARCHITECTURE.md and SECURITY.md now describe the write surface as built.
 - A `figma_write` tree spec can repeat itself cheaply. A node `{clone: "12:34", …}` is a copy of an existing node with
   only its differences: its own fields are a patch of the copy, and `edits` maps a layer of the source (its id, or a
   name unique in it) to a patch of that layer, so several similar screens cost only what differs. An instance takes

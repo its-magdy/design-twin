@@ -10,7 +10,9 @@ result in place and replies with only what changed are built; source edits — `
 file's own variables and paint, text and effect styles, a `patch` of a main component, a library's refused naming the
 library, and the dry run's count of what follows (`writeImpact`) — are built; clone and patch — a `createTree` node
 `clone` that copies an existing node with its own and its layers' differences (`edits`) — and repetition — an
-instance's `rows` table and the root's named `fragments` placed by `use` — are built)
+instance's `rows` table and the root's named `fragments` placed by `use` — are built; the designing skill
+(`claude-plugin/skills/design-in-figma/`, its grammar in `references/grammar.md`) and the docs for the write surface
+are built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -109,7 +111,7 @@ screens.
     the bytes) or a reference to an image already in the file. Never base64 in a spec.
 13. **Placement.** The spec names a target page (the current one by default) and optionally a section; the
     plugin places a new top-level frame beside the existing ones without overlap. Explicit coordinates are
-    optional.
+    optional. As built, the target is a page only (`page`); a section cannot be named yet.
 
 ### Safety
 
@@ -132,7 +134,10 @@ screens.
 ### Cost control
 
 19. **One tool.** `figma_write` stays the single write tool with a short schema. The grammar lives in a
-    skill reference that loads only when an agent is about to write.
+    skill reference that loads only when an agent is about to write. As built, the grammar is
+    `claude-plugin/skills/design-in-figma/references/grammar.md`, which that skill reads before a first write; the
+    tool's description still carries a one-line summary of each op and the spec's field names (its size is
+    `toolDefinition` in `test/write-cost/baseline.json`), so a client without the skill can still write.
 20. **Small replies.** A write answers with the root id, counts, and failures and warnings only. Ids come
     back only for nodes the spec gave a handle. No tree and no screenshot by default; the outline read of
     the new root is the check.

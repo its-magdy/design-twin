@@ -22,7 +22,7 @@ dtwin doctor       # checks everything and names the next step
 dtwin list         # then: dtwin pull --node <id>
 ```
 
-For the Claude Code skills (audit, build, verify, sync), see the
+For the Claude Code skills (audit, build, verify, sync, and designing in Figma through `figma_write`), see the
 [project README](https://github.com/its-magdy/design-twin#readme): its
 [first screen in 5 minutes](https://github.com/its-magdy/design-twin#first-screen-in-5-minutes) goes from install
 to a built screen, and [known limitations](https://github.com/its-magdy/design-twin#known-limitations--platform-support)
@@ -962,6 +962,10 @@ the current page):
 | `delete` | `nodeId` (a node this plugin session created) | — |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a collection with one mode) | — |
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` (the fields to change, below) | — |
+
+In Claude Code, the `designtwin` plugin's `design-in-figma` skill tells an agent which op fits which job, the dry-run
+rule, and carries this grammar in a reference file the agent reads only when it is about to write, so the tool's own
+description stays a summary.
 
 **A batch is all or nothing.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
 node has), and a batch with any problem is refused whole, every problem listed. Then each op keeps what it replaces:

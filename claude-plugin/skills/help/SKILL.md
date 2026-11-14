@@ -1,6 +1,6 @@
 ---
 name: help
-description: Orientation, connection, one-time setup and troubleshooting for Design Twin, the free-plan Figma→code workflow. Use this whenever the user asks a discovery-shaped question — "how does this work", "what can this plugin do", "how do I connect Claude to Figma", "is there a CLI", "what's the MCP server for", "how do I set this up", which export path to use — even if they don't name a command; when they are about to try a Figma task but have no connection set up yet; and whenever something is broken (plugin won't import, port 8787 busy / EADDRINUSE, bridge token / 401, plugin stays offline, MCP not connecting, empty library list, stale snapshot, scripts not found). It orients, routes and diagnoses; it does not export (that's extract), review a design (that's audit-design), write code (that's build-screen) or update built code after a design change (that's sync-design).
+description: Orientation, connection, one-time setup and troubleshooting for Design Twin, the free-plan Figma→code workflow. Use this whenever the user asks a discovery-shaped question — "how does this work", "what can this plugin do", "how do I connect Claude to Figma", "is there a CLI", "what's the MCP server for", "how do I set this up", which export path to use — even if they don't name a command; when they are about to try a Figma task but have no connection set up yet; and whenever something is broken (plugin won't import, port 8787 busy / EADDRINUSE, bridge token / 401, plugin stays offline, MCP not connecting, empty library list, stale snapshot, scripts not found). It orients, routes and diagnoses; it does not export (that's extract), review a design (that's audit-design), write code (that's build-screen), update built code after a design change (that's sync-design) or make or change something in the Figma file (that's design-in-figma).
 argument-hint: "[question or symptom]"
 ---
 
@@ -32,7 +32,7 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 |---|---|---|---|
 | What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `dtwin serve` daemon, also spelled `--serve`) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
 | Setup | **None** beyond importing the plugin — no bridge, no token | Once: `bun add -g @design-twin/dtwin` or `brew install its-magdy/tap/dtwin` (Bun ≥ 1.4.2 — the CLI, the MCP server and the plugin's scripts all run on it); the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration (`dtwin init --mcp`) — same token, nothing extra |
-| Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text, set a variable mode) |
+| Direction | Read only | Read only | Read **and** a fixed set of safe writes (a whole screen in one call, a copy with only its differences, a change by id, a variable, style or main component changed once, a variable mode); `/designtwin:design-in-figma` |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
 **Use what is already set up.** `mcp__designtwin__*` tools in this session (a `.mcp.json` registering
@@ -244,6 +244,9 @@ plugin does not need one: `dtwin plugin install` puts the plugin's manifest in a
   `designtwin:visual-verifier` agent; `@agent-designtwin:visual-verifier` reaches the agent directly.)
 - **A theme file from the Figma tokens** (CSS variables, or Swift / Kotlin / Dart / TS): part of
   `/designtwin:extract` — "set up my theme from Figma".
+- **Make or change something in the Figma file** (a new screen from the file's components and variables, a fix by
+  id, a brand colour changed once): `/designtwin:design-in-figma` — it needs the MCP server, and the designer ticks
+  **Allow edits** in the plugin window.
 - **The design changed after you built it:** `/designtwin:sync-design <screen>` — diffs the old and
   new export and patches only what moved, keeping your hand edits. Commit `design/` so there is
   always a previous export to diff against.

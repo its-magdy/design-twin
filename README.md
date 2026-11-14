@@ -138,7 +138,9 @@ to your tokens; build-screen reads both, and drift-lint checks the component map
   alone won't run them.
 - **Writes are deliberately small.** `figma_write` creates screens and nodes, changes them, and changes this file's
   own variables, styles and main components, from a fixed set of ops, and only after you tick **Allow edits** in the
-  plugin window.
+  plugin window. It cannot yet create variables, styles or components (so a file with no design system gets screens
+  of raw values), place images, or change many screens by one rule. It moves and deletes only nodes it created: since
+  the plugin window opened, or in the earlier result of a spec it sends again under the same key.
 - **Build checks vary by stack.** Web builds are measured node by node in Chromium. Native builds are rendered with
   the stack's own tools and compared as images. The generated Swift, Kotlin and Dart token files are not compiled in CI.
 
@@ -164,7 +166,9 @@ The repo ships **three products**, installed separately:
 
 The plugin exports the design, its variables and its assets to your project's `design/export/` as stack-neutral
 JSON. Claude Code skills then review the design, build it in your stack reusing your components and tokens, check
-the result against the design, and re-sync the code when the design changes.
+the result against the design, and re-sync the code when the design changes. Through the MCP server, the
+`design-in-figma` skill also works the other way: it composes screens in the Figma file from its own components and
+variables, and changes them.
 
 There are three ways to get a design out of Figma:
 
@@ -317,6 +321,7 @@ Every command accepts `--help`. Unknown flags are rejected, not ignored.
 | `/designtwin:build-screen <screen>` | Build the screen in your stack |
 | `/designtwin:verify <screen>` | Rendered screen vs. design, per node |
 | `/designtwin:sync-design <screen>` | Patch built code after a design change |
+| `/designtwin:design-in-figma` | Make or change things in the Figma file through `figma_write` (needs the MCP server) |
 
 ### MCP tools
 
@@ -328,7 +333,9 @@ already on disk and need no Figma connection: `design_get_component` and `design
 
 `figma_write` applies a small set of safe ops (create a screen, or copy one with only its differences; a frame or text; change a node; set or clear a
 variable mode; change a local variable, style or main component once so everything using it follows) and runs no
-arbitrary code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**.
+arbitrary code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**,
+and with **Review each write** ticked each batch waits for the designer's Apply or Reject in the plugin window. The
+`design-in-figma` skill says which op fits which job and carries the full grammar.
 
 Pass `writeToDisk: true` to the export tools for anything large. It's also the only way to get asset
 files through MCP.

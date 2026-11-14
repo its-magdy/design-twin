@@ -26,6 +26,15 @@ src/
   motion.ts      motion / animation reads (the `motion` read option)
   assets.ts      vector/icon -> SVG, image -> PNG, reference PNG (whole-frame + on-demand single-node), dev-resource links
   writes.ts      minimal, explicit, no-eval write ops (code -> design), refused while "Allow edits" is off
+  write-batch.ts what every op shares: problems found while resolving, and a Change that puts it back on a failure
+  tree.ts        createTree: a whole screen from one spec, built hidden and attached only when complete
+  tree-refs.ts   components, variables and text styles a spec or a patch names, resolved (and imported) by name or key
+  clones.ts      createTree `clone`: a copy of an existing node with only its differences
+  keyed.ts       a keyed spec re-sent: its earlier result updated in place (keyed-store.ts: what it keeps in plugin data)
+  patch.ts       patch: an existing node's fields, by id
+  structure.ts   move / delete, only of nodes this session created (session.ts keeps the list)
+  sources.ts     setVariable / setStyle and a patch of a main component, and the dry run's writeImpact count
+  variable-modes.ts  setVariableMode / clearVariableMode on a node
   edits.ts       the "Allow edits" opt-in: off by default, saved per user in clientStorage
   review.ts      "Review each write": a write waits on a card in the window until the designer applies or rejects it
   run.ts         one run's context: read options, counters, warnings, asset tables, memo caches, cancel flag
