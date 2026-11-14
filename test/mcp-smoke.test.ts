@@ -52,7 +52,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; refusedByFile?: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }>; affects?: Record<string, number>; refusedByFile?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; refusedByFile?: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }>; affects?: Record<string, number>; refusedByFile?: string; plan?: { create: string[]; update: string[] } }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -386,7 +386,10 @@ void (async () => {
       whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn }),
       write: (a): WriteResult | typeof HANG => { lastWrite = a; return holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }); },
       // The dry run's count of what a source edit carries to (figma-plugin/src/sources.ts writeImpact).
-      writeImpact: (): WriteImpactReply => ({ steps: [{ index: 0, op: "setVariable", affects: { nodes: 24, styles: 0, variables: 1 } }, { index: 1, op: "setStyle", problem: "paint style 'Core' lives in another library file" }], warnings: ["page 'Old' could not be read"] }),
+      writeImpact: (a): WriteImpactReply => (a.ops[0]?.op === "createVariables"
+        // A create table's plan: which names it would make and which the file has (figma-plugin/src/creates.ts createImpact).
+        ? { steps: [{ index: 0, op: "createVariables", plan: { create: ["collection 'Tokens'", "color/bg"], update: [] } }, { index: 1, op: "createStyles", plan: { create: [], update: ["Card"] } }] }
+        : { steps: [{ index: 0, op: "setVariable", affects: { nodes: 24, styles: 0, variables: 1 } }, { index: 1, op: "setStyle", problem: "paint style 'Core' lives in another library file" }], warnings: ["page 'Old' could not be read"] }),
     } });
     await editsPlugin.opened;
     const card = [{ op: "createFrame", name: "Card" }];
@@ -408,6 +411,15 @@ void (async () => {
       drySource.steps[0]?.affects?.nodes === 24 && drySource.steps[0].affects.variables === 1 && /another library file/.test(drySource.steps[1]?.refusedByFile ?? "")
       && drySource.refusedByFile === 1 && /`affects` counts what follows/.test(drySource.note) && /page 'Old' could not be read/.test(drySource.note)
       && JSON.stringify(editsPlugin.commands("writeImpact").at(-1)?.args).includes('"variable":"color/brand","value":"#2563eb"') && editsPlugin.commands("write").length === writesBeforeDry);
+    const createOps = [{ op: "createVariables", collection: "Tokens", modes: ["Light", "Dark"], variables: [["color/bg", "color", "#ffffff", "#111111"]] },
+      { op: "createStyles", styles: [{ name: "Card", kind: "effect", set: { effects: [{ type: "drop_shadow", color: "#00000040", offset: { x: 0, y: 2 }, radius: 8 }] } }] }];
+    const dryCreate = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: createOps } }))) as WritePreview;
+    ok("[CREATE] a create table's dry run: its sentence, the plugin's plan of what it makes and what it updates, through the tool",
+      dryCreate.creates === 2 && dryCreate.invalid === 0 && /^collection 'Tokens' \(modes 'Light', 'Dark'\): 1 variable \(1 color\)/.test(dryCreate.steps[0]?.change ?? "")
+      && JSON.stringify(dryCreate.steps[0]?.plan) === JSON.stringify({ create: ["collection 'Tokens'", "color/bg"], update: [] }) && JSON.stringify(dryCreate.steps[1]?.plan?.update) === JSON.stringify(["Card"])
+      && /a create table's `plan` lists the names/.test(dryCreate.note) && editsPlugin.commands("write").length === writesBeforeDry);
+    const dryBadTable = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createVariables", collection: "T", modes: ["A", "B"], variables: [["x", "color", "#fff"]] }] } }))) as WritePreview;
+    ok("[CREATE] a table short of a mode's value is invalid in the dry run, naming the row", dryBadTable.invalid === 1 && /variables\[0\]: 'x' has 1 value, and `modes` lists 2/.test(dryBadTable.steps[0]?.invalid ?? ""));
     const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
     ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
     // A spec by path (spec-file.ts): the server reads it, so the plugin gets the spec itself, exactly as if sent inline;

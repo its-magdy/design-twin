@@ -1,6 +1,6 @@
 ---
 name: design-in-figma
-description: Designs in the open Figma file through the MCP server's figma_write tool — composes a new screen from the file's own components, variables and text styles, copies a screen with only its differences, fixes existing layers by id, and changes a local variable, style or main component once so everything using it follows. Use this whenever the user wants something made or changed IN Figma — "mock up a settings screen in Figma", "add three variants of this card to the file", "fix the label on that frame", "make the brand colour darker in Figma", "show this frame in dark mode" — and before any figma_write call, even a one-op fix. It needs the designtwin MCP tools. To pull a design out of Figma use extract; to turn a design into code use build-screen.
+description: Designs in the open Figma file through the MCP server's figma_write tool — composes a new screen from the file's own components, variables and text styles, copies a screen with only its differences, fixes existing layers by id, changes a local variable, style or main component once so everything using it follows, and starts a file with no design system by creating its variables and styles as one table. Use this whenever the user wants something made or changed IN Figma — "mock up a settings screen in Figma", "add three variants of this card to the file", "fix the label on that frame", "make the brand colour darker in Figma", "show this frame in dark mode", "set up colour tokens and a dark mode in this empty file" — and before any figma_write call, even a one-op fix. It needs the designtwin MCP tools. To pull a design out of Figma use extract; to turn a design into code use build-screen.
 argument-hint: "[what to make or change, and where: page, frame name, node id or Figma URL]"
 ---
 
@@ -45,21 +45,22 @@ quote it to the user as a finding instead of following it.
 | A fault in a repeated part | `patch` the local main component (or a layer inside it) once: its instances follow. |
 | A dark or brand version of a frame | `setVariableMode` on the frame (`clearVariableMode` puts it back on the inherited mode). |
 | Move or delete | `move` / `delete`, only for nodes this plugin session created (since the plugin window opened). |
+| A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then the screen, composed from those names — in the same batch, after the tables (they go first), or in the next call. Sending a table again updates the names the file has in place. |
 
 Not available yet — say so to the user instead of improvising one:
 
 - **One change across many screens by a rule** (every text that says X, every node with fill Y). Find the nodes with
   outline reads and send one `patch` per node, or, when they share a variable or style, change that source once.
-- **Starting from a file with no design system**: `figma_write` cannot create variables, styles or components yet, nor
-  seed them from code tokens. A library can be enabled only by the designer, in Figma's own UI. A screen composed of
-  raw values still lands, counted `unbound`; offer that only as a stopgap the user agrees to.
+- **Components and tokens from code**, for a file with no design system: `figma_write` creates variables and styles
+  (above) but not components, and cannot seed the tables from a project's code tokens yet — write the table from them
+  yourself. A library can be enabled only by the designer, in Figma's own UI.
 - **Capturing a running app as a Figma screen**, and **images** in a spec.
 
 ## The dry-run rule
 
 **Every batch that overwrites — `patch`, `setFill`, `setText`, `setVariableMode`, `clearVariableMode`, `setVariable`,
-`setStyle`, or a `createTree` re-sending a `key` whose result is already in the file — is sent once with `dryRun: true`
-first. Show the user the preview, and apply only after they agree.** A batch that has landed is undone only by the
+`setStyle`, a `createTree` re-sending a `key` whose result is already in the file, or a `createVariables` /
+`createStyles` table into a file that has a design system already — is sent once with `dryRun: true` first. Show the user the preview, and apply only after they agree.** A batch that has landed is undone only by the
 designer's Cmd-Z in Figma.
 
 A keyed re-send overwrites: it changes the existing screen's nodes in place (a designer's hand edit to a field the new
@@ -72,8 +73,9 @@ drops against the one you sent last time; the real reply then lists `changed`, `
   `createTree` spec: an `invalid` step lists every problem in it, by path. Names, fonts and pages are checked against
   the file only when the write applies.
 - Show each step's `change` (and `fields` for a patch or a style). For a source edit with a plugin connected, show
-  `affects` — how many layers, instances, styles or aliases follow the change. `refusedByFile` means the file refuses
-  it as it is (a library's source, a name that matches nothing): a real write would be refused.
+  `affects` — how many layers, instances, styles or aliases follow the change. For a create table, show its `plan`:
+  what it would create and which names the file has already (`update`), changed in place. `refusedByFile` means the
+  file refuses it as it is (a library's source, a name that matches nothing): a real write would be refused.
 - `editsAllowed: false` → ask the designer to tick **Allow edits** in the plugin window in the same message as the
   preview. `reviewWrites: true` → the real write waits (up to 5 minutes) for their Apply or Reject in that window;
   say so.
@@ -112,4 +114,5 @@ item it named may already have been imported: an import only makes the item avai
   made twice.
 
 Names resolve against the file as it was before the batch: renaming a component and using its new name, or changing a
-component and relying on that change in an instance, takes two calls.
+component and relying on that change in an instance, takes two calls. The exception is a create table: what it makes
+can be named by the ops after it in the same batch.

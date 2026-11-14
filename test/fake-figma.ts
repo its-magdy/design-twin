@@ -106,8 +106,14 @@ export interface FakeFigma {
     getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
     importVariableByKeyAsync?(key: string): Promise<FakeVariable>;
     setBoundVariableForPaint?(paint: FakeNode, field: string, variable: FakeVariable | null): FakeNode;
+    setBoundVariableForEffect?(effect: FakeNode, field: string, variable: FakeVariable | null): FakeNode;
     createVariableAlias?(variable: FakeVariable): { type: "VARIABLE_ALIAS"; id: string };
+    createVariableCollection?(name: string): FakeCollection;
+    createVariable?(name: string, collection: FakeCollection, resolvedType: string): FakeVariable;
   };
+  createPaintStyle?: () => FakeNode;
+  createTextStyle?: () => FakeNode;
+  createEffectStyle?: () => FakeNode;
   annotations?: { getAnnotationCategoriesAsync(): Promise<Array<{ id: string; label: string }>> };
   editorType?: string;
   teamLibrary?: FakeTeamLibrary;
@@ -220,6 +226,8 @@ export interface Scene {
   clientStorage?: Record<string, unknown>;
   /** the plugin realm's setTimeout/clearTimeout (the real ones by default): a fake clock's, for a case that times out */
   timers?: PluginTimers;
+  /** the most modes a collection may have (the file plan's limit): addMode past it throws as Figma's does */
+  modeLimit?: number;
 }
 /** The timer pair the plugin's main thread has (review.ts waits on one). */
 export interface PluginTimers { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }
@@ -389,6 +397,9 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     ...(teamLibrary ? { teamLibrary } : {}),
   };
   if (scene.localStyles.animation !== null) figma.getLocalCustomAnimationStylesAsync = async () => scene.localStyles.animation ?? [];
+  const { variables: dsVariables, ...dsStyles } = designSystemWrites(scene, delta.modeLimit ?? base.modeLimit);
+  Object.assign(figma, dsStyles);
+  Object.assign(figma.variables, dsVariables);
   const { variables: varOverrides, ...rest } = overrides;
   Object.assign(figma, rest);
   if (varOverrides) Object.assign(figma.variables, varOverrides);
@@ -418,6 +429,120 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     figma, api, scene, posted, send, notified, storage,
     undo,
     async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
+  };
+}
+
+/** What creates a design system (figma-plugin/src/creates.ts): collections with modes, variables and paint, text and
+ *  effect styles, made into the world's live tables (so a lookup finds them at once) and removed from them again, with
+ *  the binding helpers that go with them. A colour value is checked for its shape and an alias for a loop, as Figma's
+ *  are; a mode past `modeLimit` is refused with Figma's message. Every world has them: a case can override any. */
+function designSystemWrites(scene: ResolvedScene, modeLimit: number | undefined): Pick<FakeFigma, "createPaintStyle" | "createTextStyle" | "createEffectStyle"> & { variables: Partial<FakeFigma["variables"]> } {
+  let seq = 0;
+  const alias = (id: string): { type: "VARIABLE_ALIAS"; id: string } => ({ type: "VARIABLE_ALIAS", id });
+  const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+  const aliasTo = (x: unknown): string | null => (isObj(x) && x.type === "VARIABLE_ALIAS" && typeof x.id === "string" ? x.id : null);
+  const reaches = (from: string, to: string): boolean => {
+    const seen = new Set<string>();
+    const queue = [from];
+    while (queue.length) {
+      const id = queue.shift();
+      if (id === undefined || seen.has(id)) continue;
+      if (id === to) return true;
+      seen.add(id);
+      const v = scene.variables[id] ?? scene.remote.variables[id];
+      for (const x of Object.values(v?.valuesByMode ?? {})) { const a = aliasTo(x); if (a) queue.push(a); }
+    }
+    return false;
+  };
+  const DEFAULTS: Record<string, unknown> = { COLOR: { r: 0, g: 0, b: 0, a: 1 }, FLOAT: 0, STRING: "", BOOLEAN: false };
+  const style = (type: string, fields: Record<string, unknown>, list: () => FakeNode[]): FakeNode => {
+    const n = ++seq;
+    const id = `S:new${n},`;
+    const st: FakeNode = {
+      id, key: `new-style-${n}`, type, name: type === "TEXT" ? "Text style" : "Style", description: "", remote: false, ...fields,
+      getStyleConsumersAsync: async () => [],
+      remove() { const l = list(); const i = l.indexOf(st); if (i >= 0) l.splice(i, 1); delete scene.styles[id]; },
+    };
+    list().push(st);
+    scene.styles[id] = st;
+    return st;
+  };
+  return {
+    createPaintStyle: () => style("PAINT", { paints: [] }, () => scene.localStyles.paint),
+    createEffectStyle: () => style("EFFECT", { effects: [] }, () => scene.localStyles.effect),
+    createTextStyle: () => {
+      const st = style("TEXT", {
+        fontName: { family: "Inter", style: "Regular" }, fontSize: 12, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 },
+        textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 0, paragraphIndent: 0, boundVariables: {},
+      }, () => scene.localStyles.text);
+      st.setBoundVariable = (field: string, v: FakeVariable | null) => {
+        const b: Record<string, unknown> = isObj(st.boundVariables) ? { ...st.boundVariables } : {};
+        if (v === null) delete b[field]; else b[field] = alias(v.id);
+        st.boundVariables = b;
+      };
+      return st;
+    },
+    variables: {
+      createVariableAlias: (v) => alias(v.id),
+      setBoundVariableForPaint: (p, field, v) => ({ ...p, boundVariables: v ? { [field]: alias(v.id) } : {} }),
+      setBoundVariableForEffect: (e, field, v) => {
+        const b: Record<string, unknown> = isObj(e.boundVariables) ? { ...e.boundVariables } : {};
+        if (v === null) delete b[field]; else b[field] = alias(v.id);
+        return { ...e, boundVariables: b };
+      },
+      createVariableCollection: (name) => {
+        const n = ++seq;
+        const id = `VariableCollectionId:new:${n}`;
+        const variablesOf = (): FakeVariable[] => Object.values(scene.variables).filter((v) => v.variableCollectionId === id);
+        const c: FakeCollection & Record<string, unknown> = {
+          id, name, key: `new-collection-${n}`, remote: false, isExtension: false, hiddenFromPublishing: false,
+          modes: [{ modeId: `${n}:0`, name: "Mode 1" }], defaultModeId: `${n}:0`, variableIds: [],
+          addMode(modeName: string) {
+            if (modeLimit !== undefined && c.modes.length >= modeLimit) throw new Error(`in addMode: Limited to ${modeLimit} modes only`);
+            const modeId = `${n}:${c.modes.length + seq++}`;
+            c.modes = [...c.modes, { modeId, name: modeName }];
+            // A new mode starts with each variable's default-mode value, as in Figma.
+            for (const v of variablesOf()) v.valuesByMode = { ...v.valuesByMode, [modeId]: v.valuesByMode[c.defaultModeId] };
+            return modeId;
+          },
+          renameMode(modeId: string, newName: string) {
+            if (!c.modes.some((m) => m.modeId === modeId)) throw new Error(`in renameMode: no mode ${modeId}`);
+            c.modes = c.modes.map((m) => (m.modeId === modeId ? { ...m, name: newName } : m));
+          },
+          removeMode(modeId: string) {
+            c.modes = c.modes.filter((m) => m.modeId !== modeId);
+            for (const v of variablesOf()) { const rest = { ...v.valuesByMode }; delete rest[modeId]; v.valuesByMode = rest; }
+          },
+          remove() {
+            for (const v of variablesOf()) delete scene.variables[v.id];
+            delete scene.collections[id];
+          },
+        };
+        scene.collections[id] = c;
+        return c;
+      },
+      createVariable: (name, collection, resolvedType) => {
+        const id = `VariableID:new:${++seq}`;
+        const coll = scene.collections[collection.id];
+        if (!coll) throw new Error("in createVariable: no such collection");
+        const v: FakeVariable & Record<string, unknown> = {
+          id, name, key: `new-variable-${seq}`, resolvedType, variableCollectionId: coll.id, scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false, description: "",
+          valuesByMode: Object.fromEntries(coll.modes.map((m) => [m.modeId, DEFAULTS[resolvedType]])),
+          setValueForMode(modeId: string, value: unknown) {
+            const now = scene.collections[v.variableCollectionId];
+            if (!now || !now.modes.some((m) => m.modeId === modeId)) throw new Error(`in setValueForMode: invalid mode ${modeId}`);
+            const to = aliasTo(value);
+            if (to !== null && reaches(to, id)) throw new Error("in setValueForMode: the alias would make a cycle");
+            if (to === null && resolvedType === "COLOR" && !(isObj(value) && "r" in value)) throw new Error("in setValueForMode: a colour variable takes RGB(A) or an alias");
+            v.valuesByMode = Object.freeze({ ...v.valuesByMode, [modeId]: value }); // a fresh frozen object, as Figma hands back
+          },
+          remove() { delete scene.variables[id]; coll.variableIds = (coll.variableIds ?? []).filter((x) => x !== id); },
+        };
+        scene.variables[id] = v;
+        coll.variableIds = [...(coll.variableIds ?? []), id];
+        return v;
+      },
+    },
   };
 }
 

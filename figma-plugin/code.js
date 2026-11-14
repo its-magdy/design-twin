@@ -1946,6 +1946,7 @@
   }
 
   // ../bridge/src/source-spec.ts
+  var SHADOW_TOKEN_FIELDS = ["color", "radius", "spread", "offsetX", "offsetY"];
   var TEXT_STYLE_TOKEN_FIELDS = ["fontFamily", "fontStyle", "fontWeight", "fontSize", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent"];
   var TEXT_STYLE_TOKEN_TYPES = {
     fontFamily: "STRING",
@@ -1969,6 +1970,19 @@
     if (!isNum2(v.value)) return "is missing value (a number)";
     return auto && v.value < 0 ? "value must be \u2265 0" : null;
   };
+  var effectTokens = (fields) => (v) => {
+    if (!isObj2(v)) return "must be an object of field \u2192 variable (" + fields.join(", ") + ")";
+    const keys = Object.keys(v).filter((k) => v[k] !== void 0);
+    if (!keys.length) return "is empty";
+    for (const k of keys) {
+      if (fields.indexOf(k) < 0) {
+        const near = nearestNames(k, fields);
+        return "." + k + ": not a field a variable binds to here" + (near.length ? "; closest: " + quoteList(near) : "");
+      }
+      if (typeof v[k] !== "string" || !String(v[k]).trim()) return "." + k + " must be a variable's name, key or id";
+    }
+    return null;
+  };
   var SHADOW_RULES = {
     type: oneOf("drop_shadow", "inner_shadow"),
     color: hex,
@@ -1977,7 +1991,7 @@
     spread: num2,
     behindNode: (v) => v === true ? null : "must be true (omit it for false)",
     blendMode: refuse("a shadow's blend mode cannot be written yet"),
-    tokens: refuse("binding an effect's fields to variables cannot be written yet")
+    tokens: effectTokens(SHADOW_TOKEN_FIELDS)
   };
   var BLUR_RULES = {
     type: oneOf("layer_blur", "background_blur"),
@@ -1986,7 +2000,7 @@
     startOffset: refuse("a progressive blur cannot be written yet"),
     endOffset: refuse("a progressive blur cannot be written yet"),
     startRadius: refuse("a progressive blur cannot be written yet"),
-    tokens: refuse("binding an effect's fields to variables cannot be written yet")
+    tokens: effectTokens(["radius"])
   };
   var effectsCheck = (v) => {
     if (!Array.isArray(v)) return "must be a list of effects ([] removes them)";
@@ -2086,12 +2100,15 @@
       for (const p of set.paints) if (isObj2(p) && isObj2(p.tokens)) add(p.tokens.color);
     }
     if (isObj2(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
+    if (Array.isArray(set.effects)) {
+      for (const e of set.effects) if (isObj2(e) && isObj2(e.tokens)) for (const k of Object.keys(e.tokens)) add(e.tokens[k]);
+    }
     return { problems, summary };
   }
   function isStyleSet(v) {
     return checkStyleSet(v).problems.length === 0;
   }
-  var valueCheck = (v) => {
+  var checkSourceValue = (v) => {
     if (typeof v === "string" || typeof v === "boolean" || isNum2(v)) return null;
     if (isObj2(v)) {
       if (v.composed !== void 0) return "a composed colour (a colour and a separate opacity) cannot be written yet";
@@ -2112,7 +2129,7 @@
     if (o.values !== void 0 && o.value !== void 0) return { problems: [at2("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
     if (o.values === void 0 && o.value === void 0) return { problems: [(path || "setVariable") + ": missing values \u2014 `values: {<mode>: value}`, or `value` for a collection with one mode"], summary };
     if (o.value !== void 0) {
-      const bad = valueCheck(o.value);
+      const bad = checkSourceValue(o.value);
       if (bad !== null) problems.push(at2("value") + (bad.startsWith(".") ? "" : ": ") + bad);
       else add(o.value);
       return { problems, summary };
@@ -2124,7 +2141,7 @@
         problems.push(at2("values") + ": a mode name must not be empty");
         continue;
       }
-      const bad = valueCheck(v);
+      const bad = checkSourceValue(v);
       if (bad !== null) {
         problems.push(at2("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad);
         continue;
@@ -2155,6 +2172,208 @@
     return problems.length + " problems in the edit \u2014 nothing was changed:\n" + problems.join("\n");
   }
 
+  // ../bridge/src/create-spec.ts
+  var VARIABLE_TYPE_NAMES = ["color", "number", "string", "boolean"];
+  function figmaType(t) {
+    return t === "color" ? "COLOR" : t === "number" ? "FLOAT" : t === "string" ? "STRING" : "BOOLEAN";
+  }
+  var MAX_TABLE_ROWS = 1e3;
+  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var nonEmpty3 = (v) => typeof v === "string" && v.trim().length > 0;
+  var isNum3 = (v) => typeof v === "number" && Number.isFinite(v);
+  var isTypeName = (v) => typeof v === "string" && VARIABLE_TYPE_NAMES.indexOf(v) >= 0;
+  function cellProblem(v, type) {
+    if (typeof v === "object") return null;
+    if (type === "color") return typeof v === "string" && parseHexColor(v) ? null : "a color row takes a hex colour (#rrggbb or #rrggbbaa) or {aliasOf}";
+    if (type === "number") return isNum3(v) ? null : "a number row takes a number or {aliasOf}";
+    if (type === "string") return typeof v === "string" ? null : "a string row takes a string or {aliasOf}";
+    return typeof v === "boolean" ? null : "a boolean row takes true, false or {aliasOf}";
+  }
+  function checkCreateVariables(o, path = "") {
+    const at2 = (k) => (path ? path + "." : "") + k;
+    const summary = { collection: typeof o.collection === "string" ? o.collection : "", modes: [], rows: [], outside: [] };
+    const problems = [];
+    if (!nonEmpty3(o.collection)) problems.push(at2("collection") + ": must be the collection's name (a non-empty string)");
+    let width = 1;
+    if (o.modes !== void 0) {
+      if (!Array.isArray(o.modes) || !o.modes.length) problems.push(at2("modes") + ': must be a list of mode names, e.g. ["Light", "Dark"] (leave it out for a collection with one mode)');
+      else {
+        const seen = /* @__PURE__ */ new Set();
+        for (const [i, m] of o.modes.entries()) {
+          if (!nonEmpty3(m)) {
+            problems.push(at2("modes") + "[" + i + "]: must be a mode name (a non-empty string)");
+            continue;
+          }
+          if (seen.has(m)) {
+            problems.push(at2("modes") + "[" + i + "]: '" + m + "' is listed twice");
+            continue;
+          }
+          seen.add(m);
+          summary.modes.push(m);
+        }
+        width = o.modes.length;
+      }
+    }
+    if (!Array.isArray(o.variables) || !o.variables.length) {
+      problems.push(at2("variables") + ': must be a list of rows [name, type, value per mode\u2026], e.g. [["color/brand", "color", "#4f46e5"]]');
+      return { problems, summary };
+    }
+    if (o.variables.length > MAX_TABLE_ROWS) problems.push(at2("variables") + ": " + o.variables.length + " rows; one op takes at most " + MAX_TABLE_ROWS + " (send the rest in another op)");
+    const names = /* @__PURE__ */ new Map();
+    for (const [i, row] of o.variables.entries()) {
+      const rp = at2("variables") + "[" + i + "]";
+      if (!Array.isArray(row)) {
+        problems.push(rp + ": must be a row [name, type, value per mode\u2026]");
+        continue;
+      }
+      const [name, type, ...cells] = row;
+      if (!nonEmpty3(name)) {
+        problems.push(rp + "[0]: must be the variable's name (a non-empty string)");
+        continue;
+      }
+      if (!isTypeName(type)) {
+        const near = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
+        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near.length ? "; closest: " + quoteList(near) : ""));
+        continue;
+      }
+      const was = names.get(name);
+      if (was !== void 0) {
+        problems.push(rp + "[0]: '" + name + "' is row " + was + " too; a name is one row");
+        continue;
+      }
+      names.set(name, i);
+      if (cells.length !== width) {
+        problems.push(rp + ": '" + name + "' has " + cells.length + " value" + (cells.length === 1 ? "" : "s") + ", and " + (o.modes === void 0 ? "a collection with one mode (no `modes`) takes one" : "`modes` lists " + width + " \u2014 one per mode, in that order"));
+        continue;
+      }
+      let ok = true;
+      const values = [];
+      for (const [j, cell] of cells.entries()) {
+        const cp = rp + "[" + (j + 2) + "]";
+        const bad = checkSourceValue(cell);
+        if (bad !== null) {
+          problems.push(cp + (bad.startsWith(".") ? "" : ": ") + bad);
+          ok = false;
+          continue;
+        }
+        const value = cell;
+        const wrong = cellProblem(value, type);
+        if (wrong !== null) {
+          problems.push(cp + ": " + wrong + " ('" + name + "' is a " + type + " row)");
+          ok = false;
+          continue;
+        }
+        values.push(value);
+      }
+      if (ok) summary.rows.push({ name, type, values });
+    }
+    if (problems.length) return { problems, summary };
+    const byName = /* @__PURE__ */ new Map();
+    for (const r of summary.rows) byName.set(r.name, r);
+    for (const [i, r] of summary.rows.entries()) {
+      for (const [j, v] of r.values.entries()) {
+        if (typeof v !== "object") continue;
+        const target = byName.get(v.aliasOf);
+        const cp = at2("variables") + "[" + i + "][" + (j + 2) + "].aliasOf";
+        if (!target) {
+          if (summary.outside.indexOf(v.aliasOf) < 0) summary.outside.push(v.aliasOf);
+          continue;
+        }
+        if (target === r) {
+          problems.push(cp + ": '" + r.name + "' cannot alias itself");
+          continue;
+        }
+        if (target.type !== r.type) problems.push(cp + ": '" + target.name + "' is a " + target.type + " row, and '" + r.name + "' is a " + r.type + " one");
+      }
+    }
+    const loop = tableLoop(summary.rows, byName, summary.modes.length || 1);
+    if (loop) problems.push(at2("variables") + ": " + loop);
+    return { problems, summary };
+  }
+  function tableLoop(rows, byName, width) {
+    for (let m = 0; m < width; m++) {
+      for (const start of rows) {
+        const chain = [start];
+        const seen = /* @__PURE__ */ new Set([start]);
+        for (let cur = start; ; ) {
+          const v = cur.values[m];
+          const next = v !== void 0 && typeof v === "object" ? byName.get(v.aliasOf) : void 0;
+          if (!next || next === cur) break;
+          chain.push(next);
+          if (next === start) return "the aliases " + chain.map((r) => "'" + r.name + "'").join(" \u2192 ") + " make a loop" + (width > 1 ? " (mode " + (m + 1) + ")" : "");
+          if (seen.has(next)) break;
+          seen.add(next);
+          cur = next;
+        }
+      }
+    }
+    return null;
+  }
+  function checkCreateStyles(o, path = "") {
+    const at2 = (k) => (path ? path + "." : "") + k;
+    const rows = [];
+    const problems = [];
+    if (!Array.isArray(o.styles) || !o.styles.length) {
+      return { problems: [at2("styles") + ': must be a list of styles {name, kind: paint | text | effect, set}, e.g. [{name: "Brand", kind: "paint", set: {paints: [{type: "solid", tokens: {color: "color/brand"}}]}}]'], rows };
+    }
+    if (o.styles.length > MAX_TABLE_ROWS) problems.push(at2("styles") + ": " + o.styles.length + " styles; one op takes at most " + MAX_TABLE_ROWS);
+    const seen = /* @__PURE__ */ new Map();
+    for (const [i, s] of o.styles.entries()) {
+      const sp = at2("styles") + "[" + i + "]";
+      if (!isObj3(s)) {
+        problems.push(sp + ": must be a style {name, kind, set}");
+        continue;
+      }
+      const extra = Object.keys(s).filter((k) => k !== "name" && k !== "kind" && k !== "set" && s[k] !== void 0);
+      for (const k of extra) {
+        const near = nearestNames(k, ["name", "kind", "set"]);
+        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near.length ? "; closest: " + quoteList(near) : "") + ")");
+      }
+      if (!nonEmpty3(s.name)) {
+        problems.push(sp + ".name: must be the style's name (a non-empty string)");
+        continue;
+      }
+      const kind = s.kind;
+      if (kind !== "paint" && kind !== "text" && kind !== "effect") {
+        problems.push(sp + ".kind: must be paint | text | effect");
+        continue;
+      }
+      if (isObj3(s.set) && s.set.name !== void 0) {
+        problems.push(sp + ".set.name: a new style is named by the row's `name` (rename an existing one with setStyle)");
+        continue;
+      }
+      const { problems: bad, summary } = checkStyleSet(s.set, sp + ".set");
+      if (bad.length) {
+        problems.push(...bad);
+        continue;
+      }
+      if (summary.kind !== null && summary.kind !== kind) {
+        problems.push(sp + ".set: its fields are a " + summary.kind + " style's, and the row says " + kind);
+        continue;
+      }
+      const key = kind + "\0" + s.name;
+      const was = seen.get(key);
+      if (was !== void 0) {
+        problems.push(sp + ".name: the " + kind + " style '" + s.name + "' is styles[" + was + "] too; a name is one row per kind");
+        continue;
+      }
+      seen.set(key, i);
+      if (extra.length) continue;
+      rows.push({ name: s.name, kind, set: s.set });
+    }
+    return { problems, rows };
+  }
+  var shown3 = (v) => typeof v === "object" ? "alias of '" + v.aliasOf + "'" : JSON.stringify(v);
+  function describeCreateVariables(s) {
+    const types = VARIABLE_TYPE_NAMES.map((t) => [t, s.rows.filter((r) => r.type === t).length]).filter(([, n]) => n > 0).map(([t, n]) => n + " " + t);
+    const first2 = s.rows[0];
+    return "collection '" + s.collection + "'" + (s.modes.length ? " (modes " + quoteList(s.modes) + ")" : " (one mode)") + ": " + s.rows.length + " variable" + (s.rows.length === 1 ? "" : "s") + " (" + types.join(", ") + ")" + (first2 ? ", e.g. '" + first2.name + "' = " + first2.values.map(shown3).join(" / ") : "") + " \u2014 a local collection, mode or variable with the same name is updated in place (a library's is not matched), the rest are created; the ops after it in the batch can name them";
+  }
+  function describeCreateStyles(rows) {
+    const kinds = ["paint", "text", "effect"].map((k) => [k, rows.filter((r) => r.kind === k).length]).filter(([, n]) => n > 0).map(([k, n]) => n + " " + k);
+    return rows.length + " style" + (rows.length === 1 ? "" : "s") + " (" + kinds.join(", ") + "): " + quoteList(rows.slice(0, 3).map((r) => r.name)) + (rows.length > 3 ? " and " + (rows.length - 3) + " more" : "") + " \u2014 a local style with the same name and kind is updated in place (a library's is not matched), the rest are created; the ops after it in the batch can name them";
+  }
+
   // ../bridge/src/tree-check.ts
   function checkTree(spec) {
     return checkTreeWith(spec, checkPatch);
@@ -2172,7 +2391,7 @@
   }
 
   // ../bridge/src/commands.ts
-  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete", "setVariable", "setStyle"];
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"];
   var INHERITED = "inherited";
   var WRITE_OPS = {
     createFrame: { effect: "creates", required: [], shows: {} },
@@ -2187,8 +2406,13 @@
     delete: { effect: "deletes", required: ["nodeId"], shows: {} },
     // Source edits (source-spec.ts): one change that every user of the variable or style follows.
     setVariable: { effect: "overwrites", required: ["variable"], shows: {} },
-    setStyle: { effect: "overwrites", required: ["style", "set"], shows: {} }
+    setStyle: { effect: "overwrites", required: ["style", "set"], shows: {} },
+    // A design system from nothing (create-spec.ts): a table of variables or styles. A name the file has is updated in
+    // place, so the dry run asks the plugin which rows it would create and which it would update (writeImpact `plan`).
+    createVariables: { effect: "creates", required: ["collection", "variables"], shows: {} },
+    createStyles: { effect: "creates", required: ["styles"], shows: {} }
   };
+  var CREATE_OPS = ["createVariables", "createStyles"];
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
   }
@@ -2200,6 +2424,7 @@
     if (o.op === "patch") return patchPreview(o, index, missing);
     if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
     if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
+    if (o.op === "createVariables" || o.op === "createStyles") return createPreview(o, index, missing);
     return {
       index,
       op: o.op,
@@ -2244,6 +2469,16 @@
     const { problems, summary } = checkStyleSet(o.set);
     if (problems.length || !isStyleSet(o.set)) return { ...base, invalid: problems.join("\n") };
     return { ...base, fields: styleRows(o.set, summary), change: describeStyleEdit(o.style, summary) };
+  }
+  function createPreview(o, index, missing) {
+    const base = { index, op: o.op, effect: "creates", target: o.op === "createVariables" ? o.collection ? `collection '${o.collection}'` : null : "local styles" };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    if (o.op === "createVariables") {
+      const { problems: problems2, summary } = checkCreateVariables(o);
+      return problems2.length ? { ...base, invalid: problems2.join("\n") } : { ...base, change: describeCreateVariables(summary) };
+    }
+    const { problems, rows } = checkCreateStyles(o);
+    return problems.length ? { ...base, invalid: problems.join("\n") } : { ...base, change: describeCreateStyles(rows) };
   }
   function modeChange(o, shows) {
     const newMode = shows === INHERITED ? INHERITED : o[shows];
@@ -2317,7 +2552,7 @@
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
-  var isNum3 = (v) => typeof v === "number";
+  var isNum4 = (v) => typeof v === "number";
   function opt(a, key, ok, what, label4 = key) {
     const v = a[key];
     return v === void 0 || ok(v) ? null : `\`${label4}\` is not ${what}`;
@@ -2332,10 +2567,10 @@
   var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
   var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
   var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
-  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum3);
+  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum4);
   var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
-  var isIndex = (v) => isNum3(v) && Number.isInteger(v) && v >= 0;
+  var isIndex = (v) => isNum4(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
     const at2 = `ops[${i}]`;
     if (!isRecord(o)) return `\`${at2}\` is not an object`;
@@ -2343,7 +2578,7 @@
     if (!isWriteOpName(op)) return `\`${at2}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
       ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at2}.${k}`)),
-      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum3, "a number", `${at2}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum4, "a number", `${at2}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at2}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at2}.padding`),
       opt(o, "index", isIndex, "a whole number \u2265 0", `${at2}.index`)
@@ -2368,6 +2603,14 @@
       const { problems } = checkStyleSet(o.set, `${at2}.set`);
       if (problems.length) return sourceRefusal(problems);
     }
+    if (op === "createVariables") {
+      const { problems } = checkCreateVariables(o, at2);
+      if (problems.length) return sourceRefusal(problems);
+    }
+    if (op === "createStyles") {
+      const { problems } = checkCreateStyles(o, at2);
+      if (problems.length) return sourceRefusal(problems);
+    }
     return null;
   }
   var writeArgs = (a) => {
@@ -2387,7 +2630,7 @@
     exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr, "a string")]),
     exportSelection: readOptArgs,
     exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
-    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum3, "a number")]),
+    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum4, "a number")]),
     write: writeArgs,
     writeImpact: writeArgs
   };
@@ -5675,7 +5918,7 @@
     }
     return out;
   }
-  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   function canonical(v) {
     if (v === void 0) return "undefined";
     if (v === null || typeof v !== "object") return JSON.stringify(v);
@@ -5685,7 +5928,7 @@
   }
   var same = (a, b) => canonical(a) === canonical(b);
   function without(o, keys) {
-    if (!isObj3(o)) return void 0;
+    if (!isObj4(o)) return void 0;
     const out = {};
     for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
     return Object.keys(out).length ? out : void 0;
@@ -5979,6 +6222,21 @@
     figma.root.setPluginData(indexEntry(key), id);
   }
 
+  // src/batch-plan.ts
+  var current2 = null;
+  function setBatchPlan(plan) {
+    current2 = plan;
+  }
+  function plannedVariables(name) {
+    return current2 ? current2.variables.filter((v) => v.name === name) : [];
+  }
+  function plannedStyles(name, kind) {
+    return current2 ? current2.styles.filter((s) => s.name === name && (kind === void 0 || s.kind === kind)) : [];
+  }
+  function plannedWhere(p) {
+    return "ops[" + p.op + "] makes it " + p.where;
+  }
+
   // src/tree-refs.ts
   var isKey = (ref2) => /^[0-9a-f]{40}$/i.test(ref2);
   function usesOf(index, s, at2, out, labels) {
@@ -6153,12 +6411,12 @@
     }
     const mapped = mapProps(node.props || {}, defs, (set || c).name);
     if ("errors" in mapped) return mapped.errors.join("; ");
-    const shown3 = set ? variantFor(set, main, mapped.ok, defs) : main;
-    if ("missing" in shown3) {
+    const shown4 = set ? variantFor(set, main, mapped.ok, defs) : main;
+    if ("missing" in shown4) {
       const have = set ? set.children.filter((k) => k.type === "COMPONENT").map((k) => k.name) : [];
-      return "component '" + (set || c).name + "' has no variant " + shown3.missing + (have.length ? "; closest: " + quoteList(nearestNames(shown3.missing, have)) : "");
+      return "component '" + (set || c).name + "' has no variant " + shown4.missing + (have.length ? "; closest: " + quoteList(nearestNames(shown4.missing, have)) : "");
     }
-    if (shown3.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
+    if (shown4.layoutMode === "NONE") for (const axis of ["widthMode", "heightMode"]) {
       if (node[axis] === "hug") return "component '" + (set || c).name + "' has no auto-layout, so its instance cannot `" + axis + ': "hug"`';
     }
     refs2.instances.set(node, { main, props: mapped.ok });
@@ -6318,6 +6576,8 @@
           return { later: () => figma.variables.importVariableByKeyAsync(ref2) };
         }
         const m = matchByName(ref2, locals, (v) => v.name);
+        const planned = plannedVariables(ref2);
+        if (planned.length) return later("variable", ref2, planned, m.kind === "one" ? 1 : m.kind === "many" ? m.matches.length : 0, libraryTypes);
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return ambiguous("variable", ref2, m.matches);
         const lib = (await libraryVariables()).filter((v) => v.name === ref2);
@@ -6345,9 +6605,24 @@
         if (byId) return { ok: byId };
         if (isKey(ref2)) return { later: () => figma.importStyleByKeyAsync(ref2) };
         const m = matchByName(ref2, locals, (st) => st.name);
+        const planned = plannedStyles(ref2, "TEXT");
+        if (planned.length) return later("text style", ref2, planned, m.kind === "one" ? 1 : m.kind === "many" ? m.matches.length : 0, libraryTypes);
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return ambiguous("text style", ref2, m.matches);
         return none("text style", ref2, m.candidates, "in this file (a library style is named by its key)");
+      }
+    };
+  }
+  function later(what, ref2, planned, inFile, types) {
+    const one = planned[0];
+    if (!one || planned.length + inFile > 1) {
+      return { error: what + " '" + ref2 + "' would match " + (planned.length + inFile) + " " + what + "s once this batch runs (" + planned.map(plannedWhere).join("; ") + (inFile ? "; the file has " + inFile + " already" : "") + ") \u2014 give the new one a name of its own" };
+    }
+    if (one.type) types.set(ref2, one.type);
+    return {
+      later: async () => {
+        if (!one.made) throw new Error(what + " '" + ref2 + "' was to be made by ops[" + one.op + "], which has not run");
+        return one.made;
       }
     };
   }
@@ -6560,8 +6835,8 @@
     } catch {
       defs = {};
     }
-    const shown3 = variantFor(owner, main, props, defs);
-    return "missing" in shown3 ? "set.props: component '" + owner.name + "' has no variant " + shown3.missing : null;
+    const shown4 = variantFor(owner, main, props, defs);
+    return "missing" in shown4 ? "set.props: component '" + owner.name + "' has no variant " + shown4.missing : null;
   }
   async function checkBeforeApply(t) {
     const problems = unfit(t.node, t.set).state;
@@ -6595,7 +6870,7 @@
     };
     for (const [index, op] of ops.entries()) {
       if (op.op !== "patch") continue;
-      const later = changesBefore(ops, index);
+      const later2 = changesBefore(ops, index);
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
       };
@@ -6610,8 +6885,8 @@
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
       }
-      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
-      const target = await resolvePatchNode(nd, set, later, loadFont, bad, fontsLater);
+      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables");
+      const target = await resolvePatchNode(nd, set, later2, loadFont, bad, fontsLater);
       if (target) targets.set(index, target);
     }
     const r = await resolveRefs(uses, loadFont);
@@ -6619,14 +6894,14 @@
     for (const t of targets.values()) t.refs = r.refs;
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
-  async function resolvePatchNode(nd, set, later, loadFont, bad, fontsLater = false) {
+  async function resolvePatchNode(nd, set, later2, loadFont, bad, fontsLater = false) {
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
       bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page");
       return null;
     }
     const node = nd;
     const fit = unfit(node, set);
-    const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
+    const misfits = later2 ? fit.kind : [...fit.kind, ...fit.state];
     for (const m of misfits) bad(m);
     if (node.type === "TEXT" && !fontsLater) {
       for (const f of await fontsToKeep(node)) {
@@ -6653,7 +6928,7 @@
         for (const e of mapped.errors) bad("set.props: " + e);
         return null;
       }
-      if (!later) {
+      if (!later2) {
         const v = await variantProblem(node, mapped.ok);
         if (v) {
           bad(v);
@@ -6899,7 +7174,7 @@
     });
     if (t.props && n.type === "INSTANCE") {
       const old = {};
-      const shown3 = (k) => {
+      const shown4 = (k) => {
         const p = n.componentProperties[k];
         return p ? JSON.stringify([p.value, p.boundVariables && p.boundVariables.value ? p.boundVariables.value.id : null]) : "";
       };
@@ -6908,10 +7183,10 @@
         const p = n.componentProperties[k];
         if (!p) continue;
         Object.defineProperty(old, k, { value: p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value, enumerable: true, writable: true, configurable: true });
-        was.set(k, shown3(k));
+        was.set(k, shown4(k));
       }
       steps.push(() => {
-        if ([...was].some(([k, v]) => shown3(k) !== v)) n.setProperties(old);
+        if ([...was].some(([k, v]) => shown4(k) !== v)) n.setProperties(old);
       });
     }
     const LIMITS2 = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
@@ -7397,7 +7672,7 @@
       for (const e of axisErrors) bad(e);
       specs.set(index, { spec, labels });
       const copies = copiesOf(spec, "tree", labels, []);
-      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables");
       const clones = copies.length ? await resolveClones(copies, (f) => load(f.family, f.style), bad, fontsLater) : /* @__PURE__ */ new Map();
       for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
       for (const c of clones.values()) cloneTargets.push(c);
@@ -7452,9 +7727,9 @@
     const root = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
     const key = t.spec.key;
     const indexWas = key !== void 0 ? readIndex(key) : "";
-    let shown3 = true;
+    let shown4 = true;
     try {
-      shown3 = rootCopy ? root.visible : t.spec.hidden !== true;
+      shown4 = rootCopy ? root.visible : t.spec.hidden !== true;
       root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
       await finish(made, 0, 0, consent2);
@@ -7462,7 +7737,7 @@
       t.page.appendChild(root);
       root.x = x;
       root.y = y;
-      root.visible = shown3;
+      root.visible = shown4;
       if (key !== void 0) {
         stampAll(made, key);
         writeIndex(key, root.id);
@@ -7779,7 +8054,7 @@
   }
 
   // src/keyed.ts
-  var isObj4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj5 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
@@ -7799,7 +8074,7 @@
     } catch {
       return null;
     }
-    if (!isObj4(spec)) return null;
+    if (!isObj5(spec)) return null;
     const children = [];
     if (n.type === "FRAME") {
       for (const c of n.children) {
@@ -7853,7 +8128,7 @@
       return p;
     };
     for (const [index, op] of ops.entries()) {
-      if (op.op !== "createTree" || !isObj4(op.tree) || typeof op.tree.key !== "string") continue;
+      if (op.op !== "createTree" || !isObj5(op.tree) || typeof op.tree.key !== "string") continue;
       const key = op.tree.key;
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
@@ -7946,8 +8221,8 @@
   var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
   function boundTo(n, k) {
     const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj4(bv) ? bv[k] : void 0;
-    return isObj4(a) && typeof a.id === "string" ? a.id : null;
+    const a = isObj5(bv) ? bv[k] : void 0;
+    return isObj5(a) && typeof a.id === "string" ? a.id : null;
   }
   function applyExtras(n, s, fields, only, variables, changes) {
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
@@ -8177,6 +8452,8 @@
           return { error: "no local variable has the key '" + ref2 + "'; if it is a library's variable (the read marks those `remote`), it is changed in that library \u2014 this file's enabled libraries do not list it, so its library cannot be named" };
         }
         const m = matchByName(ref2, all, (v) => v.name);
+        const planned = plannedVariables(ref2)[0];
+        if (planned && m.kind === "none") return { error: "variable '" + ref2 + "' is new in this batch (" + plannedWhere(planned) + "): give its values in that row" };
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return { error: "variable '" + ref2 + "' matches " + m.matches.length + " variables \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", ") };
         const lib = (await libraryVariables()).filter((v) => v.name === ref2);
@@ -8204,6 +8481,8 @@
         if (isKey2(ref2)) return { error: libraryOwned("the style with the key '" + ref2 + "' (it is not a style of this file)", registeredLibrary(ref2)) };
         const pool = kind ? all.filter((st) => st.type === kind.toUpperCase()) : all;
         const m = matchByName(ref2, pool, (st) => st.name);
+        const planned = plannedStyles(ref2, kind ? kind.toUpperCase() : void 0)[0];
+        if (planned && m.kind === "none") return { error: "style '" + ref2 + "' is new in this batch (" + plannedWhere(planned) + "): give its fields in that row" };
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return { error: "style '" + ref2 + "' matches " + m.matches.length + " styles \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((st) => "'" + st.name + "' (" + st.type.toLowerCase() + ", " + st.id + ")").join(", ") };
         const near = nearestNames(ref2, pool.map((st) => st.name));
@@ -8321,6 +8600,25 @@
     }
     return out;
   }
+  function styleUses(index, op, set, at2) {
+    const out = [];
+    (set.paints || []).forEach((p, i) => {
+      if (p.tokens) out.push({ index, op, path: at2 + ".paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" });
+    });
+    const tok = set.tokens || {};
+    for (const k of Object.keys(tok)) {
+      const ref2 = tok[k];
+      if (typeof ref2 === "string") out.push({ index, op, path: at2 + ".tokens." + k, kind: "variable", ref: ref2, type: TEXT_STYLE_TOKEN_TYPES[k] });
+    }
+    (set.effects || []).forEach((e, i) => {
+      const et = e.tokens || {};
+      for (const k of Object.keys(et)) {
+        const ref2 = et[k];
+        if (typeof ref2 === "string") out.push({ index, op, path: at2 + ".effects[" + i + "].tokens." + k, kind: "variable", ref: ref2, type: k === "color" ? "COLOR" : "FLOAT" });
+      }
+    });
+    return out;
+  }
   function fontAfter(now, set) {
     return { family: set.font !== void 0 ? set.font : now.family, style: set.weight !== void 0 ? set.weight : now.style };
   }
@@ -8418,20 +8716,14 @@
           bad("'" + st.name + "' is a " + st.type.toLowerCase() + " style, and these fields are a " + kind + " style's");
           continue;
         }
-        (set.paints || []).forEach((p, i) => {
-          if (p.tokens) uses.push({ index, op: op.op, path: "set.paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" });
-        });
+        uses.push(...styleUses(index, op.op, set, "set"));
         const tok = set.tokens || {};
-        for (const k of Object.keys(tok)) {
-          const ref2 = tok[k];
-          if (typeof ref2 === "string") uses.push({ index, op: op.op, path: "set.tokens." + k, kind: "variable", ref: ref2, type: TEXT_STYLE_TOKEN_TYPES[k] });
-        }
         let font = null;
         const bound = [];
         if (st.type === "TEXT") {
           const bv = st.boundVariables || {};
           const fontBound = !!(bv.fontFamily || bv.fontStyle || bv.fontWeight);
-          if (fontUnknown.has(st.id) || fontBound && ops.slice(0, index).some((o) => o.op === "setVariable")) fontUnknown.add(st.id);
+          if (fontUnknown.has(st.id) || fontBound && ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables")) fontUnknown.add(st.id);
           else {
             let fontOk = true;
             const projected = fontNow.get(st.id);
@@ -8537,6 +8829,21 @@
     const base = { color, offset: { x: e.offset.x, y: e.offset.y }, radius: e.radius, spread: e.spread === void 0 ? 0 : e.spread, visible: true, blendMode: "NORMAL" };
     return e.type === "drop_shadow" ? { type: "DROP_SHADOW", ...base, showShadowBehindNode: e.behindNode === true } : { type: "INNER_SHADOW", ...base };
   }
+  function styleSnapshot(st) {
+    return JSON.stringify([keepStyle(st), st.type === "TEXT" ? st.boundVariables || {} : null]);
+  }
+  function boundEffect(e, refs2) {
+    let out = effectOf(e);
+    const tok = e.tokens || {};
+    for (const k of Object.keys(tok)) {
+      const ref2 = tok[k];
+      if (ref2 === void 0) continue;
+      const v = refs2.variables.get(ref2);
+      if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
+      out = figma.variables.setBoundVariableForEffect(out, k, v);
+    }
+    return out;
+  }
   function keepStyle(st) {
     const out = { name: st.name, description: st.description };
     const copy2 = (v) => v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v;
@@ -8601,7 +8908,7 @@
           return figma.variables.setBoundVariableForPaint(paint, "color", v);
         });
       }
-      if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
+      if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map((e) => boundEffect(e, t.refs));
       if (st.type === "TEXT") {
         if (set.font !== void 0 || set.weight !== void 0) st.fontName = fontAfter(st.fontName, set);
         if (set.size !== void 0) st.fontSize = set.size;
@@ -8843,6 +9150,547 @@
       }
     }
     return warnings.length ? { steps, warnings } : { steps };
+  }
+
+  // src/creates.ts
+  var isCreateOp = (op) => CREATE_OPS.indexOf(op.op) >= 0;
+  var CreateFailed = class extends Error {
+    constructor(index, reason) {
+      super(errMsg(reason));
+      this.index = index;
+      this.reason = reason;
+    }
+  };
+  var getF3 = (o, k) => Reflect.get(o, k);
+  function aliasId(x) {
+    if (!x || typeof x !== "object" || getF3(x, "type") !== "VARIABLE_ALIAS") return null;
+    const id = getF3(x, "id");
+    return typeof id === "string" ? id : null;
+  }
+  var STYLE_TYPE = { paint: "PAINT", text: "TEXT", effect: "EFFECT" };
+  var NEW_TEXT_FONT = { family: "Inter", style: "Regular" };
+  async function resolveCreateOps(ops) {
+    const targets = /* @__PURE__ */ new Map();
+    const problems = [];
+    const plan = { variables: [], styles: [] };
+    const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
+    const none = { targets, problems, plan, imports: async () => ({ problems: [], revoked: false }), importCount: 0, refs: empty };
+    if (!ops.some(isCreateOp)) return none;
+    const firstOther = ops.findIndex((o) => !isCreateOp(o));
+    for (const [index, op] of ops.entries()) {
+      if (firstOther >= 0 && index > firstOther && isCreateOp(op)) {
+        problems.push({ index, op: op.op, message: op.op + " goes before every other op of a batch (it comes after ops[" + firstOther + "], a " + String(ops[firstOther] ? ops[firstOther].op : "") + "): move it first, so the ops after it can name what it makes" });
+      }
+    }
+    let collections = [];
+    let locals = [];
+    if (ops.some((o) => o.op === "createVariables")) {
+      collections = await figma.variables.getLocalVariableCollectionsAsync();
+      locals = await figma.variables.getLocalVariablesAsync();
+    }
+    const allRows = [];
+    const collectionOps = /* @__PURE__ */ new Map();
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createVariables") continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const { problems: shape, summary } = checkCreateVariables(op);
+      if (shape.length) {
+        bad("the table did not pass its check");
+        continue;
+      }
+      const name = summary.collection;
+      const named = collections.filter((c) => c.id === name || c.name === name);
+      if (named.length > 1) {
+        bad("collection '" + name + "' matches " + named.length + " local collections \u2014 pass one's id: " + named.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + ")").join(", "));
+        continue;
+      }
+      const coll = named[0] || null;
+      if (coll && coll.isExtension) {
+        bad("collection '" + coll.name + "' extends another collection, whose modes and variables it takes: create them in that one");
+        continue;
+      }
+      const key = coll ? coll.id : "\0" + name;
+      const twice = collectionOps.get(key);
+      if (twice !== void 0) {
+        bad("ops[" + twice + "] writes the collection '" + name + "' too; send one table per collection in a batch");
+        continue;
+      }
+      collectionOps.set(key, index);
+      let ok = true;
+      const modes = [];
+      const unlisted = [];
+      if (coll) {
+        if (!summary.modes.length) {
+          const only = coll.modes[0];
+          if (coll.modes.length !== 1 || !only) {
+            bad("'" + coll.name + "' has " + coll.modes.length + " modes (" + quoteList(coll.modes.slice(0, 3).map((m) => m.name)) + "): list them in `modes`, one value per mode in each row");
+            continue;
+          }
+          modes.push({ name: only.name, modeId: only.modeId });
+        } else {
+          for (const m of summary.modes) {
+            const hit = matchByName(m, coll.modes, (x) => x.name, (x) => [x.modeId]);
+            if (hit.kind === "many") {
+              bad("modes: '" + coll.name + "' has " + hit.matches.length + " modes named '" + m + "' \u2014 pass its modeId: " + hit.matches.slice(0, 3).map((x) => x.modeId).join(", "));
+              ok = false;
+              continue;
+            }
+            modes.push({ name: hit.kind === "one" ? hit.item.name : m, modeId: hit.kind === "one" ? hit.item.modeId : null });
+          }
+          const ids = modes.map((m) => m.modeId);
+          for (const [i, id] of ids.entries()) if (id !== null && ids.indexOf(id) !== i) {
+            bad("modes: two entries name the mode '" + String(modes[i] ? modes[i].name : id) + "'");
+            ok = false;
+          }
+          for (const m of coll.modes) if (ids.indexOf(m.modeId) < 0) unlisted.push(m.modeId);
+        }
+      } else if (summary.modes.length) {
+        for (const m of summary.modes) modes.push({ name: m, modeId: null });
+      } else {
+        modes.push({ name: "", modeId: null });
+      }
+      if (!ok) continue;
+      const where = coll ? "in the collection '" + coll.name + "'" : "in the new collection '" + name + "'";
+      const rows = [];
+      for (const [i, row] of summary.rows.entries()) {
+        const type = figmaType(row.type);
+        const existing = coll ? locals.filter((v) => v.variableCollectionId === coll.id && v.name === row.name)[0] || null : null;
+        if (existing && existing.resolvedType !== type) {
+          bad("variables[" + i + "]: '" + row.name + "' is a " + existing.resolvedType.toLowerCase() + " variable in '" + (coll ? coll.name : name) + "', and a variable's type cannot change \u2014 give the " + row.type + " one another name");
+          ok = false;
+          continue;
+        }
+        const planned = existing ? null : { name: row.name, op: index, where, type, made: null };
+        if (planned) plan.variables.push(planned);
+        rows.push({ op: index, index: i, name: row.name, type, values: row.values, existing, targets: [], planned, variable: existing });
+      }
+      if (!ok) continue;
+      allRows.push(...rows);
+      targets.set(index, { kind: "variables", name, collection: coll, modes, unlisted, rows });
+    }
+    let localStyles = null;
+    const styleOps = /* @__PURE__ */ new Map();
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createStyles") continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const { problems: shape, rows } = checkCreateStyles(op);
+      if (shape.length) {
+        bad("the table did not pass its check");
+        continue;
+      }
+      if (!localStyles) localStyles = [...await figma.getLocalPaintStylesAsync(), ...await figma.getLocalTextStylesAsync(), ...await figma.getLocalEffectStylesAsync()];
+      const all = localStyles;
+      const out = [];
+      let ok = true;
+      for (const [i, row] of rows.entries()) {
+        const type = STYLE_TYPE[row.kind];
+        const same3 = all.filter((st) => st.type === type && st.name === row.name);
+        if (same3.length > 1) {
+          bad("styles[" + i + "]: " + same3.length + " local " + row.kind + " styles are named '" + row.name + "' (" + same3.slice(0, 3).map((st) => st.id).join(", ") + "); rename all but one in Figma, or change one by id with setStyle");
+          ok = false;
+          continue;
+        }
+        const key = type + "\0" + row.name;
+        const twice = styleOps.get(key);
+        if (twice !== void 0 && twice !== index) {
+          bad("styles[" + i + "]: ops[" + twice + "] writes the " + row.kind + " style '" + row.name + "' too");
+          ok = false;
+          continue;
+        }
+        styleOps.set(key, index);
+        const existing = same3[0] || null;
+        const planned = existing ? null : { name: row.name, op: index, where: "as a " + row.kind + " style", kind: type, made: null };
+        if (planned) plan.styles.push(planned);
+        out.push({ index: i, row, existing, refs: /* @__PURE__ */ new Map(), bound: [], planned });
+      }
+      if (ok) targets.set(index, { kind: "styles", rows: out });
+    }
+    const uses = [];
+    const existingRows = /* @__PURE__ */ new Set();
+    for (const r2 of allRows) if (r2.existing) existingRows.add(r2.existing.id);
+    const lookup = (ref2, own2, use, bad) => {
+      const mine = own2 === null ? void 0 : allRows.filter((r2) => r2.op === own2 && r2.name === ref2)[0];
+      if (mine) return { row: mine };
+      const rows = allRows.filter((r2) => r2.name === ref2 && r2.op !== own2);
+      const inFile = locals.filter((v) => v.name === ref2 && !existingRows.has(v.id)).length;
+      if (rows.length + inFile > 1) {
+        bad(use.path + ": variable '" + ref2 + "' matches " + (rows.length + inFile) + " variables (" + rows.map((r2) => "a row of ops[" + r2.op + "]").concat(inFile ? [inFile + " in the file"] : []).join(", ") + ") \u2014 pass the one meant by key or id, or rename one");
+        return null;
+      }
+      const row = rows[0];
+      if (row) {
+        if (row.op > use.index) {
+          bad(use.path + ": '" + ref2 + "' is a row of ops[" + row.op + "], which runs after this op: put that table first");
+          return null;
+        }
+        return { row };
+      }
+      uses.push(use);
+      return { ref: ref2 };
+    };
+    const typeName = (t) => t === "FLOAT" ? "number" : t.toLowerCase();
+    for (const [index, t] of targets) {
+      const bad = (message) => {
+        problems.push({ index, op: t.kind === "variables" ? "createVariables" : "createStyles", message });
+      };
+      if (t.kind === "variables") {
+        for (const r2 of t.rows) {
+          r2.targets = r2.values.map((v, j) => {
+            if (typeof v !== "object") return void 0;
+            const path = "variables[" + r2.index + "][" + (j + 2) + "].aliasOf";
+            const found = lookup(v.aliasOf, index, { index, op: "createVariables", path, kind: "variable", ref: v.aliasOf, type: r2.type }, bad);
+            if (found && "row" in found && found.row.type !== r2.type) {
+              bad(path + ": '" + found.row.name + "' is a " + typeName(found.row.type) + " row, and '" + r2.name + "' a " + typeName(r2.type) + " one");
+              return void 0;
+            }
+            return found || void 0;
+          });
+        }
+        continue;
+      }
+      for (const s of t.rows) {
+        for (const u of styleUses(index, "createStyles", s.row.set, "styles[" + s.index + "].set")) {
+          const found = lookup(u.ref, null, u, bad);
+          if (found && "row" in found && u.type && found.row.type !== u.type) {
+            bad(u.path + ": '" + found.row.name + "' is a " + typeName(found.row.type) + " row, and this field takes a " + typeName(u.type) + " variable");
+            continue;
+          }
+          if (found) s.refs.set(u.ref, found);
+        }
+      }
+    }
+    const loaded3 = /* @__PURE__ */ new Map();
+    const loadFont = (f) => {
+      const k = f.family + "|" + f.style;
+      let p = loaded3.get(k);
+      if (!p) {
+        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
+        loaded3.set(k, p);
+      }
+      return p;
+    };
+    for (const [index, t] of targets) {
+      if (t.kind !== "styles") continue;
+      for (const s of t.rows) {
+        if (s.row.kind !== "text") continue;
+        const st = s.existing && s.existing.type === "TEXT" ? s.existing : null;
+        const bv = st ? st.boundVariables || {} : {};
+        if (st) {
+          for (const field of Object.keys(bv)) {
+            const a = bv[field];
+            if (!a) continue;
+            let v = null;
+            try {
+              v = await figma.variables.getVariableByIdAsync(a.id);
+            } catch {
+              v = null;
+            }
+            if (v) s.bound.push({ field, variable: v });
+          }
+        }
+        const tok = s.row.set.tokens || {};
+        if (bv.fontFamily || bv.fontStyle || bv.fontWeight || tok.fontFamily !== void 0 || tok.fontStyle !== void 0 || tok.fontWeight !== void 0) continue;
+        const now = st ? st.fontName : NEW_TEXT_FONT;
+        for (const f of [now, fontAfter(now, s.row.set)]) {
+          const err = await loadFont(f);
+          if (err) {
+            problems.push({ index, op: "createStyles", message: "styles[" + s.index + "]: text style '" + s.row.name + "': its " + err + " (check `font` and `weight`)" });
+            break;
+          }
+        }
+      }
+    }
+    const r = await resolveRefs(uses, loadFont);
+    problems.push(...r.problems);
+    if (!problems.length) problems.push(...await loops(targets, allRows, r.refs));
+    problems.sort((a, b) => a.index - b.index);
+    return { targets, problems, plan, imports: r.imports, importCount: r.importCount, refs: r.refs };
+  }
+  async function loops(targets, rows, refs2) {
+    const keyOf = (r) => r.existing ? "id:" + r.existing.id : "row:" + r.op + ":" + r.index;
+    const byKey = /* @__PURE__ */ new Map();
+    for (const r of rows) byKey.set(keyOf(r), r);
+    const listedModes = /* @__PURE__ */ new Map();
+    for (const [i, t] of targets) if (t.kind === "variables") listedModes.set(i, new Set(t.modes.map((m) => m.modeId).filter((m) => m !== null)));
+    const fileEdges = async (id, skip) => {
+      let v = null;
+      try {
+        v = await figma.variables.getVariableByIdAsync(id);
+      } catch {
+        v = null;
+      }
+      if (!v) return [];
+      const out2 = [];
+      for (const m of Object.keys(v.valuesByMode)) {
+        if (skip.has(m)) continue;
+        const a = aliasId(v.valuesByMode[m]);
+        if (a) out2.push("id:" + a);
+      }
+      return out2;
+    };
+    const edges = async (key) => {
+      const r = byKey.get(key);
+      if (!r) return key.indexOf("id:") === 0 ? fileEdges(key.slice(3), /* @__PURE__ */ new Set()) : [];
+      const out2 = [];
+      for (const t of r.targets) {
+        if (!t) continue;
+        if ("row" in t) out2.push(keyOf(t.row));
+        else {
+          const v = refs2.variables.get(t.ref);
+          if (v) out2.push("id:" + v.id);
+        }
+      }
+      if (r.existing) out2.push(...await fileEdges(r.existing.id, listedModes.get(r.op) || /* @__PURE__ */ new Set()));
+      return out2;
+    };
+    const out = [];
+    for (const start of rows) {
+      if (!start.targets.some((t) => t !== void 0)) continue;
+      const from = keyOf(start);
+      const back = /* @__PURE__ */ new Map();
+      const queue = [from];
+      let found = null;
+      while (queue.length && found === null) {
+        const k = queue.shift();
+        if (k === void 0) break;
+        for (const n of await edges(k)) {
+          if (n === from) {
+            found = k;
+            break;
+          }
+          if (back.has(n)) continue;
+          back.set(n, k);
+          queue.push(n);
+        }
+      }
+      if (found === null) continue;
+      const chain = [from];
+      for (let k = found; k !== void 0 && k !== from; k = back.get(k)) chain.splice(1, 0, k);
+      if (chain.every((k) => {
+        const r = byKey.get(k);
+        return r !== void 0 && r.op === start.op && !r.existing;
+      })) continue;
+      const label4 = async (k) => {
+        const r = byKey.get(k);
+        if (r) return "'" + r.name + "'";
+        let v = null;
+        try {
+          v = await figma.variables.getVariableByIdAsync(k.slice(3));
+        } catch {
+          v = null;
+        }
+        return v ? "'" + v.name + "'" : k.slice(3);
+      };
+      const names = [];
+      for (const k of chain.concat([from])) names.push(await label4(k));
+      out.push({ index: start.op, op: "createVariables", message: "variables[" + start.index + "]: the aliases " + names.join(" \u2192 ") + " make a loop" });
+      break;
+    }
+    return out;
+  }
+  function cellValue(v, target, refs2, type) {
+    if (typeof v === "object") {
+      const to = target === void 0 ? void 0 : "row" in target ? target.row.variable : refs2.variables.get(target.ref);
+      if (!to) throw new Error("variable '" + v.aliasOf + "' was not resolved before the batch ran");
+      return figma.variables.createVariableAlias(to);
+    }
+    if (type !== "COLOR") return v;
+    const c = typeof v === "string" ? parseHexColor(v) : null;
+    if (!c) throw new Error("'" + String(v) + "' is not a hex colour");
+    return { r: c.r, g: c.g, b: c.b, a: c.a === void 0 ? 1 : c.a };
+  }
+  var copyValue = (x) => x && typeof x === "object" ? JSON.parse(JSON.stringify(x)) : x;
+  function modeRefused(what, e) {
+    const msg = errMsg(e);
+    return new Error("Figma refused " + what + ": " + msg + (/limit/i.test(msg) ? " (this file's Figma plan limits how many modes a collection has; send fewer modes, or move the file to a plan with more)" : ""));
+  }
+  function applyVariables(t, refs2, consent2, changes) {
+    let coll = t.collection;
+    let made = false;
+    const added = [];
+    const createdVars = [];
+    const kept = [];
+    const applied = {};
+    const change = {
+      applied,
+      kind: "created variable table",
+      what: "the variables of the collection '" + t.name + "'",
+      restore(allowed2) {
+        const check = () => {
+          if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+        };
+        for (const k of kept.slice().reverse()) {
+          check();
+          if (k.value !== void 0) k.v.setValueForMode(k.modeId, k.value);
+        }
+        if (made && coll) {
+          check();
+          coll.remove();
+          return;
+        }
+        for (const v of createdVars.slice().reverse()) {
+          check();
+          v.remove();
+        }
+        for (const m of added.slice().reverse()) {
+          check();
+          if (coll) coll.removeMode(m.id);
+        }
+      }
+    };
+    changes.push(change);
+    consent2();
+    if (!coll) {
+      coll = figma.variables.createVariableCollection(t.name);
+      made = true;
+    }
+    const c = coll;
+    const ids = [];
+    for (const [i, m] of t.modes.entries()) {
+      if (m.modeId !== null) {
+        ids.push(m.modeId);
+        continue;
+      }
+      consent2();
+      if (made && i === 0) {
+        if (m.name && c.modes[0] && c.modes[0].name !== m.name) c.renameMode(c.defaultModeId, m.name);
+        ids.push(c.defaultModeId);
+        continue;
+      }
+      let id;
+      try {
+        id = c.addMode(m.name);
+      } catch (e) {
+        throw modeRefused("the mode '" + m.name + "' of '" + t.name + "'", e);
+      }
+      added.push({ id, name: m.name });
+      ids.push(id);
+    }
+    applied.id = c.id;
+    for (const r of t.rows) {
+      if (r.existing) continue;
+      consent2();
+      const v = figma.variables.createVariable(r.name, c, r.type);
+      createdVars.push(v);
+      r.variable = v;
+      if (r.planned) r.planned.made = v;
+    }
+    const outcome = [];
+    for (const r of t.rows) {
+      const v = r.variable;
+      if (!v) throw new Error("variable '" + r.name + "' was not made");
+      const before = r.existing ? JSON.stringify(v.valuesByMode) : "";
+      const set = (modeId, mode, cell) => {
+        const value = r.values[cell];
+        if (value === void 0) return;
+        consent2();
+        const old = copyValue(v.valuesByMode[modeId]);
+        try {
+          v.setValueForMode(modeId, cellValue(value, r.targets[cell], refs2, r.type));
+        } catch (e) {
+          throw modeRefused("the value of '" + r.name + "' for mode '" + (mode || "the default") + "'", e);
+        }
+        if (r.existing) kept.push({ v, modeId, value: old });
+      };
+      t.modes.forEach((m, j) => {
+        const id = ids[j];
+        if (id !== void 0) set(id, m.name, j);
+      });
+      if (!r.existing) for (const id of t.unlisted) set(id, "", 0);
+      outcome.push([v.id, !r.existing ? "created" : JSON.stringify(v.valuesByMode) === before ? "unchanged" : "updated"]);
+    }
+    applied.result = made ? "created" : added.length ? "updated" : "unchanged";
+    if (added.length && !made) applied.modesAdded = added.map((m) => m.name);
+    applied.rows = outcome;
+    return applied;
+  }
+  async function applyStyles(t, refs2, consent2, changes) {
+    const made = [];
+    const edits = [];
+    const applied = {};
+    const change = {
+      applied,
+      kind: "created style table",
+      what: "the styles of a createStyles table",
+      async restore(allowed2) {
+        for (const e of edits.slice().reverse()) await e.restore(allowed2);
+        for (const st of made.slice().reverse()) {
+          if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+          st.remove();
+        }
+      }
+    };
+    changes.push(change);
+    const outcome = [];
+    for (const s of t.rows) {
+      consent2();
+      let st = s.existing;
+      if (!st) {
+        st = s.row.kind === "paint" ? figma.createPaintStyle() : s.row.kind === "text" ? figma.createTextStyle() : figma.createEffectStyle();
+        made.push(st);
+        st.name = s.row.name;
+        if (s.planned) s.planned.made = st;
+      }
+      const variables = /* @__PURE__ */ new Map();
+      for (const [ref2, target2] of s.refs) {
+        const v = "row" in target2 ? target2.row.variable : refs2.variables.get(target2.ref);
+        if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
+        variables.set(ref2, v);
+      }
+      const before = s.existing ? styleSnapshot(st) : "";
+      const target = { style: st, set: s.row.set, refs: { instances: /* @__PURE__ */ new Map(), variables, textStyles: /* @__PURE__ */ new Map() }, font: null, bound: s.bound };
+      edits.push(await applyStyle(target, consent2));
+      outcome.push([st.id, !s.existing ? "created" : styleSnapshot(st) === before ? "unchanged" : "updated"]);
+    }
+    applied.rows = outcome;
+    return applied;
+  }
+  async function applyCreates(res, consent2, changes) {
+    const rows = /* @__PURE__ */ new Map();
+    for (const [index, t] of [...res.targets].sort((a, b) => a[0] - b[0])) {
+      try {
+        rows.set(index, t.kind === "variables" ? applyVariables(t, res.refs, consent2, changes) : await applyStyles(t, res.refs, consent2, changes));
+      } catch (e) {
+        throw new CreateFailed(index, e);
+      }
+    }
+    return rows;
+  }
+  async function createImpact(ops) {
+    const res = await resolveCreateOps(ops);
+    const steps = [];
+    for (const [index, op] of ops.entries()) {
+      if (!isCreateOp(op)) continue;
+      const mine = res.problems.filter((p) => p.index === index);
+      if (mine.length) {
+        steps.push({ index, op: op.op, problem: mine.map((p) => p.message).join("; ") });
+        continue;
+      }
+      const t = res.targets.get(index);
+      if (!t) continue;
+      const plan = { create: [], update: [] };
+      if (t.kind === "variables") {
+        if (!t.collection) plan.create.push("collection '" + t.name + "'");
+        t.modes.forEach((m, i) => {
+          if (m.modeId === null && !(i === 0 && !t.collection)) plan.create.push("mode '" + m.name + "'");
+        });
+        for (const r of t.rows) (r.existing ? plan.update : plan.create).push(r.name);
+      } else {
+        for (const s of t.rows) (s.existing ? plan.update : plan.create).push(s.row.name);
+      }
+      steps.push({ index, op: op.op, plan });
+    }
+    return { steps };
+  }
+  async function designImpact(ops) {
+    const sources = await writeImpact(ops);
+    const creates = await createImpact(ops);
+    const steps = [...sources.steps, ...creates.steps].sort((a, b) => a.index - b.index);
+    return sources.warnings ? { steps, warnings: sources.warnings } : { steps };
   }
 
   // src/structure.ts
@@ -9175,6 +10023,10 @@
       // Deletes are not run here: gatedWrites runs them after every other op (a deleted node cannot be brought back).
       case "delete":
         throw new Error("delete: deletes run after the rest of the batch");
+      // Nor are the create tables: gatedWrites runs them before every other op (creates.ts applyCreates).
+      case "createVariables":
+      case "createStyles":
+        throw new Error(op.op + ": the create tables run before the rest of the batch");
       default:
         throw new Error("unknown write op: " + op.op);
     }
@@ -9214,6 +10066,13 @@
     figma.ui.postMessage(m);
   }
   async function gatedWrites(list) {
+    try {
+      return await batchWrites(list);
+    } finally {
+      setBatchPlan(null);
+    }
+  }
+  async function batchWrites(list) {
     const applied = [];
     if (list.length && !await editsAllowed()) {
       return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
@@ -9233,6 +10092,9 @@
       if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
     }
     const resolveBatch = async () => {
+      setBatchPlan(null);
+      const creates2 = await resolveCreateOps(list);
+      setBatchPlan(creates2.plan);
       const modes2 = await resolveModeOps(list);
       const trees2 = await resolveTreeOps(list);
       const keyed = await resolveKeyed(list, trees2.targets);
@@ -9240,6 +10102,7 @@
       const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
       const sources2 = await resolveSourceOps(list);
       const problems2 = [
+        ...creates2.problems,
         ...modes2.problems,
         ...trees2.problems,
         ...keyed.problems,
@@ -9250,9 +10113,9 @@
         ...removalConflicts(list, trees2.targets, structure2.moves),
         ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
-      return { modes: modes2, trees: trees2, patches: patches2, structure: structure2, sources: sources2, problems: problems2 };
+      return { creates: creates2, modes: modes2, trees: trees2, patches: patches2, structure: structure2, sources: sources2, problems: problems2 };
     };
-    let { modes, trees, patches, structure, sources, problems } = await resolveBatch();
+    let { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
     const firstProblem = problems[0];
     if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
     if (list.length && await reviewWrites()) {
@@ -9260,23 +10123,12 @@
       const review = await awaitReview(list);
       if (review.end !== "approved") return reviewRefusal(review);
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      ({ modes, trees, patches, structure, sources, problems } = await resolveBatch());
+      ({ creates, modes, trees, patches, structure, sources, problems } = await resolveBatch());
       const changed = problems[0];
       if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       commitUndo();
     }
-    for (const step of [trees, patches, sources]) {
-      if (!step.importCount) continue;
-      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const { problems: late, revoked } = await step.imports(editsAllowedNow);
-      if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const firstLate = late[0];
-      if (firstLate) {
-        return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
-      }
-    }
-    const warnings = [...trees.targets].reduce((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
     const changes = [];
     const rows = list.map(() => void 0);
     const fail = async (i, op, e) => {
@@ -9296,8 +10148,51 @@
         ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
       };
     };
+    const refuseLate = async (late) => {
+      const firstLate = late[0];
+      const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+      const back = new Set(restored);
+      return {
+        ok: false,
+        applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
+        ...firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {},
+        error: batchRefusal(late) + (failed.length ? "; " + failed.join("; ") : ""),
+        ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
+      };
+    };
+    const revokedAfterCreates = () => ({
+      ok: false,
+      applied: changes.map((c) => c.applied),
+      refused: "edits-off",
+      error: "'Allow edits' was turned off in the Design Twin plugin once this batch's create tables had run: they stay applied (listed in `applied`), and nothing else ran. Tick 'Allow edits' in the plugin window, then retry the rest."
+    });
+    if (creates.targets.size) {
+      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      if (creates.importCount) {
+        const { problems: late, revoked } = await creates.imports(editsAllowedNow);
+        if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+        const firstLate = late[0];
+        if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+      }
+      try {
+        for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;
+      } catch (e) {
+        const at2 = e instanceof CreateFailed ? e.index : list.findIndex(isCreateOp);
+        const op = list[at2];
+        if (op) return fail(at2, op, e instanceof CreateFailed ? e.reason : e);
+        throw e;
+      }
+    }
+    for (const step of [trees, patches, sources]) {
+      if (!step.importCount) continue;
+      if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      const { problems: late, revoked } = await step.imports(editsAllowedNow);
+      if (revoked) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      if (late.length) return refuseLate(late);
+    }
+    const warnings = [...trees.targets].reduce((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
     for (const [i, op] of list.entries()) {
-      if (op.op === "delete") continue;
+      if (op.op === "delete" || isCreateOp(op)) continue;
       try {
         rows[i] = await applyWrite(op, {
           mode: modes.targets.get(i),
@@ -9538,11 +10433,12 @@
         const ops = req.args.ops;
         return () => applyWrites(ops);
       }
-      // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts). Reads
-      // only, so it needs no "Allow edits"; a scene run, so it waits for a write ahead of it.
+      // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts), and what
+      // a create table would make or update (creates.ts). Reads only, so it needs no "Allow edits"; a scene run, so it
+      // waits for a write ahead of it.
       case "writeImpact": {
         const ops = req.args.ops;
-        return () => writeImpact(ops);
+        return () => designImpact(ops);
       }
       default: {
         const exhaustive = req;

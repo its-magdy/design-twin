@@ -31,7 +31,8 @@ its guarantees are especially welcome, for example:
 - the plugin running anything a write sent as code (every write is a row of a fixed, typed op table);
 - a `move` or `delete` of a node the plugin session did not create (other than a keyed re-send removing nodes of its
   own earlier result), or a source edit (`setVariable`, `setStyle`, a `patch` of a main component) changing a
-  variable, style or component that lives in another library file;
+  variable, style or component that lives in another library file (a `createVariables` / `createStyles` table matches
+  only this file's own collections and styles by name, and makes a local one beside a library's);
 - a `treeFile` spec read from outside the directory the MCP server runs in.
 
 Out of scope: a malicious process already running as your user (it can read the token file), and issues in Figma,

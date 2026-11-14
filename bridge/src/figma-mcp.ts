@@ -745,6 +745,11 @@ const writeOpShape = z.object({
   values: z.record(z.string(), z.unknown()).optional(),
   value: z.unknown().optional(),
   style: z.string().optional(),
+  // createVariables / createStyles (create-spec.ts): a table of variables (rows [name, type, value per mode…], one cell
+  // per entry of `modes`) or of styles ({name, kind, set}), checked by checkCreateVariables / checkCreateStyles.
+  modes: z.array(z.string()).optional(),
+  variables: z.array(z.array(z.unknown())).optional(),
+  styles: z.array(z.record(z.string(), z.unknown())).optional(),
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
@@ -761,13 +766,14 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
       if (!step || step.invalid !== undefined) continue;
       if (s.affects) step.affects = s.affects;
       if (s.problem) step.refusedByFile = s.problem;
+      if (s.plan) step.plan = s.plan;
     }
   }
   const sourceNote = impact.asked
     ? impact.reply
-      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component. " +
+      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place. " +
         (impact.reply.warnings && impact.reply.warnings.length ? "Some pages could not be read, so a count may be low: " + impact.reply.warnings.join("; ") + ". " : "")
-      : "How much a source edit carries to is counted by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see the counts. "
+      : "How much a source edit carries to (and which names of a create table the file has already) is read by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see it. "
     : "";
   return {
     dryRun: true,
@@ -840,11 +846,12 @@ registerTool(
       "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place) | " +
       "patch {nodeId, set}: change the given fields of an existing node | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
+      "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
       "setVariableMode {nodeId, collection, mode} / clearVariableMode {nodeId, collection}: a frame's variable mode | " +
       "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
-      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree. " +
+      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree or a create table. " +
       "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed); with 'Review each write' on, a write waits (≤5 min) for their Apply/Reject.",
     inputSchema: {
       ...clientShape,

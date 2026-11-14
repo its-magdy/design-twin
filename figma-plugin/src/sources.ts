@@ -24,6 +24,7 @@ import type { AppliedWrite, WriteImpactCounts, WriteImpactReply, WriteImpactStep
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
 import { checkStyleSet, checkVariableEdit, isStyleSet, TEXT_STYLE_TOKEN_TYPES, type EffectSpec, type SourceValue, type StyleKindName, type StyleSet, type TextStyleTokenField } from "../../bridge/src/source-spec.ts";
+import { plannedStyles, plannedVariables, plannedWhere } from "./batch-plan";
 import { registeredLibrary } from "./libraries";
 import { solid } from "./tree";
 import { remoteVariableByKey, resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
@@ -119,6 +120,9 @@ function sourceLookups() {
         return { error: "no local variable has the key '" + ref + "'; if it is a library's variable (the read marks those `remote`), it is changed in that library — this file's enabled libraries do not list it, so its library cannot be named" };
       }
       const m = matchByName(ref, all, (v) => v.name);
+      // A variable a create op of this batch makes is set there, by its row.
+      const planned = plannedVariables(ref)[0];
+      if (planned && m.kind === "none") return { error: "variable '" + ref + "' is new in this batch (" + plannedWhere(planned) + "): give its values in that row" };
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return { error: "variable '" + ref + "' matches " + m.matches.length + " variables — pass one's key or id: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", ") };
       const lib = (await libraryVariables()).filter((v) => v.name === ref);
@@ -143,6 +147,8 @@ function sourceLookups() {
       // A name can repeat across kinds ("Primary" as a paint and a text style): the fields say which kind is meant.
       const pool = kind ? all.filter((st) => st.type === kind.toUpperCase()) : all;
       const m = matchByName(ref, pool, (st) => st.name);
+      const planned = plannedStyles(ref, kind ? (kind.toUpperCase() as "PAINT" | "TEXT" | "EFFECT") : undefined)[0];
+      if (planned && m.kind === "none") return { error: "style '" + ref + "' is new in this batch (" + plannedWhere(planned) + "): give its fields in that row" };
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return { error: "style '" + ref + "' matches " + m.matches.length + " styles — pass one's key or id: " + m.matches.slice(0, 3).map((st) => "'" + st.name + "' (" + st.type.toLowerCase() + ", " + st.id + ")").join(", ") };
       const near = nearestNames(ref, pool.map((st) => st.name));
@@ -258,8 +264,29 @@ async function stringValues(v: Variable, depth = 0): Promise<string[]> {
   return out;
 }
 
+/** Every variable a style's fields name, with the type each field takes: its paints' colours, a text style's `tokens`,
+ *  its effects' `tokens` (a shadow's colour takes a colour variable, its numbers and a blur's radius a number one).
+ *  Paths start with `at` (`set`, `styles[2].set`). */
+export function styleUses(index: number, op: string, set: StyleSet, at: string): Use[] {
+  const out: Use[] = [];
+  (set.paints || []).forEach((p, i) => { if (p.tokens) out.push({ index, op, path: at + ".paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" }); });
+  const tok = set.tokens || {};
+  for (const k of Object.keys(tok) as TextStyleTokenField[]) {
+    const ref = tok[k];
+    if (typeof ref === "string") out.push({ index, op, path: at + ".tokens." + k, kind: "variable", ref, type: TEXT_STYLE_TOKEN_TYPES[k] });
+  }
+  (set.effects || []).forEach((e, i) => {
+    const et: Record<string, string | undefined> = e.tokens || {};
+    for (const k of Object.keys(et)) {
+      const ref = et[k];
+      if (typeof ref === "string") out.push({ index, op, path: at + ".effects[" + i + "].tokens." + k, kind: "variable", ref, type: k === "color" ? "COLOR" : "FLOAT" });
+    }
+  });
+  return out;
+}
+
 /** The font a style's fields name, defaulting to `now` (what it has once the batch's earlier edits landed). */
-function fontAfter(now: FontName, set: StyleSet): FontName {
+export function fontAfter(now: FontName, set: StyleSet): FontName {
   return { family: set.font !== undefined ? set.font : now.family, style: set.weight !== undefined ? set.weight : now.style };
 }
 
@@ -328,12 +355,8 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
       if ("error" in found) { bad(found.error); continue; }
       const st = found.ok;
       if (kind && st.type !== kind.toUpperCase()) { bad("'" + st.name + "' is a " + st.type.toLowerCase() + " style, and these fields are a " + kind + " style's"); continue; }
-      (set.paints || []).forEach((p, i) => { if (p.tokens) uses.push({ index, op: op.op, path: "set.paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" }); });
+      uses.push(...styleUses(index, op.op, set, "set"));
       const tok = set.tokens || {};
-      for (const k of Object.keys(tok) as TextStyleTokenField[]) {
-        const ref = tok[k];
-        if (typeof ref === "string") uses.push({ index, op: op.op, path: "set.tokens." + k, kind: "variable", ref, type: TEXT_STYLE_TOKEN_TYPES[k] });
-      }
       let font: FontName | null = null;
       const bound: StyleTarget["bound"] = [];
       if (st.type === "TEXT") {
@@ -342,7 +365,7 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
         // missing one fails the op there (the batch is put back).
         const bv = st.boundVariables || {};
         const fontBound = !!(bv.fontFamily || bv.fontStyle || bv.fontWeight);
-        if (fontUnknown.has(st.id) || (fontBound && ops.slice(0, index).some((o) => o.op === "setVariable"))) fontUnknown.add(st.id);
+        if (fontUnknown.has(st.id) || (fontBound && ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables"))) fontUnknown.add(st.id);
         else {
           let fontOk = true;
           const projected = fontNow.get(st.id);
@@ -455,6 +478,25 @@ function effectOf(e: EffectSpec): Effect {
   return e.type === "drop_shadow" ? { type: "DROP_SHADOW", ...base, showShadowBehindNode: e.behindNode === true } : { type: "INNER_SHADOW", ...base };
 }
 
+/** A style's fields and bindings as one string: two equal snapshots mean an edit left the style as it was. */
+export function styleSnapshot(st: PaintStyle | TextStyle | EffectStyle): string {
+  return JSON.stringify([keepStyle(st), st.type === "TEXT" ? st.boundVariables || {} : null]);
+}
+
+/** An effect with its `tokens` bound (Figma hands back a bound copy of the effect for each). */
+function boundEffect(e: EffectSpec, refs: ResolvedRefs): Effect {
+  let out = effectOf(e);
+  const tok: Record<string, string | undefined> = e.tokens || {};
+  for (const k of Object.keys(tok)) {
+    const ref = tok[k];
+    if (ref === undefined) continue;
+    const v = refs.variables.get(ref);
+    if (!v) throw new Error("variable '" + ref + "' was not resolved before the batch ran");
+    out = figma.variables.setBoundVariableForEffect(out, k as VariableBindableEffectField, v);
+  }
+  return out;
+}
+
 /** The style's fields a setStyle can change, as they are now (copied: Figma hands back frozen objects). */
 function keepStyle(st: PaintStyle | TextStyle | EffectStyle): Record<string, unknown> {
   const out: Record<string, unknown> = { name: st.name, description: st.description };
@@ -518,7 +560,7 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
         return figma.variables.setBoundVariableForPaint(paint, "color", v);
       });
     }
-    if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map(effectOf);
+    if (st.type === "EFFECT" && set.effects) st.effects = set.effects.map((e) => boundEffect(e, t.refs));
     if (st.type === "TEXT") {
       if (set.font !== undefined || set.weight !== undefined) st.fontName = fontAfter(st.fontName, set);
       if (set.size !== undefined) st.fontSize = set.size;

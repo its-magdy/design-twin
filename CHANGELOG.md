@@ -32,6 +32,22 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can start a design system in a file that has none. `createVariables` (`collection`, `modes`,
+  `variables`) makes a collection, its modes and every variable from one table of rows `[name, type, …a value per
+  mode]` (`color`, `number`, `string` or `boolean`; a value as the read export writes one, or `{aliasOf}` a row of the
+  same table, of an earlier table of the batch, or a variable the file has — same type, no loops). `createStyles`
+  (`styles`: `{name, kind, set}` rows) makes paint, text and effect styles with setStyle's fields, their values bound
+  to variables in the read export's form (a paint's `tokens.color`, a text style's `tokens`, an effect's `tokens`). A
+  name the file already has is updated in place and reported as `updated` (or `unchanged`), never duplicated: a local
+  collection by name, its modes by name (a missing one added), a variable by name within the collection, a style by
+  name and kind; a library's collection or style with the same name is not matched. Both go first in a batch and run
+  first, so a `createTree` or `patch` after them names the new variables and text styles straight away: tokens and the
+  screen bound to them land in one call. Everything the tables made is removed, and everything they changed set back,
+  when any op of the batch fails; the batch stays one Cmd-Z step. The dry run asks the plugin what each table would
+  create and what it would update (`plan`). `setStyle` effects take `tokens` too (a shadow's colour, radius, spread
+  and offsets, a blur's radius). The write-cost suite records a start-from-nothing job: a 12-token light/dark theme and
+  the 28-node settings screen bound to it in one write, 1,818 estimated tokens, against 1,500 for the four ops, which
+  can make no variables and leave 19 raw colours. `figma_write`'s definition grew from 977 to 1,101 estimated tokens.
 - A seventh Claude Code skill, `/designtwin:design-in-figma`, for designing in the open Figma file through
   `figma_write`. It says which route fits which job (a new screen as one tree spec composed from the file's
   components, variables and text styles; a copy with only its differences; rows of instances and named fragments; a

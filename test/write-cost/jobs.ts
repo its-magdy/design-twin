@@ -1,11 +1,13 @@
-// The six jobs of the write-plane design record (docs/write-plane-spec.md, "The cheap route for each job"), each a
-// file to start from, what the agent is told (its brief), and the check of the file afterwards.
+// The six jobs of the write-plane design record (docs/write-plane-spec.md, "The cheap route for each job"), a new
+// screen's fix round, and starting from nothing (a file with no design system: tokens first, then a screen bound to
+// them) — each a file to start from, what the agent is told (its brief), and the check of the file afterwards.
 //
 // A job knows nothing about HOW it is done: a route (routes.ts) does it through the MCP tools, and the suite runs
 // every route of every job on a fresh copy of the job's file. The check reads the file the plugin wrote, not the
 // replies: `problems` (the job is not done; the route fails) and `gaps` (done, but not the way a designer would have
 // it — a raw colour where the file has a variable, a text layer left with its content as its name; reported, not failed).
 import { canvas, fillHex, fillVariable, hexOf, rgb, type Canvas, type CNode, type Fill, type Rgb } from "./canvas.ts";
+import type { FakeVariable } from "../fake-figma.ts";
 
 const isRgb = (v: unknown): v is Rgb => typeof v === "object" && v !== null && "r" in v && "g" in v && "b" in v;
 
@@ -85,12 +87,16 @@ const orderScreen = (n: number, status: string, items: string, total: string, wh
 // ---- the check: does the node the plugin made show what the job wanted
 export interface Verdict { problems: string[]; gaps: string[] }
 interface Tally { unbound: number; unnamedTexts: number }
-function compare(n: CNode, want: Want, f: AppFile, at: string, out: string[], tally: Tally): void {
+/** A colour variable the check wants, by name: the colour it shows and its id in the file (null: the file has none). */
+type VarLookup = (name: string) => { hex: string; id: string | null };
+/** The jobs' file: its one colour variable. */
+const appVars = (f: AppFile): VarLookup => (name) => ({ hex: BRAND.hex, id: f.vars[name] ?? null });
+function compare(n: CNode, want: Want, vars: VarLookup, at: string, out: string[], tally: Tally): void {
   const fillCheck = (w: WantFill | undefined): void => {
     if (w === undefined) return;
-    const hex = typeof w === "string" ? w : BRAND.hex;
+    const hex = typeof w === "string" ? w : vars(w.variable).hex;
     if (fillHex(n) !== hex) out.push(`${at}: fill ${String(fillHex(n))}, wanted ${hex}`);
-    else if (typeof w !== "string" && fillVariable(n) !== f.vars[w.variable]) tally.unbound++;
+    else if (typeof w !== "string") { const id = vars(w.variable).id; if (id === null || fillVariable(n) !== id) tally.unbound++; }
   };
   if (!isFrame(want)) {
     if (n.type !== "TEXT") { out.push(`${at}: a ${n.type}, wanted a TEXT`); return; }
@@ -111,14 +117,14 @@ function compare(n: CNode, want: Want, f: AppFile, at: string, out: string[], ta
   const kids = n.children ?? [];
   const wantKids = want.children ?? [];
   if (kids.length !== wantKids.length) { out.push(`${at}: ${kids.length} children, wanted ${wantKids.length}`); return; }
-  wantKids.forEach((k, i) => { const kid = kids[i]; if (kid) compare(kid, k, f, `${at}/${isFrame(k) ? k.frame : JSON.stringify(k.text)}`, out, tally); });
+  wantKids.forEach((k, i) => { const kid = kids[i]; if (kid) compare(kid, k, vars, `${at}/${isFrame(k) ? k.frame : JSON.stringify(k.text)}`, out, tally); });
 }
 const gapLines = (t: Tally): string[] => [
   ...(t.unbound ? [`${t.unbound} fill(s) are raw colours where the file has the variable ${BRAND.name}`] : []),
   ...(t.unnamedTexts ? [`${t.unnamedTexts} text layer(s) keep their content as their name (the four ops cannot name a text)`] : []),
 ];
 /** The frames on `pageNode` named like `wants`, made by the route: exactly one each, compared with what was wanted. */
-function checkNewScreens(f: AppFile, pageNode: CNode, wants: readonly Want[], before: ReadonlySet<string>): Verdict {
+function newScreens(vars: VarLookup, pageNode: CNode, wants: readonly Want[], before: ReadonlySet<string>): { problems: string[]; tally: Tally } {
   const problems: string[] = [];
   const tally: Tally = { unbound: 0, unnamedTexts: 0 };
   for (const w of wants) {
@@ -126,8 +132,12 @@ function checkNewScreens(f: AppFile, pageNode: CNode, wants: readonly Want[], be
     const made = (pageNode.children ?? []).filter((k) => k.name === w.frame && !before.has(k.id));
     if (made.length !== 1) { problems.push(`${made.length} new frames named "${w.frame}" on page "${pageNode.name}", wanted 1`); continue; }
     const root = made[0];
-    if (root) compare(root, w, f, w.frame, problems, tally);
+    if (root) compare(root, w, vars, w.frame, problems, tally);
   }
+  return { problems, tally };
+}
+function checkNewScreens(f: AppFile, pageNode: CNode, wants: readonly Want[], before: ReadonlySet<string>): Verdict {
+  const { problems, tally } = newScreens(appVars(f), pageNode, wants, before);
   return { problems, gaps: gapLines(tally) };
 }
 /** Every node under `root` (instance sublayers included). */
@@ -154,7 +164,12 @@ export interface Briefs {
   "repeated-part": { screenId: string; part: string; to: Hex };
   /** build `want` on the current page; the check of it then finds the text `wrong`, which should read `right` */
   "fix-round": { pageId: string; want: Want; wrong: string; right: string };
+  /** the file has no variables: make the token table `tokens` (one collection, `modes`), then build `want` on the
+   *  current page with its colours bound to those tokens */
+  "start-from-nothing": { pageId: string; collection: string; modes: readonly string[]; tokens: readonly Token[]; want: Want };
 }
+/** One design token: a colour or a number, a value per mode — or an alias of another token. */
+export interface Token { name: string; type: "color" | "number"; values: ReadonlyArray<Hex | number | { aliasOf: string }> }
 export type JobId = keyof Briefs;
 export interface Fixture<J extends JobId> {
   c: Canvas;
@@ -361,6 +376,89 @@ const fixRound: Job<"fix-round"> = {
   },
 };
 
-/** The six jobs, in the design record's order, then the fix round. */
-export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound] as const;
+// Starting from nothing (docs/write-plane-spec.md, "Starting from nothing"): a file with one empty page and no variables.
+// The job is a small theme — primitives, the semantic colours that alias them in a light and a dark mode, two spacing
+// numbers — and the settings screen with every colour bound to a semantic token. Done when the screen shows the light
+// colours; the way a designer would have it when the tokens exist as given and the screen's fills are bound to them.
+const TOKENS: readonly Token[] = [
+  { name: "gray/0", type: "color", values: ["#ffffff", "#ffffff"] },
+  { name: "gray/500", type: "color", values: [MUTED, MUTED] },
+  { name: "gray/900", type: "color", values: ["#18181b", "#18181b"] },
+  { name: "indigo/400", type: "color", values: ["#818cf8", "#818cf8"] },
+  { name: "indigo/600", type: "color", values: [BRAND.hex, BRAND.hex] },
+  { name: "color/bg", type: "color", values: [{ aliasOf: "gray/0" }, { aliasOf: "gray/900" }] },
+  { name: "color/text", type: "color", values: [{ aliasOf: "gray/900" }, { aliasOf: "gray/0" }] },
+  { name: "color/muted", type: "color", values: [{ aliasOf: "gray/500" }, { aliasOf: "gray/500" }] },
+  { name: "color/brand", type: "color", values: [{ aliasOf: "indigo/600" }, { aliasOf: "indigo/400" }] },
+  { name: "color/on-brand", type: "color", values: [{ aliasOf: "gray/0" }, { aliasOf: "gray/0" }] },
+  { name: "space/sm", type: "number", values: [8, 8] },
+  { name: "space/md", type: "number", values: [16, 16] },
+];
+/** A token's value in the first (light) mode, through its aliases. */
+const lightOf = (name: string): Hex | number | null => {
+  for (let at = TOKENS.find((t) => t.name === name), hops = 0; at && hops < 5; hops++) {
+    const v = at.values[0];
+    if (v === undefined) return null;
+    if (typeof v !== "object") return v;
+    at = TOKENS.find((t) => t.name === v.aliasOf);
+  }
+  return null;
+};
+/** The settings screen with every colour a semantic token: the screen's background, the texts, the muted values, the
+ *  button and its label. */
+function themed(w: Want): Want {
+  if (!isFrame(w)) {
+    const fill: WantFill = w.fill === MUTED ? { variable: "color/muted" } : w.fill === WHITE ? { variable: "color/on-brand" } : { variable: "color/text" };
+    return { ...w, fill };
+  }
+  const fill: WantFill | undefined = w.fill === WHITE ? { variable: "color/bg" } : w.fill !== undefined ? { variable: "color/brand" } : undefined;
+  const { fill: _old, children, ...rest } = w;
+  return { ...rest, ...(fill ? { fill } : {}), ...(children ? { children: children.map(themed) } : {}) };
+}
+const startFromNothing: Job<"start-from-nothing"> = {
+  id: "start-from-nothing", title: "Start from nothing",
+  what: "a 12-token theme (light and dark, aliases) and the 28-node settings screen bound to it, in a file with no variables",
+  fixture() {
+    const c = canvas();
+    const screens = c.page("Screens");
+    const before = new Set(Object.keys(c.nodes));
+    const want = themed(settingsScreen("Settings", "jane@example.com"));
+    const brief = { pageId: screens.id, collection: "Theme", modes: ["Light", "Dark"], tokens: TOKENS, want };
+    const variableNamed = (name: string): FakeVariable | undefined => Object.values(c.live().variables).find((v) => v.name === name);
+    const vars: VarLookup = (name) => { const light = lightOf(name); return { hex: typeof light === "string" ? light : "#000000", id: variableNamed(name)?.id ?? null }; };
+    return {
+      c, brief,
+      check() {
+        const { problems, tally } = newScreens(vars, screens, [want], before);
+        const live = c.live();
+        const made = Object.values(live.variables);
+        const gaps: string[] = [];
+        if (!made.length) gaps.push(`the file still has no variables: the ${TOKENS.length} tokens were not made`);
+        else {
+          // A table was made: it must be the one asked for, mode by mode.
+          for (const t of TOKENS) {
+            const v = variableNamed(t.name);
+            if (!v) { problems.push(`no variable ${t.name}`); continue; }
+            const coll = live.collections[v.variableCollectionId];
+            if (!coll || coll.name !== brief.collection || coll.modes.map((m) => m.name).join() !== brief.modes.join()) { problems.push(`${t.name} is not in the collection ${brief.collection} (${brief.modes.join(", ")})`); continue; }
+            t.values.forEach((want, i) => {
+              const modeId = coll.modes[i]?.modeId ?? "";
+              const got: unknown = v.valuesByMode[modeId];
+              const shown = typeof got === "object" && got !== null && "type" in got && got.type === "VARIABLE_ALIAS" && "id" in got
+                ? { aliasOf: live.variables[String(got.id)]?.name ?? "?" }
+                : typeof got === "object" && got !== null && "r" in got ? hexOf(got as Rgb) : got;
+              if (JSON.stringify(shown) !== JSON.stringify(want)) problems.push(`${t.name} in ${coll.modes[i]?.name ?? "?"} is ${JSON.stringify(shown)}, wanted ${JSON.stringify(want)}`);
+            });
+          }
+        }
+        if (tally.unbound) gaps.push(`${tally.unbound} fill(s) are raw colours, not bound to the tokens`);
+        if (tally.unnamedTexts) gaps.push(`${tally.unnamedTexts} text layer(s) keep their content as their name (the four ops cannot name a text)`);
+        return { problems, gaps };
+      },
+    };
+  },
+};
+
+/** The six jobs, in the design record's order, then the fix round and starting from nothing. */
+export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing] as const;
 export type AnyJob = (typeof JOBS)[number];

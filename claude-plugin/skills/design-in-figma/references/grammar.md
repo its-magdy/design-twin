@@ -2,7 +2,7 @@
 
 The whole write surface as the MCP server and the plugin check it. Inside a tree spec node (and its `layout`, `font`,
 `strokes`, `box`, `radius`, `sizeLimits`, `renderBox`, paints, `tokens`, `styles`), a copy, a patch's `set`, a
-`setStyle`'s `set` (and its effects) and a variable value, a field not listed here is refused by name with the closest
+`setStyle`'s `set` (and its effects), a create table's rows and a variable value, a field not listed here is refused by name with the closest
 names, never dropped. The op object itself is looser: a field an op does not read (a typo beside `op`, `nodeId` on a
 `createTree`) is ignored, not refused — so check the op's own field names against [The ops](#the-ops). Keys you name
 yourself (`props` property names, `edits` layer names, `values` modes, `handle`s, `fragments`) are checked against the
@@ -13,7 +13,7 @@ file or the spec instead. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbb
 - [The call](#the-call) · [The ops](#the-ops) · [Replies](#replies)
 - [Tree spec (`createTree`)](#tree-spec-createtree) · [Design-system references](#design-system-references)
 - [Copies, rows, fragments](#copies-rows-fragments) · [Keyed re-send](#keyed-re-send) · [Spec from disk](#spec-from-disk)
-- [Patch](#patch) · [Source edits](#source-edits) · [Variable modes](#variable-modes) · [Move and delete](#move-and-delete)
+- [Patch](#patch) · [Source edits](#source-edits) · [Starting from nothing](#starting-from-nothing) · [Variable modes](#variable-modes) · [Move and delete](#move-and-delete)
 - [What a write cannot set yet](#what-a-write-cannot-set-yet) · [Limits](#limits)
 
 ## The call
@@ -29,6 +29,8 @@ the file; `client` names the file when several are connected (a connId, fileKey 
 | `patch` | `nodeId`, `set` (the fields to change) | — |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a one-mode collection) | — |
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` | — |
+| `createVariables` | `collection` (a local collection's name or id; made when none has it), `variables` (rows `[name, type, …a value per mode]`) | `modes` (mode names, in the rows' value order; none for a one-mode collection) |
+| `createStyles` | `styles` (rows `{name, kind: "paint" \| "text" \| "effect", set}`) | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
 | `move` | `nodeId`, `parentId` | `index` (0 first; last when absent) |
@@ -49,6 +51,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
     could stand, and texts with no text style.
   - a keyed re-send: `{id, key, changed?: [{id, handle?, fields}], created?, removed?, reordered?, handles?}`, or
     `{id, key, unchanged: true}`.
+  - `createVariables` `{id, result, modesAdded?, rows}` (the collection, `created` / `updated` / `unchanged`, then per
+    row `[id, "created" | "updated" | "unchanged"]` in table order) · `createStyles` `{rows}` (per row `[id, …]`).
   - `patch` `{id, unbound?}` · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
     the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
 - Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
@@ -60,7 +64,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   Read `applied` before a retry, so nothing is made twice.
 - A dry run: `{dryRun: true, creates, overwrites, moves?, deletes?, invalid, refusedByFile?, steps, editsAllowed,
   reviewWrites?, note}`; each step has `effect`, `target`, a one-sentence `change`, `fields` (one row per field of a
-  patch or a style), `warnings`, `invalid` (every problem), and for a source edit `affects` and `refusedByFile`. A
+  patch or a style), `warnings`, `invalid` (every problem), for a source edit `affects` and `refusedByFile`, and for a
+  create table `plan: {create, update}` (the names it would make, and the ones the file has, updated in place). A
   `createTree` dry run reads nothing from the file: a keyed one is a `creates` step whose `change` says an existing
   result of that key would be updated in place, without listing what would change or be removed.
 
@@ -202,12 +207,46 @@ refused, naming the library when Figma says which.
   |---|---|
   | paint | `paints` (as `fills`) |
   | text | `font` (family), `weight` (style name), `size` (≥ 1), `lineHeight` (`{unit: "px" \| "percent", value}` or `{unit: "auto"}`), `letterSpacing` (`{unit: "px" \| "percent", value}`), `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent`, `tokens` (`fontFamily`, `fontStyle`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `paragraphSpacing`, `paragraphIndent` → a variable, or `null` to unbind) |
-  | effect | `effects`: `{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?: true}` (`behindNode` on a drop shadow only) or `{type: "layer_blur" \| "background_blur", radius}`, replacing the list |
+  | effect | `effects`: `{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?: true, tokens?}` (`behindNode` on a drop shadow only) or `{type: "layer_blur" \| "background_blur", radius, tokens?}`, replacing the list; `tokens` binds a shadow's `color`, `radius`, `spread`, `offsetX`, `offsetY` (a blur's `radius`) to a variable |
   | any | `name`, `description` |
 
 - A `patch` of a main component, or of a layer inside it, changes every instance.
 
 The dry run's `affects` (with a plugin connected) counts what follows: `nodes`, `instances`, `styles`, `variables`.
+
+## Starting from nothing
+
+A design system as two tables, each one op. They go before every other op of the batch and run first, so a
+`createTree` or `patch` after them names the new variables and text styles by name. A name the file has is updated in
+place, never duplicated: the collection by its local name (modes matched by name, a missing one added), a variable by
+its name in that collection, a style by name and kind. A library's collection or style is never matched by name: a
+local one is made beside it.
+
+```json
+{"op": "createVariables", "collection": "Theme", "modes": ["Light", "Dark"], "variables": [
+  ["gray/0", "color", "#ffffff", "#ffffff"],
+  ["gray/900", "color", "#18181b", "#18181b"],
+  ["color/bg", "color", {"aliasOf": "gray/0"}, {"aliasOf": "gray/900"}],
+  ["space/md", "number", 16, 16]
+]}
+{"op": "createStyles", "styles": [
+  {"name": "Surface", "kind": "paint", "set": {"paints": [{"type": "solid", "tokens": {"color": "color/bg"}}]}},
+  {"name": "Body", "kind": "text", "set": {"font": "Inter", "weight": "Regular", "size": 16, "tokens": {"fontSize": "space/md"}}},
+  {"name": "Card", "kind": "effect", "set": {"effects": [{"type": "drop_shadow", "color": "#00000026", "offset": {"x": 0, "y": 2}, "radius": 8, "tokens": {"color": "gray/900"}}]}}
+]}
+```
+
+- A row of `createVariables`: `[name, type, …values]`, `type` one of `color`, `number`, `string`, `boolean`, then one
+  value per entry of `modes`, in order (one value and no `modes` for a one-mode collection). A value is as in
+  `setVariable`; `{aliasOf}` names a row of the same table (before or after), a row of an earlier table of the batch, or
+  a variable the file has. Same type only; a loop is refused; a variable's type cannot change. A new variable takes
+  its first value in an existing mode the table leaves out.
+- A row of `createStyles`: `{name, kind, set}`, `set` as in `setStyle` for that kind, without `name`. A paint bound to a
+  variable is `{type: "solid", tokens: {color}}`. A new text style starts as Inter Regular.
+- A new name that another collection of the file has too (or two tables make) is refused for the op naming it: it
+  would match two. A mode past the file plan's limit is refused by Figma, naming the plan.
+- Sent again, the reply says per row what changed; a failure anywhere in the batch removes what the tables made and
+  sets back what they changed.
 
 ## Variable modes
 
@@ -226,7 +265,8 @@ is refused into the node itself, into an instance, or past the end of the new pa
 
 Refused by name, each with the reason: grid layout, effects on a node, mixed-format text (`runs`), images (`asset`),
 a text bound to a variable (`textTokens`), a property bound to a variable (`propTokens`), rotation, blend modes,
-masks, vector geometry, prototype reactions, annotations, and creating variables, styles or components. A frame's
+masks, vector geometry, prototype reactions, annotations, creating components, and a variable's scopes or code
+syntax. A frame's
 mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree lands.
 
 ## Limits
@@ -236,4 +276,5 @@ mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree la
   trees.
 - `treeFile` at most 2 MB; `key` at most 200 characters.
 - A review card waits 5 minutes; a rejection reason is cut at 500 characters.
-- Names resolve against the file as it was before the batch.
+- Names resolve against the file as it was before the batch, except what the batch's create tables make.
+- A create table takes at most 1,000 rows.

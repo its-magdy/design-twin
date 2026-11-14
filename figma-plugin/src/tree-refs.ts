@@ -13,6 +13,9 @@
 //   imports       runs those imports. Importing is a write that cannot be put back, so writes.ts calls it only once
 //                 the whole batch resolved, with "Allow edits" still on, right before the first op.
 //
+// A new variable or text style a create op earlier in the batch makes (batch-plan.ts) is found by its name too: it
+// resolves like an import, later — once the create op has run — and a variable's type is checked now, from its row.
+//
 // A key is accepted as exact (a component's, variable's or style's 40-hex `key`, as the read writes it); a key the file
 // does not have is imported from an enabled library. A component or text style is found by NAME only in this file (the
 // Plugin API lists no library components or styles), so a library one is named by its key.
@@ -27,6 +30,7 @@ import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-matc
 import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { nodeKind, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { OpProblem } from "./write-batch";
+import { plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
 
 /** What a node of a spec resolved to, for the build. */
 export interface ResolvedRefs {
@@ -406,6 +410,8 @@ function fileLookups() {
         return { later: () => figma.variables.importVariableByKeyAsync(ref) };
       }
       const m = matchByName(ref, locals, (v) => v.name);
+      const planned = plannedVariables(ref);
+      if (planned.length) return later("variable", ref, planned, m.kind === "one" ? 1 : m.kind === "many" ? m.matches.length : 0, libraryTypes);
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return ambiguous("variable", ref, m.matches);
       const lib = (await libraryVariables()).filter((v) => v.name === ref);
@@ -430,9 +436,29 @@ function fileLookups() {
       // A key is exact: it imports the style it names, even when a local style happens to be called that.
       if (isKey(ref)) return { later: () => figma.importStyleByKeyAsync(ref) };
       const m = matchByName(ref, locals, (st) => st.name);
+      const planned = plannedStyles(ref, "TEXT");
+      if (planned.length) return later("text style", ref, planned, m.kind === "one" ? 1 : m.kind === "many" ? m.matches.length : 0, libraryTypes);
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return ambiguous("text style", ref, m.matches);
       return none("text style", ref, m.candidates, "in this file (a library style is named by its key)");
+    },
+  };
+}
+
+/** A name a create op of the batch makes (and nothing else in the file has): resolved once that op has run. Its type is
+ *  known now (`types`, as a listed library variable's is). A name the file has too, or that two create ops make, would
+ *  match several things once the batch runs: refused. */
+function later<T>(what: string, ref: string, planned: ReadonlyArray<Planned<T>>, inFile: number, types: Map<string, VariableResolvedDataType>): Found<T> {
+  const one = planned[0];
+  if (!one || planned.length + inFile > 1) {
+    return { error: what + " '" + ref + "' would match " + (planned.length + inFile) + " " + what + "s once this batch runs (" + planned.map(plannedWhere).join("; ") +
+      (inFile ? "; the file has " + inFile + " already" : "") + ") — give the new one a name of its own" };
+  }
+  if (one.type) types.set(ref, one.type);
+  return {
+    later: async () => {
+      if (!one.made) throw new Error(what + " '" + ref + "' was to be made by ops[" + one.op + "], which has not run");
+      return one.made;
     },
   };
 }

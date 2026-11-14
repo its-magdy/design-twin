@@ -69,9 +69,15 @@ export interface Canvas {
   readonly pages: CPage[];
   /** the fake-figma world over this file; the plugin's createFrame/createText add to it */
   world(): World;
+  /** the variables and collections of the last world made, live: a write that creates one (createVariables) adds it
+   *  there, not to `variables` */
+  live(): { variables: Record<string, FakeVariable>; collections: Record<string, FakeCollection> };
+  /** a variable's value in its collection's default mode, through any aliases (null when it cannot be read) */
+  valueOf(v: FakeVariable): unknown;
 }
 
 export function canvas(): Canvas {
+  let current: World | null = null;
   const nodes: Record<string, CNode> = {};
   const pages: CPage[] = [];
   const variables: Record<string, FakeVariable> = {};
@@ -256,10 +262,25 @@ export function canvas(): Canvas {
       variables[id] = v;
       return id;
     },
+    live() {
+      return current ? { variables: current.scene.variables, collections: current.scene.collections } : { variables, collections: { [COLLECTION.id]: COLLECTION } };
+    },
+    valueOf(v) {
+      const live = c.live();
+      let at: FakeVariable | undefined = v;
+      for (let hops = 0; at && hops < 10; hops++) {
+        const coll = live.collections[at.variableCollectionId];
+        const x: unknown = at.valuesByMode[coll ? coll.defaultModeId : "1:0"];
+        const to: string | null = typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS" && "id" in x && typeof x.id === "string" ? x.id : null;
+        if (to === null) return x ?? null;
+        at = live.variables[to];
+      }
+      return null;
+    },
     world() {
-      const current = pages[0] ?? c.page("Page 1");
-      const scene: Scene = { file: { name: "Sample App" }, pages, currentPage: current, nodes, variables, collections: { [COLLECTION.id]: COLLECTION } };
-      return fakeWorld(scene, {}, {
+      const first = pages[0] ?? c.page("Page 1");
+      const scene: Scene = { file: { name: "Sample App" }, pages, currentPage: first, nodes, variables, collections: { [COLLECTION.id]: COLLECTION } };
+      current = fakeWorld(scene, {}, {
         createFrame: () => frameLike("FRAME", { name: "Frame" }),
         createText: () => textNode({ text: "" }),
         loadFontAsync: async () => {},
@@ -268,7 +289,7 @@ export function canvas(): Canvas {
           setBoundVariableForPaint: (p: FakeNode, field: string, v: FakeVariable | null) => {
             if (field !== "color" || !v) return p;
             // a live read of the variable, as paintOf's: change the variable and the paint follows
-            const bound: FakeNode = { type: "SOLID", visible: true, get color() { return v.valuesByMode["1:0"]; }, opacity: typeof p.opacity === "number" ? p.opacity : 1,
+            const bound: FakeNode = { type: "SOLID", visible: true, get color() { return c.valueOf(v); }, opacity: typeof p.opacity === "number" ? p.opacity : 1,
               boundVariables: { color: { type: "VARIABLE_ALIAS", id: v.id } } };
             return bound;
           },
@@ -276,6 +297,7 @@ export function canvas(): Canvas {
         // the live table, not the copy fakeWorld made: a node a write creates is found by the next op that names it
         getNodeByIdAsync: async (id: string) => nodes[id] ?? null,
       });
+      return current;
     },
   };
   return c;

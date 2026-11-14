@@ -116,7 +116,7 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
 export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
   let seq = 0;
   // getNodeByIdAsync's live table (the world's own): every node made here is found by id until it is removed.
-  const reg: { nodes: Record<string, FakeNode> | null } = { nodes: null };
+  const reg: { nodes: Record<string, FakeNode> | null; styles: Record<string, unknown> | null } = { nodes: null, styles: null };
   const register = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") reg.nodes[n.id] = n; };
   const unregister = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") delete reg.nodes[n.id]; for (const c of kids(n)) unregister(c); };
   const made: FakeNode[] = [];
@@ -249,7 +249,9 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       fields.setTextStyleIdAsync = async (id: string) => {
         fields.textStyleOverrides = []; // the node's own setter leaves no override (as in Figma)
         if (id === "") { fields.textStyleId = ""; return; } // "" detaches the style, keeping the formatting
-        const st = KIT_STYLES.find((x) => x.id === id) ?? imported.find((x) => x.id === id);
+        // A kit style, an imported one, or one a write made (createStyles: the world's live table).
+        const made = reg.styles ? reg.styles[id] : undefined;
+        const st = KIT_STYLES.find((x) => x.id === id) ?? imported.find((x) => x.id === id) ?? (isNode(made) ? made : undefined);
         if (!st) throw new Error("in Figma: no style " + id);
         if (!loadedFonts.has(fontKey(st.fontName))) throw new Error("in Figma: font " + fontKey(st.fontName) + " is not loaded (setting a text style)");
         fields.textStyleId = id;
@@ -349,6 +351,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     } : {}),
   });
   reg.nodes = w.scene.nodes;
+  reg.styles = w.scene.styles;
   for (const pg of pages) { register(pg); for (const k of kids(pg)) register(k); }
   await w.allowEdits();
   /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
@@ -533,7 +536,7 @@ export const cases: Case[] = [{
       wPartial.applied.length === 0 && (wPartial.restored ?? []).length === 2 && created.every((n) => n.name !== "A" && n.name !== "B"));
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | move | delete | setVariable | setStyle");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | move | delete | setVariable | setStyle | createVariables | createStyles");
     // setFill and setText keep what they replace too: a later failure puts the fill and the text back.
     const fillsBefore = rectTarget.fills, textBefore = textTarget.characters;
     const wBack = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#123456" }, { op: "setText", nodeId: "t:1", text: "temporary" }, { op: "setFill", nodeId: "nope:2", color: "#fff" }]);
@@ -594,6 +597,8 @@ export const cases: Case[] = [{
       delete: { op: "delete", nodeId: h.b ?? "" },
       setVariable: { op: "setVariable", variable: "color/surface", values: { Light: "#f4f4f5" } },
       setStyle: { op: "setStyle", style: "Surface", set: { paints: [{ type: "solid", color: "#f4f4f5" }] } },
+      createVariables: { op: "createVariables", collection: "Tokens", modes: ["Default"], variables: [["color/ink", "color", "#111111"]] },
+      createStyles: { op: "createStyles", styles: [{ name: "Ink", kind: "paint", set: { paints: [{ type: "solid", color: "#111111" }] } }] },
     };
     for (const name of WRITE_OP_NAMES) {
       const full = complete[name];
