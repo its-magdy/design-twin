@@ -1566,8 +1566,7 @@
         const v = n[k];
         if (v === void 0) continue;
         if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path + "." + k + ": not on a copy \u2014 " + NOT_ON_CLONE[k]);
-        else if (Object.prototype.hasOwnProperty.call(CLONE_RULES, k)) own2[k] = v;
-        else set[k] = v;
+        else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own2 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
       }
       problems.push(...objectProblems(own2, CLONE_RULES, path));
       const self = Object.keys(set).length ? patch(set, path) : null;
@@ -2163,7 +2162,7 @@
   var CLONE_PLACE_FIELDS = ["clone", "edits", "handle", "key", "x", "y", "absolute", "grow", "alignSelf"];
   function clonePatch(s) {
     const out = {};
-    for (const [k, v] of Object.entries(s)) if (v !== void 0 && CLONE_PLACE_FIELDS.indexOf(k) < 0) out[k] = v;
+    for (const [k, v] of Object.entries(s)) if (v !== void 0 && CLONE_PLACE_FIELDS.indexOf(k) < 0) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
     return Object.keys(out).length && isPatchSet(out) ? out : null;
   }
   function cloneEdits(s) {

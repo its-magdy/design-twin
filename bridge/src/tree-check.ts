@@ -25,7 +25,7 @@ export const CLONE_PLACE_FIELDS: readonly string[] = ["clone", "edits", "handle"
  *  none. Only for a spec checkTree accepted: its fields passed checkPatch there. */
 export function clonePatch(s: TreeNodeSpec): PatchSet | null {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(s)) if (v !== undefined && CLONE_PLACE_FIELDS.indexOf(k) < 0) out[k] = v;
+  for (const [k, v] of Object.entries(s)) if (v !== undefined && CLONE_PLACE_FIELDS.indexOf(k) < 0) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
   return Object.keys(out).length && isPatchSet(out) ? out : null;
 }
 

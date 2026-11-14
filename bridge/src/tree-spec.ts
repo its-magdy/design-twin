@@ -593,8 +593,8 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
       const v = n[k];
       if (v === undefined) continue;
       if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path + "." + k + ": not on a copy — " + NOT_ON_CLONE[k]);
-      else if (Object.prototype.hasOwnProperty.call(CLONE_RULES, k)) own[k] = v;
-      else set[k] = v;
+      // Own properties, whatever the key: one named "__proto__" must be checked (and refused), not become a prototype.
+      else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own : set, k, { value: v, enumerable: true, writable: true, configurable: true });
     }
     problems.push(...objectProblems(own, CLONE_RULES, path));
     const self = Object.keys(set).length ? patch(set, path) : null;

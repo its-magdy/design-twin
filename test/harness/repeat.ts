@@ -146,6 +146,13 @@ export const cases: Case[] = [{
       ok("[CLONE-CHECK] Figma refusing the copy before it is in the tree (" + (tree.clone ? "the root" : "a child") + "): no copy is left on the page",
         early.ok === false && alive().length === was);
     }
+    // A field named "__proto__" on a copy is a field like any other: refused by name, never a prototype the patch reads.
+    for (const v of ['{"opacity": 0.25}', "1"]) {
+      const odd = JSON.parse('{"clone": "' + sourceId + '", "name": "Copy", "__proto__": ' + v + '}') as unknown;
+      const viaFragment = JSON.parse('{"fragments": {"c": {"clone": "' + sourceId + '", "__proto__": ' + v + '}}, "children": [{"use": "c"}]}') as unknown;
+      ok("[CLONE-CHECK] a \"__proto__\" field on a copy (" + v + ") is refused, directly or from a fragment",
+        [odd, viaFragment].every((t) => checkTree(t).problems.some((p) => /__proto__: not a field a patch sets/.test(p))));
+    }
     // The wire check and the dry run say the same.
     const bad = { op: "createTree", tree: { clone: "Order 1" } };
     ok("[CLONE-CHECK] the wire check and the dry run refuse the same spec, by path",
