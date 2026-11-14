@@ -13,6 +13,7 @@
 // build leaves it at (no fills on a frame, opacity 1, no auto-layout, …).
 //
 // Children are matched by `handle`, then by a name that is unique among the old and the new children, then in order.
+// A copy of an existing node (`clone`) is kept while its spec is the same, and made again when anything in it changes.
 //
 // Pure and dependency-free (bar pure siblings): the plugin bundle imports it, so it must type-check under
 // figma-plugin/tsconfig.json (ES2019 lib, no Node types).
@@ -125,11 +126,16 @@ function sizeOf(s: TreeNodeSpec): { w?: number; h?: number } | undefined {
 /** Why a matched node is built anew instead of updated, or null when it can be updated in place. */
 function rebuildReason(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: readonly string[]): string | null {
   if (nodeKind(a) !== kind) return "its type changed";
+  // A copy is its source as it was when copied, with its edits: a change of either is a new copy (the source may have changed
+  // since, and the edits are not what a patch of the copy would put back).
+  if (kind === "CLONE") return changed.length ? "the copy changed" : null;
   if (kind === "INSTANCE") {
     if (a.component !== b.component) return "its component changed";
     if (changed.indexOf("name") >= 0 && b.name === undefined) return "its name was dropped";
     if (changed.indexOf("box") >= 0 && b.box === undefined) return "its size was dropped";
-    const gone = Object.keys(a.props || {}).filter((k) => !b.props || !(k in b.props));
+    // Own keys only: a property may be named "__proto__", which `in` would find on every object.
+    const bp = b.props;
+    const gone = Object.keys(a.props || {}).filter((k) => !bp || !Object.prototype.hasOwnProperty.call(bp, k));
     if (gone.length) return "a property it set was dropped";
   }
   if (kind === "TEXT") {

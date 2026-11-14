@@ -876,6 +876,214 @@
     return names.map((n) => "'" + n + "'").join(", ");
   }
 
+  // ../bridge/src/tree-expand.ts
+  var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  var REPEAT_FIELDS = ["use", "fragments", "rows", "columns"];
+  var NOT_EDITED = ["use", "fragments", "edits", "key"];
+  function put(o, k, v) {
+    Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
+  function copy(v) {
+    if (Array.isArray(v)) return v.map(copy);
+    if (!isObj(v)) return v;
+    const out = {};
+    for (const k of Object.keys(v)) put(out, k, copy(v[k]));
+    return out;
+  }
+  function repeats(v, depth) {
+    if (depth > 200) return true;
+    if (Array.isArray(v)) return v.some((x) => repeats(x, depth + 1));
+    if (!isObj(v)) return false;
+    for (const k of REPEAT_FIELDS) if (v[k] !== void 0) return true;
+    return Array.isArray(v.children) && v.children.some((c) => repeats(c, depth + 1));
+  }
+  function layersOf(n, out) {
+    if (!isObj(n)) return out;
+    out.push(n);
+    if (Array.isArray(n.children)) for (const c of n.children) layersOf(c, out);
+    return out;
+  }
+  var propValue = (v) => typeof v === "string" || typeof v === "boolean";
+  function expandTree(spec, maxNodes) {
+    const labels = /* @__PURE__ */ new Map();
+    const problems = [];
+    const warnings = [];
+    if (!isObj(spec) || !repeats(spec, 0)) return { tree: spec, problems, warnings, labels };
+    const say = (m) => {
+      problems.push(m);
+    };
+    const fragments = {};
+    const defs = spec.fragments;
+    if (defs !== void 0) {
+      if (!isObj(defs)) say("tree.fragments: must be an object of fragment name \u2192 node spec");
+      else for (const name of Object.keys(defs)) {
+        const f = defs[name];
+        const at2 = "tree.fragments[" + JSON.stringify(name) + "]";
+        if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
+        else if (!isObj(f)) say(at2 + ": must be a node spec");
+        else if (f.key !== void 0) say(at2 + ".key: a key names a whole result, so only the spec's root carries it");
+        else put(fragments, name, f);
+      }
+    }
+    const used = /* @__PURE__ */ new Set();
+    let count2 = 0;
+    let tooMany = false;
+    const expand = (n, path, stack, isRoot) => {
+      if (tooMany) return [];
+      if (!isObj(n)) return [n];
+      if (!isRoot && n.fragments !== void 0) say(path + ".fragments: fragments are defined once, on the spec's root");
+      if (n.use !== void 0) return place2(n, path, stack, isRoot);
+      if (n.rows !== void 0) return spread(n, path);
+      if (n.columns !== void 0) say(path + ".columns: names the values of each row in `rows`, which this node does not have");
+      if (++count2 > maxNodes) {
+        tooMany = true;
+        return [];
+      }
+      const out = {};
+      for (const k of Object.keys(n)) if (k !== "fragments" && k !== "children") put(out, k, copy(n[k]));
+      if (Array.isArray(n.children)) {
+        const kids = [];
+        n.children.forEach((c, i) => {
+          for (const x of expand(c, path + ".children[" + i + "]", stack, false)) kids.push(x);
+        });
+        out.children = kids;
+      } else if (n.children !== void 0) out.children = copy(n.children);
+      labels.set(out, path);
+      return [out];
+    };
+    const place2 = (n, path, stack, isRoot) => {
+      const name = n.use;
+      if (typeof name !== "string" || !name.trim()) {
+        say(path + ".use: must be a fragment's name");
+        return [];
+      }
+      if (!own(fragments, name)) {
+        const near = nearestNames(name, Object.keys(fragments));
+        say(path + ".use: no fragment '" + name + "'" + (near.length ? "; closest: " + quoteList(near) : "; define it under the root's `fragments`"));
+        return [];
+      }
+      if (stack.indexOf(name) >= 0) {
+        say(path + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
+        return [];
+      }
+      used.add(name);
+      if (n.children !== void 0) say(path + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
+      if (n.rows !== void 0 || n.columns !== void 0) say(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
+      const body = copy(fragments[name]);
+      if (!isObj(body)) return [];
+      if (n.edits !== void 0) {
+        if (!isObj(n.edits)) say(path + ".edits: must be an object of a layer name in the fragment \u2192 the fields it changes");
+        else {
+          const layers = layersOf(body, []);
+          for (const layer of Object.keys(n.edits)) {
+            const fields = n.edits[layer];
+            const at2 = path + ".edits[" + JSON.stringify(layer) + "]";
+            if (!isObj(fields)) {
+              say(at2 + ": must be an object of the fields to change");
+              continue;
+            }
+            const hits = layers.filter((l) => l.name === layer);
+            if (hits.length !== 1) {
+              const names = layers.map((l) => l.name).filter((x) => typeof x === "string");
+              say(at2 + ": " + (hits.length ? "matches " + hits.length + " layers of fragment '" + name + "'; give them different names" : "no layer of fragment '" + name + "' has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
+              continue;
+            }
+            const target = hits[0];
+            if (!target) continue;
+            for (const k of Object.keys(fields)) {
+              if (NOT_EDITED.indexOf(k) >= 0) {
+                say(at2 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
+                continue;
+              }
+              const v = fields[k];
+              if (v === null) delete target[k];
+              else if (v !== void 0) put(target, k, copy(v));
+            }
+          }
+        }
+      }
+      for (const k of Object.keys(n)) {
+        if (k === "use" || k === "edits" || k === "children" || k === "fragments" && isRoot) continue;
+        if (n[k] !== void 0) put(body, k, copy(n[k]));
+      }
+      return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
+    };
+    const spread = (n, path) => {
+      const at2 = path + ".rows";
+      if (n.component === void 0 || n.type !== void 0 && n.type !== "INSTANCE") {
+        say(at2 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
+        return [];
+      }
+      if (n.handle !== void 0) say(path + ".handle: a handle names one node, and a row table makes several; leave it out");
+      if (n.children !== void 0) say(path + ".children: an instance's layers come from its component");
+      const cols = n.columns;
+      if (cols !== void 0 && (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0))) {
+        say(path + ".columns: must be a non-empty list of property names");
+        return [];
+      }
+      if (Array.isArray(cols) && new Set(cols).size !== cols.length) {
+        say(path + ".columns: names a property twice");
+        return [];
+      }
+      const rows = n.rows;
+      if (!Array.isArray(rows) || !rows.length) {
+        say(at2 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
+        return [];
+      }
+      if (n.props !== void 0 && !isObj(n.props)) {
+        say(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
+        return [];
+      }
+      const base = isObj(n.props) ? n.props : {};
+      const out = [];
+      rows.forEach((row, i) => {
+        const r = at2 + "[" + i + "]";
+        let props = null;
+        if (Array.isArray(cols)) {
+          if (!Array.isArray(row) || row.length !== cols.length) {
+            say(r + ": must be a list of " + cols.length + " value" + (cols.length === 1 ? "" : "s") + ", one per column (" + quoteList(cols.map(String)) + ")");
+            return;
+          }
+          const bad = row.findIndex((v) => !propValue(v));
+          if (bad >= 0) {
+            say(r + "[" + bad + "]: must be a string (a variant's value, a text) or a boolean");
+            return;
+          }
+          props = {};
+          for (const [j, c] of cols.entries()) put(props, String(c), row[j]);
+        } else {
+          if (!isObj(row)) {
+            say(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
+            return;
+          }
+          const bad = Object.keys(row).find((k) => !propValue(row[k]) || !k.trim());
+          if (bad !== void 0) {
+            say(r + (bad.trim() ? "." + bad + ": must be a string (a variant's value, a text) or a boolean" : ": has an empty property name"));
+            return;
+          }
+          props = row;
+        }
+        if (++count2 > maxNodes) {
+          tooMany = true;
+          return;
+        }
+        const inst = {};
+        for (const k of Object.keys(n)) if (k !== "rows" && k !== "columns" && k !== "props" && k !== "handle") put(inst, k, copy(n[k]));
+        const merged = {};
+        for (const src of [base, props]) for (const k of Object.keys(src)) put(merged, k, copy(src[k]));
+        inst.props = merged;
+        labels.set(inst, r);
+        out.push(inst);
+      });
+      return out;
+    };
+    const [root] = expand(spec, "tree", [], true);
+    if (tooMany) say("tree: more than " + maxNodes + " nodes once its fragments and rows are expanded \u2014 send a large screen as several trees");
+    for (const name of Object.keys(fragments)) if (!used.has(name)) warnings.push("tree.fragments[" + JSON.stringify(name) + "]: no node uses it, so it is not built");
+    return { tree: root === void 0 ? {} : root, problems, warnings, labels };
+  }
+
   // ../bridge/src/tree-spec.ts
   var NUMBER_TOKEN_FIELDS = [
     "itemSpacing",
@@ -908,7 +1116,7 @@
   var NOT_YET = { refuse: "" };
   var refuse = (why) => ({ refuse: why });
   var isRefuse = (r) => typeof r !== "function";
-  var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var isNum = (v) => typeof v === "number" && Number.isFinite(v);
   var str = (v) => typeof v === "string" ? null : "must be a string";
   var num = (v) => isNum(v) ? null : "must be a number";
@@ -927,7 +1135,7 @@
     for (const e of list) if (e !== null) return e;
     return null;
   };
-  var objOf = (rules) => (v) => isObj(v) ? firstOr(objectProblems(v, rules, "")) : "must be an object";
+  var objOf = (rules) => (v) => isObj2(v) ? firstOr(objectProblems(v, rules, "")) : "must be an object";
   var LAYOUT_RULES = {
     display: (v) => v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : 'must be "flex"',
     mode: oneOf("absolute"),
@@ -952,7 +1160,7 @@
     autoTracks: refuse("grid layout cannot be written yet")
   };
   var LENGTH = (units, value = num) => (v) => {
-    if (!isObj(v)) return "must be an object {unit, value}";
+    if (!isObj2(v)) return "must be an object {unit, value}";
     const bad = objOf({ unit: oneOf(...units), value })(v);
     if (bad !== null) return bad;
     return v.unit === void 0 ? "is missing unit" : v.value === void 0 ? "is missing value" : null;
@@ -965,7 +1173,7 @@
     align: oneOf("left", "center", "right", "justified"),
     valign: oneOf("center", "bottom"),
     lineHeight: (v) => {
-      if (!isObj(v) || v.unit !== "auto") return LENGTH(["px", "percent"], nonNeg)(v);
+      if (!isObj2(v) || v.unit !== "auto") return LENGTH(["px", "percent"], nonNeg)(v);
       const extra = Object.keys(v).filter((k) => k !== "unit" && v[k] !== void 0);
       return extra.length ? "." + extra[0] + ': not a field of an `auto` line height (it is `{unit:"auto"}` alone)' : null;
     },
@@ -976,7 +1184,7 @@
     // No upper bound: Figma takes a `wght` axis past 1000 (seen live: 5000) and the read then writes that weight.
     weightValue: (v) => isNum(v) && v > 0 ? null : "must be a number > 0 (it follows `weight`, and sets nothing)",
     variationSettings: (v) => {
-      if (!isObj(v)) return 'must be an object of axis tag \u2192 number, e.g. {"wght": 560}';
+      if (!isObj2(v)) return 'must be an object of axis tag \u2192 number, e.g. {"wght": 560}';
       for (const [k, x] of Object.entries(v)) if (!isNum(x)) return "." + k + " must be a number";
       return null;
     },
@@ -1004,7 +1212,7 @@
     align: oneOf("inside", "outside", "center"),
     paints: refuse("only solid stroke `colors` can be written yet"),
     // The read writes `{profile:"uniform"}` on an ordinary stroke: that default is accepted (it sets nothing); a taper is not yet.
-    variableWidth: (v) => isObj(v) && v.profile === "uniform" && Object.keys(v).every((k) => k === "profile") ? null : 'only the default {profile:"uniform"} can be written yet (a tapered or custom-width stroke cannot)',
+    variableWidth: (v) => isObj2(v) && v.profile === "uniform" && Object.keys(v).every((k) => k === "profile") ? null : 'only the default {profile:"uniform"} can be written yet (a tapered or custom-width stroke cannot)',
     dash: NOT_YET,
     cap: NOT_YET,
     join: NOT_YET,
@@ -1026,7 +1234,7 @@
     color: hex,
     opacity: unit,
     tokens: (v) => {
-      if (!isObj(v)) return "must be an object {color: variable}";
+      if (!isObj2(v)) return "must be an object {color: variable}";
       const bad = firstOr(objectProblems(v, PAINT_TOKEN_RULES, ""));
       return bad !== null ? bad : v.color === void 0 ? "is missing color (the colour variable's name, key or id)" : null;
     },
@@ -1036,7 +1244,7 @@
   var fillsCheck = (v) => {
     if (!Array.isArray(v)) return 'must be a list of paints ({type:"solid", color})';
     for (const [i, p] of v.entries()) {
-      if (!isObj(p)) return "[" + i + "] must be a paint object";
+      if (!isObj2(p)) return "[" + i + "] must be a paint object";
       const bad = objectProblems(p, FILL_RULES, "")[0];
       if (bad) return "[" + i + "]" + (bad.startsWith(".") ? "" : " ") + bad;
       if (p.color === void 0 && p.tokens === void 0) return "[" + i + "] is missing color (a hex colour, or a colour variable in `tokens.color`)";
@@ -1068,7 +1276,7 @@
     grid: refuse("layout grids cannot be written yet")
   };
   var propsCheck = (v) => {
-    if (!isObj(v)) return "must be an object of property name \u2192 value";
+    if (!isObj2(v)) return "must be an object of property name \u2192 value";
     for (const [k, x] of Object.entries(v)) {
       if (!k.trim()) return "has an empty property name";
       if (x !== void 0 && typeof x !== "string" && typeof x !== "boolean") return "." + k + " must be a string (a variant's value, a text) or a boolean";
@@ -1182,24 +1390,25 @@
     const out = [];
     for (const [k, v] of Object.entries(o)) {
       if (v === void 0) continue;
-      const at = path + "." + k;
+      const at2 = path + "." + k;
       const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
       if (rule === void 0) {
         const near = nearestNames(k, Object.keys(rules).filter((r) => {
           const x = rules[r];
           return x !== void 0 && !isRefuse(x);
         }));
-        out.push(at + ": not a field the write accepts" + (near.length ? "; closest: " + quoteList(near) : ""));
+        out.push(at2 + ": not a field the write accepts" + (near.length ? "; closest: " + quoteList(near) : ""));
       } else if (isRefuse(rule)) {
-        out.push(at + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
+        out.push(at2 + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
       } else {
         const bad = rule(v);
-        if (bad !== null) out.push(at + (bad.startsWith(".") || bad.startsWith("[") ? "" : " ") + bad);
+        if (bad !== null) out.push(at2 + (bad.startsWith(".") || bad.startsWith("[") ? "" : " ") + bad);
       }
     }
     return out;
   }
   function nodeKind(n) {
+    if (n.clone !== void 0) return n.type === void 0 ? "CLONE" : null;
     if (n.type === void 0) return n.component !== void 0 ? "INSTANCE" : n.text !== void 0 ? "TEXT" : "FRAME";
     return n.type === "FRAME" || n.type === "TEXT" || n.type === "INSTANCE" ? n.type : null;
   }
@@ -1229,26 +1438,26 @@
   var STROKE_SIDES = [["top", "strokeTopWeight"], ["right", "strokeRightWeight"], ["bottom", "strokeBottomWeight"], ["left", "strokeLeftWeight"]];
   var nameList = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   function unboundOf(n, kind) {
-    const t = isObj(n.tokens) ? n.tokens : {};
+    const t = isObj2(n.tokens) ? n.tokens : {};
     const has2 = (k) => t[k] !== void 0;
     let c = 0;
     if (Array.isArray(n.fills)) {
-      for (const p of n.fills) if (isObj(p) && p.tokens === void 0) c++;
+      for (const p of n.fills) if (isObj2(p) && p.tokens === void 0) c++;
     }
     if (kind === "TEXT") {
-      const styled = isObj(n.styles) && n.styles.text !== void 0;
+      const styled = isObj2(n.styles) && n.styles.text !== void 0;
       if (!styled) c++;
-      if (n.fills === void 0 && !has2("fills") && isObj(n.font) && n.font.color !== void 0) c++;
+      if (n.fills === void 0 && !has2("fills") && isObj2(n.font) && n.font.color !== void 0) c++;
     }
-    const st = isObj(n.strokes) ? n.strokes : null;
+    const st = isObj2(n.strokes) ? n.strokes : null;
     if (st) {
       if (Array.isArray(st.colors) && !has2("strokes")) c += st.colors.length;
       if (st.weight !== void 0 && !has2("strokeWeight")) c++;
-      if (isObj(st.weights)) {
+      if (isObj2(st.weights)) {
         for (const [side, field] of STROKE_SIDES) if (st.weights[side] !== void 0 && !has2(field)) c++;
       }
     }
-    const l = isObj(n.layout) ? n.layout : null;
+    const l = isObj2(n.layout) ? n.layout : null;
     if (l && l.display === "flex") {
       if (l.gap !== void 0 && !has2("itemSpacing")) c++;
       if (Array.isArray(l.padding)) SIDE_PAD.forEach((f) => {
@@ -1259,58 +1468,159 @@
     }
     if (typeof n.radius === "number") {
       if (!CORNERS.every(([, f]) => has2(f))) c++;
-    } else if (isObj(n.radius)) {
+    } else if (isObj2(n.radius)) {
       for (const [k, f] of CORNERS) if (n.radius[k] !== void 0 && !has2(f)) c++;
     }
     return c;
   }
-  var isFlex = (n) => isObj(n.layout) && n.layout.display === "flex";
+  var isFlex = (n) => isObj2(n.layout) && n.layout.display === "flex";
   function fontOf(font) {
     return { family: font && font.family !== void 0 ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== void 0 ? font.weight : DEFAULT_FONT.weight };
   }
   function tokenProblems(n, t, kind, flex, inFlex, say) {
     const fits = kind === "FRAME" ? FRAME_TOKENS : kind === "TEXT" ? TEXT_TOKENS : INSTANCE_TOKENS;
-    const l = isObj(n.layout) ? n.layout : {};
+    const l = isObj2(n.layout) ? n.layout : {};
     for (const k of Object.keys(t)) {
       if (t[k] === void 0 || !settable(TOKEN_RULES, k)) continue;
-      const at = "`tokens." + k + "`";
+      const at2 = "`tokens." + k + "`";
       if (fits.indexOf(k) < 0) {
-        say(at + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
+        say(at2 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
         continue;
       }
-      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at + ' needs auto-layout on the node (layout.display "flex")');
-      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say(at + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
-      if (k === "width" && n.widthMode !== void 0) say(at + " sizes the node, which `widthMode` already does; leave one out");
-      if (k === "height" && n.heightMode !== void 0) say(at + " sizes the node, which `heightMode` already does; leave one out");
-      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at + " needs auto-layout on the node or its parent");
+      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at2 + ' needs auto-layout on the node (layout.display "flex")');
+      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say(at2 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
+      if (k === "width" && n.widthMode !== void 0) say(at2 + " sizes the node, which `widthMode` already does; leave one out");
+      if (k === "height" && n.heightMode !== void 0) say(at2 + " sizes the node, which `heightMode` already does; leave one out");
+      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at2 + " needs auto-layout on the node or its parent");
     }
     const fills = nameList(t.fills);
     if (t.fills !== void 0 && Array.isArray(n.fills)) {
-      const onPaints = n.fills.map((p) => isObj(p) && isObj(p.tokens) ? p.tokens.color : void 0);
+      const onPaints = n.fills.map((p) => isObj2(p) && isObj2(p.tokens) ? p.tokens.color : void 0);
       for (const name of fills) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
     const strokes = nameList(t.strokes);
-    const colors = isObj(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
+    const colors = isObj2(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
     if (t.strokes !== void 0 && colors && colors.length !== strokes.length) say("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
   }
-  function checkTree(spec) {
+  var NODE_ID = /^[^\s:;]+:[^\s:;]+$/;
+  var INSTANCE_LAYER = /^I[^\s]*;/;
+  var CLONE_RULES = {
+    clone: (v) => typeof v !== "string" ? 'must be the id of the node to copy (e.g. "12:34")' : INSTANCE_LAYER.test(v) ? "'" + v + "' is a layer inside an instance, which is not copied on its own; copy the instance or a frame that holds it" : NODE_ID.test(v) ? null : 'must be a node id (e.g. "12:34", as the read gives it); a copy names its source by id, never by name',
+    edits: (v) => isObj2(v) ? null : "must be an object of a layer of the source (its exact name, or its id) \u2192 the fields it changes",
+    handle: NODE_RULES.handle,
+    key: NODE_RULES.key,
+    x: num,
+    y: num,
+    absolute: trueOnly,
+    grow: NODE_RULES.grow,
+    alignSelf: NODE_RULES.alignSelf
+  };
+  var NOT_ON_CLONE = {
+    type: "a copy's type is its source's, so the field is refused",
+    children: "a copy's layers come from its source; change them with `edits` (a layer's name or id \u2192 its fields)"
+  };
+  function placeProblems(n, parentFlex, say, warn) {
+    const isRoot = parentFlex === null;
+    for (const axis of ["widthMode", "heightMode"]) {
+      if (n[axis] === "fill" && parentFlex !== true) say("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
+    }
+    if (parentFlex !== true) {
+      for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say("`" + k + "` needs a parent with auto-layout");
+    }
+    if (n.absolute === true && parentFlex === true) {
+      for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
+      if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
+      if (n.alignSelf === "stretch") say('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
+    }
+    if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
+      warn("`x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
+    }
+  }
+  function checkTreeWith(spec, patch) {
     const problems = [];
-    const summary = { frames: 0, texts: 0, instances: 0, refs: { components: [], variables: [], textStyles: [] }, unbound: 0, handles: [], fonts: [], warnings: [] };
+    const summary = { frames: 0, texts: 0, instances: 0, clones: 0, sources: [], refs: { components: [], variables: [], textStyles: [] }, unbound: 0, handles: [], fonts: [], warnings: [] };
+    const ex = expandTree(spec, MAX_TREE_NODES);
+    if (ex.problems.length) return { problems: ex.problems, summary, expanded: null, labels: ex.labels };
+    summary.warnings.push(...ex.warnings);
+    const tree = ex.tree;
     const seenHandles = /* @__PURE__ */ new Set();
     const seenFonts = /* @__PURE__ */ new Set();
+    const addRef = (list, name) => {
+      if (typeof name === "string" && list.indexOf(name) < 0) list.push(name);
+    };
     let count2 = 0;
     let tooMany = false;
-    const walk = (n, path, depth, parentFlex) => {
+    const handleOf = (n, say) => {
+      if (typeof n.handle !== "string" || !n.handle) return;
+      if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
+      seenHandles.add(n.handle);
+    };
+    const cloneNode = (n, path, parentFlex) => {
+      const before = problems.length;
+      const say = (msg) => {
+        problems.push(path + ": " + msg);
+      };
+      const own2 = {};
+      const set = {};
+      for (const k of Object.keys(n)) {
+        const v = n[k];
+        if (v === void 0) continue;
+        if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path + "." + k + ": not on a copy \u2014 " + NOT_ON_CLONE[k]);
+        else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own2 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
+      }
+      problems.push(...objectProblems(own2, CLONE_RULES, path));
+      const self = Object.keys(set).length ? patch(set, path) : null;
+      if (self) problems.push(...self.problems);
+      if (parentFlex !== null && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
+      else if (n.key !== void 0) say("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
+      if (parentFlex === null && n.hidden !== void 0) say("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
+      placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
+      const edits = [];
+      if (isObj2(n.edits)) {
+        const keys = Object.keys(n.edits).filter((k) => isObj2(n.edits) && n.edits[k] !== void 0);
+        if (!keys.length) say("`edits` is empty; leave it out for an exact copy");
+        for (const k of keys) {
+          if (!k.trim()) {
+            say("`edits` has an empty layer name");
+            continue;
+          }
+          if (n.clone === k) {
+            say("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields");
+            continue;
+          }
+          const r = patch(n.edits[k], path + ".edits[" + JSON.stringify(k) + "]");
+          problems.push(...r.problems);
+          edits.push(r);
+        }
+      }
+      handleOf(n, say);
+      if (problems.length !== before) return;
+      summary.clones++;
+      addRef(summary.sources, n.clone);
+      if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
+      for (const r of self ? [self, ...edits] : edits) {
+        for (const v of r.summary.refs.variables) addRef(summary.refs.variables, v);
+        for (const t of r.summary.refs.textStyles) addRef(summary.refs.textStyles, t);
+        summary.unbound += r.summary.unbound;
+      }
+    };
+    const walk = (n, at2, depth, parentFlex) => {
       if (++count2 > MAX_TREE_NODES) {
         tooMany = true;
         return;
       }
-      if (!isObj(n)) {
+      const label4 = isObj2(n) ? ex.labels.get(n) : void 0;
+      const path = label4 !== void 0 ? label4 : at2;
+      if (!isObj2(n)) {
         problems.push(path + ": must be a node object");
         return;
       }
       if (depth > MAX_TREE_DEPTH) {
         problems.push(path + ": nested deeper than " + MAX_TREE_DEPTH + " levels");
+        return;
+      }
+      if (n.clone !== void 0) {
+        cloneNode(n, path, parentFlex);
         return;
       }
       const before = problems.length;
@@ -1336,27 +1646,15 @@
       if (kind !== "INSTANCE") {
         for (const k of ["component", "props"]) if (n[k] !== void 0) say("`" + k + "` is only on an INSTANCE node");
       }
-      if (isObj(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
+      if (isObj2(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
       for (const axis of ["widthMode", "heightMode"]) {
-        const m = n[axis];
-        if (m === "fill" && parentFlex !== true) say("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
-        if (m === "hug" && !flex && kind === "FRAME") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
+        if (n[axis] === "hug" && !flex && kind === "FRAME") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
       }
-      if (isObj(n.tokens) && kind !== null) tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
-      if (parentFlex !== true) {
-        for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say("`" + k + "` needs a parent with auto-layout");
-      }
+      if (isObj2(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
+      placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
       if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
-      if (n.absolute === true && parentFlex === true) {
-        for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
-        if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
-        if (n.alignSelf === "stretch") say('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
-      }
       if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
-      if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
-        summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
-      }
-      if (isObj(n.layout) && n.layout.display === "flex") {
+      if (isObj2(n.layout) && n.layout.display === "flex") {
         const l = n.layout;
         const column = l.flexDirection === "column";
         if (l.alignItems === "baseline" && column) say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
@@ -1367,31 +1665,28 @@
           say("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
         }
       }
-      if (kind === "TEXT" && isObj(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
-      if (isObj(n.sizeLimits)) {
+      if (kind === "TEXT" && isObj2(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
+      if (isObj2(n.sizeLimits)) {
         const m = n.sizeLimits;
         if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
         if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
       }
-      if (isObj(n.layout) && n.layout.mode === "absolute") {
+      if (isObj2(n.layout) && n.layout.mode === "absolute") {
         const l = n.layout;
         if (l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
         else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
       }
-      if (isObj(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
-      if (typeof n.handle === "string" && n.handle) {
-        if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
-        seenHandles.add(n.handle);
-      }
-      if (problems.length === before && kind !== null) {
-        const styled = isObj(n.styles) && typeof n.styles.text === "string";
+      if (isObj2(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
+      handleOf(n, say);
+      if (problems.length === before && kind !== null && kind !== "CLONE") {
+        const styled = isObj2(n.styles) && typeof n.styles.text === "string";
         if (kind === "TEXT") {
           summary.texts++;
           if (styled) {
-            const set = isObj(n.font) ? STYLE_FONT_FIELDS.filter((k) => isObj(n.font) && n.font[k] !== void 0) : [];
+            const set = isObj2(n.font) ? STYLE_FONT_FIELDS.filter((k) => isObj2(n.font) && n.font[k] !== void 0) : [];
             if (set.length) summary.warnings.push(path + ": " + set.map((k) => "`font." + k + "`").join(", ") + " " + (set.length === 1 ? "is" : "are") + " set by the text style, so " + (set.length === 1 ? "it is" : "they are") + " not set");
           } else {
-            const f = fontOf(isObj(n.font) ? n.font : void 0);
+            const f = fontOf(isObj2(n.font) ? n.font : void 0);
             const key = f.family + "|" + f.weight;
             if (!seenFonts.has(key)) {
               seenFonts.add(key);
@@ -1401,29 +1696,24 @@
         } else if (kind === "INSTANCE") summary.instances++;
         else summary.frames++;
         if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
-        const addRef = (list, name) => {
-          if (typeof name === "string" && list.indexOf(name) < 0) list.push(name);
-        };
         if (kind === "INSTANCE") addRef(summary.refs.components, n.component);
-        if (styled && isObj(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
+        if (styled && isObj2(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
         if (Array.isArray(n.fills)) {
-          for (const p of n.fills) if (isObj(p) && isObj(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
+          for (const p of n.fills) if (isObj2(p) && isObj2(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
         }
-        if (isObj(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
+        if (isObj2(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
         summary.unbound += unboundOf(n, kind);
       }
       if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path + ".children[" + i + "]", depth + 1, flex));
     };
-    if (!isObj(spec)) problems.push("tree: must be a node object (the root frame)");
+    if (!isObj2(tree)) problems.push("tree: must be a node object (the root frame)");
     else {
-      walk(spec, "tree", 0, null);
-      if (nodeKind(spec) !== "FRAME") problems.push("tree: the root must be a FRAME (a screen); put the " + (nodeKind(spec) === "INSTANCE" ? "instance" : "text") + " inside one");
+      walk(tree, "tree", 0, null);
+      const k = nodeKind(tree);
+      if (k !== "FRAME" && k !== "CLONE") problems.push("tree: the root must be a FRAME (a screen)" + (k === "INSTANCE" || k === "TEXT" ? "; put the " + (k === "INSTANCE" ? "instance" : "text") + " inside one" : ""));
       if (tooMany) problems.push("tree: more than " + MAX_TREE_NODES + " nodes \u2014 send a large screen as several trees");
     }
-    return { problems, summary };
-  }
-  function isTreeSpec(v) {
-    return checkTree(v).problems.length === 0;
+    return { problems, summary, expanded: problems.length || !isObj2(tree) ? null : tree, labels: ex.labels };
   }
   function treeRefusal(problems) {
     const first2 = problems[0];
@@ -1433,12 +1723,17 @@
   function describeTree(spec, page, s) {
     const size2 = spec.box ? " " + spec.box.w + "\xD7" + spec.box.h : spec.layout && spec.layout.width && spec.layout.height ? " " + spec.layout.width + "\xD7" + spec.layout.height : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
-    const nodes = s.frames + s.texts + s.instances;
+    const nodes = s.frames + s.texts + s.instances + s.clones;
     const plural = (n, one) => n + " " + one + (n === 1 ? "" : "s");
     const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
+    const edited = (n) => {
+      const e = n.edits ? Object.keys(n.edits).length : 0;
+      return e ? " with " + plural(e, "layer") + " changed" : "";
+    };
     const parts = [
-      "creates frame '" + (spec.name || "Frame") + "'" + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + ") " + where
+      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates frame '" + (spec.name || "Frame") + "'" + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
     ];
+    if (s.clones > (spec.clone !== void 0 ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
     if (spec.key !== void 0) parts.push("key '" + spec.key + "': when the file already holds this key's earlier result, that result is updated in place instead (same ids, only the fields that differ from the spec sent last time) and the reply lists only what changed");
     if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
     if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
@@ -1447,7 +1742,7 @@
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
     if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
-    const checked = components.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied";
+    const checked = (components.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
 
@@ -1503,7 +1798,7 @@
     opacity: unit,
     layout: objOf(PATCH_LAYOUT_RULES),
     box: (v) => {
-      if (!isObj(v)) return "must be an object {w, h}";
+      if (!isObj2(v)) return "must be an object {w, h}";
       const bad = objOf(BOX_RULES2)(v);
       return bad !== null ? bad : v.w === void 0 && v.h === void 0 ? "needs `w`, `h` or both" : null;
     },
@@ -1512,7 +1807,7 @@
     radius: NODE_RULES.radius,
     fills: fillsCheck,
     strokes: (v) => {
-      if (!isObj(v)) return "must be an object";
+      if (!isObj2(v)) return "must be an object";
       const bad = objOf(PATCH_STROKE_RULES)(v);
       return bad !== null ? bad : Object.keys(v).every((k) => v[k] === void 0) ? "is empty" : null;
     },
@@ -1539,29 +1834,29 @@
   });
   function checkPatch(set, path = "set") {
     const summary = { fields: [], refs: { variables: [], textStyles: [] }, unbound: 0 };
-    if (!isObj(set)) return { problems: [path + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
+    if (!isObj2(set)) return { problems: [path + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
     const problems = [];
     const say = (m) => {
       problems.push(path + ": " + m);
     };
     for (const [k, v] of Object.entries(set)) {
       if (v === void 0) continue;
-      const at = path + "." + k;
+      const at2 = path + "." + k;
       if (Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k)) continue;
       const why = Object.prototype.hasOwnProperty.call(NOT_PATCHED, k) ? NOT_PATCHED[k] : void 0;
       const tree = Object.prototype.hasOwnProperty.call(NODE_RULES, k) ? NODE_RULES[k] : void 0;
-      if (why !== void 0) problems.push(at + ": a patch cannot set it \u2014 " + why);
-      else if (tree !== void 0) problems.push(at + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
+      if (why !== void 0) problems.push(at2 + ": a patch cannot set it \u2014 " + why);
+      else if (tree !== void 0) problems.push(at2 + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
       else {
         const near = nearestNames(k, PATCH_FIELD_NAMES);
-        problems.push(at + ": not a field a patch sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+        problems.push(at2 + ": not a field a patch sets" + (near.length ? "; closest: " + quoteList(near) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
     const fields = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
     if (!fields.length && !problems.length) say("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
     if (problems.length) return { problems, summary };
-    const l = isObj(set.layout) ? set.layout : null;
+    const l = isObj2(set.layout) ? set.layout : null;
     if (l) {
       if (l.mode !== void 0 && l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
       else if (l.mode !== void 0) {
@@ -1572,18 +1867,18 @@
         for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs wrapping; `flexWrap: "nowrap"` turns it off');
       }
     }
-    const box = isObj(set.box) ? set.box : null;
+    const box = isObj2(set.box) ? set.box : null;
     if (box && box.w !== void 0 && set.widthMode !== void 0 && set.widthMode !== "fixed") say('`box.w` gives a fixed width, which `widthMode: "' + String(set.widthMode) + '"` contradicts; leave one out');
     if (box && box.h !== void 0 && set.heightMode !== void 0 && set.heightMode !== "fixed") say('`box.h` gives a fixed height, which `heightMode: "' + String(set.heightMode) + '"` contradicts; leave one out');
-    const t = isObj(set.tokens) ? set.tokens : {};
+    const t = isObj2(set.tokens) ? set.tokens : {};
     if (t.width !== void 0 && t.width !== null && set.widthMode !== void 0 && set.widthMode !== "fixed") say("`tokens.width` sizes the node, which `widthMode` already does; leave one out");
     if (t.height !== void 0 && t.height !== null && set.heightMode !== void 0 && set.heightMode !== "fixed") say("`tokens.height` sizes the node, which `heightMode` already does; leave one out");
     if (Array.isArray(set.fills) && t.fills !== void 0) {
-      const onPaints = set.fills.map((p) => isObj(p) && isObj(p.tokens) ? p.tokens.color : void 0);
+      const onPaints = set.fills.map((p) => isObj2(p) && isObj2(p.tokens) ? p.tokens.color : void 0);
       if (t.fills === null) say("`tokens.fills: null` unbinds the node's paints, and `fills` replaces them; give one");
       else for (const name of typeof t.fills === "string" ? [t.fills] : Array.isArray(t.fills) ? t.fills : []) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + String(name) + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
-    const st = isObj(set.strokes) ? set.strokes : null;
+    const st = isObj2(set.strokes) ? set.strokes : null;
     if (st && Array.isArray(st.colors) && t.strokes !== void 0 && t.strokes !== null) {
       const n = typeof t.strokes === "string" ? 1 : Array.isArray(t.strokes) ? t.strokes.length : 0;
       if (n !== st.colors.length) say("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
@@ -1594,10 +1889,10 @@
       if (typeof name === "string" && list.indexOf(name) < 0) list.push(name);
     };
     if (Array.isArray(set.fills)) {
-      for (const p of set.fills) if (isObj(p) && isObj(p.tokens)) add(summary.refs.variables, p.tokens.color);
+      for (const p of set.fills) if (isObj2(p) && isObj2(p.tokens)) add(summary.refs.variables, p.tokens.color);
     }
     for (const v of Object.values(t)) for (const name of typeof v === "string" ? [v] : Array.isArray(v) ? v : []) add(summary.refs.variables, name);
-    if (isObj(set.styles)) add(summary.refs.textStyles, set.styles.text);
+    if (isObj2(set.styles)) add(summary.refs.textStyles, set.styles.text);
     summary.unbound = unboundOf2(set, t);
     return { problems, summary };
   }
@@ -1605,17 +1900,17 @@
     const has2 = (k) => t[k] !== void 0 && t[k] !== null;
     let c = 0;
     if (Array.isArray(set.fills)) {
-      for (const p of set.fills) if (isObj(p) && p.tokens === void 0) c++;
+      for (const p of set.fills) if (isObj2(p) && p.tokens === void 0) c++;
     }
-    const st = isObj(set.strokes) ? set.strokes : null;
+    const st = isObj2(set.strokes) ? set.strokes : null;
     if (st) {
       if (Array.isArray(st.colors) && !has2("strokes")) c += st.colors.length;
       if (st.weight !== void 0 && !has2("strokeWeight")) c++;
-      if (isObj(st.weights)) {
+      if (isObj2(st.weights)) {
         for (const [side, f] of [["top", "strokeTopWeight"], ["right", "strokeRightWeight"], ["bottom", "strokeBottomWeight"], ["left", "strokeLeftWeight"]]) if (st.weights[side] !== void 0 && !has2(f)) c++;
       }
     }
-    const l = isObj(set.layout) ? set.layout : null;
+    const l = isObj2(set.layout) ? set.layout : null;
     if (l) {
       if (l.gap !== void 0 && !has2("itemSpacing")) c++;
       if (Array.isArray(l.padding)) {
@@ -1625,7 +1920,7 @@
     const corners = [["tl", "topLeftRadius"], ["tr", "topRightRadius"], ["br", "bottomRightRadius"], ["bl", "bottomLeftRadius"]];
     if (typeof set.radius === "number") {
       if (!corners.every(([, f]) => has2(f))) c++;
-    } else if (isObj(set.radius)) {
+    } else if (isObj2(set.radius)) {
       for (const [k, f] of corners) if (set.radius[k] !== void 0 && !has2(f)) c++;
     }
     return c;
@@ -1664,9 +1959,9 @@
   };
   var isNum2 = (v) => typeof v === "number" && Number.isFinite(v);
   var num2 = (v) => isNum2(v) ? null : "must be a number";
-  var xy2 = (v) => isObj(v) && isNum2(v.x) && isNum2(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}";
+  var xy2 = (v) => isObj2(v) && isNum2(v.x) && isNum2(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}";
   var length = (units, auto) => (v) => {
-    if (!isObj(v)) return "must be an object {unit, value}";
+    if (!isObj2(v)) return "must be an object {unit, value}";
     if (auto && v.unit === "auto") return Object.keys(v).some((k) => k !== "unit" && v[k] !== void 0) ? '`{unit:"auto"}` takes no value' : null;
     if (typeof v.unit !== "string" || units.indexOf(v.unit) < 0) return "unit must be one of " + (auto ? [...units, "auto"] : units).join(" | ");
     const extra = Object.keys(v).filter((k) => k !== "unit" && k !== "value" && v[k] !== void 0);
@@ -1696,16 +1991,16 @@
   var effectsCheck = (v) => {
     if (!Array.isArray(v)) return "must be a list of effects ([] removes them)";
     for (const [i, e] of v.entries()) {
-      const at = "[" + i + "]";
-      if (!isObj(e)) return at + " must be an effect object";
+      const at2 = "[" + i + "]";
+      if (!isObj2(e)) return at2 + " must be an effect object";
       const shadow = e.type === "drop_shadow" || e.type === "inner_shadow";
       const blur = e.type === "layer_blur" || e.type === "background_blur";
-      if (!shadow && !blur) return at + ".type: " + (typeof e.type === "string" ? "'" + e.type + "' cannot be written yet (drop_shadow, inner_shadow, layer_blur and background_blur can)" : "must be drop_shadow | inner_shadow | layer_blur | background_blur");
+      if (!shadow && !blur) return at2 + ".type: " + (typeof e.type === "string" ? "'" + e.type + "' cannot be written yet (drop_shadow, inner_shadow, layer_blur and background_blur can)" : "must be drop_shadow | inner_shadow | layer_blur | background_blur");
       const bad = objectProblems(e, shadow ? SHADOW_RULES : BLUR_RULES, "")[0];
-      if (bad) return at + (bad.startsWith(".") ? "" : " ") + bad;
+      if (bad) return at2 + (bad.startsWith(".") ? "" : " ") + bad;
       const need = shadow ? ["color", "offset", "radius"] : ["radius"];
-      for (const k of need) if (e[k] === void 0) return at + " is missing " + k;
-      if (e.behindNode !== void 0 && e.type !== "drop_shadow") return at + ".behindNode: only a drop_shadow shows behind its node";
+      for (const k of need) if (e[k] === void 0) return at2 + " is missing " + k;
+      if (e.behindNode !== void 0 && e.type !== "drop_shadow") return at2 + ".behindNode: only a drop_shadow shows behind its node";
     }
     return null;
   };
@@ -1726,7 +2021,7 @@
     // Bound after the raw values above (setting a raw value unbinds the field).
     tokens: {
       rule: (v) => {
-        if (!isObj(v)) return "must be an object of text style field \u2192 variable (or null to unbind)";
+        if (!isObj2(v)) return "must be an object of text style field \u2192 variable (or null to unbind)";
         const keys = Object.keys(v).filter((k) => v[k] !== void 0);
         if (!keys.length) return "is empty";
         for (const k of keys) {
@@ -1758,16 +2053,16 @@
   };
   function checkStyleSet(set, path = "set") {
     const summary = { fields: [], kind: null, variables: [] };
-    if (!isObj(set)) return { problems: [path + `: must be an object of the style's fields to change, e.g. {paints: [{type: "solid", color: "#2563eb"}]}`], summary };
+    if (!isObj2(set)) return { problems: [path + `: must be an object of the style's fields to change, e.g. {paints: [{type: "solid", color: "#2563eb"}]}`], summary };
     const problems = [];
     for (const [k, v] of Object.entries(set)) {
       if (v === void 0 || Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k)) continue;
-      const at = path + "." + k;
+      const at2 = path + "." + k;
       const why = Object.prototype.hasOwnProperty.call(NOT_STYLED, k) ? NOT_STYLED[k] : void 0;
-      if (why !== void 0) problems.push(at + ": a style edit cannot set it \u2014 " + why);
+      if (why !== void 0) problems.push(at2 + ": a style edit cannot set it \u2014 " + why);
       else {
         const near = nearestNames(k, STYLE_FIELD_NAMES);
-        problems.push(at + ": not a field a style edit sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+        problems.push(at2 + ": not a field a style edit sets" + (near.length ? "; closest: " + quoteList(near) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
@@ -1788,9 +2083,9 @@
       if (typeof name === "string" && summary.variables.indexOf(name) < 0) summary.variables.push(name);
     };
     if (Array.isArray(set.paints)) {
-      for (const p of set.paints) if (isObj(p) && isObj(p.tokens)) add(p.tokens.color);
+      for (const p of set.paints) if (isObj2(p) && isObj2(p.tokens)) add(p.tokens.color);
     }
-    if (isObj(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
+    if (isObj2(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
     return { problems, summary };
   }
   function isStyleSet(v) {
@@ -1798,7 +2093,7 @@
   }
   var valueCheck = (v) => {
     if (typeof v === "string" || typeof v === "boolean" || isNum2(v)) return null;
-    if (isObj(v)) {
+    if (isObj2(v)) {
       if (v.composed !== void 0) return "a composed colour (a colour and a separate opacity) cannot be written yet";
       const extra = Object.keys(v).filter((k) => k !== "aliasOf" && v[k] !== void 0);
       if (extra.length) return "." + extra[0] + ": an alias is {aliasOf: <variable name, key or id>}";
@@ -1809,29 +2104,29 @@
   };
   function checkVariableEdit(o, path = "") {
     const summary = { modes: [], aliases: [] };
-    const at = (k) => (path ? path + "." : "") + k;
+    const at2 = (k) => (path ? path + "." : "") + k;
     const problems = [];
     const add = (v) => {
-      if (isObj(v) && typeof v.aliasOf === "string" && summary.aliases.indexOf(v.aliasOf) < 0) summary.aliases.push(v.aliasOf);
+      if (isObj2(v) && typeof v.aliasOf === "string" && summary.aliases.indexOf(v.aliasOf) < 0) summary.aliases.push(v.aliasOf);
     };
-    if (o.values !== void 0 && o.value !== void 0) return { problems: [at("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
+    if (o.values !== void 0 && o.value !== void 0) return { problems: [at2("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
     if (o.values === void 0 && o.value === void 0) return { problems: [(path || "setVariable") + ": missing values \u2014 `values: {<mode>: value}`, or `value` for a collection with one mode"], summary };
     if (o.value !== void 0) {
       const bad = valueCheck(o.value);
-      if (bad !== null) problems.push(at("value") + (bad.startsWith(".") ? "" : ": ") + bad);
+      if (bad !== null) problems.push(at2("value") + (bad.startsWith(".") ? "" : ": ") + bad);
       else add(o.value);
       return { problems, summary };
     }
-    if (!isObj(o.values) || !Object.keys(o.values).some((k) => isObj(o.values) && o.values[k] !== void 0)) return { problems: [at("values") + ": must be an object of mode name (or modeId) \u2192 value, with at least one mode"], summary };
+    if (!isObj2(o.values) || !Object.keys(o.values).some((k) => isObj2(o.values) && o.values[k] !== void 0)) return { problems: [at2("values") + ": must be an object of mode name (or modeId) \u2192 value, with at least one mode"], summary };
     for (const [mode, v] of Object.entries(o.values)) {
       if (v === void 0) continue;
       if (!mode.trim()) {
-        problems.push(at("values") + ": a mode name must not be empty");
+        problems.push(at2("values") + ": a mode name must not be empty");
         continue;
       }
       const bad = valueCheck(v);
       if (bad !== null) {
-        problems.push(at("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad);
+        problems.push(at2("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad);
         continue;
       }
       summary.modes.push(mode);
@@ -1858,6 +2153,22 @@
     const first2 = problems[0];
     if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
     return problems.length + " problems in the edit \u2014 nothing was changed:\n" + problems.join("\n");
+  }
+
+  // ../bridge/src/tree-check.ts
+  function checkTree(spec) {
+    return checkTreeWith(spec, checkPatch);
+  }
+  var CLONE_PLACE_FIELDS = ["clone", "edits", "handle", "key", "x", "y", "absolute", "grow", "alignSelf"];
+  function clonePatch(s) {
+    const out = {};
+    for (const [k, v] of Object.entries(s)) if (v !== void 0 && CLONE_PLACE_FIELDS.indexOf(k) < 0) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    return Object.keys(out).length && isPatchSet(out) ? out : null;
+  }
+  function cloneEdits(s) {
+    const out = [];
+    for (const [k, v] of Object.entries(s.edits || {})) if (isPatchSet(v)) out.push([k, v]);
+    return out;
   }
 
   // ../bridge/src/commands.ts
@@ -1904,9 +2215,9 @@
   function treePreview(o, index, missing) {
     const base = { index, op: o.op, effect: "creates", target: o.page ? `new frame on page '${o.page}'` : "new frame on the current page" };
     if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
-    const { problems, summary } = checkTree(o.tree);
-    if (problems.length || !isTreeSpec(o.tree)) return { ...base, invalid: problems.join("\n") };
-    return { ...base, change: describeTree(o.tree, o.page, summary), ...summary.warnings.length ? { warnings: summary.warnings } : {} };
+    const { problems, summary, expanded } = checkTree(o.tree);
+    if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
+    return { ...base, change: describeTree(expanded, o.page, summary), ...summary.warnings.length ? { warnings: summary.warnings } : {} };
   }
   function patchPreview(o, index, missing) {
     const base = { index, op: o.op, effect: "overwrites", target: o.nodeId || null };
@@ -2007,9 +2318,9 @@
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
   var isNum3 = (v) => typeof v === "number";
-  function opt(a, key, ok, what, label3 = key) {
+  function opt(a, key, ok, what, label4 = key) {
     const v = a[key];
-    return v === void 0 || ok(v) ? null : `\`${label3}\` is not ${what}`;
+    return v === void 0 || ok(v) ? null : `\`${label4}\` is not ${what}`;
   }
   function first(errs) {
     for (const e of errs) if (e !== null) return e;
@@ -2026,35 +2337,35 @@
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   var isIndex = (v) => isNum3(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
-    const at = `ops[${i}]`;
-    if (!isRecord(o)) return `\`${at}\` is not an object`;
+    const at2 = `ops[${i}]`;
+    if (!isRecord(o)) return `\`${at2}\` is not an object`;
     const op = o.op;
-    if (!isWriteOpName(op)) return `\`${at}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
+    if (!isWriteOpName(op)) return `\`${at2}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
-      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
-      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum3, "a number", `${at}.${k}`)),
-      opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
-      opt(o, "padding", isPadding, "four numbers", `${at}.padding`),
-      opt(o, "index", isIndex, "a whole number \u2265 0", `${at}.index`)
+      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at2}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum3, "a number", `${at2}.${k}`)),
+      opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at2}.layoutMode`),
+      opt(o, "padding", isPadding, "four numbers", `${at2}.padding`),
+      opt(o, "index", isIndex, "a whole number \u2265 0", `${at2}.index`)
     ]);
     if (typeErr !== null) return typeErr;
-    if (o.treeFile !== void 0) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
+    if (o.treeFile !== void 0) return `\`${at2}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
     const missing = missingWriteFields(op, o);
-    if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
+    if (missing.length) return `\`${at2}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {
       const { problems } = checkTree(o.tree);
-      if (problems.length) return treeRefusal(problems.map((p) => p.replace(/^tree/, `${at}.tree`)));
+      if (problems.length) return treeRefusal(problems.map((p) => p.replace(/^tree/, `${at2}.tree`)));
     }
     if (op === "patch") {
-      const { problems } = checkPatch(o.set, `${at}.set`);
+      const { problems } = checkPatch(o.set, `${at2}.set`);
       if (problems.length) return patchRefusal(problems);
     }
     if (op === "setVariable") {
-      const { problems } = checkVariableEdit(o, at);
+      const { problems } = checkVariableEdit(o, at2);
       if (problems.length) return sourceRefusal(problems);
     }
     if (op === "setStyle") {
-      const { problems } = checkStyleSet(o.set, `${at}.set`);
+      const { problems } = checkStyleSet(o.set, `${at2}.set`);
       if (problems.length) return sourceRefusal(problems);
     }
     return null;
@@ -5354,10 +5665,327 @@
     };
   }
 
+  // ../bridge/src/tree-diff.ts
+  var EXTRA_FIELDS = ["x", "y", "absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout"];
+  function ownSpec(s) {
+    const out = {};
+    for (const k of Object.keys(s)) {
+      const v = s[k];
+      if (k !== "children" && v !== void 0) out[k] = v;
+    }
+    return out;
+  }
+  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  function canonical(v) {
+    if (v === void 0) return "undefined";
+    if (v === null || typeof v !== "object") return JSON.stringify(v);
+    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+    const o = v;
+    return "{" + Object.keys(o).filter((k) => o[k] !== void 0).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
+  }
+  var same = (a, b) => canonical(a) === canonical(b);
+  function without(o, keys) {
+    if (!isObj3(o)) return void 0;
+    const out = {};
+    for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
+    return Object.keys(out).length ? out : void 0;
+  }
+  function compared(s, kind) {
+    const out = {};
+    for (const k of Object.keys(s)) {
+      const v = s[k];
+      if (v === void 0 || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key") continue;
+      if (k === "box") {
+        out.box = without(v, ["x", "y"]);
+        continue;
+      }
+      if (k === "font") {
+        out.font = without(v, ["weightValue"]);
+        continue;
+      }
+      if (k === "layout") {
+        out.layout = without(v, ["width", "height"]);
+        continue;
+      }
+      out[k] = v;
+    }
+    if (kind === "FRAME") {
+      const size2 = sizeOf(s);
+      if (size2) out.box = size2;
+    }
+    return out;
+  }
+  function sizeOf(s) {
+    if (s.box) return { w: s.box.w, h: s.box.h };
+    const l = s.layout;
+    if (!l || l.width === void 0 && l.height === void 0) return void 0;
+    return { ...l.width !== void 0 ? { w: l.width } : {}, ...l.height !== void 0 ? { h: l.height } : {} };
+  }
+  function rebuildReason(kind, a, b, changed) {
+    if (nodeKind(a) !== kind) return "its type changed";
+    if (kind === "CLONE") return changed.length ? "the copy changed" : null;
+    if (kind === "INSTANCE") {
+      if (a.component !== b.component) return "its component changed";
+      if (changed.indexOf("name") >= 0 && b.name === void 0) return "its name was dropped";
+      if (changed.indexOf("box") >= 0 && b.box === void 0) return "its size was dropped";
+      const bp = b.props;
+      const gone = Object.keys(a.props || {}).filter((k) => !bp || !Object.prototype.hasOwnProperty.call(bp, k));
+      if (gone.length) return "a property it set was dropped";
+    }
+    if (kind === "TEXT") {
+      for (const f of ["font", "truncate", "maxLines", "widthMode", "heightMode"]) if (changed.indexOf(f) >= 0) return "`" + f + "` changed";
+      if (changed.indexOf("styles") >= 0 && !(b.styles && b.styles.text !== void 0)) return "its text style was dropped";
+      if (changed.indexOf("strokes") >= 0 && a.strokes && a.strokes.align !== void 0 && !(b.strokes && b.strokes.align !== void 0)) return "its stroke alignment was dropped";
+    }
+    return null;
+  }
+  var SIDES2 = ["top", "right", "bottom", "left"];
+  function translate(kind, a, b, changed) {
+    const set = {};
+    const tokens = {};
+    const extras = [];
+    const fields = [];
+    const has2 = (f) => changed.indexOf(f) >= 0;
+    const touch = (f) => {
+      if (fields.indexOf(f) < 0) fields.push(f);
+    };
+    const bt = b.tokens || {};
+    const at2 = a.tokens || {};
+    if (has2("name")) {
+      set.name = b.name !== void 0 ? b.name : kind === "TEXT" ? b.text || "" : "Frame";
+      touch("name");
+    }
+    if (has2("hidden")) {
+      set.hidden = b.hidden === true;
+      touch("hidden");
+    }
+    if (has2("opacity")) {
+      set.opacity = b.opacity !== void 0 ? b.opacity : 1;
+      touch("opacity");
+    }
+    if (has2("text") && b.text !== void 0) {
+      set.text = b.text;
+      touch("text");
+    }
+    if (has2("styles") && b.styles && b.styles.text !== void 0) {
+      set.styles = { text: b.styles.text };
+      touch("styles");
+    }
+    if (has2("props") && b.props) {
+      set.props = b.props;
+      touch("props");
+    }
+    if (has2("layout") && kind === "FRAME") {
+      set.layout = layoutOf(b);
+      touch("layout");
+    }
+    if (has2("radius")) {
+      const r = b.radius;
+      set.radius = r === void 0 ? 0 : typeof r === "number" ? r : { tl: r.tl || 0, tr: r.tr || 0, br: r.br || 0, bl: r.bl || 0 };
+      touch("radius");
+    }
+    if (has2("box") || kind === "TEXT" && has2("autoResize") || kind !== "TEXT" && (has2("widthMode") || has2("heightMode"))) {
+      if (kind === "TEXT") {
+        if (b.box) {
+          const box = {};
+          if (b.widthMode === void 0) box.w = b.box.w;
+          if (b.heightMode === void 0) box.h = b.box.h;
+          if (box.w !== void 0 || box.h !== void 0) set.box = box;
+        }
+        set.autoResize = b.autoResize !== void 0 ? b.autoResize : b.box ? "none" : "width_and_height";
+        if (has2("box")) touch("box");
+        if (has2("autoResize")) touch("autoResize");
+      } else {
+        const size2 = kind === "FRAME" ? sizeOf(b) : b.box;
+        const box = {};
+        const w = size2 && size2.w !== void 0 ? size2.w : 100;
+        const h = size2 && size2.h !== void 0 ? size2.h : 100;
+        if (b.widthMode === void 0 && (has2("box") || has2("widthMode"))) box.w = w;
+        if (b.heightMode === void 0 && (has2("box") || has2("heightMode"))) box.h = h;
+        if (box.w !== void 0 || box.h !== void 0) {
+          set.box = box;
+          touch("box");
+        }
+      }
+    }
+    for (const axis of ["widthMode", "heightMode"]) {
+      if (!has2(axis)) continue;
+      const m = b[axis];
+      set[axis] = m !== void 0 ? m : "fixed";
+      touch(axis);
+    }
+    if (kind !== "INSTANCE" && (has2("fills") || !same(at2.fills, bt.fills))) {
+      if (b.fills) set.fills = b.fills;
+      else if (bt.fills !== void 0) tokens.fills = bt.fills;
+      else set.fills = kind === "TEXT" ? [{ type: "solid", color: b.font && b.font.color !== void 0 ? b.font.color : "#000000" }] : [];
+      touch("fills");
+    }
+    if (kind !== "INSTANCE" && (has2("strokes") || !same(at2.strokes, bt.strokes))) {
+      const sa = a.strokes || {};
+      const sb = b.strokes || {};
+      const st = {};
+      if (sb.colors) st.colors = sb.colors;
+      else if (bt.strokes === void 0) st.colors = [];
+      if (st.colors !== void 0 && st.colors.length && bt.strokes !== void 0) tokens.strokes = bt.strokes;
+      else if (st.colors === void 0) tokens.strokes = bt.strokes !== void 0 ? bt.strokes : null;
+      if (sb.weight !== void 0) st.weight = sb.weight;
+      else if (sa.weight !== void 0) st.weight = 1;
+      if (kind === "FRAME" && (sb.weights !== void 0 || sa.weights !== void 0)) {
+        const w = {};
+        for (const side of SIDES2) {
+          const v = sb.weights && sb.weights[side];
+          if (v !== void 0) w[side] = v;
+          else if (sa.weights && sa.weights[side] !== void 0) w[side] = sb.weight !== void 0 ? sb.weight : 1;
+        }
+        if (Object.keys(w).length) st.weights = w;
+      }
+      if (sb.align !== void 0) st.align = sb.align;
+      else if (sa.align !== void 0) st.align = "inside";
+      if (Object.keys(st).length) set.strokes = st;
+      touch("strokes");
+    }
+    const numberChanged = NUMBER_TOKEN_FIELDS.filter((k) => at2[k] !== bt[k]);
+    if (numberChanged.length) touch("tokens");
+    for (const k of numberChanged) tokens[k] = bt[k] !== void 0 ? bt[k] : null;
+    if (Object.keys(set).length || numberChanged.length) {
+      for (const k of NUMBER_TOKEN_FIELDS) if (bt[k] !== void 0) tokens[k] = bt[k];
+    }
+    if (Object.keys(tokens).length) set.tokens = tokens;
+    for (const f of EXTRA_FIELDS) {
+      if (!has2(f)) continue;
+      if ((f === "x" || f === "y") && b[f] === void 0) continue;
+      if ((f === "clip" || f === "sizeLimits" || f === "strokesInLayout") && kind !== "FRAME") continue;
+      extras.push(f);
+      touch(f);
+    }
+    return { set, extras, fields };
+  }
+  function layoutOf(b) {
+    const l = b.layout;
+    if (!l || l.display !== "flex") return { mode: "absolute" };
+    const column = l.flexDirection === "column";
+    const out = {
+      display: "flex",
+      flexDirection: column ? "column" : "row",
+      gap: l.gap !== void 0 ? l.gap : 0,
+      padding: l.padding ? l.padding : [0, 0, 0, 0],
+      justifyContent: l.justifyContent !== void 0 ? l.justifyContent : "flex-start",
+      alignItems: l.alignItems !== void 0 ? l.alignItems : "flex-start",
+      flexWrap: l.flexWrap === "wrap" ? "wrap" : "nowrap",
+      reverseZ: l.reverseZ === true
+    };
+    if (l.flexWrap === "wrap") {
+      if (column) out.columnGap = l.columnGap !== void 0 ? l.columnGap : 0;
+      else out.rowGap = l.rowGap !== void 0 ? l.rowGap : 0;
+      out.alignContent = l.alignContent !== void 0 ? l.alignContent : "auto";
+    }
+    return out;
+  }
+  function match(olds, news) {
+    const out = news.map(() => null);
+    const used = /* @__PURE__ */ new Set();
+    news.forEach((n, i) => {
+      if (n.handle === void 0) return;
+      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.handle === n.handle);
+      if (j >= 0) {
+        out[i] = olds[j] || null;
+        used.add(j);
+      }
+    });
+    const count2 = (list, name, of) => list.filter((x) => of(x) === name).length;
+    news.forEach((n, i) => {
+      if (out[i] || n.name === void 0) return;
+      if (count2(news, n.name, (x) => x.name) !== 1 || count2(olds, n.name, (o) => o.spec.name) !== 1) return;
+      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.name === n.name && o.spec.handle === void 0);
+      if (j >= 0) {
+        out[i] = olds[j] || null;
+        used.add(j);
+      }
+    });
+    let next = 0;
+    news.forEach((n, i) => {
+      if (out[i]) return;
+      while (next < olds.length && (used.has(next) || olds[next] && olds[next].spec.handle !== void 0)) next++;
+      const o = olds[next];
+      if (!o) return;
+      if (n.name !== void 0 && o.spec.name !== void 0 && n.name !== o.spec.name) return;
+      out[i] = o;
+      used.add(next);
+      next++;
+    });
+    return out;
+  }
+  function planUpdate(old, spec) {
+    const plan = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [] };
+    visit(old, spec, "tree", plan);
+    return plan;
+  }
+  function visit(old, spec, path, plan) {
+    const kind = nodeKind(spec) || "FRAME";
+    const a = compared(old.spec, kind);
+    const b = compared(spec, kind);
+    const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
+    if (changed.length) {
+      const t = translate(kind, old.spec, spec, changed);
+      if (t.fields.length) plan.updates.push({ ref: old.ref, spec, fields: t.fields, set: Object.keys(t.set).length ? t.set : null, extras: t.extras, path });
+    }
+    if (!same(old.spec, ownSpec(spec))) plan.stamps.push({ ref: old.ref, spec: ownSpec(spec) });
+    if (spec.handle !== void 0 && spec.handle !== old.spec.handle) plan.handles.push({ handle: spec.handle, ref: old.ref });
+    if (kind !== "FRAME") return;
+    const news = spec.children || [];
+    const pairs = match(old.children, news);
+    const order = [];
+    let built = false;
+    news.forEach((n, i) => {
+      const at2 = path + ".children[" + i + "]";
+      const o = pairs[i];
+      const why = o ? replaceReason(o, n) : null;
+      if (o && why === null) {
+        visit(o, n, at2, plan);
+        order.push({ ref: o.ref });
+        return;
+      }
+      order.push({ build: plan.builds.length });
+      plan.builds.push({ parent: old.ref, spec: n, replaces: o ? o.ref : null, path: at2 });
+      built = true;
+    });
+    const kept = new Set(pairs.filter((p) => p !== null).map((p) => p.ref));
+    for (const o of old.children) if (!kept.has(o.ref)) plan.removals.push(o.ref);
+    const before = old.children.filter((o) => kept.has(o.ref)).map((o) => o.ref);
+    const after = order.filter((e) => "ref" in e && kept.has(e.ref)).map((e) => e.ref);
+    const reordered = before.some((r, i) => r !== after[i]);
+    if (built || reordered) plan.orders.push({ parent: old.ref, order });
+  }
+  function replaceReason(o, n) {
+    const kind = nodeKind(n) || "FRAME";
+    const a = compared(o.spec, kind);
+    const b = compared(n, kind);
+    const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
+    return rebuildReason(kind, o.spec, n, changed);
+  }
+
+  // src/keyed-store.ts
+  var KEY_DATA = "dtwin.key";
+  var SPEC_DATA = "dtwin.spec";
+  var indexEntry = (key) => "dtwin.key:" + key;
+  function stampNode(n, key, spec) {
+    n.setPluginData(KEY_DATA, key);
+    n.setPluginData(SPEC_DATA, JSON.stringify(ownSpec(spec)));
+  }
+  function readIndex(key) {
+    return figma.root.getPluginData(indexEntry(key));
+  }
+  function writeIndex(key, id) {
+    figma.root.setPluginData(indexEntry(key), id);
+  }
+
   // src/tree-refs.ts
   var isKey = (ref2) => /^[0-9a-f]{40}$/i.test(ref2);
-  function usesOf(index, s, path, out) {
+  function usesOf(index, s, at2, out, labels) {
     const kind = nodeKind(s);
+    const lab = labels.get(s);
+    const path = lab !== void 0 ? lab : at2;
+    if (kind === "CLONE") return out;
     const op = "createTree";
     if (kind === "INSTANCE" && s.component !== void 0) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
     if (kind === "TEXT" && s.styles && s.styles.text !== void 0) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
@@ -5373,12 +6001,12 @@
       if (k === "fills" && s.fills) continue;
       names.forEach((ref2, i) => out.push({ index, op, path: path + ".tokens." + k + (names.length > 1 ? "[" + i + "]" : ""), kind: "variable", ref: ref2, type }));
     }
-    (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out));
+    (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out, labels));
     return out;
   }
   function treeUses(specs) {
     const uses = [];
-    for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
+    for (const [index, { spec, labels }] of specs) usesOf(index, spec, "tree", uses, labels);
     return uses;
   }
   function patchUses(index, set) {
@@ -5536,6 +6164,9 @@
     refs2.instances.set(node, { main, props: mapped.ok });
     return null;
   }
+  function putOwn(o, k, v) {
+    Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
   function variantFor(set, start, props, defs) {
     const want = {};
     const from = start.variantProperties || {};
@@ -5544,7 +6175,7 @@
       if (!d || d.type !== "VARIANT") continue;
       const given2 = props[k];
       const v = typeof given2 === "string" ? given2 : from[k];
-      if (v !== void 0) want[k] = v;
+      if (v !== void 0) putOwn(want, k, v);
     }
     const given = Object.keys(want).some((k) => typeof props[k] === "string");
     const matches = (c) => {
@@ -5600,7 +6231,7 @@
         errors.push("property '" + name + "' of '" + component + "' swaps a nested instance, which a write cannot set yet");
         continue;
       }
-      ok[key] = value;
+      putOwn(ok, key, value);
     }
     return errors.length ? { errors } : { ok };
   }
@@ -5786,706 +6417,6 @@
         throw e;
       }
     }
-  }
-
-  // src/session.ts
-  var created = /* @__PURE__ */ new Set();
-  function markCreated(node) {
-    created.add(node.id);
-    if (node.type === "INSTANCE" || !("children" in node)) return;
-    for (const c of node.children) markCreated(c);
-  }
-  function createdThisSession(id) {
-    return created.has(id);
-  }
-  function foreignBelow(node) {
-    if (!created.has(node.id)) return node;
-    if (node.type === "INSTANCE" || !("children" in node)) return null;
-    for (const c of node.children) {
-      const f = foreignBelow(c);
-      if (f) return f;
-    }
-    return null;
-  }
-
-  // ../bridge/src/tree-diff.ts
-  var EXTRA_FIELDS = ["x", "y", "absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout"];
-  function ownSpec(s) {
-    const out = {};
-    for (const k of Object.keys(s)) {
-      const v = s[k];
-      if (k !== "children" && v !== void 0) out[k] = v;
-    }
-    return out;
-  }
-  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  function canonical(v) {
-    if (v === void 0) return "undefined";
-    if (v === null || typeof v !== "object") return JSON.stringify(v);
-    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
-    const o = v;
-    return "{" + Object.keys(o).filter((k) => o[k] !== void 0).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
-  }
-  var same = (a, b) => canonical(a) === canonical(b);
-  function without(o, keys) {
-    if (!isObj2(o)) return void 0;
-    const out = {};
-    for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
-    return Object.keys(out).length ? out : void 0;
-  }
-  function compared(s, kind) {
-    const out = {};
-    for (const k of Object.keys(s)) {
-      const v = s[k];
-      if (v === void 0 || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key") continue;
-      if (k === "box") {
-        out.box = without(v, ["x", "y"]);
-        continue;
-      }
-      if (k === "font") {
-        out.font = without(v, ["weightValue"]);
-        continue;
-      }
-      if (k === "layout") {
-        out.layout = without(v, ["width", "height"]);
-        continue;
-      }
-      out[k] = v;
-    }
-    if (kind === "FRAME") {
-      const size2 = sizeOf(s);
-      if (size2) out.box = size2;
-    }
-    return out;
-  }
-  function sizeOf(s) {
-    if (s.box) return { w: s.box.w, h: s.box.h };
-    const l = s.layout;
-    if (!l || l.width === void 0 && l.height === void 0) return void 0;
-    return { ...l.width !== void 0 ? { w: l.width } : {}, ...l.height !== void 0 ? { h: l.height } : {} };
-  }
-  function rebuildReason(kind, a, b, changed) {
-    if (nodeKind(a) !== kind) return "its type changed";
-    if (kind === "INSTANCE") {
-      if (a.component !== b.component) return "its component changed";
-      if (changed.indexOf("name") >= 0 && b.name === void 0) return "its name was dropped";
-      if (changed.indexOf("box") >= 0 && b.box === void 0) return "its size was dropped";
-      const gone = Object.keys(a.props || {}).filter((k) => !b.props || !(k in b.props));
-      if (gone.length) return "a property it set was dropped";
-    }
-    if (kind === "TEXT") {
-      for (const f of ["font", "truncate", "maxLines", "widthMode", "heightMode"]) if (changed.indexOf(f) >= 0) return "`" + f + "` changed";
-      if (changed.indexOf("styles") >= 0 && !(b.styles && b.styles.text !== void 0)) return "its text style was dropped";
-      if (changed.indexOf("strokes") >= 0 && a.strokes && a.strokes.align !== void 0 && !(b.strokes && b.strokes.align !== void 0)) return "its stroke alignment was dropped";
-    }
-    return null;
-  }
-  var SIDES2 = ["top", "right", "bottom", "left"];
-  function translate(kind, a, b, changed) {
-    const set = {};
-    const tokens = {};
-    const extras = [];
-    const fields = [];
-    const has2 = (f) => changed.indexOf(f) >= 0;
-    const touch = (f) => {
-      if (fields.indexOf(f) < 0) fields.push(f);
-    };
-    const bt = b.tokens || {};
-    const at = a.tokens || {};
-    if (has2("name")) {
-      set.name = b.name !== void 0 ? b.name : kind === "TEXT" ? b.text || "" : "Frame";
-      touch("name");
-    }
-    if (has2("hidden")) {
-      set.hidden = b.hidden === true;
-      touch("hidden");
-    }
-    if (has2("opacity")) {
-      set.opacity = b.opacity !== void 0 ? b.opacity : 1;
-      touch("opacity");
-    }
-    if (has2("text") && b.text !== void 0) {
-      set.text = b.text;
-      touch("text");
-    }
-    if (has2("styles") && b.styles && b.styles.text !== void 0) {
-      set.styles = { text: b.styles.text };
-      touch("styles");
-    }
-    if (has2("props") && b.props) {
-      set.props = b.props;
-      touch("props");
-    }
-    if (has2("layout") && kind === "FRAME") {
-      set.layout = layoutOf(b);
-      touch("layout");
-    }
-    if (has2("radius")) {
-      const r = b.radius;
-      set.radius = r === void 0 ? 0 : typeof r === "number" ? r : { tl: r.tl || 0, tr: r.tr || 0, br: r.br || 0, bl: r.bl || 0 };
-      touch("radius");
-    }
-    if (has2("box") || kind === "TEXT" && has2("autoResize") || kind !== "TEXT" && (has2("widthMode") || has2("heightMode"))) {
-      if (kind === "TEXT") {
-        if (b.box) {
-          const box = {};
-          if (b.widthMode === void 0) box.w = b.box.w;
-          if (b.heightMode === void 0) box.h = b.box.h;
-          if (box.w !== void 0 || box.h !== void 0) set.box = box;
-        }
-        set.autoResize = b.autoResize !== void 0 ? b.autoResize : b.box ? "none" : "width_and_height";
-        if (has2("box")) touch("box");
-        if (has2("autoResize")) touch("autoResize");
-      } else {
-        const size2 = kind === "FRAME" ? sizeOf(b) : b.box;
-        const box = {};
-        const w = size2 && size2.w !== void 0 ? size2.w : 100;
-        const h = size2 && size2.h !== void 0 ? size2.h : 100;
-        if (b.widthMode === void 0 && (has2("box") || has2("widthMode"))) box.w = w;
-        if (b.heightMode === void 0 && (has2("box") || has2("heightMode"))) box.h = h;
-        if (box.w !== void 0 || box.h !== void 0) {
-          set.box = box;
-          touch("box");
-        }
-      }
-    }
-    for (const axis of ["widthMode", "heightMode"]) {
-      if (!has2(axis)) continue;
-      const m = b[axis];
-      set[axis] = m !== void 0 ? m : "fixed";
-      touch(axis);
-    }
-    if (kind !== "INSTANCE" && (has2("fills") || !same(at.fills, bt.fills))) {
-      if (b.fills) set.fills = b.fills;
-      else if (bt.fills !== void 0) tokens.fills = bt.fills;
-      else set.fills = kind === "TEXT" ? [{ type: "solid", color: b.font && b.font.color !== void 0 ? b.font.color : "#000000" }] : [];
-      touch("fills");
-    }
-    if (kind !== "INSTANCE" && (has2("strokes") || !same(at.strokes, bt.strokes))) {
-      const sa = a.strokes || {};
-      const sb = b.strokes || {};
-      const st = {};
-      if (sb.colors) st.colors = sb.colors;
-      else if (bt.strokes === void 0) st.colors = [];
-      if (st.colors !== void 0 && st.colors.length && bt.strokes !== void 0) tokens.strokes = bt.strokes;
-      else if (st.colors === void 0) tokens.strokes = bt.strokes !== void 0 ? bt.strokes : null;
-      if (sb.weight !== void 0) st.weight = sb.weight;
-      else if (sa.weight !== void 0) st.weight = 1;
-      if (kind === "FRAME" && (sb.weights !== void 0 || sa.weights !== void 0)) {
-        const w = {};
-        for (const side of SIDES2) {
-          const v = sb.weights && sb.weights[side];
-          if (v !== void 0) w[side] = v;
-          else if (sa.weights && sa.weights[side] !== void 0) w[side] = sb.weight !== void 0 ? sb.weight : 1;
-        }
-        if (Object.keys(w).length) st.weights = w;
-      }
-      if (sb.align !== void 0) st.align = sb.align;
-      else if (sa.align !== void 0) st.align = "inside";
-      if (Object.keys(st).length) set.strokes = st;
-      touch("strokes");
-    }
-    const numberChanged = NUMBER_TOKEN_FIELDS.filter((k) => at[k] !== bt[k]);
-    if (numberChanged.length) touch("tokens");
-    for (const k of numberChanged) tokens[k] = bt[k] !== void 0 ? bt[k] : null;
-    if (Object.keys(set).length || numberChanged.length) {
-      for (const k of NUMBER_TOKEN_FIELDS) if (bt[k] !== void 0) tokens[k] = bt[k];
-    }
-    if (Object.keys(tokens).length) set.tokens = tokens;
-    for (const f of EXTRA_FIELDS) {
-      if (!has2(f)) continue;
-      if ((f === "x" || f === "y") && b[f] === void 0) continue;
-      if ((f === "clip" || f === "sizeLimits" || f === "strokesInLayout") && kind !== "FRAME") continue;
-      extras.push(f);
-      touch(f);
-    }
-    return { set, extras, fields };
-  }
-  function layoutOf(b) {
-    const l = b.layout;
-    if (!l || l.display !== "flex") return { mode: "absolute" };
-    const column = l.flexDirection === "column";
-    const out = {
-      display: "flex",
-      flexDirection: column ? "column" : "row",
-      gap: l.gap !== void 0 ? l.gap : 0,
-      padding: l.padding ? l.padding : [0, 0, 0, 0],
-      justifyContent: l.justifyContent !== void 0 ? l.justifyContent : "flex-start",
-      alignItems: l.alignItems !== void 0 ? l.alignItems : "flex-start",
-      flexWrap: l.flexWrap === "wrap" ? "wrap" : "nowrap",
-      reverseZ: l.reverseZ === true
-    };
-    if (l.flexWrap === "wrap") {
-      if (column) out.columnGap = l.columnGap !== void 0 ? l.columnGap : 0;
-      else out.rowGap = l.rowGap !== void 0 ? l.rowGap : 0;
-      out.alignContent = l.alignContent !== void 0 ? l.alignContent : "auto";
-    }
-    return out;
-  }
-  function match(olds, news) {
-    const out = news.map(() => null);
-    const used = /* @__PURE__ */ new Set();
-    news.forEach((n, i) => {
-      if (n.handle === void 0) return;
-      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.handle === n.handle);
-      if (j >= 0) {
-        out[i] = olds[j] || null;
-        used.add(j);
-      }
-    });
-    const count2 = (list, name, of) => list.filter((x) => of(x) === name).length;
-    news.forEach((n, i) => {
-      if (out[i] || n.name === void 0) return;
-      if (count2(news, n.name, (x) => x.name) !== 1 || count2(olds, n.name, (o) => o.spec.name) !== 1) return;
-      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.name === n.name && o.spec.handle === void 0);
-      if (j >= 0) {
-        out[i] = olds[j] || null;
-        used.add(j);
-      }
-    });
-    let next = 0;
-    news.forEach((n, i) => {
-      if (out[i]) return;
-      while (next < olds.length && (used.has(next) || olds[next] && olds[next].spec.handle !== void 0)) next++;
-      const o = olds[next];
-      if (!o) return;
-      if (n.name !== void 0 && o.spec.name !== void 0 && n.name !== o.spec.name) return;
-      out[i] = o;
-      used.add(next);
-      next++;
-    });
-    return out;
-  }
-  function planUpdate(old, spec) {
-    const plan = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [] };
-    visit(old, spec, "tree", plan);
-    return plan;
-  }
-  function visit(old, spec, path, plan) {
-    const kind = nodeKind(spec) || "FRAME";
-    const a = compared(old.spec, kind);
-    const b = compared(spec, kind);
-    const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
-    if (changed.length) {
-      const t = translate(kind, old.spec, spec, changed);
-      if (t.fields.length) plan.updates.push({ ref: old.ref, spec, fields: t.fields, set: Object.keys(t.set).length ? t.set : null, extras: t.extras, path });
-    }
-    if (!same(old.spec, ownSpec(spec))) plan.stamps.push({ ref: old.ref, spec: ownSpec(spec) });
-    if (spec.handle !== void 0 && spec.handle !== old.spec.handle) plan.handles.push({ handle: spec.handle, ref: old.ref });
-    if (kind !== "FRAME") return;
-    const news = spec.children || [];
-    const pairs = match(old.children, news);
-    const order = [];
-    let built = false;
-    news.forEach((n, i) => {
-      const at = path + ".children[" + i + "]";
-      const o = pairs[i];
-      const why = o ? replaceReason(o, n) : null;
-      if (o && why === null) {
-        visit(o, n, at, plan);
-        order.push({ ref: o.ref });
-        return;
-      }
-      order.push({ build: plan.builds.length });
-      plan.builds.push({ parent: old.ref, spec: n, replaces: o ? o.ref : null, path: at });
-      built = true;
-    });
-    const kept = new Set(pairs.filter((p) => p !== null).map((p) => p.ref));
-    for (const o of old.children) if (!kept.has(o.ref)) plan.removals.push(o.ref);
-    const before = old.children.filter((o) => kept.has(o.ref)).map((o) => o.ref);
-    const after = order.filter((e) => "ref" in e && kept.has(e.ref)).map((e) => e.ref);
-    const reordered = before.some((r, i) => r !== after[i]);
-    if (built || reordered) plan.orders.push({ parent: old.ref, order });
-  }
-  function replaceReason(o, n) {
-    const kind = nodeKind(n) || "FRAME";
-    const a = compared(o.spec, kind);
-    const b = compared(n, kind);
-    const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
-    return rebuildReason(kind, o.spec, n, changed);
-  }
-
-  // src/keyed-store.ts
-  var KEY_DATA = "dtwin.key";
-  var SPEC_DATA = "dtwin.spec";
-  var indexEntry = (key) => "dtwin.key:" + key;
-  function stampNode(n, key, spec) {
-    n.setPluginData(KEY_DATA, key);
-    n.setPluginData(SPEC_DATA, JSON.stringify(ownSpec(spec)));
-  }
-  function readIndex(key) {
-    return figma.root.getPluginData(indexEntry(key));
-  }
-  function writeIndex(key, id) {
-    figma.root.setPluginData(indexEntry(key), id);
-  }
-
-  // src/tree.ts
-  var PLACE_GAP = 100;
-  async function resolveTreeOps(ops) {
-    const targets = /* @__PURE__ */ new Map();
-    const specs = /* @__PURE__ */ new Map();
-    const problems = [];
-    const loaded3 = /* @__PURE__ */ new Map();
-    let available = null;
-    const availableNames = () => {
-      if (!available) available = figma.listAvailableFontsAsync().then((fs) => fs.map((f) => f.fontName.family + " " + f.fontName.style), () => []);
-      return available;
-    };
-    const load = (family, weight) => {
-      const key = family + "|" + weight;
-      let p = loaded3.get(key);
-      if (!p) {
-        p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
-          const near = nearestNames(family + " " + weight, await availableNames());
-          return "font '" + family + " " + weight + "' is not available in this file" + (near.length ? "; closest: " + quoteList(near) : "");
-        });
-        loaded3.set(key, p);
-      }
-      return p;
-    };
-    for (const [index, op] of ops.entries()) {
-      if (op.op !== "createTree") continue;
-      const bad = (message) => {
-        problems.push({ index, op: op.op, message });
-      };
-      const spec = op.tree;
-      if (!isTreeSpec(spec)) {
-        bad("the tree spec did not pass its check");
-        continue;
-      }
-      const summary = checkTree(spec).summary;
-      const page = resolvePage(op.page);
-      if ("error" in page) bad(page.error);
-      const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e) => e !== null);
-      for (const e of fontErrors) bad(e);
-      const axisErrors = fontErrors.length ? [] : variationProblems(spec);
-      for (const e of axisErrors) bad(e);
-      specs.set(index, spec);
-      if ("error" in page || fontErrors.length || axisErrors.length) continue;
-      await page.ok.loadAsync();
-      targets.set(index, { spec, page: page.ok, summary, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() } });
-    }
-    const r = await resolveRefs(treeUses(specs), (f) => load(f.family, f.style));
-    problems.push(...r.problems);
-    for (const t of targets.values()) t.refs = r.refs;
-    return { targets, problems, imports: r.imports, importCount: r.importCount };
-  }
-  function textsOf(s, path, out) {
-    if (nodeKind(s) === "TEXT") out.push({ s, path });
-    (s.children || []).forEach((c, i) => textsOf(c, path + ".children[" + i + "]", out));
-    return out;
-  }
-  function variationProblems(spec) {
-    const out = [];
-    for (const { s, path } of textsOf(spec, "tree", [])) {
-      const vs = s.font && s.font.variationSettings;
-      if (!vs || !Object.keys(vs).length || s.styles && s.styles.text !== void 0) continue;
-      const { family } = fontOf(s.font);
-      let axes;
-      try {
-        axes = figma.getFontFamilyVariationAxes(family);
-      } catch {
-        axes = null;
-      }
-      const unknown = Object.keys(vs).filter((k) => !axes || axes.indexOf(k) < 0);
-      if (!unknown.length) continue;
-      out.push(path + ".font.variationSettings: " + (axes ? "'" + family + "' has no axis " + quoteList(unknown) + "; its axes are " + quoteList(axes) : "'" + family + "' is not a variable font, so it has no axes to set"));
-    }
-    return out;
-  }
-  function resolvePage(ref2) {
-    if (ref2 === void 0) return { ok: figma.currentPage };
-    const m = matchByName(ref2, figma.root.children, (p) => p.name, (p) => [p.id]);
-    if (m.kind === "one") return { ok: m.item };
-    if (m.kind === "many") return { error: "page '" + ref2 + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
-    return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
-  }
-  async function buildTree(t, consent2) {
-    const made = newMade(t.refs);
-    const root = figma.createFrame();
-    const key = t.spec.key;
-    const indexWas = key !== void 0 ? readIndex(key) : "";
-    root.visible = false;
-    try {
-      applyFrame(root, t.spec, null, made);
-      for (const [text, style] of made.styled) {
-        await text.setTextStyleIdAsync(style.id);
-        consent2();
-      }
-      const { x, y } = placement(t.page, root, t.spec);
-      t.page.appendChild(root);
-      root.x = x;
-      root.y = y;
-      root.visible = t.spec.hidden !== true;
-      if (key !== void 0) {
-        for (const [n, s] of made.pairs) stampNode(n, key, s);
-        writeIndex(key, root.id);
-      }
-      markCreated(root);
-    } catch (e) {
-      try {
-        root.remove();
-      } catch {
-      }
-      throw e;
-    }
-    const applied = { id: root.id, created: createdCount(made) };
-    if (key !== void 0) applied.key = key;
-    if (made.handles.size) applied.handles = handleRecord(made.handles);
-    if (t.summary.unbound) applied.unbound = t.summary.unbound;
-    return {
-      applied,
-      kind: "created tree",
-      what: "the tree '" + root.name + "' (" + root.id + ")",
-      restore() {
-        root.remove();
-        if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
-      }
-    };
-  }
-  function createdCount(made) {
-    return made.instances ? { frames: made.frames, texts: made.texts, instances: made.instances } : { frames: made.frames, texts: made.texts };
-  }
-  function newMade(refs2) {
-    return { frames: 0, texts: 0, instances: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, styled: [], pairs: [] };
-  }
-  async function buildSubtree(spec, parent, made, consent2) {
-    const kind = nodeKind(spec);
-    const first2 = made.pairs.length;
-    const styledFrom = made.styled.length;
-    let node = null;
-    try {
-      if (kind === "TEXT") {
-        const t = figma.createText();
-        node = t;
-        applyText(t, spec, parent, made);
-      } else if (kind === "INSTANCE") node = applyInstance(spec, parent, made);
-      else {
-        const f = figma.createFrame();
-        node = f;
-        applyFrame(f, spec, parent, made);
-      }
-      for (const [text, style] of made.styled.slice(styledFrom)) {
-        await text.setTextStyleIdAsync(style.id);
-        consent2();
-      }
-    } catch (e) {
-      const made0 = made.pairs[first2];
-      const n = node || (made0 ? made0[0] : null);
-      if (n) {
-        try {
-          n.remove();
-        } catch {
-        }
-      }
-      throw e;
-    }
-    if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
-    markCreated(node);
-    return node;
-  }
-  function handleRecord(m) {
-    const out = {};
-    for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
-    return out;
-  }
-  function occupied(c) {
-    const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
-    return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
-  }
-  function placement(page, root, spec) {
-    if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    let right = null;
-    let top = null;
-    for (const c of page.children) {
-      if (c.id === root.id) continue;
-      const b = occupied(c);
-      right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
-      top = top === null ? b.y : Math.min(top, b.y);
-    }
-    return {
-      x: spec.x !== void 0 ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
-      y: spec.y !== void 0 ? spec.y : top === null ? 0 : Math.round(top)
-    };
-  }
-  var ALIGN_MAIN = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" };
-  var ALIGN_CROSS = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" };
-  var SIZING = { fill: "FILL", hug: "HUG" };
-  function paints2(fills, names, made) {
-    if (fills) return fills.map((f) => bindPaint(solid(f.color === void 0 ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color, made));
-    return nameList2(names).map((n) => bindPaint(solid("#000000"), n, made));
-  }
-  var nameList2 = (v) => v === void 0 ? [] : typeof v === "string" ? [v] : v;
-  function bindPaint(p, ref2, made) {
-    if (ref2 === void 0) return p;
-    return figma.variables.setBoundVariableForPaint(p, "color", variable(ref2, made));
-  }
-  function variable(ref2, made) {
-    const v = made.refs.variables.get(ref2);
-    if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
-    return v;
-  }
-  function bindNumbers(n, s, made) {
-    const t = s.tokens;
-    if (!t) return;
-    for (const k of NUMBER_TOKEN_FIELDS) {
-      const ref2 = t[k];
-      if (ref2 !== void 0) n.setBoundVariable(k, variable(ref2, made));
-    }
-  }
-  function solid(color, opacity) {
-    const c = parseHexColor(color);
-    if (!c) throw new Error("'" + color + "' is not a hex colour");
-    const alpha = (c.a === void 0 ? 1 : c.a) * (opacity === void 0 ? 1 : opacity);
-    return alpha < 1 ? { type: "SOLID", color: { r: c.r, g: c.g, b: c.b }, opacity: alpha } : { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
-  }
-  function common(n, s, parent, made) {
-    if (s.name !== void 0) n.name = s.name;
-    if (s.hidden && parent) n.visible = false;
-    if (s.opacity !== void 0) n.opacity = s.opacity;
-    const strokeNames = nameList2(s.tokens && s.tokens.strokes);
-    if (s.strokes || strokeNames.length) {
-      if (s.strokes && s.strokes.colors) n.strokes = s.strokes.colors.map((c, i) => bindPaint(solid(c), strokeNames[i], made));
-      else if (strokeNames.length) n.strokes = paints2(void 0, strokeNames, made);
-    }
-    if (s.strokes) {
-      if (s.strokes.weight !== void 0) n.strokeWeight = s.strokes.weight;
-      const w = s.strokes.weights;
-      if (w && n.type === "FRAME") {
-        if (w.top !== void 0) n.strokeTopWeight = w.top;
-        if (w.right !== void 0) n.strokeRightWeight = w.right;
-        if (w.bottom !== void 0) n.strokeBottomWeight = w.bottom;
-        if (w.left !== void 0) n.strokeLeftWeight = w.left;
-      }
-      if (s.strokes.align) n.strokeAlign = s.strokes.align === "inside" ? "INSIDE" : s.strokes.align === "outside" ? "OUTSIDE" : "CENTER";
-    }
-    if (s.handle) made.handles.set(s.handle, n.id);
-    if (!parent) return;
-    const inFlex = parent.layoutMode !== "NONE";
-    if (inFlex) {
-      if (s.absolute) n.layoutPositioning = "ABSOLUTE";
-      if (s.grow !== void 0) n.layoutGrow = s.grow;
-      if (s.alignSelf) n.layoutAlign = s.alignSelf === "min" ? "MIN" : s.alignSelf === "center" ? "CENTER" : s.alignSelf === "max" ? "MAX" : "STRETCH";
-    }
-    if (!inFlex || s.absolute) {
-      if (s.x !== void 0) n.x = s.x;
-      if (s.y !== void 0) n.y = s.y;
-    }
-  }
-  function sizing(n, s) {
-    if (s.widthMode) n.layoutSizingHorizontal = SIZING[s.widthMode];
-    if (s.heightMode) n.layoutSizingVertical = SIZING[s.heightMode];
-  }
-  function applyFrame(f, s, parent, made) {
-    made.frames++;
-    made.pairs.push([f, s]);
-    if (parent) parent.appendChild(f);
-    f.fills = paints2(s.fills, s.tokens && s.tokens.fills, made);
-    f.clipsContent = s.clip === true;
-    if (typeof s.radius === "number") f.cornerRadius = s.radius;
-    else if (s.radius) {
-      if (s.radius.tl !== void 0) f.topLeftRadius = s.radius.tl;
-      if (s.radius.tr !== void 0) f.topRightRadius = s.radius.tr;
-      if (s.radius.br !== void 0) f.bottomRightRadius = s.radius.br;
-      if (s.radius.bl !== void 0) f.bottomLeftRadius = s.radius.bl;
-    }
-    const l = s.layout;
-    if (l && l.display === "flex") {
-      f.layoutMode = l.flexDirection === "column" ? "VERTICAL" : "HORIZONTAL";
-      if (l.gap !== void 0) f.itemSpacing = l.gap;
-      const p = l.padding;
-      if (p) {
-        f.paddingTop = p[0] || 0;
-        f.paddingRight = p[1] || 0;
-        f.paddingBottom = p[2] || 0;
-        f.paddingLeft = p[3] || 0;
-      }
-      if (l.justifyContent) f.primaryAxisAlignItems = ALIGN_MAIN[l.justifyContent];
-      if (l.alignItems) f.counterAxisAlignItems = ALIGN_CROSS[l.alignItems];
-      if (l.flexWrap) f.layoutWrap = "WRAP";
-      const track = l.flexDirection === "column" ? l.columnGap : l.rowGap;
-      if (l.flexWrap && track !== void 0) f.counterAxisSpacing = track;
-      if (l.alignContent) f.counterAxisAlignContent = "SPACE_BETWEEN";
-      if (l.reverseZ) f.itemReverseZIndex = true;
-      if (s.strokesInLayout) f.strokesIncludedInLayout = true;
-    }
-    const w = s.box ? s.box.w : l && l.width;
-    const h = s.box ? s.box.h : l && l.height;
-    if (w !== void 0 && h !== void 0) f.resize(w, h);
-    else if (w !== void 0 || h !== void 0) f.resize(w !== void 0 ? w : f.width, h !== void 0 ? h : f.height);
-    if (l && l.display === "flex" || parent && parent.layoutMode !== "NONE") {
-      f.layoutSizingHorizontal = "FIXED";
-      f.layoutSizingVertical = "FIXED";
-    }
-    common(f, s, parent, made);
-    if (s.sizeLimits) {
-      const m = s.sizeLimits;
-      if (m.minWidth !== void 0) f.minWidth = m.minWidth;
-      if (m.maxWidth !== void 0) f.maxWidth = m.maxWidth;
-      if (m.minHeight !== void 0) f.minHeight = m.minHeight;
-      if (m.maxHeight !== void 0) f.maxHeight = m.maxHeight;
-    }
-    for (const c of s.children || []) {
-      const kind = nodeKind(c);
-      if (kind === "TEXT") applyText(figma.createText(), c, f, made);
-      else if (kind === "INSTANCE") applyInstance(c, f, made);
-      else applyFrame(figma.createFrame(), c, f, made);
-    }
-    sizing(f, s);
-    bindNumbers(f, s, made);
-  }
-  function applyInstance(s, parent, made) {
-    const r = made.refs.instances.get(s);
-    if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
-    made.instances++;
-    const inst = r.main.createInstance();
-    made.pairs.push([inst, s]);
-    parent.appendChild(inst);
-    if (Object.keys(r.props).length) inst.setProperties(r.props);
-    if (s.box) inst.resize(s.box.w, s.box.h);
-    common(inst, s, parent, made);
-    sizing(inst, s);
-    bindNumbers(inst, s, made);
-    return inst;
-  }
-  function applyText(t, s, parent, made) {
-    made.texts++;
-    made.pairs.push([t, s]);
-    parent.appendChild(t);
-    const font = s.font || {};
-    const styleRef = s.styles && s.styles.text;
-    const style = styleRef !== void 0 ? made.refs.textStyles.get(styleRef) : void 0;
-    if (styleRef !== void 0 && !style) throw new Error("text style '" + styleRef + "' was not resolved before the batch ran");
-    if (style) {
-      t.fontName = style.fontName;
-      made.styled.push([t, style]);
-    } else {
-      const { family, weight } = fontOf(font);
-      const vs = font.variationSettings;
-      t.fontName = vs && Object.keys(vs).length ? { family, style: weight, variationSettings: vs } : { family, style: weight };
-      if (font.size !== void 0) t.fontSize = font.size;
-    }
-    t.characters = s.text || "";
-    const fillNames = s.tokens && s.tokens.fills;
-    if (s.fills || fillNames !== void 0) t.fills = paints2(s.fills, fillNames, made);
-    else if (font.color) t.fills = [solid(font.color)];
-    if (font.align) t.textAlignHorizontal = font.align === "justified" ? "JUSTIFIED" : font.align === "center" ? "CENTER" : font.align === "right" ? "RIGHT" : "LEFT";
-    if (font.valign) t.textAlignVertical = font.valign === "center" ? "CENTER" : "BOTTOM";
-    if (!style) {
-      if (font.lineHeight) t.lineHeight = font.lineHeight.unit === "auto" || font.lineHeight.value === void 0 ? { unit: "AUTO" } : { unit: font.lineHeight.unit === "px" ? "PIXELS" : "PERCENT", value: font.lineHeight.value };
-      if (font.letterSpacing) t.letterSpacing = { unit: font.letterSpacing.unit === "px" ? "PIXELS" : "PERCENT", value: font.letterSpacing.value };
-      if (font.case) t.textCase = font.case === "small_caps" ? "SMALL_CAPS" : font.case === "small_caps_forced" ? "SMALL_CAPS_FORCED" : font.case === "upper" ? "UPPER" : font.case === "lower" ? "LOWER" : "TITLE";
-      if (font.decoration) t.textDecoration = font.decoration === "underline" ? "UNDERLINE" : "STRIKETHROUGH";
-    }
-    if (s.box) t.resize(s.box.w, s.box.h);
-    if (s.autoResize) t.textAutoResize = s.autoResize === "height" ? "HEIGHT" : s.autoResize === "truncate" ? "TRUNCATE" : "WIDTH_AND_HEIGHT";
-    else if (s.box) t.textAutoResize = "NONE";
-    if (s.truncate) t.textTruncation = "ENDING";
-    if (s.maxLines !== void 0 && s.truncate) t.maxLines = s.maxLines;
-    common(t, s, parent, made);
-    sizing(t, s);
-    bindNumbers(t, s, made);
   }
 
   // src/write-batch.ts
@@ -6976,7 +6907,7 @@
       for (const k of Object.keys(t.props)) {
         const p = n.componentProperties[k];
         if (!p) continue;
-        old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
+        Object.defineProperty(old, k, { value: p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value, enumerable: true, writable: true, configurable: true });
         was.set(k, shown3(k));
       }
       steps.push(() => {
@@ -7076,19 +7007,19 @@
       if (failed.length) throw new Error(failed.join("; "));
     };
   }
-  var ALIGN_MAIN2 = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" };
-  var ALIGN_CROSS2 = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" };
-  var SIZING2 = { fill: "FILL", hug: "HUG", fixed: "FIXED" };
+  var ALIGN_MAIN = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" };
+  var ALIGN_CROSS = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" };
+  var SIZING = { fill: "FILL", hug: "HUG", fixed: "FIXED" };
   var AUTO_RESIZE = { width_and_height: "WIDTH_AND_HEIGHT", height: "HEIGHT", truncate: "TRUNCATE", none: "NONE" };
-  var nameList3 = (v) => v === void 0 || v === null ? [] : typeof v === "string" ? [v] : v;
-  function variable2(t, ref2) {
+  var nameList2 = (v) => v === void 0 || v === null ? [] : typeof v === "string" ? [v] : v;
+  function variable(t, ref2) {
     const v = t.refs.variables.get(ref2);
     if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
     return v;
   }
-  var bindPaint2 = (t, p, ref2) => ref2 === void 0 ? p : figma.variables.setBoundVariableForPaint(p, "color", variable2(t, ref2));
+  var bindPaint = (t, p, ref2) => ref2 === void 0 ? p : figma.variables.setBoundVariableForPaint(p, "color", variable(t, ref2));
   var unbindPaints = (paints3) => paints3.map((p) => p.type === "SOLID" && p.boundVariables && p.boundVariables.color ? figma.variables.setBoundVariableForPaint(p, "color", null) : p);
-  var fillPaints = (t, fills) => fills.map((f) => bindPaint2(t, solid(f.color === void 0 ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color));
+  var fillPaints = (t, fills) => fills.map((f) => bindPaint(t, solid(f.color === void 0 ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color));
   async function setFields(t, consent2) {
     const n = t.node;
     const { set } = t;
@@ -7112,8 +7043,8 @@
           setF(n, "paddingBottom", l.padding[2] || 0);
           setF(n, "paddingLeft", l.padding[3] || 0);
         }
-        if (l.justifyContent) setF(n, "primaryAxisAlignItems", ALIGN_MAIN2[l.justifyContent]);
-        if (l.alignItems) setF(n, "counterAxisAlignItems", ALIGN_CROSS2[l.alignItems]);
+        if (l.justifyContent) setF(n, "primaryAxisAlignItems", ALIGN_MAIN[l.justifyContent]);
+        if (l.alignItems) setF(n, "counterAxisAlignItems", ALIGN_CROSS[l.alignItems]);
         const track = dir === "column" ? l.columnGap : l.rowGap;
         if (track !== void 0) setF(n, "counterAxisSpacing", track);
         if (l.alignContent) setF(n, "counterAxisAlignContent", l.alignContent === "space-between" ? "SPACE_BETWEEN" : "AUTO");
@@ -7132,7 +7063,7 @@
       const m = set[axis];
       if (m === void 0) continue;
       if (m === "fixed" && !isFlex2(n.parent) && !isFlex2(n)) continue;
-      setF(n, field, SIZING2[m]);
+      setF(n, field, SIZING[m]);
     }
     if (typeof set.radius === "number") setF(n, "cornerRadius", set.radius);
     else if (set.radius) {
@@ -7145,14 +7076,14 @@
     if ("fills" in n) {
       if (set.fills) n.fills = fillPaints(t, set.fills);
       else if (tok.fills === null && n.fills !== figma.mixed) n.fills = unbindPaints(n.fills);
-      else if (tok.fills !== void 0 && tok.fills !== null) n.fills = nameList3(tok.fills).map((ref2) => bindPaint2(t, solid("#000000"), ref2));
+      else if (tok.fills !== void 0 && tok.fills !== null) n.fills = nameList2(tok.fills).map((ref2) => bindPaint(t, solid("#000000"), ref2));
     }
     const st = set.strokes;
     if ("strokes" in n) {
-      const strokeNames = nameList3(tok.strokes);
-      if (st && st.colors) n.strokes = st.colors.map((c, i) => bindPaint2(t, solid(c), strokeNames[i]));
+      const strokeNames = nameList2(tok.strokes);
+      if (st && st.colors) n.strokes = st.colors.map((c, i) => bindPaint(t, solid(c), strokeNames[i]));
       else if (tok.strokes === null) n.strokes = unbindPaints(n.strokes);
-      else if (strokeNames.length) n.strokes = strokeNames.map((ref2) => bindPaint2(t, solid("#000000"), ref2));
+      else if (strokeNames.length) n.strokes = strokeNames.map((ref2) => bindPaint(t, solid("#000000"), ref2));
       if (st) {
         if (st.weight !== void 0) setF(n, "strokeWeight", st.weight);
         const w = st.weights;
@@ -7179,8 +7110,29 @@
     for (const k of NUMBER_TOKEN_FIELDS) {
       const ref2 = tok[k];
       if (ref2 === void 0) continue;
-      bindField(n, k, ref2 === null ? null : variable2(t, ref2));
+      bindField(n, k, ref2 === null ? null : variable(t, ref2));
     }
+  }
+  async function patchCopy(t, node, consent2) {
+    const on2 = { ...t, node };
+    const fit = unfit(node, t.set);
+    const problems = fit.kind.concat(fit.state);
+    if (on2.props && node.type === "INSTANCE") {
+      const v = await variantProblem(node, on2.props);
+      if (v) problems.push(v);
+    }
+    if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+    if (on2.fontsLater && node.type === "TEXT") {
+      for (const f of await fontsToKeep(node)) {
+        try {
+          await figma.loadFontAsync(f);
+        } catch {
+          throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
+        }
+      }
+    }
+    consent2();
+    await setFields(on2, consent2);
   }
   async function applyPatch(t, consent2, allowed2, changes) {
     await checkBeforeApply(t);
@@ -7214,9 +7166,621 @@
     return change;
   }
 
-  // src/keyed.ts
-  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  // src/clones.ts
   var label = (n) => "'" + n.name + "' (" + n.id + ")";
+  var NODE_ID2 = /^I?[^\s:]+:[^\s]+$/;
+  function layersBelow(n, out) {
+    if (!("children" in n)) return out;
+    for (const c of n.children) {
+      out.push(c);
+      layersBelow(c, out);
+    }
+    return out;
+  }
+  function findLayer(source, ref2) {
+    const all = layersBelow(source, []);
+    const byId = all.find((n) => n.id === ref2);
+    if (byId) return { ok: byId };
+    const hits = all.filter((n) => n.name === ref2);
+    if (!hits.length && NODE_ID2.test(ref2)) return { error: "'" + ref2 + "' is not the id or the name of a layer of " + label(source) };
+    const first2 = hits[0];
+    if (hits.length === 1 && first2) return { ok: first2 };
+    if (hits.length > 1) return { error: "matches " + hits.length + " layers of " + label(source) + "; name one by its id: " + hits.slice(0, 3).map(label).join(", ") };
+    const near = nearestNames(ref2, all.map((n) => n.name));
+    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near.length ? "; closest: " + quoteList(near) : "") };
+  }
+  function pageOf2(n) {
+    let p = n.parent;
+    while (p && p.type !== "PAGE") p = p.parent;
+    return p && p.type === "PAGE" ? p : null;
+  }
+  var under = (at2, m) => m.indexOf("set.") === 0 ? at2 + m.slice(3) : at2 + ": " + m;
+  function copiesOf(s, path, labels, out, root = true) {
+    const lab = labels.get(s);
+    const at2 = lab !== void 0 ? lab : path;
+    if (nodeKind(s) === "CLONE") out.push({ s, path: at2, root });
+    (s.children || []).forEach((c, i) => copiesOf(c, at2 + ".children[" + i + "]", labels, out, false));
+    return out;
+  }
+  function cloneUses(index, s, path) {
+    const out = [];
+    const add = (set, at2) => {
+      for (const u of patchUses(index, set)) out.push({ ...u, op: "createTree", path: at2 + u.path.slice(3) });
+    };
+    const self = clonePatch(s);
+    if (self) add(self, path);
+    for (const [k, set] of cloneEdits(s)) add(set, path + ".edits[" + JSON.stringify(k) + "]");
+    return out;
+  }
+  async function resolveClones(copies, loadFont, bad, fontsLater) {
+    const out = /* @__PURE__ */ new Map();
+    for (const { s, path, root } of copies) {
+      const id = s.clone;
+      if (id === void 0) continue;
+      const at2 = path + ".clone";
+      const nd = await figma.getNodeByIdAsync(id);
+      if (!nd) {
+        bad(at2 + ": no node with id '" + id + "' (invalid or removed)");
+        continue;
+      }
+      if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
+        bad(at2 + ": " + label(nd) + " is a " + nd.type + "; a copy is of a layer on a page");
+        continue;
+      }
+      if (nd.type === "COMPONENT" || nd.type === "COMPONENT_SET") {
+        bad(at2 + ": " + label(nd) + " is a main component; place an instance of it (`component`) instead of a copy of it");
+        continue;
+      }
+      if (root && nd.type !== "FRAME") {
+        bad(at2 + ": the root copy is a screen, so its source must be a FRAME; " + label(nd) + " is a " + nd.type + " \u2014 put the copy in a frame");
+        continue;
+      }
+      const page = pageOf2(nd);
+      if (page) await page.loadAsync();
+      const before = { n: 0 };
+      const say = (m) => {
+        before.n++;
+        bad(m);
+      };
+      const self = clonePatch(s);
+      const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say(under(path, m)), fontsLater) : null;
+      const edits = [];
+      const named = /* @__PURE__ */ new Map();
+      for (const [ref2, set] of cloneEdits(s)) {
+        const where = path + ".edits[" + JSON.stringify(ref2) + "]";
+        const layer = findLayer(nd, ref2);
+        if ("error" in layer) {
+          say(where + ": " + layer.error);
+          continue;
+        }
+        let inMain = layer.ok;
+        while (inMain && inMain !== nd && inMain.type !== "COMPONENT" && inMain.type !== "COMPONENT_SET") inMain = inMain.parent;
+        if (inMain && inMain !== nd) {
+          say(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
+          continue;
+        }
+        const twice = named.get(layer.ok.id);
+        if (twice !== void 0) {
+          say(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
+          continue;
+        }
+        named.set(layer.ok.id, ref2);
+        const t = await resolvePatchNode(layer.ok, set, true, loadFont, (m) => say(under(where, m)), fontsLater);
+        if (t) edits.push(t);
+      }
+      if (before.n) continue;
+      out.set(s, { source: nd, self: selfTarget, edits });
+    }
+    return out;
+  }
+  function placeIn(root, layer) {
+    const path = [];
+    let n = layer;
+    while (n !== root) {
+      const p = n.parent;
+      if (!p || !("children" in p)) return null;
+      const child = n;
+      path.unshift(p.children.findIndex((c) => c === child));
+      n = p;
+    }
+    return path;
+  }
+  function at(root, path) {
+    let n = root;
+    for (const i of path) {
+      if (!("children" in n)) return null;
+      const c = n.children[i];
+      if (!c) return null;
+      n = c;
+    }
+    return n;
+  }
+  function restamp(n, key, self) {
+    if (!self) {
+      n.setPluginData(KEY_DATA, key === null ? "" : key);
+      n.setPluginData(SPEC_DATA, "");
+    }
+    if (n.type === "INSTANCE" || !("children" in n)) return;
+    for (const c of n.children) restamp(c, key, false);
+  }
+  function makeCopy(r, patches) {
+    const places = [];
+    for (const e of r.edits) {
+      const p = placeIn(r.source, e.node);
+      if (!p) throw new Error(label(e.node) + " is no longer inside " + label(r.source) + ", so its edit cannot be made on the copy");
+      places.push({ target: e, path: p });
+    }
+    const copy2 = r.source.clone();
+    const from = patches.length;
+    try {
+      copy2.setPluginData(KEY_DATA, "");
+      copy2.setPluginData(SPEC_DATA, "");
+      restamp(copy2, null, true);
+      if (r.self) patches.push({ target: r.self, node: copy2 });
+      for (const { target, path } of places) {
+        const n = at(copy2, path);
+        if (!n) throw new Error("the copy of " + label(r.source) + " has no layer where " + label(target.node) + " is");
+        patches.push({ target, node: n });
+      }
+    } catch (e) {
+      patches.length = from;
+      try {
+        copy2.remove();
+      } catch {
+      }
+      throw e;
+    }
+    return copy2;
+  }
+
+  // src/session.ts
+  var created = /* @__PURE__ */ new Set();
+  function markCreated(node) {
+    created.add(node.id);
+    if (node.type === "INSTANCE" || !("children" in node)) return;
+    for (const c of node.children) markCreated(c);
+  }
+  function createdThisSession(id) {
+    return created.has(id);
+  }
+  function foreignBelow(node) {
+    if (!created.has(node.id)) return node;
+    if (node.type === "INSTANCE" || !("children" in node)) return null;
+    for (const c of node.children) {
+      const f = foreignBelow(c);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  // src/tree.ts
+  var PLACE_GAP = 100;
+  async function resolveTreeOps(ops) {
+    const targets = /* @__PURE__ */ new Map();
+    const specs = /* @__PURE__ */ new Map();
+    const cloneRefs = [];
+    const cloneTargets = [];
+    const problems = [];
+    const loaded3 = /* @__PURE__ */ new Map();
+    let available = null;
+    const availableNames = () => {
+      if (!available) available = figma.listAvailableFontsAsync().then((fs) => fs.map((f) => f.fontName.family + " " + f.fontName.style), () => []);
+      return available;
+    };
+    const load = (family, weight) => {
+      const key = family + "|" + weight;
+      let p = loaded3.get(key);
+      if (!p) {
+        p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
+          const near = nearestNames(family + " " + weight, await availableNames());
+          return "font '" + family + " " + weight + "' is not available in this file" + (near.length ? "; closest: " + quoteList(near) : "");
+        });
+        loaded3.set(key, p);
+      }
+      return p;
+    };
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree") continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const { problems: invalid, summary, expanded: spec, labels } = checkTree(op.tree);
+      if (invalid.length || !spec) {
+        bad("the tree spec did not pass its check");
+        continue;
+      }
+      const page = resolvePage(op.page);
+      if ("error" in page) bad(page.error);
+      const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e) => e !== null);
+      for (const e of fontErrors) bad(e);
+      const axisErrors = fontErrors.length ? [] : variationProblems(spec, labels);
+      for (const e of axisErrors) bad(e);
+      specs.set(index, { spec, labels });
+      const copies = copiesOf(spec, "tree", labels, []);
+      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable");
+      const clones = copies.length ? await resolveClones(copies, (f) => load(f.family, f.style), bad, fontsLater) : /* @__PURE__ */ new Map();
+      for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
+      for (const c of clones.values()) cloneTargets.push(c);
+      if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
+      await page.ok.loadAsync();
+      targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() } });
+    }
+    const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
+    problems.push(...r.problems);
+    for (const t of targets.values()) t.refs = r.refs;
+    for (const c of cloneTargets) {
+      if (c.self) c.self.refs = r.refs;
+      for (const e of c.edits) e.refs = r.refs;
+    }
+    return { targets, problems, imports: r.imports, importCount: r.importCount };
+  }
+  function textsOf(s, at2, labels, out) {
+    const lab = labels.get(s);
+    const path = lab !== void 0 ? lab : at2;
+    if (nodeKind(s) === "TEXT") out.push({ s, path });
+    (s.children || []).forEach((c, i) => textsOf(c, path + ".children[" + i + "]", labels, out));
+    return out;
+  }
+  function variationProblems(spec, labels) {
+    const out = [];
+    for (const { s, path } of textsOf(spec, "tree", labels, [])) {
+      const vs = s.font && s.font.variationSettings;
+      if (!vs || !Object.keys(vs).length || s.styles && s.styles.text !== void 0) continue;
+      const { family } = fontOf(s.font);
+      let axes;
+      try {
+        axes = figma.getFontFamilyVariationAxes(family);
+      } catch {
+        axes = null;
+      }
+      const unknown = Object.keys(vs).filter((k) => !axes || axes.indexOf(k) < 0);
+      if (!unknown.length) continue;
+      out.push(path + ".font.variationSettings: " + (axes ? "'" + family + "' has no axis " + quoteList(unknown) + "; its axes are " + quoteList(axes) : "'" + family + "' is not a variable font, so it has no axes to set"));
+    }
+    return out;
+  }
+  function resolvePage(ref2) {
+    if (ref2 === void 0) return { ok: figma.currentPage };
+    const m = matchByName(ref2, figma.root.children, (p) => p.name, (p) => [p.id]);
+    if (m.kind === "one") return { ok: m.item };
+    if (m.kind === "many") return { error: "page '" + ref2 + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
+    return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+  }
+  async function buildTree(t, consent2) {
+    const made = newMade(t.refs, t.clones);
+    const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : void 0;
+    const root = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
+    const key = t.spec.key;
+    const indexWas = key !== void 0 ? readIndex(key) : "";
+    let shown3 = true;
+    try {
+      shown3 = rootCopy ? root.visible : t.spec.hidden !== true;
+      root.visible = false;
+      if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
+      await finish(made, 0, 0, consent2);
+      const { x, y } = placement(t.page, root, t.spec);
+      t.page.appendChild(root);
+      root.x = x;
+      root.y = y;
+      root.visible = shown3;
+      if (key !== void 0) {
+        stampAll(made, key);
+        writeIndex(key, root.id);
+      }
+      markCreated(root);
+    } catch (e) {
+      try {
+        root.remove();
+      } catch {
+      }
+      throw e;
+    }
+    const applied = { id: root.id, created: createdCount(made) };
+    if (key !== void 0) applied.key = key;
+    if (made.handles.size) applied.handles = handleRecord(made.handles);
+    if (t.summary.unbound) applied.unbound = t.summary.unbound;
+    return {
+      applied,
+      kind: "created tree",
+      what: "the tree '" + root.name + "' (" + root.id + ")",
+      restore() {
+        root.remove();
+        if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
+      }
+    };
+  }
+  function createdCount(made) {
+    const out = { frames: made.frames, texts: made.texts };
+    if (made.instances) out.instances = made.instances;
+    if (made.clones) out.clones = made.clones;
+    return out;
+  }
+  function newMade(refs2, clones) {
+    return { frames: 0, texts: 0, instances: 0, clones: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, copies: clones, styled: [], patches: [], pairs: [] };
+  }
+  async function finish(made, styledFrom, patchesFrom, consent2) {
+    for (const [text, style] of made.styled.slice(styledFrom)) {
+      await text.setTextStyleIdAsync(style.id);
+      consent2();
+    }
+    for (const p of made.patches.slice(patchesFrom)) {
+      await patchCopy(p.target, p.node, consent2);
+      consent2();
+    }
+  }
+  function stampAll(made, key, from = 0) {
+    for (const [n, s] of made.pairs.slice(from)) {
+      stampNode(n, key, s);
+      if (nodeKind(s) === "CLONE") restamp(n, key, true);
+    }
+  }
+  function copyOf(r, s, made) {
+    const copy2 = makeCopy(r, made.patches);
+    made.clones++;
+    made.pairs.push([copy2, s]);
+    if (s.handle) made.handles.set(s.handle, copy2.id);
+    return copy2;
+  }
+  function applyClone(s, parent, made) {
+    const r = made.copies.get(s);
+    if (!r) throw new Error("the copy of '" + String(s.clone) + "' was not resolved before the batch ran");
+    const copy2 = copyOf(r, s, made);
+    try {
+      parent.appendChild(copy2);
+      place(copy2, s, parent);
+    } catch (e) {
+      try {
+        copy2.remove();
+      } catch {
+      }
+      throw e;
+    }
+    return copy2;
+  }
+  async function buildSubtree(spec, parent, made, consent2) {
+    const kind = nodeKind(spec);
+    const first2 = made.pairs.length;
+    const styledFrom = made.styled.length;
+    const patchesFrom = made.patches.length;
+    let node = null;
+    try {
+      if (kind === "TEXT") {
+        const t = figma.createText();
+        node = t;
+        applyText(t, spec, parent, made);
+      } else if (kind === "INSTANCE") node = applyInstance(spec, parent, made);
+      else if (kind === "CLONE") node = applyClone(spec, parent, made);
+      else {
+        const f = figma.createFrame();
+        node = f;
+        applyFrame(f, spec, parent, made);
+      }
+      await finish(made, styledFrom, patchesFrom, consent2);
+    } catch (e) {
+      const made0 = made.pairs[first2];
+      const n = node || (made0 ? made0[0] : null);
+      if (n) {
+        try {
+          n.remove();
+        } catch {
+        }
+      }
+      throw e;
+    }
+    if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
+    markCreated(node);
+    return node;
+  }
+  function handleRecord(m) {
+    const out = {};
+    for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    return out;
+  }
+  function occupied(c) {
+    const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
+    return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
+  }
+  function placement(page, root, spec) {
+    if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
+    let right = null;
+    let top = null;
+    for (const c of page.children) {
+      if (c.id === root.id) continue;
+      const b = occupied(c);
+      right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
+      top = top === null ? b.y : Math.min(top, b.y);
+    }
+    return {
+      x: spec.x !== void 0 ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
+      y: spec.y !== void 0 ? spec.y : top === null ? 0 : Math.round(top)
+    };
+  }
+  var ALIGN_MAIN2 = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" };
+  var ALIGN_CROSS2 = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" };
+  var SIZING2 = { fill: "FILL", hug: "HUG" };
+  function paints2(fills, names, made) {
+    if (fills) return fills.map((f) => bindPaint2(solid(f.color === void 0 ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color, made));
+    return nameList3(names).map((n) => bindPaint2(solid("#000000"), n, made));
+  }
+  var nameList3 = (v) => v === void 0 ? [] : typeof v === "string" ? [v] : v;
+  function bindPaint2(p, ref2, made) {
+    if (ref2 === void 0) return p;
+    return figma.variables.setBoundVariableForPaint(p, "color", variable2(ref2, made));
+  }
+  function variable2(ref2, made) {
+    const v = made.refs.variables.get(ref2);
+    if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
+    return v;
+  }
+  function bindNumbers(n, s, made) {
+    const t = s.tokens;
+    if (!t) return;
+    for (const k of NUMBER_TOKEN_FIELDS) {
+      const ref2 = t[k];
+      if (ref2 !== void 0) n.setBoundVariable(k, variable2(ref2, made));
+    }
+  }
+  function solid(color, opacity) {
+    const c = parseHexColor(color);
+    if (!c) throw new Error("'" + color + "' is not a hex colour");
+    const alpha = (c.a === void 0 ? 1 : c.a) * (opacity === void 0 ? 1 : opacity);
+    return alpha < 1 ? { type: "SOLID", color: { r: c.r, g: c.g, b: c.b }, opacity: alpha } : { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
+  }
+  function common(n, s, parent, made) {
+    if (s.name !== void 0) n.name = s.name;
+    if (s.hidden && parent) n.visible = false;
+    if (s.opacity !== void 0) n.opacity = s.opacity;
+    const strokeNames = nameList3(s.tokens && s.tokens.strokes);
+    if (s.strokes || strokeNames.length) {
+      if (s.strokes && s.strokes.colors) n.strokes = s.strokes.colors.map((c, i) => bindPaint2(solid(c), strokeNames[i], made));
+      else if (strokeNames.length) n.strokes = paints2(void 0, strokeNames, made);
+    }
+    if (s.strokes) {
+      if (s.strokes.weight !== void 0) n.strokeWeight = s.strokes.weight;
+      const w = s.strokes.weights;
+      if (w && n.type === "FRAME") {
+        if (w.top !== void 0) n.strokeTopWeight = w.top;
+        if (w.right !== void 0) n.strokeRightWeight = w.right;
+        if (w.bottom !== void 0) n.strokeBottomWeight = w.bottom;
+        if (w.left !== void 0) n.strokeLeftWeight = w.left;
+      }
+      if (s.strokes.align) n.strokeAlign = s.strokes.align === "inside" ? "INSIDE" : s.strokes.align === "outside" ? "OUTSIDE" : "CENTER";
+    }
+    if (s.handle) made.handles.set(s.handle, n.id);
+    if (parent) place(n, s, parent);
+  }
+  function place(n, s, parent) {
+    const inFlex = parent.layoutMode !== "NONE";
+    if (inFlex && (s.absolute || s.grow !== void 0 || s.alignSelf)) {
+      if (!("layoutPositioning" in n)) throw new Error("'" + n.name + "' (a " + n.type + ") cannot be placed in an auto-layout flow");
+      if (s.absolute) n.layoutPositioning = "ABSOLUTE";
+      if (s.grow !== void 0) n.layoutGrow = s.grow;
+      if (s.alignSelf) n.layoutAlign = s.alignSelf === "min" ? "MIN" : s.alignSelf === "center" ? "CENTER" : s.alignSelf === "max" ? "MAX" : "STRETCH";
+    }
+    if (!inFlex || s.absolute) {
+      if (s.x !== void 0) n.x = s.x;
+      if (s.y !== void 0) n.y = s.y;
+    }
+  }
+  function sizing(n, s) {
+    if (s.widthMode) n.layoutSizingHorizontal = SIZING2[s.widthMode];
+    if (s.heightMode) n.layoutSizingVertical = SIZING2[s.heightMode];
+  }
+  function applyFrame(f, s, parent, made) {
+    made.frames++;
+    made.pairs.push([f, s]);
+    if (parent) parent.appendChild(f);
+    f.fills = paints2(s.fills, s.tokens && s.tokens.fills, made);
+    f.clipsContent = s.clip === true;
+    if (typeof s.radius === "number") f.cornerRadius = s.radius;
+    else if (s.radius) {
+      if (s.radius.tl !== void 0) f.topLeftRadius = s.radius.tl;
+      if (s.radius.tr !== void 0) f.topRightRadius = s.radius.tr;
+      if (s.radius.br !== void 0) f.bottomRightRadius = s.radius.br;
+      if (s.radius.bl !== void 0) f.bottomLeftRadius = s.radius.bl;
+    }
+    const l = s.layout;
+    if (l && l.display === "flex") {
+      f.layoutMode = l.flexDirection === "column" ? "VERTICAL" : "HORIZONTAL";
+      if (l.gap !== void 0) f.itemSpacing = l.gap;
+      const p = l.padding;
+      if (p) {
+        f.paddingTop = p[0] || 0;
+        f.paddingRight = p[1] || 0;
+        f.paddingBottom = p[2] || 0;
+        f.paddingLeft = p[3] || 0;
+      }
+      if (l.justifyContent) f.primaryAxisAlignItems = ALIGN_MAIN2[l.justifyContent];
+      if (l.alignItems) f.counterAxisAlignItems = ALIGN_CROSS2[l.alignItems];
+      if (l.flexWrap) f.layoutWrap = "WRAP";
+      const track = l.flexDirection === "column" ? l.columnGap : l.rowGap;
+      if (l.flexWrap && track !== void 0) f.counterAxisSpacing = track;
+      if (l.alignContent) f.counterAxisAlignContent = "SPACE_BETWEEN";
+      if (l.reverseZ) f.itemReverseZIndex = true;
+      if (s.strokesInLayout) f.strokesIncludedInLayout = true;
+    }
+    const w = s.box ? s.box.w : l && l.width;
+    const h = s.box ? s.box.h : l && l.height;
+    if (w !== void 0 && h !== void 0) f.resize(w, h);
+    else if (w !== void 0 || h !== void 0) f.resize(w !== void 0 ? w : f.width, h !== void 0 ? h : f.height);
+    if (l && l.display === "flex" || parent && parent.layoutMode !== "NONE") {
+      f.layoutSizingHorizontal = "FIXED";
+      f.layoutSizingVertical = "FIXED";
+    }
+    common(f, s, parent, made);
+    if (s.sizeLimits) {
+      const m = s.sizeLimits;
+      if (m.minWidth !== void 0) f.minWidth = m.minWidth;
+      if (m.maxWidth !== void 0) f.maxWidth = m.maxWidth;
+      if (m.minHeight !== void 0) f.minHeight = m.minHeight;
+      if (m.maxHeight !== void 0) f.maxHeight = m.maxHeight;
+    }
+    for (const c of s.children || []) {
+      const kind = nodeKind(c);
+      if (kind === "TEXT") applyText(figma.createText(), c, f, made);
+      else if (kind === "INSTANCE") applyInstance(c, f, made);
+      else if (kind === "CLONE") applyClone(c, f, made);
+      else applyFrame(figma.createFrame(), c, f, made);
+    }
+    sizing(f, s);
+    bindNumbers(f, s, made);
+  }
+  function applyInstance(s, parent, made) {
+    const r = made.refs.instances.get(s);
+    if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
+    made.instances++;
+    const inst = r.main.createInstance();
+    made.pairs.push([inst, s]);
+    parent.appendChild(inst);
+    if (Object.keys(r.props).length) inst.setProperties(r.props);
+    if (s.box) inst.resize(s.box.w, s.box.h);
+    common(inst, s, parent, made);
+    sizing(inst, s);
+    bindNumbers(inst, s, made);
+    return inst;
+  }
+  function applyText(t, s, parent, made) {
+    made.texts++;
+    made.pairs.push([t, s]);
+    parent.appendChild(t);
+    const font = s.font || {};
+    const styleRef = s.styles && s.styles.text;
+    const style = styleRef !== void 0 ? made.refs.textStyles.get(styleRef) : void 0;
+    if (styleRef !== void 0 && !style) throw new Error("text style '" + styleRef + "' was not resolved before the batch ran");
+    if (style) {
+      t.fontName = style.fontName;
+      made.styled.push([t, style]);
+    } else {
+      const { family, weight } = fontOf(font);
+      const vs = font.variationSettings;
+      t.fontName = vs && Object.keys(vs).length ? { family, style: weight, variationSettings: vs } : { family, style: weight };
+      if (font.size !== void 0) t.fontSize = font.size;
+    }
+    t.characters = s.text || "";
+    const fillNames = s.tokens && s.tokens.fills;
+    if (s.fills || fillNames !== void 0) t.fills = paints2(s.fills, fillNames, made);
+    else if (font.color) t.fills = [solid(font.color)];
+    if (font.align) t.textAlignHorizontal = font.align === "justified" ? "JUSTIFIED" : font.align === "center" ? "CENTER" : font.align === "right" ? "RIGHT" : "LEFT";
+    if (font.valign) t.textAlignVertical = font.valign === "center" ? "CENTER" : "BOTTOM";
+    if (!style) {
+      if (font.lineHeight) t.lineHeight = font.lineHeight.unit === "auto" || font.lineHeight.value === void 0 ? { unit: "AUTO" } : { unit: font.lineHeight.unit === "px" ? "PIXELS" : "PERCENT", value: font.lineHeight.value };
+      if (font.letterSpacing) t.letterSpacing = { unit: font.letterSpacing.unit === "px" ? "PIXELS" : "PERCENT", value: font.letterSpacing.value };
+      if (font.case) t.textCase = font.case === "small_caps" ? "SMALL_CAPS" : font.case === "small_caps_forced" ? "SMALL_CAPS_FORCED" : font.case === "upper" ? "UPPER" : font.case === "lower" ? "LOWER" : "TITLE";
+      if (font.decoration) t.textDecoration = font.decoration === "underline" ? "UNDERLINE" : "STRIKETHROUGH";
+    }
+    if (s.box) t.resize(s.box.w, s.box.h);
+    if (s.autoResize) t.textAutoResize = s.autoResize === "height" ? "HEIGHT" : s.autoResize === "truncate" ? "TRUNCATE" : "WIDTH_AND_HEIGHT";
+    else if (s.box) t.textAutoResize = "NONE";
+    if (s.truncate) t.textTruncation = "ENDING";
+    if (s.maxLines !== void 0 && s.truncate) t.maxLines = s.maxLines;
+    common(t, s, parent, made);
+    sizing(t, s);
+    bindNumbers(t, s, made);
+  }
+
+  // src/keyed.ts
+  var isObj4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
     if (!id) return null;
@@ -7235,7 +7799,7 @@
     } catch {
       return null;
     }
-    if (!isObj3(spec)) return null;
+    if (!isObj4(spec)) return null;
     const children = [];
     if (n.type === "FRAME") {
       for (const c of n.children) {
@@ -7268,7 +7832,7 @@
   }
   function foreignIn(n, key) {
     if (n.getPluginData(KEY_DATA) !== key) return n;
-    if (n.type !== "FRAME") return null;
+    if (n.type === "INSTANCE" || !("children" in n)) return null;
     for (const c of n.children) {
       const f = foreignIn(c, key);
       if (f) return f;
@@ -7289,7 +7853,7 @@
       return p;
     };
     for (const [index, op] of ops.entries()) {
-      if (op.op !== "createTree" || !isObj3(op.tree) || typeof op.tree.key !== "string") continue;
+      if (op.op !== "createTree" || !isObj4(op.tree) || typeof op.tree.key !== "string") continue;
       const key = op.tree.key;
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
@@ -7310,12 +7874,12 @@
       const root = await findResult(key);
       if (!root) continue;
       if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
-        bad("tree.key '" + key + "': its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+        bad("tree.key '" + key + "': its result " + label2(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
         continue;
       }
       const old = readOld(root, key);
       if (!old) {
-        bad("tree.key '" + key + "': the spec stored on its result " + label(root) + " cannot be read; give the spec another key to build it again");
+        bad("tree.key '" + key + "': the spec stored on its result " + label2(root) + " cannot be read; give the spec another key to build it again");
         continue;
       }
       const plan = planUpdate(old, t.spec);
@@ -7323,16 +7887,16 @@
       for (const b of plan.builds) {
         if (!b.replaces) continue;
         const f = foreignIn(b.replaces, key);
-        if (f) bad(b.path + ": " + label(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label(f) + ", which this key did not build; move that layer out first");
+        if (f) bad(b.path + ": " + label2(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label2(f) + ", which this key did not build; move that layer out first");
       }
       for (const r of plan.removals) {
         const f = foreignIn(r, key);
-        if (f) bad("tree.key '" + key + "': " + label(r) + " is no longer in the spec, but it holds " + label(f) + ", which this key did not build; move that layer out, or keep the node in the spec");
+        if (f) bad("tree.key '" + key + "': " + label2(r) + " is no longer in the spec, but it holds " + label2(f) + ", which this key did not build; move that layer out, or keep the node in the spec");
       }
       const patches = /* @__PURE__ */ new Map();
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
-        const say = (m) => bad(u.path + " (" + label(u.ref) + "): " + m);
+        const say = (m) => bad(u.path + " (" + label2(u.ref) + "): " + m);
         const checked = checkPatch(u.set);
         if (checked.problems.length) {
           for (const m of checked.problems) say(m);
@@ -7350,7 +7914,7 @@
   function checkRemoval(u, n) {
     if (n.removed) return;
     const f = foreignIn(n, u.key);
-    if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
+    if (f) throw new Error(label2(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label2(f) + ", which that key did not build; nothing was removed");
   }
   function touchedBy(u) {
     const out = /* @__PURE__ */ new Set([u.root.id]);
@@ -7366,7 +7930,7 @@
     const count2 = (x) => {
       if (x.removed) return;
       if (x.getPluginData(KEY_DATA) === u.key) n++;
-      if (x.type === "FRAME") for (const c of x.children) count2(c);
+      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
     };
     for (const x of removalsOf(u)) count2(x);
     return n;
@@ -7382,8 +7946,8 @@
   var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
   function boundTo(n, k) {
     const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj3(bv) ? bv[k] : void 0;
-    return isObj3(a) && typeof a.id === "string" ? a.id : null;
+    const a = isObj4(bv) ? bv[k] : void 0;
+    return isObj4(a) && typeof a.id === "string" ? a.id : null;
   }
   function applyExtras(n, s, fields, only, variables, changes) {
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
@@ -7395,7 +7959,7 @@
     changes.push({
       applied: { id: n.id },
       kind: "updated node",
-      what: "the place, clipping or size limits of " + label(n),
+      what: "the place, clipping or size limits of " + label2(n),
       async restore() {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
         if (size2) {
@@ -7409,7 +7973,7 @@
         }
       }
     });
-    const put = (k, v) => {
+    const put2 = (k, v) => {
       if (!(k in n)) return;
       const was = Reflect.get(n, k);
       if (was === v) return;
@@ -7420,19 +7984,19 @@
     const onPage = !parent || parent.type === "PAGE";
     const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
     for (const f of todo) {
-      if (f === "absolute" && inFlex) put("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
-      else if (f === "grow" && inFlex) put("layoutGrow", s.grow !== void 0 ? s.grow : 0);
-      else if (f === "alignSelf" && inFlex) put("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
-      else if (f === "clip") put("clipsContent", s.clip === true);
+      if (f === "absolute" && inFlex) put2("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
+      else if (f === "grow" && inFlex) put2("layoutGrow", s.grow !== void 0 ? s.grow : 0);
+      else if (f === "alignSelf" && inFlex) put2("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
+      else if (f === "clip") put2("clipsContent", s.clip === true);
       else if (f === "sizeLimits") {
-        for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
+        for (const k of LIMITS) put2(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
         for (const k of LIMITS) {
           const ref2 = s.tokens && s.tokens[k];
           const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
           if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
         }
-      } else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
-      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put(f, s[f]);
+      } else if (f === "strokesInLayout") put2("strokesIncludedInLayout", s.strokesInLayout === true);
+      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
     }
   }
   function arrange(parent, want) {
@@ -7463,13 +8027,13 @@
     return {
       applied: { id: parent.id },
       kind: "reordered frame",
-      what: "the order of the layers in " + label(parent),
+      what: "the order of the layers in " + label2(parent),
       restore() {
         arrange(parent, was.filter((c) => c.parent === parent));
       }
     };
   }
-  function restamp(stamps, key, changes) {
+  function restamp2(stamps, key, changes) {
     const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
     changes.push({
       applied: {},
@@ -7500,16 +8064,16 @@
       }
       changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
     }
-    const made = newMade(t.refs);
+    const made = newMade(t.refs, t.clones);
     const built = [];
     for (const b of plan.builds) {
       consent2();
       const from = made.pairs.length;
       const n = await buildSubtree(b.spec, b.parent, made, consent2);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label2(n), restore() {
         n.remove();
       } });
-      for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
+      stampAll(made, key, from);
       built.push(n);
     }
     const replaced = plan.builds.map((b) => b.replaces);
@@ -7519,7 +8083,7 @@
     }
     if (plan.stamps.length) {
       consent2();
-      restamp(plan.stamps, key, changes);
+      restamp2(plan.stamps, key, changes);
     }
     const applied = { id: u.root.id, key };
     if (changed.length) applied.changed = changed;
@@ -7975,10 +8539,10 @@
   }
   function keepStyle(st) {
     const out = { name: st.name, description: st.description };
-    const copy = (v) => v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v;
+    const copy2 = (v) => v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v;
     if (st.type === "PAINT") out.paints = st.paints.slice();
     if (st.type === "EFFECT") out.effects = st.effects.slice();
-    if (st.type === "TEXT") for (const k of ["fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent"]) out[k] = copy(getF2(st, k));
+    if (st.type === "TEXT") for (const k of ["fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration", "paragraphSpacing", "paragraphIndent"]) out[k] = copy2(getF2(st, k));
     return out;
   }
   function putBack2(o, k, v) {
@@ -8282,9 +8846,9 @@
   }
 
   // src/structure.ts
-  var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
-  var holds = (node, foreign) => "node " + label2(node) + " holds " + label2(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
+  var holds = (node, foreign) => "node " + label3(node) + " holds " + label3(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
   function instanceAround(n) {
     for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
     return null;
@@ -8295,10 +8859,10 @@
   }
   function placeProblem(node, parent, index) {
     const inst = instanceAround(parent);
-    if (inst) return "parent " + label2(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label2(inst)) + ", which cannot take new children";
-    if (within(parent, node)) return "parent " + label2(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+    if (inst) return "parent " + label3(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label3(inst)) + ", which cannot take new children";
+    if (within(parent, node)) return "parent " + label3(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
     const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
-    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label2(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label3(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
     return null;
   }
   async function resolveStructureOps(ops, changesBefore2) {
@@ -8317,12 +8881,12 @@
         continue;
       }
       if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad(label2(nd) + " is a " + nd.type + "; " + NOT_OURS);
+        bad(label3(nd) + " is a " + nd.type + "; " + NOT_OURS);
         continue;
       }
       const node = nd;
       if (!createdThisSession(node.id)) {
-        bad("node " + label2(node) + ": " + NOT_OURS);
+        bad("node " + label3(node) + ": " + NOT_OURS);
         continue;
       }
       if (op.op === "delete") {
@@ -8340,7 +8904,7 @@
         continue;
       }
       if (pd.type === "DOCUMENT" || !("insertChild" in pd)) {
-        bad("parent " + label2(pd) + " is a " + pd.type + ", which cannot have children");
+        bad("parent " + label3(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
@@ -8364,8 +8928,8 @@
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
-    if (!from || !("insertChild" in from)) throw new Error("node " + label2(node) + " has no parent to move it from");
-    const at = from.children.indexOf(node);
+    if (!from || !("insertChild" in from)) throw new Error("node " + label3(node) + " has no parent to move it from");
+    const at2 = from.children.indexOf(node);
     const x = node.x, y = node.y, w = node.width, h = node.height;
     const sizing2 = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
     if (t.index === void 0) parent.appendChild(node);
@@ -8374,9 +8938,9 @@
     return {
       applied,
       kind: "moved node",
-      what: "the move of " + label2(node),
+      what: "the move of " + label3(node),
       restore() {
-        from.insertChild(Math.min(at, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
+        from.insertChild(Math.min(at2, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
         if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
         if (sizing2 && "layoutSizingHorizontal" in node) {
           const inFlex = !!node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE";
@@ -8408,7 +8972,7 @@
       const m = movedTo.get(x.id);
       return m !== void 0 ? m : x.parent;
     };
-    const under = (x) => {
+    const under2 = (x) => {
       const seen = /* @__PURE__ */ new Set();
       for (let p = x; p && !seen.has(p.id); p = up(p)) {
         if (p.id === n.id) return true;
@@ -8418,7 +8982,7 @@
     };
     const candidates = [...nodesBelow(n), ...[...moves.values()].flatMap((m) => nodesBelow(m.node))];
     const out = /* @__PURE__ */ new Set();
-    for (const c of candidates) if (under(c)) out.add(c.id);
+    for (const c of candidates) if (under2(c)) out.add(c.id);
     return out;
   }
 
@@ -9013,10 +9577,10 @@
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post2 = (m) => figma.ui.postMessage(m);
-  async function runExport(label3, collect, toFiles) {
+  async function runExport(label4, collect, toFiles) {
     let r;
     try {
-      r = await serializeRun(collect, { source: "ui", label: label3 });
+      r = await serializeRun(collect, { source: "ui", label: label4 });
     } catch (e) {
       post2({ type: "error", message: errMsg(e) });
       return;

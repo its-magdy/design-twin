@@ -25,6 +25,7 @@
 import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, RenderBox, SizeLimits, StyleRefs, Strokes } from "./doc-types.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "./hex-color.ts";
 import { nearestNames, quoteList } from "./name-match.ts";
+import { expandTree, type TreeRow } from "./tree-expand.ts";
 
 /** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity, and the colour
  *  variable it is bound to (`tokens.color`: a variable's name, key or id; the colour may then be left out). */
@@ -84,9 +85,24 @@ export interface TreeStrokes {
   variableWidth?: { profile: "uniform" };
 }
 /** One node of a tree spec. `type` defaults to INSTANCE when the node names a `component`, TEXT when it has `text`,
- *  else FRAME. */
+ *  else FRAME; a node with `clone` is a copy of an existing node. */
 export interface TreeNodeSpec {
   type?: "FRAME" | "TEXT" | "INSTANCE";
+  /** A copy of the existing node with this id (decision 6). Its own fields are a patch of the copy (patch-spec.ts
+   *  PatchSet, checked by checkPatch), and its place (`x`, `y`, `absolute`, `grow`, `alignSelf`, `handle`). */
+  clone?: string;
+  /** A copy: its layers' differences — a layer of the source (its exact name, unique in the source, or its id) → a
+   *  patch of that layer in the copy. */
+  edits?: Record<string, Record<string, unknown>>;
+  /** Repetition (tree-expand.ts): a copy of the fragment of this name, from the root's `fragments`. Expanded before the
+   *  spec is checked, as `rows` and `columns` are. */
+  use?: string;
+  /** The root only: fragments by name, each a node spec placed wherever a node `use`s it. */
+  fragments?: Record<string, TreeNodeSpec>;
+  /** INSTANCE: one instance per row, each with `props` and its row's values. */
+  rows?: TreeRow[];
+  /** INSTANCE with `rows`: the property each value of a row sets, in order. */
+  columns?: string[];
   /** INSTANCE: the component — a local component or component set's exact name, or a component's key or id */
   component?: string;
   /** INSTANCE: property values by name (a variant's value, a text, a boolean) */
@@ -101,7 +117,8 @@ export interface TreeNodeSpec {
   /** The root only: a stable name for the result. The plugin stores it on the root it builds; a spec sent again with
    *  the same key updates that result in place (tree-diff.ts) and replies with only what changed. */
   key?: string;
-  hidden?: true;
+  /** `true` on a built node; a copy's patch also takes `false` */
+  hidden?: boolean;
   /** The root: page coordinates (placed beside the existing frames when absent). A child: relative to its parent,
    *  for a child of a frame without auto-layout or an `absolute` one. */
   x?: number;
@@ -151,6 +168,10 @@ export interface TreeSummary {
   frames: number;
   texts: number;
   instances: number;
+  /** copies of existing nodes (`clone`), each one node of the spec however many layers it copies */
+  clones: number;
+  /** the ids the copies copy, first-use order */
+  sources: string[];
   /** every component, variable and text style the spec names (resolved against the file by the plugin) */
   refs: TreeRefs;
   /** raw values where a reference could stand: colours, spacing, radii and stroke weights without a variable, and
@@ -403,9 +424,11 @@ function objectProblems(o: Record<string, unknown>, rules: Readonly<Record<strin
   return out;
 }
 
-export type NodeKind = "FRAME" | "TEXT" | "INSTANCE";
-/** The kind a node spec is: its `type`, else INSTANCE when it names a `component`, TEXT when it has `text`, else FRAME. */
-export function nodeKind(n: { type?: unknown; text?: unknown; component?: unknown }): NodeKind | null {
+export type NodeKind = "FRAME" | "TEXT" | "INSTANCE" | "CLONE";
+/** The kind a node spec is: CLONE when it names a node to copy, else its `type`, else INSTANCE when it names a
+ *  `component`, TEXT when it has `text`, else FRAME. */
+export function nodeKind(n: { type?: unknown; text?: unknown; component?: unknown; clone?: unknown }): NodeKind | null {
+  if (n.clone !== undefined) return n.type === undefined ? "CLONE" : null;
   if (n.type === undefined) return n.component !== undefined ? "INSTANCE" : n.text !== undefined ? "TEXT" : "FRAME";
   return n.type === "FRAME" || n.type === "TEXT" || n.type === "INSTANCE" ? n.type : null;
 }
@@ -484,18 +507,133 @@ function tokenProblems(n: Record<string, unknown>, t: Record<string, unknown>, k
   if (t.strokes !== undefined && colors && colors.length !== strokes.length) say("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
 }
 
-/** The check of a whole spec: every problem (empty when it is valid) and, for a valid one, what it makes. */
-export function checkTree(spec: unknown): { problems: string[]; summary: TreeSummary } {
+/** A patch's check (patch-spec.ts checkPatch), handed to checkTreeWith: a copy's own fields and its edits are patches.
+ *  Passed in rather than imported, as patch-spec.ts builds its rules from this module's when it loads. */
+export type PatchCheck = (set: unknown, path: string) => { problems: string[]; summary: { refs: { variables: string[]; textStyles: string[] }; unbound: number } };
+
+/** A node id as the read gives it (`12:34`): no spaces, one colon. A layer inside an instance (`I12:3;4:5`) is not copied
+ *  on its own. */
+const NODE_ID = /^[^\s:;]+:[^\s:;]+$/;
+const INSTANCE_LAYER = /^I[^\s]*;/;
+/** The fields a copy carries itself (its source, its edits, its place); every other field is a patch of the copy. */
+const CLONE_RULES: Readonly<Record<string, Rule>> = {
+  clone: (v) => (typeof v !== "string" ? "must be the id of the node to copy (e.g. \"12:34\")"
+    : INSTANCE_LAYER.test(v) ? "'" + v + "' is a layer inside an instance, which is not copied on its own; copy the instance or a frame that holds it"
+      : NODE_ID.test(v) ? null : "must be a node id (e.g. \"12:34\", as the read gives it); a copy names its source by id, never by name"),
+  edits: (v) => (isObj(v) ? null : "must be an object of a layer of the source (its exact name, or its id) → the fields it changes"),
+  handle: NODE_RULES.handle, key: NODE_RULES.key,
+  x: num, y: num, absolute: trueOnly, grow: NODE_RULES.grow, alignSelf: NODE_RULES.alignSelf,
+};
+/** A copy's own fields that are not a patch, and why. */
+const NOT_ON_CLONE: Readonly<Record<string, string>> = {
+  type: "a copy's type is its source's, so the field is refused",
+  children: "a copy's layers come from its source; change them with `edits` (a layer's name or id → its fields)",
+};
+
+/** The context a node's place needs, shared by built nodes and copies: a fill, `absolute`, `grow` and `alignSelf` need a
+ *  parent with auto-layout, and an `absolute` child is out of the flow. */
+function placeProblems(n: Record<string, unknown>, parentFlex: boolean | null, say: (m: string) => void, warn: (m: string) => void): void {
+  const isRoot = parentFlex === null;
+  for (const axis of ["widthMode", "heightMode"] as const) {
+    if (n[axis] === "fill" && parentFlex !== true) say("`" + axis + ": \"fill\"` needs a parent with auto-layout" + (isRoot ? " (this is the root)" : ""));
+  }
+  if (parentFlex !== true) {
+    for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== undefined) say("`" + k + "` needs a parent with auto-layout");
+  }
+  if (n.absolute === true && parentFlex === true) {
+    // Out of the flow, a child cannot fill or grow in it: Figma refuses these on an absolute child mid-build.
+    for (const axis of ["widthMode", "heightMode"] as const) if (n[axis] === "fill") say("`" + axis + ": \"fill\"` is not on an `absolute` child (it is out of the auto-layout flow)");
+    if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
+    if (n.alignSelf === "stretch") say("`alignSelf: \"stretch\"` is not on an `absolute` child (it is out of the auto-layout flow)");
+  }
+  if (parentFlex === true && n.absolute !== true && (n.x !== undefined || n.y !== undefined)) {
+    warn("`x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
+  }
+}
+
+/** What checkTreeWith answers. */
+export interface TreeCheck {
+  problems: string[];
+  summary: TreeSummary;
+  /** the tree to build: the spec with its fragments placed and its row tables spread (null when it has problems) */
+  expanded: TreeNodeSpec | null;
+  /** the path each node of `expanded` has in the spec as written, for a node whose place in `expanded` differs */
+  labels: ReadonlyMap<object, string>;
+}
+
+/**
+ * The check of a whole spec: every problem (empty when it is valid) and, for a valid one, what it makes and the tree the
+ * plugin builds (`expanded`: the spec with its fragments placed and its row tables spread, tree-expand.ts; the spec
+ * itself when it has neither). `patch` checks a copy's own fields and its edits (tree-check.ts passes checkPatch).
+ */
+export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
   const problems: string[] = [];
-  const summary: TreeSummary = { frames: 0, texts: 0, instances: 0, refs: { components: [], variables: [], textStyles: [] }, unbound: 0, handles: [], fonts: [], warnings: [] };
+  const summary: TreeSummary = { frames: 0, texts: 0, instances: 0, clones: 0, sources: [], refs: { components: [], variables: [], textStyles: [] }, unbound: 0, handles: [], fonts: [], warnings: [] };
+  const ex = expandTree(spec, MAX_TREE_NODES);
+  if (ex.problems.length) return { problems: ex.problems, summary, expanded: null, labels: ex.labels };
+  summary.warnings.push(...ex.warnings);
+  const tree = ex.tree;
   const seenHandles = new Set<string>();
   const seenFonts = new Set<string>();
+  const addRef = (list: string[], name: unknown): void => { if (typeof name === "string" && list.indexOf(name) < 0) list.push(name); };
   let count = 0;
   let tooMany = false;
-  const walk = (n: unknown, path: string, depth: number, parentFlex: boolean | null): void => {
+  const handleOf = (n: Record<string, unknown>, say: (m: string) => void): void => {
+    if (typeof n.handle !== "string" || !n.handle) return;
+    if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
+    seenHandles.add(n.handle);
+  };
+  /** A copy (`clone`): its own fields, the patch of the copy, its edits. It has no children of its own. */
+  const cloneNode = (n: Record<string, unknown>, path: string, parentFlex: boolean | null): void => {
+    const before = problems.length;
+    const say = (msg: string): void => { problems.push(path + ": " + msg); };
+    const own: Record<string, unknown> = {};
+    const set: Record<string, unknown> = {};
+    for (const k of Object.keys(n)) {
+      const v = n[k];
+      if (v === undefined) continue;
+      if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path + "." + k + ": not on a copy — " + NOT_ON_CLONE[k]);
+      // Own properties, whatever the key: one named "__proto__" must be checked (and refused), not become a prototype.
+      else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own : set, k, { value: v, enumerable: true, writable: true, configurable: true });
+    }
+    problems.push(...objectProblems(own, CLONE_RULES, path));
+    const self = Object.keys(set).length ? patch(set, path) : null;
+    if (self) problems.push(...self.problems);
+    if (parentFlex !== null && n.key !== undefined) say("`key` names a whole result, so only the root carries it");
+    else if (n.key !== undefined) say("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
+    if (parentFlex === null && n.hidden !== undefined) say("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
+    placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
+    const edits: Array<ReturnType<PatchCheck>> = [];
+    if (isObj(n.edits)) {
+      const keys = Object.keys(n.edits).filter((k) => isObj(n.edits) && n.edits[k] !== undefined);
+      if (!keys.length) say("`edits` is empty; leave it out for an exact copy");
+      for (const k of keys) {
+        if (!k.trim()) { say("`edits` has an empty layer name"); continue; }
+        if (n.clone === k) { say("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields"); continue; }
+        const r = patch(n.edits[k], path + ".edits[" + JSON.stringify(k) + "]");
+        problems.push(...r.problems);
+        edits.push(r);
+      }
+    }
+    handleOf(n, say);
+    if (problems.length !== before) return;
+    summary.clones++;
+    addRef(summary.sources, n.clone);
+    if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
+    for (const r of self ? [self, ...edits] : edits) {
+      for (const v of r.summary.refs.variables) addRef(summary.refs.variables, v);
+      for (const t of r.summary.refs.textStyles) addRef(summary.refs.textStyles, t);
+      summary.unbound += r.summary.unbound;
+    }
+  };
+  const walk = (n: unknown, at: string, depth: number, parentFlex: boolean | null): void => {
     if (++count > MAX_TREE_NODES) { tooMany = true; return; }
+    // The path as the agent wrote it: a row or a fragment's layer has its own (tree-expand.ts).
+    const label = isObj(n) ? ex.labels.get(n) : undefined;
+    const path = label !== undefined ? label : at;
     if (!isObj(n)) { problems.push(path + ": must be a node object"); return; }
     if (depth > MAX_TREE_DEPTH) { problems.push(path + ": nested deeper than " + MAX_TREE_DEPTH + " levels"); return; }
+    if (n.clone !== undefined) { cloneNode(n, path, parentFlex); return; }
     const before = problems.length;
     problems.push(...objectProblems(n, NODE_RULES, path));
     const kind = nodeKind(n);
@@ -517,26 +655,13 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
     if (kind !== "INSTANCE") for (const k of ["component", "props"]) if (n[k] !== undefined) say("`" + k + "` is only on an INSTANCE node");
     if (isObj(n.styles) && n.styles.text !== undefined && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
     for (const axis of ["widthMode", "heightMode"] as const) {
-      const m = n[axis];
-      if (m === "fill" && parentFlex !== true) say("`" + axis + ": \"fill\"` needs a parent with auto-layout" + (isRoot ? " (this is the root)" : ""));
       // An instance hugs when its component has auto-layout: only the file knows, so the plugin checks it.
-      if (m === "hug" && !flex && kind === "FRAME") say("`" + axis + ": \"hug\"` needs the node itself to have auto-layout (layout.display \"flex\") or be TEXT");
+      if (n[axis] === "hug" && !flex && kind === "FRAME") say("`" + axis + ": \"hug\"` needs the node itself to have auto-layout (layout.display \"flex\") or be TEXT");
     }
-    if (isObj(n.tokens) && kind !== null) tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
-    if (parentFlex !== true) {
-      for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== undefined) say("`" + k + "` needs a parent with auto-layout");
-    }
+    if (isObj(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
+    placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
     if (n.sizeLimits !== undefined && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
-    if (n.absolute === true && parentFlex === true) {
-      // Out of the flow, a child cannot fill or grow in it: Figma refuses these on an absolute child mid-build.
-      for (const axis of ["widthMode", "heightMode"] as const) if (n[axis] === "fill") say("`" + axis + ": \"fill\"` is not on an `absolute` child (it is out of the auto-layout flow)");
-      if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
-      if (n.alignSelf === "stretch") say("`alignSelf: \"stretch\"` is not on an `absolute` child (it is out of the auto-layout flow)");
-    }
     if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
-    if (parentFlex === true && n.absolute !== true && (n.x !== undefined || n.y !== undefined)) {
-      summary.warnings.push(path + ": `x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
-    }
     if (isObj(n.layout) && n.layout.display === "flex") {
       // Values Figma refuses, or ignores, only in context: caught here so nothing is sent that fails mid-build.
       const l = n.layout;
@@ -560,11 +685,8 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
       else for (const k of Object.keys(l)) if (l[k] !== undefined && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + "` is an auto-layout field; `mode: \"absolute\"` has none (use `display: \"flex\"`)");
     }
     if (isObj(n.layout) && n.layout.display === undefined && n.layout.mode === undefined) say("`layout` needs `display: \"flex\"` (or `mode: \"absolute\"` for none)");
-    if (typeof n.handle === "string" && n.handle) {
-      if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
-      seenHandles.add(n.handle);
-    }
-    if (problems.length === before && kind !== null) {
+    handleOf(n, say);
+    if (problems.length === before && kind !== null && kind !== "CLONE") {
       const styled = isObj(n.styles) && typeof n.styles.text === "string";
       if (kind === "TEXT") {
         summary.texts++;
@@ -579,7 +701,6 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
       } else if (kind === "INSTANCE") summary.instances++;
       else summary.frames++;
       if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
-      const addRef = (list: string[], name: unknown): void => { if (typeof name === "string" && list.indexOf(name) < 0) list.push(name); };
       if (kind === "INSTANCE") addRef(summary.refs.components, n.component);
       if (styled && isObj(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
       if (Array.isArray(n.fills)) for (const p of n.fills) if (isObj(p) && isObj(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
@@ -588,18 +709,14 @@ export function checkTree(spec: unknown): { problems: string[]; summary: TreeSum
     }
     if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path + ".children[" + i + "]", depth + 1, flex));
   };
-  if (!isObj(spec)) problems.push("tree: must be a node object (the root frame)");
+  if (!isObj(tree)) problems.push("tree: must be a node object (the root frame)");
   else {
-    walk(spec, "tree", 0, null);
-    if (nodeKind(spec) !== "FRAME") problems.push("tree: the root must be a FRAME (a screen); put the " + (nodeKind(spec) === "INSTANCE" ? "instance" : "text") + " inside one");
+    walk(tree, "tree", 0, null);
+    const k = nodeKind(tree);
+    if (k !== "FRAME" && k !== "CLONE") problems.push("tree: the root must be a FRAME (a screen)" + (k === "INSTANCE" || k === "TEXT" ? "; put the " + (k === "INSTANCE" ? "instance" : "text") + " inside one" : ""));
     if (tooMany) problems.push("tree: more than " + MAX_TREE_NODES + " nodes — send a large screen as several trees");
   }
-  return { problems, summary };
-}
-
-/** `v` is a spec checkTree accepts. The plugin builds only a spec that passed this. */
-export function isTreeSpec(v: unknown): v is TreeNodeSpec {
-  return checkTree(v).problems.length === 0;
+  return { problems, summary, expanded: problems.length || !isObj(tree) ? null : tree, labels: ex.labels };
 }
 
 /** The refusal for an invalid spec: every problem (each starting with its path), one per line. */
@@ -613,14 +730,21 @@ export function treeRefusal(problems: readonly string[]): string {
 export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: TreeSummary): string {
   const size = spec.box ? " " + spec.box.w + "×" + spec.box.h : spec.layout && spec.layout.width && spec.layout.height ? " " + spec.layout.width + "×" + spec.layout.height : "";
   const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
-  const nodes = s.frames + s.texts + s.instances;
+  const nodes = s.frames + s.texts + s.instances + s.clones;
   const plural = (n: number, one: string): string => n + " " + one + (n === 1 ? "" : "s");
   const where = (page ? "on page '" + page + "'" : "on the current page") +
     (spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : ", placed beside the existing frames");
-  const parts = [
-    "creates frame '" + (spec.name || "Frame") + "'" + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") +
-      " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + ") " + where,
+  const edited = (n: TreeNodeSpec): string => {
+    const e = n.edits ? Object.keys(n.edits).length : 0;
+    return e ? " with " + plural(e, "layer") + " changed" : "";
+  };
+  const parts = [spec.clone !== undefined
+    ? "creates a copy of node " + spec.clone + (spec.name !== undefined ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where
+    : "creates frame '" + (spec.name || "Frame") + "'" + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") +
+      " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") +
+      (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where,
   ];
+  if (s.clones > (spec.clone !== undefined ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
   if (spec.key !== undefined) parts.push("key '" + spec.key + "': when the file already holds this key's earlier result, that result is updated in place instead (same ids, only the fields that differ from the spec sent last time) and the reply lists only what changed");
   if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
   if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
@@ -629,9 +753,9 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
   if (variables.length) parts.push("variables " + quoteList(variables));
   if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
   if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
-  const checked = components.length + variables.length + textStyles.length
+  const checked = (components.length + variables.length + textStyles.length
     ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)"
-    : "the page and fonts are checked against the file when applied";
+    : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
   return parts.join("; ") + " — " + checked + ", and nothing lands unless all of it does";
 }
 

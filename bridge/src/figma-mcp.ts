@@ -847,6 +847,8 @@ registerTool(
       "It lands on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
       "the reply is the root id, counts, and ids only for nodes given a `handle`. A read field a write cannot set is refused by name. " +
       "A root `key` (a stable name) makes a re-send update that result in place (same ids) instead of adding one; its reply lists only what changed. " +
+      "Repeat cheaply: {clone: nodeId, edits?{layer id or unique name: patch set}, ...patch fields} copies an existing node with only its differences; an instance takes rows?[{prop: value}] (or columns?[props] + rows of values), one instance each; " +
+      "root fragments?{name: node} with {use: name, edits?{layer name: fields}} places a part several times. " +
       "{op:'patch', nodeId, set} changes an existing node: `set` takes the same field names, only those given change — name, hidden(bool), opacity, text, styles{text}, fills, strokes, radius, " +
       "layout (partial; {mode:'absolute'} removes auto-layout), box{w?,h?}, widthMode/heightMode('fill'|'hug'|'fixed'), autoResize, tokens (null unbinds), props (an instance's). " +
       "{op:'move', nodeId, parentId, index?} | {op:'delete', nodeId} — only nodes this plugin session created; deletes run last. " +

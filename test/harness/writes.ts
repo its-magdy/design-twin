@@ -113,13 +113,16 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
  * setTextStyleIdAsync (to untick "Allow edits" there).
  */
-async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
+export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
   let seq = 0;
   // getNodeByIdAsync's live table (the world's own): every node made here is found by id until it is removed.
   const reg: { nodes: Record<string, FakeNode> | null } = { nodes: null };
   const register = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") reg.nodes[n.id] = n; };
   const unregister = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") delete reg.nodes[n.id]; for (const c of kids(n)) unregister(c); };
   const made: FakeNode[] = [];
+  /** every node clone() was called on, in order */
+  const cloned: FakeNode[] = [];
+  const raw = new WeakMap<FakeNode, FakeNode>(); // a node's own fields, behind the proxy that checks what Figma refuses
   const imports: string[] = [];
   const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
@@ -180,7 +183,10 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     // This plugin's own data on the node (a keyed spec stamps every node it builds); "" when unset, as in Figma.
     const data = new Map<string, string>();
     fields.getPluginData = (k: string) => data.get(k) ?? "";
-    fields.setPluginData = (k: string, v: string) => { if (v === "") data.delete(k); else data.set(k, v); };
+    fields.setPluginData = (k: string, v: string) => {
+      if (trap.has("setPluginData")) throw new Error("in Figma: cannot set plugin data on " + String(fields.name));
+      if (v === "") data.delete(k); else data.set(k, v);
+    };
     fields.getPluginDataKeys = () => [...data.keys()];
     // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {
@@ -213,8 +219,8 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
           const set = isNode(fields.props) ? fields.props : {};
           const vp = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
           const bound = isNode(fields.propBound) ? fields.propBound : {};
-          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? vp[k] : k in set ? set[k] : d.defaultValue,
-            ...(isNode(bound[k]) ? { boundVariables: { value: bound[k] } } : {}) }]));
+          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? (Object.prototype.hasOwnProperty.call(vp, k) ? vp[k] : Object.prototype.hasOwnProperty.call(set, k) ? set[k] : d.defaultValue) : Object.prototype.hasOwnProperty.call(set, k) ? set[k] : d.defaultValue,
+            ...(Object.prototype.hasOwnProperty.call(bound, k) && isNode(bound[k]) ? { boundVariables: { value: bound[k] } } : {}) }]));
         },
       });
       fields.props = {};
@@ -223,7 +229,9 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
         const bound: Record<string, unknown> = isNode(fields.propBound) ? { ...fields.propBound } : {};
         const p: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(given)) {
-          if (isNode(v) && v.type === "VARIABLE_ALIAS") { bound[k] = v; p[k] = "(" + String(v.id) + ")"; } else { delete bound[k]; p[k] = v; }
+          const value = isNode(v) && v.type === "VARIABLE_ALIAS" ? "(" + String(v.id) + ")" : v;
+          if (isNode(v) && v.type === "VARIABLE_ALIAS") bound[k] = v; else delete bound[k];
+          Object.defineProperty(p, k, { value, enumerable: true, writable: true, configurable: true }); // any name, "__proto__" too
         }
         fields.propBound = bound;
         fields.props = { ...(isNode(fields.props) ? fields.props : {}), ...p };
@@ -291,6 +299,27 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     };
     // An instance has the children API too, and refuses a new child (insertInto), as Figma's does.
     if (type !== "TEXT") { fields.children = []; fields.appendChild = type === "FRAME" ? appendTo(n) : (c: FakeNode) => insertInto(n)(0, c); fields.insertChild = insertInto(n); }
+    // Figma's clone(): a new node with every value and layer of this one (plugin data included), on the current page.
+    fields.clone = () => {
+      if (trap.has("clone")) throw new Error("in Figma: cannot clone " + String(fields.name));
+      const c = node(type, isNode(fields.mainComponent) ? fields.mainComponent : main);
+      const cf = raw.get(c);
+      if (!cf) throw new Error("fake: no fields for the copy");
+      for (const k of Object.keys(fields)) {
+        const v = fields[k];
+        if (typeof v === "function" || COPY_SKIP.has(k)) continue;
+        cf[k] = Array.isArray(v) ? v.slice() as unknown[] : isNode(v) ? { ...v } : v;
+      }
+      for (const k of data.keys()) (c.setPluginData as (k: string, v: string) => void)(k, data.get(k) ?? "");
+      for (const k of kids(n)) {
+        if (typeof k.clone !== "function") throw new Error("fake: a fixture layer cannot be cloned");
+        const kc = (k.clone as () => FakeNode)();
+        appendTo(c)(kc);
+      }
+      cloned.push(n);
+      return c;
+    };
+    raw.set(n, fields);
     made.push(n);
     register(n);
     appendTo(current)(n); // Figma puts a new node on the current page
@@ -326,8 +355,10 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
    *  parent is null, so everything below it is gone with it, as in Figma) */
   const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
-  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
+  return { ...w, made, alive, cloned, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
 }
+/** The fields a copy does not take from its source: its identity and its place. */
+const COPY_SKIP = new Set(["id", "parent", "removed", "children", "mainComponent", "componentProperties"]);
 
 // ---- the design system a kit world has: components, variables, text styles, and a library
 
@@ -381,6 +412,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   chip.defaultVariant = chipSmall;
   chip.children = [chipSmall, chipLarge];
   const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
+  // A variant property whose name is "__proto__" (any string is a valid property name in Figma; a variant's key is its name).
+  const odd = comp("6:5", "Odd", { componentPropertyDefinitions: JSON.parse('{"__proto__": {"type": "VARIANT", "defaultValue": "Off", "variantOptions": ["On", "Off"]}}') as Record<string, unknown> });
   // A conflicting set (Figma allows it): two variants with the same values, the first without auto-layout.
   const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, componentPropertyDefinitions: {
     Kind: { type: "VARIANT", defaultValue: "A", variantOptions: ["A"] },
@@ -389,8 +422,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
   twin.defaultVariant = twinFlat;
   twin.children = [twinFlat, twinFlex];
-  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, twin, twinFlat, twinFlex];
-  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, twin], loadAsync: async () => {},
+  const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, odd, twin, twinFlat, twinFlex];
+  const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, odd, twin], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
   const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
   const library = {

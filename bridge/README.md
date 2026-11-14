@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -1018,6 +1018,9 @@ node: the same field names and values, defaults left out, no ids and no parent r
 | `fills[].tokens` | `{color: variable}`: the paint is bound to a colour variable (the raw `color` may then be left out) |
 | `tokens` | Figma's bindable fields → a variable: `itemSpacing`, `counterAxisSpacing`, `paddingTop`/`Right`/`Bottom`/`Left`, `topLeftRadius`/`topRightRadius`/`bottomRightRadius`/`bottomLeftRadius`, `width`, `height`, `minWidth`/`maxWidth`/`minHeight`/`maxHeight`, `strokeWeight` and the per-side stroke weights, `opacity` (a number variable each), and `fills` / `strokes` (colour variables, one per paint; with no raw list, one bound paint each). A text binds `width`, `height`, `opacity`, `strokeWeight`, `fills`, `strokes`; an instance `width`, `height`, `opacity` |
 | `styles` | `{text: style}` on a TEXT: the text style (its font, size, line height, letter spacing, case and decoration; those `font` fields are then accepted and not set, with a warning) |
+| `clone`, `edits` | a copy of an existing node (below): `clone` is its id, `edits` its layers' differences |
+| `fragments`, `use` | the root only: named parts (`fragments`, name → node spec); a node `{use: name}` places one (below) |
+| `rows`, `columns` | an `INSTANCE`: one instance per row (below) |
 
 A variable, component or text style is named by its exact name (case-sensitive, never guessed), or by its exact key or
 id. A variable not in the file but in an enabled library is found by name too; a library component or text style is
@@ -1037,12 +1040,40 @@ name refuses the whole batch.
 The tree is built hidden, then moved to its page and shown only when every node is in place, so it lands whole or not
 at all; if a later op of the batch fails, the tree is removed and listed as `restored`. Without `x`/`y` on the root,
 the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
-The reply is small: `{id, created: {frames, texts, instances}, handles, unbound}` for the tree (`instances`, `handles`
-and `unbound` only when there are any), plus `warnings` for anything that had no effect (an `x`/`y` inside auto-layout,
+The reply is small: `{id, created: {frames, texts, instances, clones}, handles, unbound}` for the tree (`instances`,
+`clones`, `handles` and `unbound` only when there are any), plus `warnings` for anything that had no effect (an `x`/`y` inside auto-layout,
 `strokesInLayout` without auto-layout, `maxLines` without `truncate`, a `font` field a text style sets). So a
 read node can be fed back in: what the read writes on an ordinary frame or text is accepted. The dry run says the change in one sentence: the frame, its size and layout,
 the node counts, where it lands, the handles, the fonts, the components, variables and text styles it names, and how
 many raw values stay unbound (it does not read the file, so the names are checked when applied). A spec holds at most 500 nodes.
+
+**Copies, rows and fragments** (all three are checked and land all or nothing, like the rest of a spec):
+
+- **A copy with its differences.** A node `{clone: "12:34", …}` is a copy of the existing node with that id, with every
+  layer and value it has (a nested main component is copied as an instance of it). Its other fields are a `patch` of
+  the copy (`name`, `hidden` (not on a root copy), `opacity`, `text`, `fills`, `strokes`, `radius`, `layout`, `box`, `widthMode`/`heightMode`,
+  `autoResize`, `styles`, `tokens`, `props`), plus its place (`x`, `y`, `absolute`, `grow`, `alignSelf`) and a `handle`.
+  `edits` maps a layer of the source — its id from the read, or its exact name when that is unique in the source — to a
+  patch of the same layer in the copy: `{clone: "12:34", name: "Order 2", edits: {"12:40": {text: "Shipped"}, "Total":
+  {text: "$42.00"}}}`. A copy may be the root (its source must then be a frame; it is placed like a new one) or a child
+  anywhere in a tree; it takes no `children` (its layers are its source's). The source stays as it is. A main component inside the
+  source is an instance of it in the copy, so an edit of it, or of a layer in it, is refused (patch that instance once
+  the copy has landed). A missing
+  source, a page or a main component as one, a layer name that matches nothing or several layers, and a field the layer
+  lacks refuse the whole batch before anything is copied, with candidates; a value Figma refuses on the copy removes
+  the whole tree. A copy as the root cannot carry a `key` yet; inside a keyed spec, a copy is kept while its spec is
+  the same and made again when it changes. The reply counts copies as `created.clones`.
+- **An instance with rows.** `{component: "List item", props: {Size: "md"}, rows: [{Label: "Inbox"}, {Label: "Sent",
+  Size: "sm"}]}` is one instance per row, each with `props` and its row's values (a row's value wins). With
+  `columns: ["Label", "Count"]`, each row is the list of values in that order: `rows: [["Inbox", "4"], ["Sent", "0"]]`.
+  A row table takes no `handle` (it makes several nodes). A problem of one row is named at it (`tree.children[2].rows[1]`).
+- **Fragments.** The root's `fragments` names parts that are not components: `{fragments: {row: {name: "Row", layout:
+  {display: "flex"}, children: [{name: "Label", text: ""}, {name: "Value", text: ""}]}}, …}`. A node `{use: "row", …}`
+  anywhere in the spec is a copy of that fragment, its own fields laid over the fragment's root, and `edits` maps a
+  layer of the fragment (by `name`, unique in it) to the fields it changes there (`null` drops one): `{use: "row",
+  edits: {Label: {text: "Email"}, Value: {text: "jane@example.com"}}}`. A fragment may use another; one that uses
+  itself is refused, and so is a spec that grows past 500 nodes once its fragments and rows are placed. A fragment no
+  node uses is a warning. A handle inside a fragment used twice names two nodes, so it is refused.
 
 **A spec from disk.** `treeFile` names a JSON file holding the spec (the value `tree` would have), relative to the
 directory the MCP server was started in and inside it, at most 2 MB. The server reads it into `tree` before anything

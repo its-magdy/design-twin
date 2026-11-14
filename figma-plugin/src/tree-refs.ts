@@ -55,9 +55,13 @@ export interface Use {
 /** A key as Figma writes one: 40 hex digits. */
 const isKey = (ref: string): boolean => /^[0-9a-f]{40}$/i.test(ref);
 
-/** Every reference `spec` makes, with its path (as checkTree names it). */
-function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[] {
+/** Every reference `spec` makes, with its path (as checkTree names it: `labels` holds the path the agent wrote for a node
+ *  a fragment or a row table made). A copy's references are its patches' (clones.ts cloneUses). */
+function usesOf(index: number, s: TreeNodeSpec, at: string, out: Use[], labels: ReadonlyMap<object, string>): Use[] {
   const kind = nodeKind(s);
+  const lab = labels.get(s);
+  const path = lab !== undefined ? lab : at;
+  if (kind === "CLONE") return out;
   const op = "createTree";
   if (kind === "INSTANCE" && s.component !== undefined) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
   if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
@@ -72,14 +76,14 @@ function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[]
     if (k === "fills" && s.fills) continue;
     names.forEach((ref, i) => out.push({ index, op, path: path + ".tokens." + k + (names.length > 1 ? "[" + i + "]" : ""), kind: "variable", ref, type }));
   }
-  (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out));
+  (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out, labels));
   return out;
 }
 
-/** Every reference the createTree specs of a batch make (`specs`: op index → spec). */
-export function treeUses(specs: ReadonlyMap<number, TreeNodeSpec>): Use[] {
+/** Every reference the createTree specs of a batch make (`specs`: op index → the spec as built, and its paths). */
+export function treeUses(specs: ReadonlyMap<number, { spec: TreeNodeSpec; labels: ReadonlyMap<object, string> }>): Use[] {
   const uses: Use[] = [];
-  for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
+  for (const [index, { spec, labels }] of specs) usesOf(index, spec, "tree", uses, labels);
   return uses;
 }
 
@@ -255,6 +259,12 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   return null;
 }
 
+/** Set `o[k]` as an own property: a property name is the file's or the agent's, and may be "__proto__", which plain
+ *  assignment would turn into a prototype instead of a key. */
+function putOwn<T>(o: Record<string, T>, k: string, v: T): void {
+  Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+}
+
 /** The variant of `set` an instance made from `start` shows once `props` are set: each VARIANT property at its given
  *  value, else at `start`'s. A combination the set does not have is `missing` (as "Size=Large, Tone=Off"): Figma would
  *  keep the instance on another variant, so it is refused rather than built wrong. */
@@ -266,7 +276,7 @@ export function variantFor(set: ComponentSetNode, start: ComponentNode, props: R
     if (!d || d.type !== "VARIANT") continue;
     const given = props[k];
     const v = typeof given === "string" ? given : from[k];
-    if (v !== undefined) want[k] = v;
+    if (v !== undefined) putOwn(want, k, v);
   }
   // No variant value given, or the start already shows them: the instance stays on `start` (two variants can share
   // their values, so the first match need not be the one that is built).
@@ -313,7 +323,7 @@ export function mapProps(given: Readonly<Record<string, string | boolean>>, defs
       errors.push("property '" + name + "' of '" + component + "' swaps a nested instance, which a write cannot set yet");
       continue;
     }
-    ok[key] = value;
+    putOwn(ok, key, value);
   }
   return errors.length ? { errors } : { ok };
 }

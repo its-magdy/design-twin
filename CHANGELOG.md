@@ -31,6 +31,14 @@ list of merged PRs.
 
 ### Added
 
+- A `figma_write` tree spec can repeat itself cheaply. A node `{clone: "12:34", …}` is a copy of an existing node with
+  only its differences: its own fields are a patch of the copy, and `edits` maps a layer of the source (its id, or a
+  name unique in it) to a patch of that layer, so several similar screens cost only what differs. An instance takes
+  `rows` (each an object of property values, or with `columns` a list of them) and makes one instance per row. The
+  root's `fragments` names parts that are not components, placed anywhere with `{use: name, edits?}`. All three are
+  checked whole before anything is built and land all or nothing; the reply counts copies as `created.clones`. The
+  write-cost suite records the several-similar-screens job on the new route: 1,773 estimated tokens against 2,604 for
+  the four ops. `figma_write`'s definition grew by about 90 estimated tokens.
 - `figma_write` can change a design-system source once, and Figma carries the change to everything that uses it.
   `setVariable` (`variable`, `values` by mode name or id, or `value` for a collection with one mode) sets a local
   variable's values: a hex colour, a number, a string, a boolean, or `{aliasOf}` another variable (an alias that would

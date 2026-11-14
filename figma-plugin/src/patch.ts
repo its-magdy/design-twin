@@ -469,7 +469,8 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
     for (const k of Object.keys(t.props)) {
       const p = n.componentProperties[k];
       if (!p) continue;
-      old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
+      // An own property, whatever the name (a property may be named "__proto__").
+      Object.defineProperty(old, k, { value: p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value, enumerable: true, writable: true, configurable: true });
       was.set(k, shown(k));
     }
     steps.push(() => { if ([...was].some(([k, v]) => shown(k) !== v)) n.setProperties(old); });
@@ -686,6 +687,26 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
     if (ref === undefined) continue;
     bindField(n, k, ref === null ? null : variable(t, ref));
   }
+}
+
+/**
+ * Set a patch resolved against a source's layer on `node`, the same layer of a fresh copy of it (clones.ts): the checks
+ * that read the file are run against the copy where it is now, then the fields are set. Nothing is kept to put back:
+ * the copy is new, and a throw removes it with the tree it is in.
+ */
+export async function patchCopy(t: PatchTarget, node: SceneNode, consent: () => void): Promise<void> {
+  const on: PatchTarget = { ...t, node };
+  const fit = unfit(node, t.set);
+  const problems = fit.kind.concat(fit.state);
+  if (on.props && node.type === "INSTANCE") { const v = await variantProblem(node, on.props); if (v) problems.push(v); }
+  if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+  if (on.fontsLater && node.type === "TEXT") {
+    for (const f of await fontsToKeep(node)) {
+      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+    }
+  }
+  consent();
+  await setFields(on, consent);
 }
 
 /**

@@ -26,7 +26,7 @@ import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type OldNode, ty
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { KEY_DATA, readIndex, SPEC_DATA, stampNode } from "./keyed-store";
 import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
-import { buildSubtree, createdCount, newMade, type TreeTarget } from "./tree";
+import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "./tree";
 import type { Change, OpProblem } from "./write-batch";
 
 /** A createTree op that updates the result its key names. */
@@ -95,7 +95,8 @@ function oversized(s: TreeNodeSpec, path: string, out: string[]): string[] {
 /** The first layer at or below `n` (not inside an instance) that `key` did not build, or null. */
 function foreignIn(n: SceneNode, key: string): SceneNode | null {
   if (n.getPluginData(KEY_DATA) !== key) return n;
-  if (n.type !== "FRAME") return null;
+  // Every container but an instance (whose layers are its component's): a copy brings groups and other containers in.
+  if (n.type === "INSTANCE" || !("children" in n)) return null;
   for (const c of n.children) {
     const f = foreignIn(c, key);
     if (f) return f;
@@ -196,7 +197,7 @@ export function removalCount(u: KeyedUpdate): number {
   const count = (x: SceneNode): void => {
     if (x.removed) return;
     if (x.getPluginData(KEY_DATA) === u.key) n++;
-    if (x.type === "FRAME") for (const c of x.children) count(c);
+    if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count(c);
   };
   for (const x of removalsOf(u)) count(x);
   return n;
@@ -346,7 +347,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
     changed.push({ id: up.ref.id, ...(up.spec.handle !== undefined ? { handle: up.spec.handle } : {}), fields: up.fields });
   }
-  const made = newMade(t.refs);
+  const made = newMade(t.refs, t.clones);
   const built: SceneNode[] = [];
   for (const b of plan.builds) {
     consent();
@@ -354,7 +355,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     const n = await buildSubtree(b.spec, b.parent as FrameNode, made, consent);
     // On the list before it is stamped: a stamp that throws removes it with the batch.
     changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
-    for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
+    stampAll(made, key, from);
     built.push(n);
   }
   const replaced = plan.builds.map((b) => b.replaces);
