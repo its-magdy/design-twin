@@ -833,35 +833,19 @@ registerTool(
   "figma_write",
   {
     description:
-      "Apply a batch of safe write operations to the open Figma file. Each op: " +
-      "{op:'createFrame', name?, width?, height?, layoutMode?('HORIZONTAL'|'VERTICAL'), itemSpacing?, padding?[t,r,b,l], fill?(#hex), parentId?} | " +
-      "{op:'createText', text, fontSize?, fill?, parentId?} | " +
-      "{op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text} | " +
-      "{op:'setVariableMode', nodeId, collection, mode} (collection: a variable collection's exact name, id or key; mode: a mode's exact name or modeId — e.g. a frame's Theme to Dark) | " +
-      "{op:'clearVariableMode', nodeId, collection} (back to the mode the node inherits) | " +
-      "{op:'createTree', tree|treeFile, page?} — a whole screen in ONE op (`treeFile`: a path to the same spec as JSON, read by this server): `tree` is a nested node in the read export's field names, defaults omitted, no ids: " +
-      "{type?('FRAME'|'TEXT'|'INSTANCE', TEXT when it has text), name?, handle?, box?{w,h}, layout?{display:'flex', flexDirection:'row'|'column', gap?, padding?[t,r,b,l], justifyContent?, alignItems?, flexWrap?}, " +
-      "widthMode?/heightMode?('fill'|'hug'), grow?, alignSelf?, absolute?, x?, y?, fills?[{type:'solid', color:#hex}], strokes?{colors,weight,align}, radius?, opacity?, clip?, hidden?, " +
-      "text?, font?{family, weight(style name), size, color, align, lineHeight{unit,value}}, autoResize?, children?[...]}. " +
-      "Prefer the design system: {component, props?} is an instance; paint tokens:{color: variable}; tokens?{itemSpacing|padding*|*Radius|…: variable}; styles?{text}. Exact name, key or id; library items are imported. " +
-      "It lands on `page` (exact name or id; the current page by default) beside the existing frames unless the root has x/y; " +
-      "the reply is the root id, counts, and ids only for nodes given a `handle`. A read field a write cannot set is refused by name. " +
-      "A root `key` (a stable name) makes a re-send update that result in place (same ids) instead of adding one; its reply lists only what changed. " +
-      "Repeat cheaply: {clone: nodeId, edits?{layer id or unique name: patch set}, ...patch fields} copies an existing node with only its differences; an instance takes rows?[{prop: value}] (or columns?[props] + rows of values), one instance each; " +
-      "root fragments?{name: node} with {use: name, edits?{layer name: fields}} places a part several times. " +
-      "{op:'patch', nodeId, set} changes an existing node: `set` takes the same field names, only those given change — name, hidden(bool), opacity, text, styles{text}, fills, strokes, radius, " +
-      "layout (partial; {mode:'absolute'} removes auto-layout), box{w?,h?}, widthMode/heightMode('fill'|'hug'|'fixed'), autoResize, tokens (null unbinds), props (an instance's). " +
-      "{op:'move', nodeId, parentId, index?} | {op:'delete', nodeId} — only nodes this plugin session created; deletes run last. " +
-      "Source edits — change once, every user follows: {op:'setVariable', variable, values{mode: v}|value} (v: hex, number, string, bool or {aliasOf}) | " +
-      "{op:'setStyle', style, set} (set: paints | font, weight, size, lineHeight, letterSpacing, case, decoration, paragraphSpacing, paragraphIndent, tokens | effects; name, description); " +
-      "a patch of a main component changes its instances. A library's variable, style or component is refused, naming the library; the dry run's `affects` counts what follows. " +
-      "A name (collection, mode, page, component, variable, style) that matches nothing or several things, a font the file lacks, or a node that lacks a field refuses the whole batch before anything runs, with candidates. " +
-      "A batch lands whole: if an op fails, every change the batch made is put back (listed as `restored`) — and the designer's one Cmd-Z undoes a whole batch. " +
-      "For anything that OVERWRITES (setFill/setText/patch/setVariableMode/clearVariableMode/setVariable/setStyle), call once with dryRun:true, show the user the preview, and only then apply. " +
-      "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
-      "while it is off a write is refused with that instruction, and a dry run reports editsAllowed:false — " +
-      "ask the designer to tick it, then retry. " +
-      "With 'Review each write' on, a write waits (≤5 min) for their Apply/Reject; a rejection carries their reason.",
+      // Kept short on purpose (spec decision 19): every listing of the tools pays for it. The spec, patch and style
+      // fields, the replies and the limits are the designtwin plugin's design-in-figma skill (references/grammar.md),
+      // and a field this summary leaves out is still checked: the refusal names it by path.
+      "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch; a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
+      "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place) | " +
+      "patch {nodeId, set}: change the given fields of an existing node | " +
+      "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
+      "setVariableMode {nodeId, collection, mode} / clearVariableMode {nodeId, collection}: a frame's variable mode | " +
+      "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
+      "createFrame, createText, setFill, setText: one node or property per op. " +
+      "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
+      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree. " +
+      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed); with 'Review each write' on, a write waits (≤5 min) for their Apply/Reject.",
     inputSchema: {
       ...clientShape,
       // Constrain `op` to the ops the plugin actually implements — reject unknown ops at the

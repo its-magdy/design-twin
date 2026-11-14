@@ -135,9 +135,10 @@ screens.
 
 19. **One tool.** `figma_write` stays the single write tool with a short schema. The grammar lives in a
     skill reference that loads only when an agent is about to write. As built, the grammar is
-    `claude-plugin/skills/design-in-figma/references/grammar.md`, which that skill reads before a first write; the
-    tool's description still carries a one-line summary of each op and the spec's field names (its size is
-    `toolDefinition` in `test/write-cost/baseline.json`), so a client without the skill can still write.
+    `claude-plugin/skills/design-in-figma/references/grammar.md`, which that skill reads before a first write. The
+    tool's description is the op names with a line each, the dry-run rule and a pointer to that reference (its size is
+    `toolDefinition` in `test/write-cost/baseline.json`); the input schema is unchanged. A client without the skill
+    learns the rest from the refusals, which name each offending field by path.
 20. **Small replies.** A write answers with the root id, counts, and failures and warnings only. Ids come
     back only for nodes the spec gave a handle. No tree and no screenshot by default; the outline read of
     the new root is the check.

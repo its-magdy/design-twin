@@ -7,7 +7,8 @@ argument-hint: "[what to make or change, and where: page, frame name, node id or
 # Designing in Figma
 
 `figma_write` is the one write tool: a batch of typed ops (at most 50 per call), checked whole against the file before
-anything changes, applied all or nothing, one Cmd-Z step for the designer. No code an agent sends ever runs. Every
+anything changes, put back if an op fails partway (as far as it can: see [When a write is refused](#when-a-write-is-refused)),
+one Cmd-Z step for the designer. No code an agent sends ever runs. Every
 write here goes through it; the CLI has no write command.
 
 **The grammar is in [`references/grammar.md`](references/grammar.md). Read it before you compose your first op** —
@@ -57,8 +58,15 @@ Not available yet — say so to the user instead of improvising one:
 ## The dry-run rule
 
 **Every batch that overwrites — `patch`, `setFill`, `setText`, `setVariableMode`, `clearVariableMode`, `setVariable`,
-`setStyle` — is sent once with `dryRun: true` first. Show the user the preview, and apply only after they agree.** A
-batch that has landed is undone only by the designer's Cmd-Z in Figma.
+`setStyle`, or a `createTree` re-sending a `key` whose result is already in the file — is sent once with `dryRun: true`
+first. Show the user the preview, and apply only after they agree.** A batch that has landed is undone only by the
+designer's Cmd-Z in Figma.
+
+A keyed re-send overwrites: it changes the existing screen's nodes in place (a designer's hand edit to a field the new
+spec changes is lost) and removes every node the new spec drops. Its dry run does not read the file, so it cannot list
+those: the step counts as a `creates`, its `change` describes the whole spec and says that an existing result of that
+key is updated in place instead. Tell the user plainly which screen it updates and what your spec adds, changes and
+drops against the one you sent last time; the real reply then lists `changed`, `created` and `removed`.
 
 - The dry run changes nothing and works with no plugin connected, so it is also the free check of a large
   `createTree` spec: an `invalid` step lists every problem in it, by path. Names, fonts and pages are checked against
@@ -76,22 +84,31 @@ batch that has landed is undone only by the designer's Cmd-Z in Figma.
    `warnings` for what had no effect.
 2. **Check** with one outline read of the new root: `figma_export_url {url: "<root id>"}`. A screenshot
    (`figma_screenshot`) only when the user wants to see it.
-3. **Fix.** A keyed spec: change it and send it again. Otherwise `patch` the nodes the outline names, by id.
+3. **Fix.** A keyed spec: change it, dry-run the re-send and show the user (above), then send it again. Otherwise
+   `patch` the nodes the outline names, by id (dry-run first too).
 4. **Report** what was created or changed (ids), how many raw values stayed `unbound` where a variable or text style
    could stand, every warning, and anything refused.
 
 ## When a write is refused
 
-Nothing in the file changed in any of these.
+A batch refused before it starts (all but the last case below) changed nothing in the file, except that a library
+item it named may already have been imported: an import only makes the item available, and stays.
 
-- **Edits are off** → ask the designer to tick **Allow edits**, then retry the same call. No tool can tick it.
+- **Edits are off** → ask the designer to tick **Allow edits**, then retry the same call. No tool can tick it. If the
+  refusal came back as `Write failed at op N` with an `applied` list, the box was unticked while the batch ran: see
+  the last case before retrying.
 - **Rejected on the review card** → the error carries the designer's reason. Act on it; never resend the same batch.
   **Nobody applied it** (5 minutes, or the card was cancelled) → ask the designer before sending it again.
 - **A problem in the batch** — a name that matches nothing or several things, a font the file lacks, a field the node
   does not have, a read field a write cannot set — refuses the whole batch, every problem listed with its path and up
   to three candidates. Fix all of them and send once more. A name is never guessed: take one of the candidates or ask.
 - **Dev Mode** → the designer switches the file to Design mode (Shift+D) and re-runs the plugin.
-- **An op failed partway** → everything the batch did is put back and listed as `restored`.
+- **An op failed partway** (`Write failed at op N`) → the batch tries to put back what it did, and lists that as
+  `restored`. Not everything always comes back: when **Allow edits** is turned off mid-batch the plugin changes nothing
+  more, not even to undo its own work, so every change so far stays; a value that cannot be restored stays (the error
+  says which); and nodes already deleted cannot be brought back. Whatever stays is listed under `applied`, with ids.
+  Read it — or read the nodes back with an outline — before you retry, and send only what is missing, so nothing is
+  made twice.
 
 Names resolve against the file as it was before the batch: renaming a component and using its new name, or changing a
 component and relying on that change in an instance, takes two calls.

@@ -1,7 +1,12 @@
 # `figma_write` grammar
 
-The whole write surface as the MCP server and the plugin check it. A field not listed here is refused by name, never
-dropped. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, with the `#`.
+The whole write surface as the MCP server and the plugin check it. Inside a tree spec node (and its `layout`, `font`,
+`strokes`, `box`, `radius`, `sizeLimits`, `renderBox`, paints, `tokens`, `styles`), a copy, a patch's `set`, a
+`setStyle`'s `set` (and its effects) and a variable value, a field not listed here is refused by name with the closest
+names, never dropped. The op object itself is looser: a field an op does not read (a typo beside `op`, `nodeId` on a
+`createTree`) is ignored, not refused — so check the op's own field names against [The ops](#the-ops). Keys you name
+yourself (`props` property names, `edits` layer names, `values` modes, `handle`s, `fragments`) are checked against the
+file or the spec instead. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, with the `#`.
 
 ## Contents
 
@@ -46,12 +51,17 @@ calls and can bind variables. A create with no `parentId` lands on the current p
     `{id, key, unchanged: true}`.
   - `patch` `{id, unbound?}` · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
     the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
-- Refused whole, nothing changed: an error saying why (Allow edits off, rejected with the designer's reason, nobody
-  reviewed it, Dev Mode, or every problem of the batch with its path and up to three candidates).
-- Failed partway: `Write failed at op N`, with what was put back (`restored`).
+- Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
+  edits off, rejected with the designer's reason, nobody reviewed it, Dev Mode, or every problem of the batch with its
+  path and up to three candidates).
+- Failed partway: `Write failed at op N`, with what was put back (`restored`) and what stays (`applied`). Not all of it
+  may come back: with Allow edits turned off mid-batch nothing is put back; a value that cannot be restored is named in
+  the error; a node already deleted stays deleted. Read `applied` before a retry, so nothing is made twice.
 - A dry run: `{dryRun: true, creates, overwrites, moves?, deletes?, invalid, refusedByFile?, steps, editsAllowed,
   reviewWrites?, note}`; each step has `effect`, `target`, a one-sentence `change`, `fields` (one row per field of a
-  patch or a style), `warnings`, `invalid` (every problem), and for a source edit `affects` and `refusedByFile`.
+  patch or a style), `warnings`, `invalid` (every problem), and for a source edit `affects` and `refusedByFile`. A
+  `createTree` dry run reads nothing from the file: a keyed one is a `creates` step whose `change` says an existing
+  result of that key would be updated in place, without listing what would change or be removed.
 
 ## Tree spec (`createTree`)
 
@@ -66,17 +76,18 @@ a `component`, a `TEXT` when it has `text`, else a `FRAME`; the root is a frame 
 | `handle` | your own name for the node; the reply returns its id. Unique in the spec; not `__proto__` |
 | `key` | the root only: a stable name for the result (≤ 200 characters) — see [Keyed re-send](#keyed-re-send) |
 | `box` | `{w, h}`: the size (the read's `x`/`y` in it are accepted and set nothing) |
-| `layout` | `{display: "flex", flexDirection: "row" \| "column", gap, padding: [t, r, b, l], justifyContent, alignItems, flexWrap: "wrap", rowGap, columnGap, alignContent: "space-between", reverseZ: true}`, or `{mode: "absolute", width, height}` for no auto-layout |
+| `renderBox`, `reference` | read-export compatibility only, so a read node can be fed back: `renderBox {x, y, w, h}` and `reference` (a string) are accepted and set nothing; leave them out of a spec you write |
+| `layout` | `{display: "flex", flexDirection: "row" \| "column", gap, padding: [t, r, b, l], justifyContent, alignItems, flexWrap: "wrap", rowGap, columnGap, alignContent: "space-between", reverseZ: true}`, or `{mode: "absolute", width, height}` for no auto-layout. `justifyContent`: `flex-start` \| `center` \| `flex-end` \| `space-between` \| `space-evenly` \| `space-around`; `alignItems`: `flex-start` \| `center` \| `flex-end` \| `baseline` (a row only); `rowGap`/`columnGap`/`alignContent` need `flexWrap` |
 | `widthMode`, `heightMode` | `fill` (in an auto-layout parent) \| `hug` (a frame with auto-layout, or a text); fixed when absent |
 | `grow` (0 \| 1), `alignSelf` (`min` \| `center` \| `max` \| `stretch`), `absolute: true` | a child's role in its auto-layout parent; an `absolute` child is out of the flow, so it cannot `fill`, `grow: 1` or stretch |
 | `x`, `y` | the root: page coordinates; a child: its place in a parent without auto-layout, or an `absolute` one (inside auto-layout they are a warning) |
 | `sizeLimits` | `{minWidth, maxWidth, minHeight, maxHeight}`, each above 0; needs auto-layout on the node or its parent |
-| `fills` | `[{type: "solid", color, opacity?, tokens?: {color: variable}}]`; a frame without `fills` has none |
-| `strokes` | `{colors: [hex], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}`; `strokesInLayout: true` counts them toward the auto-layout size |
+| `fills` | `[{type: "solid", color, opacity? (0–1), tokens?: {color: variable}}]` (solid paints only); a frame without `fills` has none |
+| `strokes` | `{colors: [hex], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}` (`weights` not on a TEXT); `variableWidth: {profile: "uniform"}` is read-export compatibility only (the default; accepted, sets nothing; a taper is refused); `strokesInLayout: true` counts them toward the auto-layout size |
 | `radius` | a number, or `{tl, tr, br, bl}` |
 | `opacity` (0–1), `clip: true` | as read; a frame without `clip` does not clip |
 | `text` | a TEXT's characters |
-| `font` | `{family, weight (the style name: "Semi Bold"), size, color, align, valign, lineHeight: {unit: "px" \| "percent", value} or {unit: "auto"}, letterSpacing: {unit, value}, case, decoration, variationSettings: {wght: 560}}`; Inter Regular when absent |
+| `font` | `{family, weight (the style name: "Semi Bold", "Bold Italic"), size (≥ 1), color, align, valign, lineHeight: {unit: "px" \| "percent", value} or {unit: "auto"}, letterSpacing: {unit: "px" \| "percent", value}, case, decoration, variationSettings: {wght: 560}}`; Inter Regular when absent. `align`: `left` \| `center` \| `right` \| `justified`; `valign`: `center` \| `bottom` (leave it out for top); `case`: `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`; `decoration`: `underline` \| `strikethrough` (leave `case`/`decoration` out for none). `weightValue` (a number > 0) is read-export compatibility only: it follows `weight` and sets nothing. Italic is in `weight`, not `fontStyle` |
 | `autoResize` (`width_and_height` \| `height` \| `truncate`), `truncate: true`, `maxLines` | a text with `box` and no `autoResize` keeps a fixed box; `maxLines` needs `truncate: true` |
 | `children` | the child nodes, in order (not on a TEXT, an INSTANCE or a copy) |
 
@@ -112,7 +123,7 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
   token cannot sit beside `widthMode`/`heightMode`. A TEXT binds `width`, `height`, `opacity`, `strokeWeight`,
   `fills`, `strokes`; an INSTANCE `width`, `height`, `opacity`.
 - An INSTANCE takes only `component`, `props`, `name`, `handle`, `hidden`, `box`, `x`/`y`, `absolute`, `grow`,
-  `alignSelf`, `widthMode`/`heightMode`, `opacity` and `tokens`: its content comes from its component. A wrong
+  `alignSelf`, `widthMode`/`heightMode`, `opacity` and `tokens` (and the compatibility-only `renderBox`, `reference`): its content comes from its component. A wrong
   variable type, a property the component lacks, a variant value it does not have, or a hugging instance whose
   component has no auto-layout refuses the batch.
 
@@ -166,7 +177,7 @@ rule for that field.
 | `text`, `styles` | a TEXT's characters; `{text: style}` |
 | `autoResize` | `width_and_height` \| `height` \| `truncate` \| `none` |
 | `fills` | replaces the paints (`[]` for none); paints as in a tree spec |
-| `strokes` | any of `colors`, `weight`, `weights`, `align`; only those change (`colors: []` removes them) |
+| `strokes` | any of `colors`, `weight`, `weights`, `align` (as in a tree spec); only those change (`colors: []` removes them) |
 | `radius` | a number, or any of `{tl, tr, br, bl}` |
 | `layout` | any tree-spec `layout` field but `width`/`height` (a size is `box`), only those change; `flexWrap: "nowrap"`, `alignContent: "auto"`, `reverseZ: false` turn them off; `{mode: "absolute"}` removes auto-layout |
 | `box` | `{w, h}` or either: a fixed size |
@@ -189,8 +200,8 @@ refused, naming the library when Figma says which.
   | Kind | Fields |
   |---|---|
   | paint | `paints` (as `fills`) |
-  | text | `font` (family), `weight` (style name), `size`, `lineHeight`, `letterSpacing`, `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent`, `tokens` (`fontFamily`, `fontStyle`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `paragraphSpacing`, `paragraphIndent` → a variable, or `null` to unbind) |
-  | effect | `effects`: `{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?}` or `{type: "layer_blur" \| "background_blur", radius}`, replacing the list |
+  | text | `font` (family), `weight` (style name), `size` (≥ 1), `lineHeight` (`{unit: "px" \| "percent", value}` or `{unit: "auto"}`), `letterSpacing` (`{unit: "px" \| "percent", value}`), `case` (`original` \| `upper` \| `lower` \| `title` \| `small_caps` \| `small_caps_forced`), `decoration` (`none` \| `underline` \| `strikethrough`), `paragraphSpacing`, `paragraphIndent`, `tokens` (`fontFamily`, `fontStyle`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `paragraphSpacing`, `paragraphIndent` → a variable, or `null` to unbind) |
+  | effect | `effects`: `{type: "drop_shadow" \| "inner_shadow", color, offset: {x, y}, radius, spread?, behindNode?: true}` (`behindNode` on a drop shadow only) or `{type: "layer_blur" \| "background_blur", radius}`, replacing the list |
   | any | `name`, `description` |
 
 - A `patch` of a main component, or of a layer inside it, changes every instance.

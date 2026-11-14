@@ -965,13 +965,16 @@ the current page):
 
 In Claude Code, the `designtwin` plugin's `design-in-figma` skill tells an agent which op fits which job, the dry-run
 rule, and carries this grammar in a reference file the agent reads only when it is about to write, so the tool's own
-description stays a summary.
+description is only the op names with a line each, the dry-run rule and a pointer to that reference. A refused batch
+names each offending field by path, so a client without the skill can still correct a call.
 
 **A batch is all or nothing.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
 node has), and a batch with any problem is refused whole, every problem listed. Then each op keeps what it replaces:
 if one fails partway, everything the batch already did is put back — values restored, nodes it created removed, moved
-nodes returned to their parent and place — and listed as `restored`. Deletes run last, once everything else has landed,
-because a deleted node cannot be brought back. The batch is one Cmd-Z step for the designer.
+nodes returned to their parent and place — and listed as `restored`; whatever stays is listed as `applied`. Not all of it always comes back: once the
+designer turns "Allow edits" off the plugin changes nothing more, not even to undo its own work, and a value that
+cannot be restored is named in the error. Deletes run last, once everything else has landed, because a deleted node
+cannot be brought back. The batch is one Cmd-Z step for the designer.
 A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
 sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
 runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's

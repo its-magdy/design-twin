@@ -38,8 +38,11 @@ list of merged PRs.
   once), which jobs have no route yet (a change across many screens by one rule, starting from a file with no design
   system, capturing a running app, images), and the rule that every batch that overwrites is dry-run and shown to the
   user first. The full grammar of ops, spec and patch fields, replies and limits is a reference file the skill reads
-  only before a first write, so a session that never writes does not load it. `figma_write`'s own definition is
-  unchanged. The help skill, the READMEs, ARCHITECTURE.md and SECURITY.md now describe the write surface as built.
+  only before a first write, so a session that never writes does not load it. `figma_write`'s description now
+  carries only the op names with a line each, the dry-run rule and a pointer to that reference (its input schema is
+  unchanged): its definition shrank from 1,653 to 977 estimated tokens. The rule covers re-sending a keyed spec whose
+  result is in the file, which updates it in place and can remove nodes. The help skill, the READMEs, ARCHITECTURE.md
+  and SECURITY.md now describe the write surface as built.
 - A `figma_write` tree spec can repeat itself cheaply. A node `{clone: "12:34", …}` is a copy of an existing node with
   only its differences: its own fields are a patch of the copy, and `edits` maps a layer of the source (its id, or a
   name unique in it) to a patch of that layer, so several similar screens cost only what differs. An instance takes

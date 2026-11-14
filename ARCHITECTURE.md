@@ -351,7 +351,8 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
   drift-lint. The write direction has its own skill, `design-in-figma`: the route per job (a tree spec composed from
   the file's components and variables, a copy with its differences, a patch by id, a source edit), the dry-run rule,
   and the grammar in `references/grammar.md`, which the skill reads only before a write. So `figma_write`'s own
-  description stays a summary of the ops, and a session that never writes never loads the grammar.
+  description is only the op names with a line each, the dry-run rule and a pointer to that reference, and a session
+  that never writes never loads the grammar.
 
 ## Reuse posture — Figma's skills & knowledge
 
