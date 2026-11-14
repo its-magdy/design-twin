@@ -26,7 +26,13 @@ its guarantees are especially welcome, for example:
 - the daemon socket being reachable by another user;
 - design content (layer names, text, annotations) being followed as instructions by the skills or tools;
 - a write to the Figma file through any path other than the MCP server's opt-in `figma_write`, or any write applied
-  while the plugin's **Allow edits** checkbox is off.
+  while the plugin's **Allow edits** checkbox is off, or with **Review each write** on but without the designer's
+  Apply;
+- the plugin running anything a write sent as code (every write is a row of a fixed, typed op table);
+- a `move` or `delete` of a node the plugin session did not create (other than a keyed re-send removing nodes of its
+  own earlier result), or a source edit (`setVariable`, `setStyle`, a `patch` of a main component) changing a
+  variable, style or component that lives in another library file;
+- a `treeFile` spec read from outside the directory the MCP server runs in.
 
 Out of scope: a malicious process already running as your user (it can read the token file), and issues in Figma,
 Claude Code or other third-party tools themselves — report those to their vendors.

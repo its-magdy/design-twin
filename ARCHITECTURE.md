@@ -49,7 +49,7 @@ is the calling convention, spelled out under the diagram.
                          MCP front-end: interactive reads + the only WRITE path  — optional
   Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js
           same reads as the CLI (inline, or to disk via writeToDisk:true) · figma_write (code → design,
-          6 typed ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
+          12 typed ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
 ```
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
@@ -348,7 +348,11 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
   (`design-to-code/audit.ts` does the deterministic checks; the skill adds engineer judgment and
   designer questions), `build-screen` gates on that audit → maps → builds → verifies by rendering;
   MCP/CLI **provide the data**. Complementary. The audit is offline-only (reads `design/`), like
-  drift-lint.
+  drift-lint. The write direction has its own skill, `design-in-figma`: the route per job (a tree spec composed from
+  the file's components and variables, a copy with its differences, a patch by id, a source edit), the dry-run rule,
+  and the grammar in `references/grammar.md`, which the skill reads only before a write. So `figma_write`'s own
+  description is only the op names with a line each, the dry-run rule and a pointer to that reference, and a session
+  that never writes never loads the grammar.
 
 ## Reuse posture — Figma's skills & knowledge
 
@@ -397,10 +401,22 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    code→design path. Kept a separate process so the write surface never touches the CLI's read path.
    Writes are still a small fixed set of safe ops with a `dryRun` preview, not a general authoring API, and
    the plugin applies none of them until the designer ticks **Allow edits** in its window (see Security posture).
-   A batch is all or nothing (`figma-plugin/src/writes.ts`): every op is resolved against the file before the first
-   runs, each op that changes the file returns a `Change` that can put it back (`write-batch.ts`), and a failure
-   partway puts back the whole batch; deletes run last since a deleted node cannot be restored. One batch is one
+   A batch is checked whole and put back on failure as far as it can be (`figma-plugin/src/writes.ts`): every op is
+   resolved against the file before the first runs, each op that changes the file returns a `Change` that can put it
+   back (`write-batch.ts`), and a failure partway puts those back, newest first. That is best effort: when the designer
+   turns Allow edits off mid-batch nothing is put back (the plugin changes nothing more, not even to undo its own
+   work), a restore can stop partway or fail for one change, a library item imported for the batch stays, and deletes
+   run last since a deleted node cannot be restored. `applied` lists the changes not put back and the deletes already run, not the imported library
+   items (a batch that fails while importing has an empty `applied`). One batch is one
    Cmd-Z step (`commitUndo` before and after).
+   The op table (`bridge/src/commands.ts` `WRITE_OPS`, 12 ops) is read by all three places a write is checked —
+   the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
+   bundle imports too: `createTree`'s tree spec (`tree-spec.ts`, with `tree-check.ts`; rows and fragments expanded
+   first by `tree-expand.ts`), `patch` (`patch-spec.ts`), `setVariable` / `setStyle` (`source-spec.ts`). What only the
+   file can answer (names, fonts, pages, a node's kind) is resolved by the plugin before the first op runs
+   (`tree-refs.ts`, `patch.ts`, `sources.ts`). A spec given as `treeFile` is read by the MCP server
+   (`spec-file.ts`) and never reaches the plugin as a path. The design record is `docs/write-plane-spec.md`; the
+   token cost of each route is measured by `test/write-cost.test.ts`.
 
 ## Security posture
 

@@ -24,19 +24,32 @@ list of merged PRs.
 - Each `figma_write` call is now its own Cmd-Z step in Figma. Before, one Cmd-Z undid every write since the plugin
   started. A failed write no longer ends with an empty "0 earlier op(s) ... NOT rolled back" list, and one whose mode
   changes were put back lists them.
-- A `figma_write` batch is now all or nothing: if an op fails, everything the batch already did is put back (values
-  restored, created nodes removed, moved nodes returned) and listed as `restored`. Before, only variable-mode
+- A `figma_write` batch is now put back when an op fails: everything the batch already did is put back (values
+  restored, created nodes removed, moved nodes returned) and listed as `restored`, as far as it can be (not once Allow
+  edits is turned off mid-batch; what stays, bar imported library items, is listed in `applied`). Before, only variable-mode
   changes and `createTree` trees were put back; `createFrame`, `createText`, `setFill` and `setText` stayed applied.
   `figma_write`'s definition grew from 1,184 to 1,304 estimated tokens.
 
 ### Added
 
+- A seventh Claude Code skill, `/designtwin:design-in-figma`, for designing in the open Figma file through
+  `figma_write`. It says which route fits which job (a new screen as one tree spec composed from the file's
+  components, variables and text styles; a copy with only its differences; rows of instances and named fragments; a
+  keyed spec re-sent to update in place, or kept on disk; a patch by id; a variable, style or main component changed
+  once), which jobs have no route yet (a change across many screens by one rule, starting from a file with no design
+  system, capturing a running app, images), and the rule that every batch that overwrites is dry-run and shown to the
+  user first. The full grammar of ops, spec and patch fields, replies and limits is a reference file the skill reads
+  only before a first write, so a session that never writes does not load it. `figma_write`'s description now
+  carries only the op names with a line each, the dry-run rule and a pointer to that reference (its input schema is
+  unchanged): its definition shrank from 1,653 to 977 estimated tokens. The rule covers re-sending a keyed spec whose
+  result is in the file, which updates it in place and can remove nodes. The help skill, the READMEs, ARCHITECTURE.md
+  and SECURITY.md now describe the write surface as built.
 - A `figma_write` tree spec can repeat itself cheaply. A node `{clone: "12:34", …}` is a copy of an existing node with
   only its differences: its own fields are a patch of the copy, and `edits` maps a layer of the source (its id, or a
   name unique in it) to a patch of that layer, so several similar screens cost only what differs. An instance takes
   `rows` (each an object of property values, or with `columns` a list of them) and makes one instance per row. The
   root's `fragments` names parts that are not components, placed anywhere with `{use: name, edits?}`. All three are
-  checked whole before anything is built and land all or nothing; the reply counts copies as `created.clones`. The
+  checked whole before anything is built and put back with the batch, as far as it can be, if it fails; the reply counts copies as `created.clones`. The
   write-cost suite records the several-similar-screens job on the new route: 1,773 estimated tokens against 2,604 for
   the four ops. `figma_write`'s definition grew by about 90 estimated tokens.
 - `figma_write` can change a design-system source once, and Figma carries the change to everything that uses it.
@@ -110,7 +123,7 @@ list of merged PRs.
   brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
   mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several
   things refuses the whole batch before anything runs, with up to three candidates. If a later op in the batch
-  fails, the mode changes are put back. A library collection the file doesn't use yet is refused by name.
+  fails, the mode changes are put back as far as they can be. A library collection the file doesn't use yet is refused by name.
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map

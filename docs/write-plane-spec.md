@@ -2,15 +2,17 @@
 
 Status: **accepted, partly built** (the four ops `figma_write` started with are the baseline this replaces; setting a
 node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built; the tree spec, `createTree` — frames,
-auto-layout and text, placement, all or nothing — is built; design-system references in it — instances of a named
+auto-layout and text, placement, checked whole — is built; design-system references in it — instances of a named
 component with property values, variables, text styles, library imports under the consent gate — are built; patch by
-id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the whole batch put back when an
-op fails, one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
+id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the batch put back when an
+op fails (as far as it can be: not once Allow edits is turned off, and what stays, bar imported library items, is reported in `applied`), one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
 result in place and replies with only what changed are built; source edits — `setVariable` and `setStyle` on this
 file's own variables and paint, text and effect styles, a `patch` of a main component, a library's refused naming the
 library, and the dry run's count of what follows (`writeImpact`) — are built; clone and patch — a `createTree` node
 `clone` that copies an existing node with its own and its layers' differences (`edits`) — and repetition — an
-instance's `rows` table and the root's named `fragments` placed by `use` — are built)
+instance's `rows` table and the root's named `fragments` placed by `use` — are built; the designing skill
+(`claude-plugin/skills/design-in-figma/`, its grammar in `references/grammar.md`) and the docs for the write surface
+are built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -109,13 +111,16 @@ screens.
     the bytes) or a reference to an image already in the file. Never base64 in a spec.
 13. **Placement.** The spec names a target page (the current one by default) and optionally a section; the
     plugin places a new top-level frame beside the existing ones without overlap. Explicit coordinates are
-    optional.
+    optional. As built, the target is a page only (`page`); a section cannot be named yet.
 
 ### Safety
 
-14. **All or nothing.** Everything is checked before the file is touched: names resolve, fonts exist,
+14. **All or nothing, as far as the plugin can put things back.** Everything is checked before the file is touched: names resolve, fonts exist,
     parents exist. A new tree is built to the side and attached only when complete. A patch batch keeps
-    the old values and restores them when a later op fails.
+    the old values and restores them when a later op fails — best effort: nothing is put back once the designer
+    turns Allow edits off mid-batch, a restore can fail for one change, an imported library item and a deleted node
+    stay. `applied` lists the changes not put back and the deletes already run, not the imported items (a batch
+    that fails while importing has an empty `applied`).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
 16. **One undo per batch.**
@@ -132,7 +137,11 @@ screens.
 ### Cost control
 
 19. **One tool.** `figma_write` stays the single write tool with a short schema. The grammar lives in a
-    skill reference that loads only when an agent is about to write.
+    skill reference that loads only when an agent is about to write. As built, the grammar is
+    `claude-plugin/skills/design-in-figma/references/grammar.md`, which that skill reads before a first write. The
+    tool's description is the op names with a line each, the dry-run rule and a pointer to that reference (its size is
+    `toolDefinition` in `test/write-cost/baseline.json`); the input schema is unchanged. A client without the skill
+    learns the rest from the refusals, which name each offending field by path.
 20. **Small replies.** A write answers with the root id, counts, and failures and warnings only. Ids come
     back only for nodes the spec gave a handle. No tree and no screenshot by default; the outline read of
     the new root is the check.
