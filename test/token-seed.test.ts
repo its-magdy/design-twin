@@ -414,13 +414,23 @@ console.log("\nevery token is in a table (perhaps with a `partly` note) or in `u
     same(stylesOf(styleOfSeeded).find((x) => x.name === "s")?.set, stylesOf(styleOfSeeded).find((x) => x.name === "t")?.set) && same(stylesOf(styleOfSeeded).find((x) => x.name === "ss")?.set, stylesOf(styleOfSeeded).find((x) => x.name === "t")?.set)
     && /names a typography token, and it is a shadow one/.test(reasonOf(styleOfSeeded, "sh")) && /its aliases loop/.test(reasonOf(styleOfSeeded, "l1")) && /its aliases loop/.test(reasonOf(styleOfSeeded, "l2"))
     && /names a variable/.test(reasonOf(styleOfSeeded, "v")) && clean(styleOfSeeded));
-  // Two paths of one source make a name, and a later source of the set gives it too: the later value is seeded, and the
-  // note says so (never that the first of the two is).
+  // Two paths of one source make a name. Which value is read is settled later (a later source, an earlier set, a
+  // modifier's modes), so the note never says which one is read.
+  const DUP_NOTE = "two paths make this name once joined with '/' in one source; one value is read for it";
   const dupLater = seedFromResolver(doc({ sets: { A: { sources: [{ "a/b": { $type: "number", $value: 1 }, a: { b: { $type: "number", $value: 2 } } }, { "a/b": { $type: "number", $value: 3 } }] } } }), new Map());
-  check(`a name two paths of one source make, overridden by a later source: the later value, and a note that says so (${JSON.stringify(res(dupLater))})`,
-    same(rowOf(dupLater, "a/b"), ["a/b", "number", 3]) && partOf(dupLater, "a/b") === "two paths make this name once joined with '/' in one source; a later source gives it, and that value is read" && clean(dupLater));
+  check(`a name two paths of one source make, overridden by a later source: the later value, and a note that names no value (${JSON.stringify(res(dupLater))})`,
+    same(rowOf(dupLater, "a/b"), ["a/b", "number", 3]) && partOf(dupLater, "a/b") === DUP_NOTE && clean(dupLater));
   const dupKept = seedFromResolver(doc({ sets: { A: { sources: [{ "a/b": { $type: "number", $value: 3 } }, { "a/b": { $type: "number", $value: 1 }, a: { b: { $type: "number", $value: 2 } } }] } } }), new Map());
-  check("…and when the source with the two paths is the last, the first of them is read", same(rowOf(dupKept, "a/b"), ["a/b", "number", 1]) && /in one source; the first of them is read$/.test(partOf(dupKept, "a/b")));
+  check("…and when the source with the two paths is the last, the first of its two is read, with the same note", same(rowOf(dupKept, "a/b"), ["a/b", "number", 1]) && partOf(dupKept, "a/b") === DUP_NOTE);
+  // An earlier set keeps the name, so neither of the later set's two paths is read.
+  const dupOtherSet = seedFromResolver(doc({ sets: { A: { sources: [{ "a/b": { $type: "number", $value: 1 } }] }, B: { sources: [{ "a/b": { $type: "number", $value: 2 }, a: { b: { $type: "number", $value: 3 } } }] } } }), new Map());
+  check(`…two paths in a later set, the name kept from an earlier set: its value, and a note that names no value (${JSON.stringify(res(dupOtherSet))})`,
+    same(rowOf(dupOtherSet, "a/b"), ["a/b", "number", 1]) && /one value is read for it/.test(partOf(dupOtherSet, "a/b")) && !/the first of them|a later source gives it/.test(partOf(dupOtherSet, "a/b")) && clean(dupOtherSet));
+  // A modifier gives both modes, so neither of the set's two paths is a mode's value.
+  const dupMod = seedFromResolver(doc({ sets: { A: { sources: [{ keep: { $type: "number", $value: 0 }, "a/b": { $type: "number", $value: 2 }, a: { b: { $type: "number", $value: 3 } } }] } },
+    modifiers: { A: { contexts: { L: [{ "a/b": { $type: "number", $value: 4 } }], D: [{ "a/b": { $type: "number", $value: 5 } }] } } } }), new Map());
+  check(`…two paths overridden by a modifier's modes: the modes' values, and a note that names no value (${JSON.stringify(res(dupMod))})`,
+    same(rowOf(dupMod, "a/b"), ["a/b", "number", 4, 5]) && /one value is read for it/.test(partOf(dupMod, "a/b")) && !/the first of them|a later source gives it/.test(partOf(dupMod, "a/b")) && clean(dupMod));
   const ctxTwice = seedFromResolver(doc({
     sets: { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } },
     modifiers: {

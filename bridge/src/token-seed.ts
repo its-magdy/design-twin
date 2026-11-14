@@ -927,16 +927,11 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
   /** The tokens of a list of sources, later sources over earlier ones. */
   const tokensOf = (src: readonly unknown[]): Map<string, RawToken> => {
     const out = new Map<string, RawToken>();
-    /** the source each kept name came from, and each name two paths of one source make (with that source) */
-    const from = new Map<string, number>();
-    const dups: Array<[string, number]> = [];
-    for (const [i, s] of src.entries()) {
+    for (const s of src) {
       const tree = isObj(s) && hasOwn(s, "$ref") ? files.get(String(own(s, "$ref"))) : s;
-      for (const [n, t] of flatten(tree, g, (n) => dups.push([n, i]))) { out.set(n, t); from.set(n, i); }
-    }
-    // Said once the sources are in: a later source overrides the source whose two paths made the name.
-    for (const [n, i] of dups) {
-      g.part(n, "two paths make this name once joined with '/' in one source; " + (from.get(n) === i ? "the first of them is read" : "a later source gives it, and that value is read"));
+      // Which value is read is settled later (a later source, another set, a modifier's modes), so the note never
+      // says which one: only that the name had two paths and one value is read for it.
+      for (const [n, t] of flatten(tree, g, (n) => g.part(n, "two paths make this name once joined with '/' in one source; one value is read for it"))) out.set(n, t);
     }
     return out;
   };

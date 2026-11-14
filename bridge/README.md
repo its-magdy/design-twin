@@ -1276,7 +1276,7 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   past the limit). A resolver's build reads at most 1,500,000 values (`MAX_SEED_WORK`: a value per mode of each name a
   collection seeds). Past a limit, the seed is refused and the reason says which.
 - Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
-  extended-collection overrides, a name two paths make once joined (the first, unless a later source of the set gives it), a token a second set or
+  extended-collection overrides, a name two paths make once joined (one value is read for it), a token a second set or
   another collection's modifier also gives (the first is seeded), a
   one-mode token whose `$value` differs from its mode's value, a one-mode colour whose mode's opacity differs from its
   own (the mode's is seeded), a group's `$extends` when the group has its own token. `unmapped` holds only tokens in no table.
