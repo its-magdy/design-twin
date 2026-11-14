@@ -1245,7 +1245,8 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   the token's `$extensions["figma.com"].defaultMode` (design-to-code writes it), else the one mode whose value is the
   `$value`, else the order of the keys. Tokens with different modes go into one collection per set of modes, named
   `<collection> (<mode> / <mode>)` (a number added when two sets of modes would get the same name); a token with no
-  modes goes into the one-mode collection. A file is a resolver when it has a `resolutionOrder` list or a set with a
+  modes goes into the one-mode collection, and so does a token with one mode, which takes that mode's value (and its
+  `modeOpacity`) for a variable and a style alike. A file is a resolver when it has a `resolutionOrder` list or a set with a
   `sources` list, so a token tree may have a group or a token named `sets`.
 - Names and values: the path joined with `/` (`color.brand.primary` is `color/brand/primary`), and `{a.b}` is an
   alias of `a/b`. A colour is a hex (an sRGB colour from its components; another colour space only through its `hex`);
@@ -1262,7 +1263,8 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   description is not carried. A collection over 1,000 variables is refused.
 - Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
   extended-collection overrides, a name two paths make once joined (the first is seeded), a token a second set or
-  another collection's modifier also gives (the first is seeded). `unmapped` holds only tokens in no table.
+  another collection's modifier also gives (the first is seeded), a one-mode token whose `$value` differs from its
+  mode's value, a group's `$extends` when the group has its own token. `unmapped` holds only tokens in no table.
 - The reply puts one entry at the op's own index: `{seeded: file, tables, unmapped?, partly?}`. Each table is
   `{collection, id, result, modesAdded?, created?, updated?, unchanged}` (or `{styles: true, …}`), where `created` and
   `updated` list `[name, id]` and `unchanged` counts the rest. A second identical seed reports nothing created or

@@ -16,7 +16,9 @@ import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 import type { WritePreviewStep, WriteResult } from "../bridge/src/commands.ts";
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
-const res = (o: SeedOutcome): SeedResult => ("error" in o ? { ops: [], unmapped: [{ token: "(error)", reason: o.error }], partly: [] } : o);
+/** Every outcome a check looked at, for the closing check that each token is in one place. */
+const looked = new Set<SeedOutcome>();
+const res = (o: SeedOutcome): SeedResult => { looked.add(o); return "error" in o ? { ops: [], unmapped: [{ token: "(error)", reason: o.error }], partly: [] } : o; };
 const tables = (o: SeedOutcome): SeedVariablesOp[] => res(o).ops.filter((x): x is SeedVariablesOp => x.op === "createVariables");
 const stylesOf = (o: SeedOutcome): SeedStylesOp["styles"] => res(o).ops.find((x): x is SeedStylesOp => x.op === "createStyles")?.styles ?? [];
 const rowOf = (o: SeedOutcome, name: string): SeedRow | undefined => tables(o).flatMap((t) => t.variables).find((r) => r[0] === name);
@@ -26,6 +28,13 @@ const partOf = (o: SeedOutcome, name: string): string => res(o).partly.find((u) 
 const listed = (l: ReadonlyArray<{ token: string }>, name: string): number => l.filter((u) => u.token === name).length;
 const dtcg = (text: string, collection?: string): SeedOutcome => seedFromDtcg(JSON.parse(text) as unknown, { collection });
 /** Every seeded table passes the create tables' own shape check. */
+/** No name in a table and in `unmapped`; no `partly` note for a name in no table; no row name in two tables. */
+const clean = (o: SeedOutcome): boolean => {
+  if ("error" in o) return true;
+  const rows = tables(o).flatMap((t) => t.variables.map((r) => r[0]));
+  const seeded = new Set<string>([...rows, ...stylesOf(o).map((s) => s.name)]);
+  return rows.length === new Set(rows).size && o.unmapped.every((u) => !seeded.has(u.token)) && o.partly.every((u) => seeded.has(u.token));
+};
 const valid = (o: SeedOutcome): boolean => res(o).ops.every((op) => (op.op === "createVariables" ? checkCreateVariables(op).problems.length === 0 : checkCreateStyles(op).problems.length === 0));
 
 // ---------------------------------------------------------------- the round trip
@@ -352,6 +361,49 @@ console.log("\nresolvers:");
   check("a resolution order naming a set that is not there is refused", "error" in noSet && /names nothing in the resolver/.test(noSet.error));
 }
 
+// ---------------------------------------------------------------- every token in one place
+console.log("\nevery token is in a table (perhaps with a `partly` note) or in `unmapped`, never both:");
+{
+  const doc = (o: object): unknown => JSON.parse(JSON.stringify(o)) as unknown;
+  const theme = { $extensions: { "figma.com": { collection: "Theme" } } };
+  const order = [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }];
+  const typeClash = seedFromResolver(doc({ sets: { A: { sources: [{ x: { $type: "number", $value: 1 }, ok: { $type: "number", $value: 3 } }], ...theme }, B: { sources: [{ x: { $type: "color", $value: "#ffffff" } }], ...theme } }, resolutionOrder: order }), new Map());
+  check(`two sets of one collection give a token: the first set's token is seeded whole (type and value), the second in \`partly\` (${JSON.stringify(res(typeClash))})`,
+    same(rowOf(typeClash, "x"), ["x", "number", 1]) && /set 'B' has it too/.test(partOf(typeClash, "x")) && reasonOf(typeClash, "x") === "" && clean(typeClash));
+  const valueClash = seedFromResolver(doc({ sets: { A: { sources: [{ x: { $type: "number", $value: 1 } }], ...theme }, B: { sources: [{ x: { $type: "number", $value: 2 } }], ...theme } }, resolutionOrder: order }), new Map());
+  check("…and with two numbers, the first is seeded and the second is said", same(rowOf(valueClash, "x"), ["x", "number", 1]) && /set 'B' has it too/.test(partOf(valueClash, "x")) && clean(valueClash));
+  const ctxTwice = seedFromResolver(doc({
+    sets: { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } },
+    modifiers: {
+      ma: { contexts: { l: [{ n: { $type: "number", $value: 1 } }], d: [{ n: { $type: "number", $value: 2 } }] }, default: "l", $extensions: { "figma.com": { collection: "A" } } },
+      mb: { contexts: { l: [{ n: { $type: "number", $value: 3 } }], d: [{ n: { $type: "number", $value: 4 } }] }, default: "l", $extensions: { "figma.com": { collection: "B" } } },
+    },
+    resolutionOrder: [...order, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }],
+  }), new Map());
+  check(`a token only modifiers give, in two collections: seeded once, in the first, the other in \`partly\` (${JSON.stringify(tables(ctxTwice).map((t) => t.variables))})`,
+    same(rowOf(ctxTwice, "n"), ["n", "number", 1, 2]) && /modifier 'mb' sets it, and it is in collection 'A'/.test(partOf(ctxTwice, "n")) && clean(ctxTwice));
+
+  const one = dtcg(`{"n":{"$type":"number","$value":1,"$extensions":{"figma.com":{"modes":{"Only":2}}}},"c":{"$type":"color","$value":"#ffffff","$extensions":{"figma.com":{"modes":{"Only":"#000000"},"modeOpacity":{"Only":50}}}},"t":{"$type":"typography","$value":{"fontFamily":"Inter","fontSize":"16px"},"$extensions":{"figma.com":{"modes":{"Only":{"fontFamily":"Inter","fontSize":"18px"}}}}}}`);
+  check(`a token with one mode: its mode's value (and that mode's opacity) for a variable and a style alike, a $value that differs in \`partly\` (${JSON.stringify(res(one))})`,
+    same(rowOf(one, "n"), ["n", "number", 2]) && same(rowOf(one, "c"), ["c", "color", "#00000080"]) && stylesOf(one).find((s) => s.name === "t")?.set.size === 18
+    && ["n", "c", "t"].every((k) => /its \$value differs from its one mode 'Only'/.test(partOf(one, k))) && res(one).unmapped.length === 0 && clean(one));
+  const oneSame = dtcg(`{"n":{"$type":"number","$value":2,"$extensions":{"figma.com":{"modes":{"Only":2}}}}}`);
+  check("…and a one-mode token whose $value is its mode's value says nothing", same(rowOf(oneSame, "n"), ["n", "number", 2]) && res(oneSame).partly.length === 0);
+
+  const ext = dtcg(`{"color":{"$extends":"{palette}","$root":{"$type":"color","$value":"#ffffff"},"bg":{"$type":"color","$value":"#000000"}}}`);
+  check(`a group's $extends, the group's own token seeded: in \`partly\`, not \`unmapped\` (${JSON.stringify(res(ext))})`,
+    same(rowOf(ext, "color"), ["color", "color", "#ffffff"]) && /\$extends is not read/.test(partOf(ext, "color")) && reasonOf(ext, "color") === "" && clean(ext));
+  const extGroup = dtcg(`{"color":{"$extends":"{palette}","bg":{"$type":"color","$value":"#000000"}}}`);
+  check("…and with no token of its own, in `unmapped`", /\$extends is not read/.test(reasonOf(extGroup, "color")) && clean(extGroup));
+  const slash = dtcg(`{"a":{"$type":"color","$value":"#ffffff","b":{"$value":"#000000"}},"a/b":{"$type":"color","$value":"#111111"}}`);
+  check(`a token inside a token, its name seeded by a key with '/': the seeded one keeps a \`partly\` note, not an \`unmapped\` one (${JSON.stringify(res(slash))})`,
+    same(rowOf(slash, "a/b"), ["a/b", "color", "#111111"]) && /inside token 'a'/.test(partOf(slash, "a/b")) && reasonOf(slash, "a/b") === "" && clean(slash));
+  const notNode = dtcg(`{"a":{"b":3},"a/b":{"$type":"number","$value":1}}`);
+  check("…and a value that is neither a token nor a group, its name seeded the same way", same(rowOf(notNode, "a/b"), ["a/b", "number", 1]) && /neither a token/.test(partOf(notNode, "a/b")) && clean(notNode));
+  const empty = dtcg(`{"a":{"":{"$type":"number","$value":1}},"a/":{"$type":"number","$value":2}}`);
+  check("…and an empty name", same(rowOf(empty, "a/"), ["a/", "number", 2]) && /an empty name/.test(partOf(empty, "a/")) && clean(empty));
+}
+
 // ---------------------------------------------------------------- the files
 console.log("\nthe files (seed-file.ts):");
 {
@@ -448,5 +500,8 @@ console.log("\nthe reply, cut to what changed:");
     && /seeds from 't\.json': collection 'Theme' \(3 variables\), 1 style; 1 token is seeded in part \(`partly`\); 1 token is not seeded \(`unmapped`\)$/.test(String(steps[0]?.change)) && steps[1]?.index === 1 && p.creates === 2);
   check("nothing seeded: the reply and the preview are as they were", seededReply(r, []) === r);
 }
+
+const unclean = [...looked].filter((o) => !clean(o));
+check(`every outcome above: each token in a table (perhaps with a \`partly\` note) or in \`unmapped\`, never both (${looked.size} looked at; ${unclean.length} not: ${JSON.stringify(unclean.slice(0, 1))})`, looked.size > 20 && unclean.length === 0);
 
 report();
