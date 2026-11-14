@@ -328,6 +328,13 @@ export const cases: Case[] = [{
       { name: "Card", kind: "effect", set: { effects: [{ type: "drop_shadow", color: "#00000040", offset: { x: 0, y: 2 }, radius: 8, tokens: { color: "gray/900", radius: "space/base" } }] } },
     ] }]);
     ok("[STYLES] re-sent with its bound raw values moved by Figma: still unchanged (the bindings are the same)", bound.ok && same(bound.applied[0]?.rows?.map((x) => x[1]), ["unchanged", "unchanged"]));
+    // A font binding hides only its own part: the family bound, a new weight is still a change.
+    const fam = (weight: string): WriteOp => ({ op: "createStyles", styles: [{ name: "Fam", kind: "text", set: { font: "Inter", weight, size: 14, tokens: { fontFamily: "font/family" } } }] });
+    const famMade = await write(w, [{ op: "createVariables", collection: "Fonts", variables: [["font/family", "string", "Inter"]] }, fam("Regular")]);
+    const famSame = await write(w, [fam("Regular")]);
+    const famBold = await write(w, [fam("Bold")]);
+    ok("[STYLES] a text style with its family bound: re-sent unchanged; a new weight is updated", famMade.ok && famSame.ok && famBold.ok
+      && famSame.applied[0]?.rows?.[0]?.[1] === "unchanged" && famBold.applied[0]?.rows?.[0]?.[1] === "updated");
   },
 }, {
   name: "the ops after the create ops name what they make: a spec, a patch; a source edit of a new name is pointed at its row",

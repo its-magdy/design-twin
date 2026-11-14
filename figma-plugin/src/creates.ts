@@ -575,8 +575,10 @@ async function applyStyles(t: StylesTarget, refs: ResolvedRefs, consent: () => v
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 
-/** A style as "unchanged" compares it: its snapshot without the raw value of a field bound to a variable. Figma moves that
- *  raw value as the variable resolves (a variable written earlier in the batch does it), so only the binding counts. */
+/** A style as "unchanged" compares it: its snapshot without the raw value of a field bound to a variable. What a bound
+ *  field shows is its variable's value, and Figma moves the raw value under it to that value when the variable is
+ *  written (an earlier table of the batch does it), so the raw value is not what the style looks like: only the binding
+ *  counts. A font binding hides only its own part: `fontFamily` the family, `fontStyle` / `fontWeight` the style. */
 function comparableStyle(st: AnyStyle): string {
   const parsed: unknown = JSON.parse(styleSnapshot(st));
   if (!Array.isArray(parsed)) return JSON.stringify(parsed);
@@ -586,7 +588,7 @@ function comparableStyle(st: AnyStyle): string {
     if (!isRecord(bound)) return;
     for (const k of Object.keys(bound)) {
       if (k === "offsetX" || k === "offsetY") { const off = o.offset; if (isRecord(off)) delete off[k === "offsetX" ? "x" : "y"]; continue; }
-      if (k === "fontFamily" || k === "fontStyle" || k === "fontWeight") { delete o.fontName; continue; }
+      if (k === "fontFamily" || k === "fontStyle" || k === "fontWeight") { const f = o.fontName; if (isRecord(f)) delete f[k === "fontFamily" ? "family" : "style"]; continue; }
       if (own(o, k)) delete o[k];
     }
   };

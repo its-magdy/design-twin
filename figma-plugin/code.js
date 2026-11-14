@@ -9706,7 +9706,8 @@
           continue;
         }
         if (k === "fontFamily" || k === "fontStyle" || k === "fontWeight") {
-          delete o.fontName;
+          const f = o.fontName;
+          if (isRecord2(f)) delete f[k === "fontFamily" ? "family" : "style"];
           continue;
         }
         if (own2(o, k)) delete o[k];
