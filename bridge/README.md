@@ -1056,7 +1056,9 @@ many raw values stay unbound (it does not read the file, so the names are checke
   `edits` maps a layer of the source — its id from the read, or its exact name when that is unique in the source — to a
   patch of the same layer in the copy: `{clone: "12:34", name: "Order 2", edits: {"12:40": {text: "Shipped"}, "Total":
   {text: "$42.00"}}}`. A copy may be the root (its source must then be a frame; it is placed like a new one) or a child
-  anywhere in a tree; it takes no `children` (its layers are its source's). The source stays as it is. A missing
+  anywhere in a tree; it takes no `children` (its layers are its source's). The source stays as it is. A main component inside the
+  source is an instance of it in the copy, so an edit of it, or of a layer in it, is refused (patch that instance once
+  the copy has landed). A missing
   source, a page or a main component as one, a layer name that matches nothing or several layers, and a field the layer
   lacks refuse the whole batch before anything is copied, with candidates; a value Figma refuses on the copy removes
   the whole tree. A copy as the root cannot carry a `key` yet; inside a keyed spec, a copy is kept while its spec is

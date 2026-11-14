@@ -124,14 +124,27 @@ export const cases: Case[] = [{
     ok("[CLONE-CHECK] Figma refusing a copy's edit partway: the tree and its copy are removed, the earlier op put back, the source untouched",
       partway.ok === false && partway.failedAt === 1 && partway.restored?.length === 1 && alive().length === count && w.cloned.at(-1)?.id === sourceId
       && all(alive().find((n) => n.id === sourceId)).every((n) => n.opacity === 1));
+    // A main component inside the source is an instance in the copy: an edit of it (or of a layer in it) is refused.
+    const withMain = await api.applyWrites([{ op: "createTree", tree: { name: "Holds a main", children: [{ name: "Badge", children: [{ name: "Badge label", text: "New" }] }] } }]);
+    const holder = alive().find((n) => n.id === withMain.applied[0]?.id);
+    const badge = kids(holder)[0];
+    if (badge) badge.type = "COMPONENT";
+    const mainCount = alive().length;
+    const mainEdit = await api.applyWrites([{ op: "createTree", tree: { clone: must(holder?.id, "holder"), edits: { Badge: { name: "x" }, "Badge label": { text: "y" } } } }]);
+    ok("[CLONE-CHECK] an edit of a main component inside the source, or of a layer in it, is refused (the copy holds an instance there)",
+      mainEdit.ok === false && alive().length === mainCount && /edits\["Badge"\]: 'Badge' \(\S+\) is a main component of the source/.test(mainEdit.error ?? "")
+      && /edits\["Badge label"\]: 'Badge label' \(\S+\) is inside a main component/.test(mainEdit.error ?? ""));
+    if (badge) badge.type = "FRAME";
+
     // Figma refusing something between clone() and the copy's place in the tree (its stamps cleared): the copy is removed
     // too, not left on the page.
     for (const tree of [{ clone: sourceId }, { name: "Holder", children: [{ clone: sourceId }] }]) {
+      const was = alive().length;
       w.trap.add("setPluginData");
       const early = await api.applyWrites([{ op: "createTree", tree }]);
       w.trap.delete("setPluginData");
       ok("[CLONE-CHECK] Figma refusing the copy before it is in the tree (" + (tree.clone ? "the root" : "a child") + "): no copy is left on the page",
-        early.ok === false && alive().length === count);
+        early.ok === false && alive().length === was);
     }
     // The wire check and the dry run say the same.
     const bad = { op: "createTree", tree: { clone: "Order 1" } };
@@ -278,6 +291,10 @@ export const cases: Case[] = [{
       ].every((re) => re.test(bad.error ?? "")));
     const inside = checkTree({ fragments: { row: { layout: { display: "flex" }, children: [{ name: "Label", text: 5 }] } }, children: [{ text: "x" }, { use: "row" }] }).problems;
     ok("[FRAG] a problem inside a fragment is named below the node that uses it", JSON.stringify(inside) === JSON.stringify(["tree.children[1] (fragment 'row').children[0].text must be a string", "tree.children[1] (fragment 'row').children[0]: a TEXT node needs `text`"]));
+    const proto: Record<string, unknown> = JSON.parse('{"fragments": {"__proto__": {"name": "Odd", "text": "x"}}, "children": [{"use": "__proto__", "edits": {"Odd": {"__proto__": 1}}}]}') as Record<string, unknown>;
+    const protoCheck = checkTree(proto);
+    ok("[FRAG] a fragment (or a field) named \"__proto__\" is a name like any other", protoCheck.problems.length === 1 && /__proto__: not a field the write accepts/.test(protoCheck.problems[0] ?? "")
+      && checkTree(JSON.parse('{"fragments": {"__proto__": {"name": "Odd", "text": "x"}}, "children": [{"use": "__proto__"}]}') as unknown).problems.length === 0);
     const dup = checkTree({ fragments: { tag: { text: "x", handle: "t" } }, children: [{ use: "tag" }, { use: "tag" }] }).problems;
     ok("[FRAG] a handle inside a fragment used twice names two nodes: refused", dup.some((p) => /handle 't' is used twice/.test(p)));
     // A fragment of fragments multiplies: refused while it is expanded, not after.

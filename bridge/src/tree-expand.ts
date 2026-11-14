@@ -38,12 +38,17 @@ const REPEAT_FIELDS = ["use", "fragments", "rows", "columns"] as const;
 /** Fields an edit of a fragment's layer cannot set: they would change what the fragment is, not a value in it. */
 const NOT_EDITED = ["use", "fragments", "edits", "key"];
 
+/** Set `o[k]` as an own property: a key the agent wrote may be "__proto__", which plain assignment would turn into a
+ *  prototype instead of a field. */
+function put(o: Record<string, unknown>, k: string, v: unknown): void {
+  Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+}
 /** `v` (a JSON value) copied, so an expansion never shares an object with the spec or with another copy. */
 function copy(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(copy);
   if (!isObj(v)) return v;
   const out: Record<string, unknown> = {};
-  for (const k of Object.keys(v)) out[k] = copy(v[k]);
+  for (const k of Object.keys(v)) put(out, k, copy(v[k]));
   return out;
 }
 
@@ -87,7 +92,7 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
       if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
       else if (!isObj(f)) say(at + ": must be a node spec");
       else if (f.key !== undefined) say(at + ".key: a key names a whole result, so only the spec's root carries it");
-      else fragments[name] = f;
+      else put(fragments, name, f);
     }
   }
   const used = new Set<string>();
@@ -105,7 +110,7 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
     if (n.columns !== undefined) say(path + ".columns: names the values of each row in `rows`, which this node does not have");
     if (++count > maxNodes) { tooMany = true; return []; }
     const out: Record<string, unknown> = {};
-    for (const k of Object.keys(n)) if (k !== "fragments" && k !== "children") out[k] = copy(n[k]);
+    for (const k of Object.keys(n)) if (k !== "fragments" && k !== "children") put(out, k, copy(n[k]));
     if (Array.isArray(n.children)) {
       const kids: unknown[] = [];
       n.children.forEach((c, i) => { for (const x of expand(c, path + ".children[" + i + "]", stack, false)) kids.push(x); });
@@ -151,14 +156,14 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
             if (NOT_EDITED.indexOf(k) >= 0) { say(at + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited"); continue; }
             const v = fields[k];
             if (v === null) delete target[k];
-            else if (v !== undefined) target[k] = copy(v);
+            else if (v !== undefined) put(target, k, copy(v));
           }
         }
       }
     }
     for (const k of Object.keys(n)) {
       if (k === "use" || k === "edits" || k === "children" || (k === "fragments" && isRoot)) continue;
-      if (n[k] !== undefined) body[k] = copy(n[k]);
+      if (n[k] !== undefined) put(body, k, copy(n[k]));
     }
     return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
   };
@@ -187,7 +192,7 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
         const bad = row.findIndex((v) => !propValue(v));
         if (bad >= 0) { say(r + "[" + bad + "]: must be a string (a variant's value, a text) or a boolean"); return; }
         props = {};
-        for (const [j, c] of cols.entries()) props[String(c)] = row[j];
+        for (const [j, c] of cols.entries()) put(props, String(c), row[j]);
       } else {
         if (!isObj(row)) { say(r + ": must be an object of property name → value (or give `columns` and a list of values)"); return; }
         const bad = Object.keys(row).find((k) => !propValue(row[k]) || !k.trim());
@@ -196,8 +201,10 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
       }
       if (++count > maxNodes) { tooMany = true; return; }
       const inst: Record<string, unknown> = {};
-      for (const k of Object.keys(n)) if (k !== "rows" && k !== "columns" && k !== "props" && k !== "handle") inst[k] = copy(n[k]);
-      inst.props = Object.assign({}, copy(base), copy(props));
+      for (const k of Object.keys(n)) if (k !== "rows" && k !== "columns" && k !== "props" && k !== "handle") put(inst, k, copy(n[k]));
+      const merged: Record<string, unknown> = {};
+      for (const src of [base, props]) for (const k of Object.keys(src)) put(merged, k, copy(src[k]));
+      inst.props = merged;
       labels.set(inst, r);
       out.push(inst);
     });

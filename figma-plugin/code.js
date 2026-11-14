@@ -881,11 +881,14 @@
   var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   var REPEAT_FIELDS = ["use", "fragments", "rows", "columns"];
   var NOT_EDITED = ["use", "fragments", "edits", "key"];
+  function put(o, k, v) {
+    Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
   function copy(v) {
     if (Array.isArray(v)) return v.map(copy);
     if (!isObj(v)) return v;
     const out = {};
-    for (const k of Object.keys(v)) out[k] = copy(v[k]);
+    for (const k of Object.keys(v)) put(out, k, copy(v[k]));
     return out;
   }
   function repeats(v, depth) {
@@ -920,7 +923,7 @@
         if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
         else if (!isObj(f)) say(at2 + ": must be a node spec");
         else if (f.key !== void 0) say(at2 + ".key: a key names a whole result, so only the spec's root carries it");
-        else fragments[name] = f;
+        else put(fragments, name, f);
       }
     }
     const used = /* @__PURE__ */ new Set();
@@ -938,7 +941,7 @@
         return [];
       }
       const out = {};
-      for (const k of Object.keys(n)) if (k !== "fragments" && k !== "children") out[k] = copy(n[k]);
+      for (const k of Object.keys(n)) if (k !== "fragments" && k !== "children") put(out, k, copy(n[k]));
       if (Array.isArray(n.children)) {
         const kids = [];
         n.children.forEach((c, i) => {
@@ -995,14 +998,14 @@
               }
               const v = fields[k];
               if (v === null) delete target[k];
-              else if (v !== void 0) target[k] = copy(v);
+              else if (v !== void 0) put(target, k, copy(v));
             }
           }
         }
       }
       for (const k of Object.keys(n)) {
         if (k === "use" || k === "edits" || k === "children" || k === "fragments" && isRoot) continue;
-        if (n[k] !== void 0) body[k] = copy(n[k]);
+        if (n[k] !== void 0) put(body, k, copy(n[k]));
       }
       return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
     };
@@ -1048,7 +1051,7 @@
             return;
           }
           props = {};
-          for (const [j, c] of cols.entries()) props[String(c)] = row[j];
+          for (const [j, c] of cols.entries()) put(props, String(c), row[j]);
         } else {
           if (!isObj(row)) {
             say(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
@@ -1066,8 +1069,10 @@
           return;
         }
         const inst = {};
-        for (const k of Object.keys(n)) if (k !== "rows" && k !== "columns" && k !== "props" && k !== "handle") inst[k] = copy(n[k]);
-        inst.props = Object.assign({}, copy(base), copy(props));
+        for (const k of Object.keys(n)) if (k !== "rows" && k !== "columns" && k !== "props" && k !== "handle") put(inst, k, copy(n[k]));
+        const merged = {};
+        for (const src of [base, props]) for (const k of Object.keys(src)) put(merged, k, copy(src[k]));
+        inst.props = merged;
         labels.set(inst, r);
         out.push(inst);
       });
@@ -7245,6 +7250,12 @@
           say(where + ": " + layer.error);
           continue;
         }
+        let inMain = layer.ok;
+        while (inMain && inMain !== nd && inMain.type !== "COMPONENT" && inMain.type !== "COMPONENT_SET") inMain = inMain.parent;
+        if (inMain && inMain !== nd) {
+          say(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
+          continue;
+        }
         const twice = named.get(layer.ok.id);
         if (twice !== void 0) {
           say(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
@@ -7959,7 +7970,7 @@
         }
       }
     });
-    const put = (k, v) => {
+    const put2 = (k, v) => {
       if (!(k in n)) return;
       const was = Reflect.get(n, k);
       if (was === v) return;
@@ -7970,19 +7981,19 @@
     const onPage = !parent || parent.type === "PAGE";
     const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
     for (const f of todo) {
-      if (f === "absolute" && inFlex) put("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
-      else if (f === "grow" && inFlex) put("layoutGrow", s.grow !== void 0 ? s.grow : 0);
-      else if (f === "alignSelf" && inFlex) put("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
-      else if (f === "clip") put("clipsContent", s.clip === true);
+      if (f === "absolute" && inFlex) put2("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
+      else if (f === "grow" && inFlex) put2("layoutGrow", s.grow !== void 0 ? s.grow : 0);
+      else if (f === "alignSelf" && inFlex) put2("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
+      else if (f === "clip") put2("clipsContent", s.clip === true);
       else if (f === "sizeLimits") {
-        for (const k of LIMITS) put(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
+        for (const k of LIMITS) put2(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
         for (const k of LIMITS) {
           const ref2 = s.tokens && s.tokens[k];
           const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
           if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
         }
-      } else if (f === "strokesInLayout") put("strokesIncludedInLayout", s.strokesInLayout === true);
-      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put(f, s[f]);
+      } else if (f === "strokesInLayout") put2("strokesIncludedInLayout", s.strokesInLayout === true);
+      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
     }
   }
   function arrange(parent, want) {

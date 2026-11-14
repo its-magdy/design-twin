@@ -125,6 +125,11 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
       const where = path + ".edits[" + JSON.stringify(ref) + "]";
       const layer = findLayer(nd, ref);
       if ("error" in layer) { say(where + ": " + layer.error); continue; }
+      // A main component inside the source is an instance of it in the copy (Figma's clone()), so a patch checked against
+      // the component would not fit what it lands on.
+      let inMain: BaseNode | null = layer.ok;
+      while (inMain && inMain !== nd && inMain.type !== "COMPONENT" && inMain.type !== "COMPONENT_SET") inMain = inMain.parent;
+      if (inMain && inMain !== nd) { say(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed"); continue; }
       const twice = named.get(layer.ok.id);
       if (twice !== undefined) { say(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit"); continue; }
       named.set(layer.ok.id, ref);
