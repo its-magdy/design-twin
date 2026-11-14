@@ -265,12 +265,13 @@ passes through the call. It goes first in a batch, like the tables; the 50-op li
   (`$ref`s next to it). Not read: CSS, Tailwind's `theme.css`, native token files. Every file must be inside the
   project, JSON, at most 2 MB; a `$ref` that is a URL, absolute, or a `#` pointer is refused.
 - A resolver: each set is a collection, its modifier's contexts are the modes (the default first). A `tokens.dtcg.json`:
-  the modes are `$extensions["figma.com"].modes`, the collection is `collection`; tokens with other modes go into
-  `<collection> (<mode> / <mode>)`.
+  the modes are `$extensions["figma.com"].modes` (the default first: its `defaultMode`, else the mode whose value is the
+  `$value`), the collection is `collection`; tokens with other modes go into `<collection> (<mode> / <mode>)`, numbered
+  on a clash.
 - Names: the path joined with `/`; `{a.b}` is an alias of `a/b`. color → hex, dimension → px (rem × 16), number,
   string, fontFamily, fontWeight, a boolean kept as a string token → boolean; `typography` → a text style, `shadow` → an
-  effect style, their `{ref}`s bound.
-- `unmapped` lists each token not seeded, with why (gradient, duration, an alias to nothing, a loop, …). The dry run's
+  effect style, their `{ref}`s bound (a style has no modes: the default's value, a differing mode listed).
+- `unmapped` lists each token not seeded, with why (gradient, duration, an alias to nothing, a loop, a token inside a token, …). The dry run's
   `seedTokens` step has the tables' steps (with their `plan`) under `tables`, and `unmapped`.
 
 ## Variable modes

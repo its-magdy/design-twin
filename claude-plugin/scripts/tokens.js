@@ -1674,6 +1674,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
         if (mv !== null) modes[m] = mv;
       }
       ext.modes = modes;
+      const def = defaultModeName(v, ds.collections);
+      if (def !== void 0 && modes[def] !== void 0) ext.defaultMode = def;
     }
     if (modeKeys.length > 1 && modeKeys.some((m) => isComposed(values[m]))) {
       const byMode = nullProto();

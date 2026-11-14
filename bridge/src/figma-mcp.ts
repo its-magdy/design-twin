@@ -906,7 +906,9 @@ registerTool(
     if (!r.ok) {
       const applied = r.applied;
       const restored = r.restored ?? [];
-      const lines = [`Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}`];
+      // No op index when the batch stopped for no op of its own ('Allow edits' turned off once the create tables ran).
+      const at = r.failedAt !== undefined ? ` at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}` : "";
+      const lines = [`Write failed${at}: ${r.error}`];
       if (restored.length) lines.push(`${restored.length} earlier change(s) were undone (values put back, created nodes removed, moved nodes returned):\n` + JSON.stringify(restored, null, 2));
       if (applied.length) lines.push(`${applied.length} earlier op(s) stay applied (not undone):\n` + JSON.stringify(applied, null, 2));
       return errorResult(lines.join("\n"));

@@ -37,10 +37,11 @@ list of merged PRs.
   `createVariables` and `createStyles` ops in its place, so no token value passes through the model and the dry run,
   the checks and the one-undo write are the tables' own. A resolver's sets are collections and its modifiers' contexts
   their modes (the default first); a `tokens.dtcg.json`'s modes come from `$extensions["figma.com"].modes`, one
-  collection per set of modes. Names are the path joined with `/`, `{a.b}` an alias. Colours, dimensions (rem × 16),
+  collection per set of modes (numbered when two would share a name), the default first: tokens.dtcg.json now records
+  it as `$extensions["figma.com"].defaultMode`, and a file without it gives the mode whose value is the `$value`. Names are the path joined with `/`, `{a.b}` an alias. Colours, dimensions (rem × 16),
   numbers, strings, font families and weights, and booleans become variables; `typography` and `shadow` tokens become
-  text and effect styles bound to them. What cannot be seeded (a gradient, a duration, an alias to nothing, a loop, …)
-  is listed in `unmapped` with the reason. The reply lists only the rows created or updated, with a count of the
+  text and effect styles bound to them (a style takes the default mode's value; a mode that differs is listed). What
+  cannot be seeded (a gradient, a duration, an alias to nothing, a loop, a token inside a token, …) is listed in `unmapped` with the reason. The reply lists only the rows created or updated, with a count of the
   unchanged ones, so a second seed of the same file reports no change. Every file read stays inside the server's
   directory, is JSON and at most 2 MB; a `$ref` that is a URL, absolute or a pointer is refused, and so are CSS and
   native token files. A resolver's set files now keep a boolean's origin (`originalType`), as tokens.dtcg.json does.

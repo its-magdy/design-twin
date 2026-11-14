@@ -143,31 +143,42 @@ function seededTable(t: SeedRecord["tables"][number], a: AppliedWrite | undefine
   };
 }
 
-/** A write's reply with each seedTokens op's tables folded back into one entry at the op's index (only what changed),
- *  and a failure's op index given as the batch the agent sent. Nothing to do when nothing was seeded. */
-export function seededReply(r: WriteResult, seeds: readonly SeedRecord[]): WriteResult | (Omit<WriteResult, "applied"> & { applied: Array<AppliedWrite | SeededWrite> }) {
-  if (!seeds.length) return r;
-  if (!r.ok) {
-    if (r.failedAt === undefined) return r;
-    const seed = seeds.find((s) => r.failedAt !== undefined && r.failedAt >= s.first && r.failedAt < s.first + s.count);
-    const note = seeds.map((s) => `ops[${s.index}] (seedTokens '${s.file}') became ops[${s.first}${s.count > 1 ? "–" + (s.first + s.count - 1) : ""}] of the batch: ` +
-      s.tables.map((t) => (t.collection !== null ? "createVariables '" + t.collection + "'" : "createStyles")).join(", ")).join("; ");
-    return { ...r, failedAt: inputIndex(seeds, r.failedAt), ...(seed ? { failedOp: "seedTokens" } : {}), error: (r.error || "") + " (" + note + ")" };
-  }
-  const applied: Array<AppliedWrite | SeededWrite> = [];
+/** `applied` with each seedTokens op's tables folded into one entry (only what changed). The create tables run first and
+ *  in op order, so an entry's place is its op's; a failed batch's list stops where the batch stopped, and a seed then
+ *  holds only the tables that stay. */
+function foldApplied(applied: readonly AppliedWrite[], seeds: readonly SeedRecord[]): Array<AppliedWrite | SeededWrite> {
+  const out: Array<AppliedWrite | SeededWrite> = [];
   let k = 0;
-  for (let e = 0; e < r.applied.length;) {
+  for (let e = 0; e < applied.length;) {
     const s = seeds[k];
     if (s && e === s.first) {
-      const tables = s.tables.map((t, j) => seededTable(t, r.applied[e + j]));
-      applied.push({ seeded: s.file, tables, ...(s.unmapped.length ? { unmapped: s.unmapped } : {}) });
-      e += s.count;
+      const n = Math.min(s.count, applied.length - e);
+      const tables = s.tables.slice(0, n).map((t, j) => seededTable(t, applied[e + j]));
+      out.push({ seeded: s.file, tables, ...(s.unmapped.length ? { unmapped: s.unmapped } : {}) });
+      e += n;
       k++;
       continue;
     }
-    const a = r.applied[e];
-    if (a) applied.push(a);
+    const a = applied[e];
+    if (a) out.push(a);
     e++;
+  }
+  return out;
+}
+
+/** A write's reply with each seedTokens op's tables folded back into one entry at the op's index (only what changed),
+ *  and a failure's op index given as the batch the agent sent. Nothing to do when nothing was seeded. A failure's
+ *  `applied` is folded too — with or without an op index ('Allow edits' turned off once the create tables ran has
+ *  none) — unless some changes were put back: what stays is then a subset whose places are not its ops'. */
+export function seededReply(r: WriteResult, seeds: readonly SeedRecord[]): WriteResult | (Omit<WriteResult, "applied"> & { applied: Array<AppliedWrite | SeededWrite> }) {
+  if (!seeds.length) return r;
+  const applied = r.ok || !(r.restored && r.restored.length) ? foldApplied(r.applied, seeds) : r.applied;
+  if (!r.ok && r.failedAt !== undefined) {
+    const at = r.failedAt;
+    const seed = seeds.find((s) => at >= s.first && at < s.first + s.count);
+    const note = seeds.map((s) => `ops[${s.index}] (seedTokens '${s.file}') became ops[${s.first}${s.count > 1 ? "–" + (s.first + s.count - 1) : ""}] of the batch: ` +
+      s.tables.map((t) => (t.collection !== null ? "createVariables '" + t.collection + "'" : "createStyles")).join(", ")).join("; ");
+    return { ...r, applied, failedAt: inputIndex(seeds, at), ...(seed ? { failedOp: "seedTokens" } : {}), error: (r.error || "") + " (" + note + ")" };
   }
   return { ...r, applied };
 }

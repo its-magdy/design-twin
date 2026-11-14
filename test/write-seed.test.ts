@@ -17,7 +17,7 @@ import { tokens } from "./fixtures.ts";
 import { treeWorld } from "./harness/writes.ts";
 import type { FakeCollection, FakeNode, FakeVariable } from "./fake-figma.ts";
 import { toResolver } from "../design-to-code/tokens.ts";
-import type { WhoamiReply, WriteImpactReply, WriteOp } from "../bridge/src/commands.ts";
+import type { WhoamiReply, WriteImpactReply, WriteOp, WriteResult } from "../bridge/src/commands.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
 import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 
@@ -102,13 +102,20 @@ void (async () => {
     if (!port) { console.log(stderr); report(); return; }
 
     let w = await treeWorld();
+    /** A reply the next write gets instead of the plugin's own (a case the fake file cannot reach). */
+    let nextWrite: ((ops: WriteOp[]) => WriteResult) | null = null;
     await w.allowEdits();
     const writes: WriteOp[][] = [];
     const plugin = fakePlugin(port, {
       token: TOKEN, hello: { instanceId: "fig-seed", file: "Sample App", page: "Page 1" },
       on: {
         whoami: (): WhoamiReply => ({ instanceId: "fig-seed", startedAt: 0, uptimeMs: 1, file: "Sample App", page: "Page 1", pageId: "", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: true }),
-        write: async (a) => { writes.push(a.ops); return await w.api.applyWrites(a.ops.map((o) => ({ ...o }))); },
+        write: async (a) => {
+          writes.push(a.ops);
+          const canned = nextWrite;
+          nextWrite = null;
+          return canned ? canned(a.ops) : await w.api.applyWrites(a.ops.map((o) => ({ ...o })));
+        },
         writeImpact: async (a): Promise<WriteImpactReply> => {
           const posted = await w.send({ type: "bridge", id: "imp", cmd: "writeImpact", args: { ops: a.ops } });
           const r = posted.find((m) => m.type === "bridge-result" && m.id === "imp");
@@ -191,6 +198,14 @@ void (async () => {
     check(`__proto__, constructor, toString/hasOwnProperty land as names, in a collection named __proto__${proto.isError ? " (" + proto.text.slice(0, 200) + ")" : ""}`, !proto.isError && collNamed("__proto__") !== undefined
       && varNamed("__proto__")?.resolvedType === "COLOR" && same(Object.values(varNamed("constructor")?.valuesByMode ?? {}), [aliasTo("__proto__")]) && varNamed("toString/hasOwnProperty")?.resolvedType === "FLOAT"
       && same(list(list(json(proto).applied)[0]?.tables)[0]?.created, [["__proto__", varNamed("__proto__")?.id], ["constructor", varNamed("constructor")?.id], ["toString/hasOwnProperty", varNamed("toString/hasOwnProperty")?.id]]));
+
+    // ---- 'Allow edits' turned off once the create tables ran: no op index, the tables that stay folded
+    nextWrite = (ops) => ({ ok: false, refused: "edits-off", error: "'Allow edits' was turned off once this batch's create tables had run",
+      applied: ops.map((_o, i) => ({ id: "C:" + i, result: "created" as const, rows: [["V:" + i, "created" as const]] })) });
+    put("small.dtcg.json", { a: { $type: "number", $value: 1 } });
+    const offReply = await call({ ops: [{ op: "seedTokens", file: "small.dtcg.json", collection: "Off" }] });
+    check(`edits turned off partway: no "at op undefined", the seeded table folded (got ${JSON.stringify(offReply.text.slice(0, 200))})`, offReply.isError
+      && /^Write failed: 'Allow edits' was turned off/.test(offReply.text) && !offReply.text.includes("undefined") && offReply.text.includes('"seeded": "small.dtcg.json"') && offReply.text.includes('"created": [\n'));
 
     // ---- refusals: each before the plugin is asked
     const before = writes.length;

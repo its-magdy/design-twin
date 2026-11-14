@@ -1241,25 +1241,30 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
 - Collections and modes: from a resolver, each set is a collection (its `$extensions["figma.com"].collection`, else
   the set's name), and the modifier of that collection gives its modes, the default first. A context file holds only
   what differs; the rest comes from the set. From a `tokens.dtcg.json`, the modes are each token's
-  `$extensions["figma.com"].modes`, and the collection is `collection`. Tokens with different modes go into one
-  collection per set of modes, named `<collection> (<mode> / <mode>)`; a token with no modes goes into the
-  one-mode collection.
+  `$extensions["figma.com"].modes`, and the collection is `collection`. The default mode goes first (Figma's default):
+  the token's `$extensions["figma.com"].defaultMode` (design-to-code writes it), else the one mode whose value is the
+  `$value`, else the order of the keys. Tokens with different modes go into one collection per set of modes, named
+  `<collection> (<mode> / <mode>)` (a number added when two sets of modes would get the same name); a token with no
+  modes goes into the one-mode collection. A file is a resolver when it has a `resolutionOrder` list or a set with a
+  `sources` list, so a token tree may have a group or a token named `sets`.
 - Names and values: the path joined with `/` (`color.brand.primary` is `color/brand/primary`), and `{a.b}` is an
   alias of `a/b`. A colour is a hex (an sRGB colour from its components; another colour space only through its `hex`);
   a numeric `opacity` in `$extensions["figma.com"]` goes into the alpha. A dimension in px is a number, rem and em
   count 16 px. `number`, `string`, `fontFamily` (the first of a list), `fontWeight` (a named weight is its number), and
   a string token whose `$extensions["figma.com"].originalType` is `boolean`. A group's `$type` holds for the tokens
   in it. A `typography` token is a text style and a `shadow` token an effect style; a `{ref}` in it is bound to that
-  variable. A line height that is a multiple of the font size is set as a percentage, not bound.
+  variable. A line height that is a multiple of the font size is set as a percentage, not bound. A style has no
+  modes: it takes the default mode's value, and a mode whose value differs is listed in `unmapped`.
 - Not seeded, and listed in `unmapped` with the reason: gradient, cubicBezier, duration, border, transition and
   strokeStyle tokens, an unknown `$type`, a value that cannot be read, an alias to a token that is not in the files
   (and a token that aliases one that is not seeded), a loop of aliases, a name two paths make once joined, a colour
-  alias with an opacity of its own. A description is not carried. A collection over 1,000 variables is refused.
+  alias with an opacity of its own, a token inside another token (a token cannot also be a group; DTCG puts a group's
+  own token in `$root`). A description is not carried. A collection over 1,000 variables is refused.
 - The reply puts one entry at the op's own index: `{seeded: file, tables, unmapped?}`. Each table is
   `{collection, id, result, modesAdded?, created?, updated?, unchanged}` (or `{styles: true, …}`), where `created` and
   `updated` list `[name, id]` and `unchanged` counts the rest. A second identical seed reports nothing created or
-  updated. The dry run gives one `seedTokens` step with its tables' steps (and their `plan`) under `tables`, and the
-  `unmapped` list.
+  updated. A failed write's `applied` is folded the same way (only the tables that stay applied). The dry run gives
+  one `seedTokens` step with its tables' steps (and their `plan`) under `tables`, and the `unmapped` list.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

@@ -6,7 +6,10 @@
 // Read (the formats design-to-code/tokens.ts writes, and hand-written DTCG 2025.10):
 //   tokens.dtcg.json      one DTCG tree. Its modes ride in $extensions["figma.com"].modes; it names no collection, so the
 //                         tokens go into one collection (the op's `collection`, "Tokens" by default) — or, when they
-//                         carry different sets of modes, one per set of modes, "<collection> (<mode> / <mode>)".
+//                         carry different sets of modes, one per set of modes, "<collection> (<mode> / <mode>)" (a
+//                         number after a name two sets would share). The default mode goes first: its
+//                         $extensions["figma.com"].defaultMode, else the one mode whose value is the $value, else
+//                         the key order.
 //   tokens.resolver.json  a DTCG resolver: each set is a collection (its $extensions["figma.com"].collection, else the
 //                         set's name), and the modifier of that collection gives its modes (the default first). A
 //                         context file holds only what differs from the set's values.
@@ -19,7 +22,9 @@
 //   dimension    px → a number; rem and em × 16 (the browser default font size)
 //   number, string, boolean (a string token with $extensions["figma.com"].originalType "boolean"), fontFamily (the
 //                first family of a list), fontWeight (a named weight → its number)
-//   typography   a text style; shadow an effect style. A sub-value that is a `{ref}` is bound to that variable.
+//   typography   a text style; shadow an effect style. A sub-value that is a `{ref}` is bound to that variable. A style
+//                has no modes: the default mode's value is seeded, and a mode whose value differs is listed.
+// A token with children (a token cannot also be a group; DTCG puts a group's own token in `$root`): each child listed.
 // Anything else (gradient, cubicBezier, duration, border, transition, strokeStyle, an unknown type, a bad value, an
 // alias to a token that is not here, a name two paths reach) is listed in `unmapped` with the reason, never dropped
 // silently. A description is not carried (the create tables have no field for it).
@@ -68,9 +73,14 @@ function figmaExt(node: Obj): Obj | null {
   return isObj(f) ? f : null;
 }
 
-/** Is this parsed JSON a DTCG resolver document (rather than a token tree)? By its content, not its file name. */
+/** Is this parsed JSON a DTCG resolver document (rather than a token tree)? By its content, not its file name: a
+ *  `resolutionOrder` list, or a `sets` entry with a `sources` list (the shape a set must have). A token tree may have a
+ *  group, or a token, named `sets`. */
 export function isResolverDoc(doc: unknown): boolean {
-  return isObj(doc) && (Array.isArray(own(doc, "resolutionOrder")) || (isObj(own(doc, "sets")) && !hasOwn(doc, "$value")));
+  if (!isObj(doc)) return false;
+  if (Array.isArray(own(doc, "resolutionOrder"))) return true;
+  const sets = own(doc, "sets");
+  return isObj(sets) && Object.values(sets).some((s) => isObj(s) && Array.isArray(own(s, "sources")));
 }
 
 // ---------------------------------------------------------------- a token tree, flattened
@@ -83,8 +93,18 @@ interface RawToken { name: string; type: string | null; value: unknown; ext: Obj
  *  name an alias could not spell, a group's $extends: listed. */
 function flatten(doc: unknown, unmapped: SeedUnmapped[]): Map<string, RawToken> {
   const out = new Map<string, RawToken>();
+  /** The tokens under a token (a token and a group cannot share a name: DTCG puts a group's own token in `$root`). */
+  const inside = (node: Obj, path: readonly string[], token: string): void => {
+    for (const [k, child] of Object.entries(node)) {
+      if (k.startsWith("$")) continue;
+      const at = [...path, k];
+      if (!isObj(child) || hasOwn(child, "$value")) unmapped.push({ token: at.join("/"), reason: "it is inside token '" + token + "' (a token cannot also be a group; a group's own token goes in $root)" });
+      if (isObj(child)) inside(child, at, token);
+    }
+  };
   const leaf = (path: readonly string[], node: Obj, inherited: string | null): void => {
     const name = path.join("/");
+    inside(node, path, name || "$root");
     if (!path.length) { unmapped.push({ token: "$root", reason: "a token needs a name" }); return; }
     if (out.has(name)) { unmapped.push({ token: name, reason: "two paths make this name once joined with '/'; the first is seeded" }); return; }
     const t = own(node, "$type");
@@ -230,8 +250,9 @@ interface Row { name: string; type: VariableTypeName; dtcgType: string; cells: S
 interface Coll { name: string; modes: string[]; rows: Row[] }
 /** A typography or shadow token: a style, built once the variables are known. */
 interface StyleToken { name: string; type: "typography" | "shadow"; value: unknown }
-/** The per-mode values of a token, before they are typed: `value` and the opacity half beside it. */
-interface ModeValue { value: unknown; opacity: unknown }
+/** The per-mode values of a token, before they are typed: `value`, the opacity half beside it, and the mode's name
+ *  (absent for a collection with one mode). */
+interface ModeValue { value: unknown; opacity: unknown; mode?: string }
 
 /** Everything a reader (DTCG or resolver) gathers before the tables are finished. */
 class Gather {
@@ -265,7 +286,15 @@ class Gather {
       this.unmapped.push({ token: t.name, reason: a !== null && !this.raw.has(a) ? "its alias {" + a.split("/").join(".") + "} names no token here" : "no $type (on it, a group above it, or the token it aliases)" });
       return;
     }
-    if (type === "typography" || type === "shadow") { this.styles.push({ name: t.name, type, value: t.value }); return; }
+    if (type === "typography" || type === "shadow") {
+      // A style has no modes: the default mode's value (the first) is the style; a mode that differs is said.
+      const [first, ...rest] = values;
+      const value = first && values.length > 1 ? first.value : t.value;
+      const differ = rest.filter((mv) => JSON.stringify(mv.value) !== JSON.stringify(value)).map((mv) => "'" + (mv.mode ?? "?") + "'");
+      if (differ.length) this.unmapped.push({ token: t.name, reason: "a style has no modes; only the '" + (first?.mode ?? "?") + "' value was seeded (" + differ.join(", ") + (differ.length === 1 ? " differs)" : " differ)") });
+      this.styles.push({ name: t.name, type, value });
+      return;
+    }
     const vt = VARIABLE_TYPE.get(type);
     if (vt === undefined) {
       this.unmapped.push({ token: t.name, reason: NOT_SEEDED.has(type) ? "a " + type + " token has no Figma variable or style" : "unknown $type '" + type + "'" });
@@ -519,7 +548,8 @@ function finish(g: Gather, source: string): SeedOutcome {
 // ---------------------------------------------------------------- tokens.dtcg.json
 
 /** The tables a DTCG token tree makes. Its tokens go into `collection`; tokens with different modes go into one
- *  collection per set of modes ("<collection> (<mode> / <mode>)"), and the ones with no modes into the one-mode one. */
+ *  collection per set of modes ("<collection> (<mode> / <mode>)", numbered on a clash), the default mode first, and
+ *  the ones with no modes into the one-mode one. */
 export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefined; source?: string | undefined } = {}): SeedOutcome {
   const source = opts.source || "the token file";
   if (!isObj(doc)) return { error: source + " is not a DTCG token tree (a JSON object of groups and tokens); seedTokens reads " + SEED_FORMATS };
@@ -527,37 +557,66 @@ export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefin
   const base = opts.collection || DEFAULT_SEED_COLLECTION;
   const g = new Gather();
   for (const [n, t] of flatten(doc, g.unmapped)) g.raw.set(n, t);
-  // The modes each token has, and the groups they make (a Map keyed by the mode list: names are free text).
-  const groups = new Map<string, { modes: string[]; coll: Coll | null }>();
+  // The modes each token has, and the groups they make (a Map keyed by the mode list: names are free text). A group's
+  // modes are in its default-first order: the plugin makes the first mode the collection's default.
+  //   how sure: 2 the token's figma.com defaultMode (design-to-code writes it), 1 the one mode whose value is the
+  //   $value, 0 neither (the key order). A group takes the order of its first token that is surest.
+  const groups = new Map<string, { modes: string[]; sure: number; name: string; coll: Coll | null }>();
   const keyOf = (modes: readonly string[]): string => JSON.stringify(modes.slice().sort());
-  const plan: Array<{ t: RawToken; key: string; values: ModeValue[] }> = [];
+  const plan: Array<{ t: RawToken; key: string; modesV: Obj | null; modeOpacity: unknown; opacity: unknown }> = [];
   for (const t of g.raw.values()) {
     const modesV = t.ext ? own(t.ext, "modes") : undefined;
     const modeOpacity = t.ext ? own(t.ext, "modeOpacity") : undefined;
     const opacity = t.ext ? own(t.ext, "opacity") : undefined;
     const modes = isObj(modesV) ? Object.keys(modesV) : [];
     if (modes.some((m) => !m.trim())) { g.unmapped.push({ token: t.name, reason: "a mode with an empty name" }); continue; }
-    if (modes.length < 2) {
-      // One mode (or none): the token's $value. A one-mode `modes` names its mode, which a one-mode table leaves to Figma.
-      const v = modes.length === 1 && isObj(modesV) ? own(modesV, modes[0] ?? "") : t.value;
+    if (modes.length < 2 || !isObj(modesV)) {
       const key = keyOf([]);
-      if (!groups.has(key)) groups.set(key, { modes: [], coll: null });
-      plan.push({ t, key, values: [{ value: v, opacity }] });
+      if (!groups.has(key)) groups.set(key, { modes: [], sure: 2, name: base, coll: null });
+      plan.push({ t, key, modesV: isObj(modesV) && modes.length === 1 ? modesV : null, modeOpacity, opacity });
       continue;
     }
+    const declared = t.ext ? own(t.ext, "defaultMode") : undefined;
+    const valueText = JSON.stringify(t.value);
+    const matching = modes.filter((m) => JSON.stringify(own(modesV, m)) === valueText);
+    const [dflt, sure] = typeof declared === "string" && modes.indexOf(declared) >= 0 ? [declared, 2] : matching.length === 1 && matching[0] !== undefined ? [matching[0], 1] : [modes[0] ?? "", 0];
+    const ordered = [dflt, ...modes.filter((m) => m !== dflt)];
     const key = keyOf(modes);
-    if (!groups.has(key)) groups.set(key, { modes, coll: null });
-    const order = groups.get(key)?.modes ?? modes;
-    plan.push({ t, key, values: order.map((m) => ({ value: isObj(modesV) ? own(modesV, m) : undefined, opacity: isObj(modeOpacity) ? own(modeOpacity, m) : opacity })) });
+    const grp = groups.get(key);
+    if (!grp) groups.set(key, { modes: ordered, sure, name: "", coll: null });
+    else if (sure > grp.sure) { grp.modes = ordered; grp.sure = sure; }
+    plan.push({ t, key, modesV, modeOpacity, opacity });
   }
+  // Each group's collection name, unique in this seed (the plugin takes one table per collection): mode names may hold
+  // " / ", so two sets of modes can join alike; a clash takes a number.
   const several = groups.size > 1;
+  const used = new Set<string>();
+  const plain = groups.get(keyOf([]));
+  if (plain) used.add(plain.name);
+  for (const grp of groups.values()) {
+    if (grp === plain) continue;
+    const want = several ? base + " (" + grp.modes.join(" / ") + ")" : base;
+    let name = want;
+    for (let n = 2; used.has(name); n++) name = want + " " + n;
+    used.add(name);
+    grp.name = name;
+  }
   const collOf = (key: string): (() => Coll) => () => {
     const grp = groups.get(key);
     if (!grp) throw new Error("token-seed: no group " + key);
-    if (!grp.coll) grp.coll = g.coll(several && grp.modes.length ? base + " (" + grp.modes.join(" / ") + ")" : base, grp.modes);
+    if (!grp.coll) grp.coll = g.coll(grp.name, grp.modes);
     return grp.coll;
   };
-  for (const p of plan) g.add(p.t, collOf(p.key), p.values);
+  for (const p of plan) {
+    const grp = groups.get(p.key);
+    if (!grp) continue;
+    const { modesV, modeOpacity, opacity } = p;
+    // One mode (or none): the token's $value. A one-mode `modes` names its mode, which a one-mode table leaves to Figma.
+    const values: ModeValue[] = !grp.modes.length
+      ? [{ value: modesV ? own(modesV, Object.keys(modesV)[0] ?? "") : p.t.value, opacity }]
+      : grp.modes.map((m) => ({ value: modesV ? own(modesV, m) : undefined, opacity: isObj(modeOpacity) ? own(modeOpacity, m) : opacity, mode: m }));
+    g.add(p.t, collOf(p.key), values);
+  }
   // Composite overrides an extended collection layers on a token are not seeded: say so, once per token.
   for (const t of g.raw.values()) if (t.ext && own(t.ext, "extensionOverrides") !== undefined) g.unmapped.push({ token: t.name, reason: "its extended-collection overrides are not seeded (the base value is)" });
   // Tables in first-seen order of their groups, so a one-mode collection made first stays first.
@@ -745,7 +804,7 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
       // A token only a context gives is typed by it: put it where the type lookup finds it.
       const typed: RawToken = b.base.get(n) ?? first;
       if (!g.raw.has(n)) g.raw.set(n, typed);
-      g.add(typed, coll, mod.modes.map((m) => { const t = at(m) ?? first; return { value: t.value, opacity: t.ext ? own(t.ext, "opacity") : undefined }; }));
+      g.add(typed, coll, mod.modes.map((m) => { const t = at(m) ?? first; return { value: t.value, opacity: t.ext ? own(t.ext, "opacity") : undefined, mode: m }; }));
     }
   }
   return finish(g, source);

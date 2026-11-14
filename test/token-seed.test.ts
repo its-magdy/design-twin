@@ -10,7 +10,7 @@ import { tokens } from "./fixtures.ts";
 import { toDTCG, toResolver } from "../design-to-code/tokens.ts";
 import type { Variable, VariableValue } from "../bridge/src/doc-types.ts";
 import { checkCreateStyles, checkCreateVariables, MAX_TABLE_ROWS } from "../bridge/src/create-spec.ts";
-import { refProblem, resolverRefs, seedFromDtcg, seedFromResolver, type SeedOutcome, type SeedResult, type SeedRow, type SeedStylesOp, type SeedVariablesOp } from "../bridge/src/token-seed.ts";
+import { isResolverDoc, refProblem, resolverRefs, seedFromDtcg, seedFromResolver, type SeedOutcome, type SeedResult, type SeedRow, type SeedStylesOp, type SeedVariablesOp } from "../bridge/src/token-seed.ts";
 import { inputIndex, loadSeedTokens, seededPreview, seededReply, type SeedRecord } from "../bridge/src/seed-file.ts";
 import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 import type { WritePreviewStep, WriteResult } from "../bridge/src/commands.ts";
@@ -31,7 +31,7 @@ const FIXTURE = tokens({
   file: "Sample Library",
   collections: [
     { name: "Primitives", modes: ["Value"], default: "Value" },
-    { name: "Theme", modes: ["Light", "Dark"], default: "Light" },
+    { name: "Theme", modes: ["Light", "Dark"], default: "Dark" },
   ],
   variables: [
     { name: "color/gray/0", type: "COLOR", collection: "Primitives", values: { Value: "#FFFFFF" } },
@@ -82,10 +82,13 @@ function roundTrips(o: SeedOutcome, collOf: (v: Variable) => { name: string; mod
   const warnings: string[] = [];
   const tree = JSON.parse(JSON.stringify(toDTCG(FIXTURE, warnings))) as unknown;
   const fromDtcg = seedFromDtcg(tree, { collection: "Brand" });
-  const bad = roundTrips(fromDtcg, (v) => (v.collection === "Theme" ? { name: "Brand (Light / Dark)", modes: ["Light", "Dark"] } : { name: "Brand", modes: [] }));
+  const bad = roundTrips(fromDtcg, (v) => (v.collection === "Theme" ? { name: "Brand (Dark / Light)", modes: ["Dark", "Light"] } : { name: "Brand", modes: [] }));
   check(`tokens.dtcg.json: every variable back with its name, type, value per mode and aliases${bad.length ? " (" + bad.slice(0, 4).join("; ") + ")" : ""}`, bad.length === 0);
   check("tokens.dtcg.json: the one-mode table first (the two-mode one aliases it), only the composed colour unmapped, every table valid",
-    same(tables(fromDtcg).map((t) => t.collection), ["Brand", "Brand (Light / Dark)"]) && same(res(fromDtcg).unmapped.map((u) => u.token), [COMPOSED]) && valid(fromDtcg));
+    same(tables(fromDtcg).map((t) => t.collection), ["Brand", "Brand (Dark / Light)"]) && same(res(fromDtcg).unmapped.map((u) => u.token), [COMPOSED]) && valid(fromDtcg));
+  // Theme's default is Dark, its values' first key Light: the default goes first, as the mode the plugin renames.
+  const bgExt = (((tree as Record<string, Record<string, Record<string, unknown>>>).color?.bg?.$extensions ?? {}) as Record<string, Record<string, unknown>>)["figma.com"];
+  check("toDTCG records the collection default as figma.com defaultMode (default ≠ the first key)", bgExt?.defaultMode === "Dark" && same(Object.keys(bgExt?.modes ?? {}), ["Light", "Dark"]));
 
   const { resolver, files } = toResolver(FIXTURE, []);
   const parsed = JSON.parse(JSON.stringify(resolver)) as unknown;
@@ -93,7 +96,7 @@ function roundTrips(o: SeedOutcome, collOf: (v: Variable) => { name: string; mod
   const loaded = new Map<string, unknown>();
   for (const r of "refs" in refs ? refs.refs : []) loaded.set(r, JSON.parse(JSON.stringify(files[r])) as unknown);
   const fromResolver = seedFromResolver(parsed, loaded);
-  const badR = roundTrips(fromResolver, (v) => (v.collection === "Theme" ? { name: "Theme", modes: ["Light", "Dark"] } : { name: "Primitives", modes: [] }));
+  const badR = roundTrips(fromResolver, (v) => (v.collection === "Theme" ? { name: "Theme", modes: ["Dark", "Light"] } : { name: "Primitives", modes: [] }));
   check(`tokens.resolver.json: every variable back, in its own collection, its modes from the modifier${badR.length ? " (" + badR.slice(0, 4).join("; ") + ")" : ""}`, badR.length === 0);
   check("tokens.resolver.json: the resolver names every set and context file it was written with", "refs" in refs && refs.refs.length === Object.keys(files).length);
   check("tokens.resolver.json: Primitives before Theme, only the composed colour unmapped, every table valid", same(tables(fromResolver).map((t) => t.collection), ["Primitives", "Theme"]) && same(res(fromResolver).unmapped.map((u) => u.token), [COMPOSED]) && valid(fromResolver));
@@ -183,6 +186,24 @@ console.log("\nmodes and collections (tokens.dtcg.json):");
   check("a token whose modes come in another order lands in the same collection, its values by mode name", same(ld?.modes, ["Light", "Dark"]) && same(ld?.variables.find((r) => r[0] === "fg"), ["fg", "color", "#000000", "#ffffff"]));
   check("a per-mode opacity goes into that mode's alpha only", same(rowOf(o, "tint"), ["tint", "color", "#00000080", "#ffffff"]));
   check("a token with no modes goes into the one-mode collection", same(tables(o)[0]?.variables, [["plain", "number", 1]]) && tables(o)[0]?.modes === undefined);
+  const modesOf = (text: string): unknown => tables(dtcg(text)).map((t) => [t.collection, t.modes, t.variables]);
+  check("the default mode goes first: a figma.com defaultMode", same(modesOf(`{ "a": { "$type": "number", "$value": 9, "$extensions": { "figma.com": { "defaultMode": "Dark", "modes": { "Light": 1, "Dark": 2 } } } } }`),
+    [["Tokens", ["Dark", "Light"], [["a", "number", 2, 1]]]]));
+  check("…else the one mode whose value is the $value", same(modesOf(`{ "a": { "$type": "number", "$value": 2, "$extensions": { "figma.com": { "modes": { "Light": 1, "Dark": 2 } } } } }`),
+    [["Tokens", ["Dark", "Light"], [["a", "number", 2, 1]]]]));
+  check("…else (no mode, or two, match) the key order", same(modesOf(`{ "a": { "$type": "number", "$value": 2, "$extensions": { "figma.com": { "modes": { "Light": 2, "Dark": 2 } } } }, "b": { "$type": "number", "$value": 5, "$extensions": { "figma.com": { "modes": { "Light": 3, "Dark": 4 } } } } }`),
+    [["Tokens", ["Light", "Dark"], [["a", "number", 2, 2], ["b", "number", 3, 4]]]]));
+  check("…a later token's clear default orders a group the first token left open", same(modesOf(`{ "a": { "$type": "number", "$value": 2, "$extensions": { "figma.com": { "modes": { "Light": 2, "Dark": 2 } } } }, "b": { "$type": "number", "$value": 4, "$extensions": { "figma.com": { "modes": { "Light": 3, "Dark": 4 } } } } }`),
+    [["Tokens", ["Dark", "Light"], [["a", "number", 2, 2], ["b", "number", 4, 3]]]]));
+  const clash = dtcg(`{
+    "p": { "$type": "number", "$value": 1 },
+    "x": { "$type": "number", "$value": 1, "$extensions": { "figma.com": { "modes": { "A / B": 1, "C": 2 } } } },
+    "y": { "$type": "number", "$value": 1, "$extensions": { "figma.com": { "modes": { "A": 1, "B / C": 2 } } } },
+    "z": { "$type": "number", "$value": 1, "$extensions": { "figma.com": { "modes": { "x": 1, "y": 2 } } } }
+  }`, "K (x / y)");
+  const clashNames = tables(clash).map((t) => t.collection);
+  check(`mode sets whose names join alike, and one named like the plain collection: every collection name unique (got ${JSON.stringify(clashNames)})`,
+    same(clashNames, ["K (x / y)", "K (x / y) (A / B / C)", "K (x / y) (A / B / C) 2", "K (x / y) (x / y)"]) && valid(clash));
   const one = dtcg(`{ "bg": { "$type": "color", "$value": "#ffffff", "$extensions": { "figma.com": { "modes": { "Light": "#ffffff", "Dark": "#000000" } } } } }`);
   check("one set of modes: the collection is named as given ('Tokens' by default)", same(tables(one).map((t) => [t.collection, t.modes]), [["Tokens", ["Light", "Dark"]]]));
   const big: Record<string, unknown> = {};
@@ -223,6 +244,31 @@ console.log("\nstyles:");
     { type: "drop_shadow", color: "#00000040", offset: { x: 0, y: 2 }, radius: 8, spread: 0, tokens: { color: "shadow/color", radius: "shadow/blur" } }] } }));
   check("a shadow list is one effect per layer; inset is an inner shadow", same(stack?.set.effects?.map((e) => e.type), ["drop_shadow", "inner_shadow"]));
   check("the styles come after the variables, one table; every table valid", res(o).ops.at(-1)?.op === "createStyles" && valid(o));
+  // A style has no modes: the default mode's value is seeded, and another mode that differs is said.
+  const moded = dtcg(`{
+    "t": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "16px" }, "$extensions": { "figma.com": { "defaultMode": "Light",
+      "modes": { "Dark": { "fontFamily": "Inter", "fontSize": "18px" }, "Light": { "fontFamily": "Inter", "fontSize": "16px" } } } } },
+    "u": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "12px" }, "$extensions": { "figma.com": { "modes": { "Light": { "fontFamily": "Inter", "fontSize": "12px" }, "Dark": { "fontFamily": "Inter", "fontSize": "12px" } } } } }
+  }`);
+  check("a typography token with modes: the default's value is the style, and the differing mode is listed",
+    same(stylesOf(moded).find((s) => s.name === "t")?.set, { font: "Inter", size: 16 }) && /a style has no modes; only the 'Light' value was seeded \('Dark' differs\)/.test(reasonOf(moded, "t"))
+    && stylesOf(moded).some((s) => s.name === "u") && reasonOf(moded, "u") === "");
+  const doc = (x: object): unknown => JSON.parse(JSON.stringify(x)) as unknown;
+  const rs = seedFromResolver(doc({
+    sets: { Core: { sources: [{ shadow: { $type: "shadow", $value: { color: "#000000", offsetX: "0px", offsetY: "1px", blur: "2px" } }, gap: { $type: "number", $value: 1 } }] } },
+    modifiers: { theme: { contexts: { light: [], dark: [{ shadow: { $type: "shadow", $value: { color: "#ffffff", offsetX: "0px", offsetY: "1px", blur: "2px" } } }] }, default: "light" } },
+    resolutionOrder: [{ $ref: "#/sets/Core" }, { $ref: "#/modifiers/theme" }],
+  }), new Map());
+  check("a shadow a resolver context overrides: the default's value is the style, the context listed",
+    same(stylesOf(rs).find((s) => s.name === "shadow")?.set.effects?.map((e) => ("color" in e ? e.color : null)), ["#000000"]) && /only the 'light' value was seeded \('dark' differs\)/.test(reasonOf(rs, "shadow")));
+}
+
+console.log("\na token with children:");
+{
+  const o = dtcg(`{ "color": { "$type": "color", "$value": "#ffffff", "hover": { "$value": "#000000", "deep": { "$value": "#111111" } }, "group": { "x": { "$value": "#222222" } } }, "ok": { "$type": "number", "$value": 1 } }`);
+  check("a token's own children are listed (a token and a group cannot share a name; $root is the group's token), the token seeded",
+    same(rowOf(o, "color"), ["color", "color", "#ffffff"]) && ["color/hover", "color/hover/deep", "color/group/x"].every((n) => /inside token 'color'.*\$root/.test(reasonOf(o, n)))
+    && !rowOf(o, "color/hover") && same(rowOf(o, "ok"), ["ok", "number", 1]));
 }
 
 console.log("\nnames that are Object.prototype's:");
@@ -302,6 +348,14 @@ console.log("\nthe files (seed-file.ts):");
   check("a resolver is told by its content, its $ref read relative to it", "ops" in rr && same(rr.ops, [{ op: "createVariables", collection: "Core", variables: [["gap", "number", 4]] }]));
   put("named.json", { version: "2025.10", sets: { Core: { sources: [{ $ref: "tokens/core.json" }] } }, resolutionOrder: [{ $ref: "#/sets/Core" }] });
   check("…whatever the file is called", "ops" in load([{ op: "seedTokens", file: "named.json" }]));
+  put("sets-group.json", { sets: { base: { $type: "color", $value: "#ffffff" } } });
+  put("sets-token.json", { sets: { $type: "color", $value: "#ffffff" } });
+  const sg = load([{ op: "seedTokens", file: "sets-group.json" }]), stk = load([{ op: "seedTokens", file: "sets-token.json" }]);
+  check(`a token tree with a top-level 'sets' group or token is a token tree, not a resolver (${err(sg)}; ${err(stk)})`,
+    "ops" in sg && same(sg.ops, [{ op: "createVariables", collection: "Tokens", variables: [["sets/base", "color", "#ffffff"]] }])
+    && "ops" in stk && same(stk.ops, [{ op: "createVariables", collection: "Tokens", variables: [["sets", "color", "#ffffff"]] }]));
+  check("a resolver: a resolutionOrder list, or a set with a `sources` list", isResolverDoc({ resolutionOrder: [] }) && isResolverDoc({ sets: { A: { sources: [] } } })
+    && !isResolverDoc({ sets: { A: { $type: "number", $value: 1 } } }) && !isResolverDoc({ sets: {} }));
   check("a resolver with `collection` is refused (its sets name the collections)", /a resolver names its collections/.test(err(load([{ op: "seedTokens", file: "tokens.resolver.json", collection: "X" }]))));
   put("escape.resolver.json", { sets: { A: { sources: [{ $ref: "../../outside.json" }] } }, resolutionOrder: [{ $ref: "#/sets/A" }] });
   check("a $ref that leaves the directory is refused by the server's own check", /\$ref '\.\.\/\.\.\/outside\.json' must stay inside the directory/.test(err(load([{ op: "seedTokens", file: "escape.resolver.json" }]))));
@@ -344,6 +398,14 @@ console.log("\nthe reply, cut to what changed:");
   const fail = seededReply({ ok: false, applied: [], failedAt: 1, failedOp: "createStyles", error: "ops[1] (createStyles): boom" }, seeds);
   check("a failure inside a seed's tables is that op's, and says which tables it became", fail.failedAt === 0 && fail.failedOp === "seedTokens" && /ops\[0\] \(seedTokens 't\.json'\) became ops\[0–1\] of the batch: createVariables 'Theme', createStyles/.test(fail.error ?? ""));
   check("a failure after it is given at the agent's own index", seededReply({ ok: false, applied: [], failedAt: 2, error: "x" }, seeds).failedAt === 1 && inputIndex(seeds, 2) === 1 && inputIndex(seeds, 1) === 0);
+  // 'Allow edits' turned off once the create tables ran: no failedAt, and the tables stay applied.
+  const off = seededReply({ ok: false, refused: "edits-off", error: "off", applied: [{ id: "C:1", result: "created", rows: [["V:1", "created"], ["V:2", "created"], ["V:3", "created"]] }, { rows: [["S:1", "created"]] }] }, seeds);
+  check("a failure with no failedAt (edits turned off partway): the tables that stay are folded like a success's",
+    off.failedAt === undefined && off.error === "off" && same(off.applied, [{ seeded: "t.json", tables: [
+      { collection: "Theme", id: "C:1", result: "created", created: [["a", "V:1"], ["b", "V:2"], ["c", "V:3"]], unchanged: 0 }, { styles: true, created: [["Body", "S:1"]], unchanged: 0 }], unmapped: seeds[0]?.unmapped }]));
+  const late = seededReply({ ok: false, failedAt: 2, failedOp: "createTree", error: "x", applied: [{ id: "C:1", result: "unchanged", rows: [["V:1", "unchanged"], ["V:2", "unchanged"], ["V:3", "updated"]] }] }, seeds);
+  check("a failure with a failedAt, and a seed's first table staying: folded too (only the tables that stay)",
+    late.failedAt === 1 && same(late.applied, [{ seeded: "t.json", tables: [{ collection: "Theme", id: "C:1", result: "unchanged", updated: [["c", "V:3"]], unchanged: 2 }], unmapped: seeds[0]?.unmapped }]));
   const step = (index: number, op: WritePreviewStep["op"], extra: Partial<WritePreviewStep> = {}): WritePreviewStep => ({ index, op, effect: "creates", target: null, ...extra });
   const p = seededPreview({ dryRun: true, creates: 3, invalid: 0, steps: [step(0, "createVariables", { plan: { create: ["a"], update: [] } }), step(1, "createStyles"), step(2, "createTree")] }, seeds);
   const steps = Array.isArray(p.steps) ? (p.steps as Array<Record<string, unknown>>) : [];
