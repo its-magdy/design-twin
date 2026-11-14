@@ -1235,14 +1235,16 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
 - Files read: a DTCG token file (`tokens.dtcg.json`, as design-to-code writes it, or a hand-written DTCG 2025.10 file)
   and a DTCG resolver (`tokens.resolver.json` with its set and context files). Which one is told by the content. CSS
   (`tokens.css`, Tailwind's `theme.css`) and the native token files are refused: a CSS name has lost the `/` grouping.
-  Every file read (the resolver and each `$ref`) stays inside the directory the server was started in, is a regular
+  Every file read (the resolver and each `$ref`) stays inside the directory the server was started in, with its
+  symbolic links followed (a link inside the directory to a file outside it is refused), is a regular
   file of at most 2 MB, and is JSON. A `$ref` that is a URL, an absolute path, a pointer into the resolver (`#/…`) or
   has a `#fragment` is refused.
 - Collections and modes: from a resolver, each set is a collection (its `$extensions["figma.com"].collection`, else
   the set's name), and the modifier of that collection gives its modes, the default first. A context file holds only
   what differs; the rest comes from the set. A token is typed by its set, else (a token only contexts give) by the
   default context; a context that gives it a `$type` making another kind of variable is refused. A token two
-  collections' modifiers give is seeded by the first that can. From a `tokens.dtcg.json`, the modes are each token's
+  collections' modifiers give is seeded by the first that can. It moves on from a collection only for a failure of
+  its own (a bad value or type); an alias to a token that may still be seeded by a later collection waits for it. From a `tokens.dtcg.json`, the modes are each token's
   `$extensions["figma.com"].modes`, and the collection is `collection`. The default mode goes first (Figma's default):
   the token's `$extensions["figma.com"].defaultMode` (design-to-code writes it), else the one mode whose value is the
   `$value`, else the order of the keys. Tokens with different modes go into one collection per set of modes, named
@@ -1265,6 +1267,12 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`; a `$root`
   with no `$value` is read as the group itself), a `$value` on the document root (a token needs a name), a name that is
   empty or has `.`, `{` or `}` in it, and every token under such a name. A description is not carried. A collection over 1,000 variables is refused.
+- Limits, checked before anything is built (token-seed.ts): a resolver makes at most 50 collections
+  (`MAX_SEED_COLLECTIONS`: one `createVariables` op each, and a batch takes 50 ops) and names at most 200 files
+  (`MAX_SEED_FILES`); a seed reads at most 20,000 tokens (`MAX_SEED_TOKENS`: a `tokens.dtcg.json`'s, or a resolver's
+  across its sets and every context). A resolver's builds read at most 1,500,000 values in all (`MAX_SEED_WORK`: each
+  build reads every token's value and a value per mode of each name; a token only modifiers give that fails in one
+  collection after another makes the seed build again). Past a limit, the seed is refused and the reason says which.
 - Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
   extended-collection overrides, a name two paths make once joined (the first is seeded), a token a second set or
   another collection's modifier also gives (the first is seeded; why an earlier collection could not is listed too), a

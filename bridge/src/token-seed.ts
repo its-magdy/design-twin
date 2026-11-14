@@ -17,7 +17,9 @@
 //                         context file holds only what differs from the set's values. A token is typed by its set, else
 //                         by the default context (never by the context listed first); a context of another kind of
 //                         $type is refused. A name only modifiers give is seeded by the first collection that can:
-//                         tried in one, the whole build checked, and only then moved on (the failed try leaves nothing).
+//                         tried in one, the whole build checked, and only then moved on (the failed try leaves nothing)
+//                         — and only for a failure of its own: an alias to a name still settling waits for it.
+//                         Bounded before it is built: MAX_SEED_COLLECTIONS, MAX_SEED_TOKENS, MAX_SEED_WORK.
 // Not read: tokens.css, Tailwind's theme.css and the native files. A CSS name has lost the `/` grouping.
 //
 // Mapping:
@@ -62,6 +64,29 @@ export const DEFAULT_SEED_COLLECTION = "Tokens";
 export const SEED_FORMATS = "a DTCG token file (tokens.dtcg.json) or a DTCG resolver (tokens.resolver.json) with its set and context files";
 /** The browser's default font size: what a rem or an em is taken to be. */
 export const REM_PX = 16;
+/** The most collections one resolver seeds: each is one createVariables op, and a figma_write batch takes at most 50
+ *  ops (seed-file.ts MAX_WRITE_OPS). More is refused before anything is built. */
+export const MAX_SEED_COLLECTIONS = 50;
+/** The most tokens one seed reads: a tokens.dtcg.json's, or a resolver's across its sets and every context (a name two
+ *  of them give counts each time). More is refused before anything is built. */
+export const MAX_SEED_TOKENS = 20_000;
+/** The most a resolver's builds may read in all: each build reads every token and every value of every mode (a name's
+ *  value per mode of its collection), and a name only modifiers give that fails in one collection after another makes
+ *  the whole seed build again. Past this the seed is refused, saying so; at the caps above it stays under a second. */
+export const MAX_SEED_WORK = 1_500_000;
+/** The size of a parsed JSON value: 1 for each value in it, itself included (walked with its own stack). */
+function valueSize(v: unknown): number {
+  let n = 0;
+  for (const todo: unknown[] = [v]; todo.length;) {
+    const x = todo.pop();
+    n++;
+    if (Array.isArray(x)) for (const y of x) todo.push(y);
+    else if (isObj(x)) for (const k of Object.keys(x)) todo.push(own(x, k));
+  }
+  return n;
+}
+const tooManyTokens = (source: string, n: number, where: string): string =>
+  source + " holds " + n + " tokens " + where + ", more than the " + MAX_SEED_TOKENS + " a seed reads: split it into smaller files";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -301,21 +326,39 @@ class Gather {
   readonly known = new Set<string>();
   /** Is `name` a token of the files (seeded or not)? */
   has(name: string): boolean { return this.raw.has(name) || this.known.has(name); }
+  /** For a token that failed because a token it aliases (or binds) is not seeded: those targets. A resolver's seats tell
+   *  such a failure (it may pass once the target settles) from one of the token's own. */
+  readonly waits = new Map<string, Set<string>>();
+  wait(token: string, target: string): void {
+    const s = this.waits.get(token);
+    if (s) s.add(target);
+    else this.waits.set(token, new Set([target]));
+  }
+  /** typeOf's answers: `raw` is complete before the first one is asked. */
+  private readonly typed = new Map<string, string | null>();
   coll(name: string, modes: string[]): Coll {
     const c: Coll = { name, modes, rows: [] };
     this.colls.push(c);
     return c;
   }
-  /** The type of token `name`, following its aliases when it has no $type of its own (null: none found). */
+  /** The type of token `name`, following its aliases when it has no $type of its own (null: none found). Every name the
+   *  walk passes has the same answer (its walk is the rest of this one), so each is kept: a long chain is walked once. */
   typeOf(name: string): string | null {
+    const known = this.typed.get(name);
+    if (known !== undefined) return known;
     const seen = new Set<string>();
+    let found: string | null = null;
     for (let t = this.raw.get(name); t && !seen.has(t.name); t = this.raw.get(aliasName(t.value) ?? "")) {
+      const kept = this.typed.get(t.name);
+      if (kept !== undefined) { found = kept; break; }
       seen.add(t.name);
       const type = tokenType(t);
-      if (type !== null) return type;
-      if (aliasName(t.value) === null) return null;
+      if (type !== null) { found = type; break; }
+      if (aliasName(t.value) === null) break;
     }
-    return null;
+    this.typed.set(name, found);
+    for (const n of seen) this.typed.set(n, found);
+    return found;
   }
   /** Token `t` with a value per mode of `coll` (one ModeValue per mode; one for a collection with one mode): a row, a
    *  style, or an unmapped entry. True when it made a row or a style. */
@@ -323,6 +366,12 @@ class Gather {
     const type = this.typeOf(t.name);
     if (type === null) {
       const a = aliasName(t.value);
+      // Untyped through its aliases to a name no seat gives a token yet: it may be typed once that one settles.
+      const seen = new Set<string>();
+      for (let n = a; n !== null && !seen.has(n); n = aliasName(this.raw.get(n)?.value)) {
+        seen.add(n);
+        if (!this.raw.has(n)) { if (this.known.has(n)) this.wait(t.name, n); break; }
+      }
       this.unmapped.push({ token: t.name, reason: a !== null && !this.raw.has(a) ? "its alias {" + a.split("/").join(".") + "} names " + (this.known.has(a) ? "a token that is not seeded" : "no token here") : "no $type (on it, a group above it, or the token it aliases)" });
       return false;
     }
@@ -369,97 +418,135 @@ class Gather {
 function settle(g: Gather): Coll[] {
   const byName = new Map<string, Row>();
   for (const c of g.colls) for (const r of c.rows) byName.set(r.name, r);
+  const styleNames = new Set(g.styles.map((s) => s.name));
+  // Each row's alias targets (in cell order), and the rows that alias each name: a drop re-checks only those.
+  const targetsOf = new Map<Row, string[]>();
+  const aliasers = new Map<string, Row[]>();
+  for (const c of g.colls) for (const r of c.rows) {
+    const ts = r.cells.flatMap((c) => (typeof c === "object" ? [c.aliasOf] : []));
+    targetsOf.set(r, ts);
+    for (const a of ts) { const l = aliasers.get(a); if (l) l.push(r); else aliasers.set(a, [r]); }
+  }
+  const targets = (r: Row): readonly string[] => targetsOf.get(r) ?? [];
   const dropped = new Map<Row, string>();
-  const drop = (r: Row, reason: string): void => { if (!dropped.has(r)) { dropped.set(r, reason); g.unmapped.push({ token: r.name, reason }); } };
+  /** Rows dropped whose aliasers are not re-checked yet. */
+  const queue: Row[] = [];
+  /** `waitOn`: the target whose not being seeded is the reason (Gather.waits). */
+  const drop = (r: Row, reason: string, waitOn?: string): void => {
+    if (dropped.has(r)) return;
+    dropped.set(r, reason);
+    g.unmapped.push({ token: r.name, reason });
+    if (waitOn !== undefined) g.wait(r.name, waitOn);
+    queue.push(r);
+  };
   const live = (): Row[] => g.colls.flatMap((c) => c.rows.filter((r) => !dropped.has(r)));
-  const targets = (r: Row): string[] => r.cells.flatMap((c) => (typeof c === "object" ? [c.aliasOf] : []));
   const dotted = (n: string): string => "{" + n.split("/").join(".") + "}";
+  /** Every alias of `r` names a seeded row of the same type: else `r` is dropped, for the first one that does not. */
+  const checkAliases = (r: Row): void => {
+    if (dropped.has(r)) return;
+    for (const a of targets(r)) {
+      const t = byName.get(a);
+      if (!t) {
+        if (styleNames.has(a)) drop(r, "its alias " + dotted(a) + " names a style token");
+        else if (g.has(a)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded", a);
+        else drop(r, "its alias " + dotted(a) + " names no token here");
+      } else if (dropped.has(t)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded", a);
+      else if (t.type !== r.type) drop(r, "its alias " + dotted(a) + " names a " + t.type + " token, and it is a " + r.type + " one");
+      if (dropped.has(r)) return;
+    }
+  };
+  for (const r of live()) checkAliases(r);
   let order: Coll[] = [];
   for (let changed = true; changed;) {
     changed = false;
     const before = dropped.size;
-    // Every alias names a seeded row of the same type.
-    for (let again = true; again;) {
-      again = false;
-      for (const r of live()) {
-        for (const a of targets(r)) {
-          const t = byName.get(a);
-          if (!t) {
-            const style = g.styles.some((s) => s.name === a);
-            drop(r, style ? "its alias " + dotted(a) + " names a style token" : g.has(a) ? "its alias " + dotted(a) + " names a token that is not seeded" : "its alias " + dotted(a) + " names no token here");
-          } else if (dropped.has(t)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded");
-          else if (t.type !== r.type) drop(r, "its alias " + dotted(a) + " names a " + t.type + " token, and it is a " + r.type + " one");
-          if (dropped.has(r)) { again = true; break; }
-        }
-      }
+    // A dropped row's aliasers are dropped in turn (each row is re-checked only when a row it names is dropped).
+    for (let d = queue.pop(); d; d = queue.pop()) {
+      if (byName.get(d.name) !== d) continue;
+      for (const r of aliasers.get(d.name) ?? []) checkAliases(r);
     }
-    // No loop of aliases (in any mode: a loop across modes is refused by the create tables too).
+    // No loop of aliases (in any mode: a loop across modes is refused by the create tables too). A walk with its own
+    // stack, so a long chain does not run out of the call stack.
     const state = new Map<Row, 1 | 2>();
-    const stack: Row[] = [];
-    const visit = (r: Row): void => {
-      state.set(r, 1);
-      stack.push(r);
-      for (const a of targets(r)) {
-        const t = byName.get(a);
+    for (const root of live()) {
+      if (state.has(root)) continue;
+      const path: Row[] = [], next: number[] = [];
+      const at = new Map<Row, number>();
+      const enter = (r: Row): void => { state.set(r, 1); at.set(r, path.length); path.push(r); next.push(0); };
+      enter(root);
+      while (path.length) {
+        const top = path.length - 1;
+        const r = path[top], k = next[top];
+        if (r === undefined || k === undefined) break;
+        const ts = targets(r);
+        if (k >= ts.length) { path.pop(); next.pop(); at.delete(r); state.set(r, 2); continue; }
+        next[top] = k + 1;
+        const t = byName.get(ts[k] ?? "");
         if (!t || dropped.has(t) || t === r) continue;
         if (state.get(t) === 1) {
-          const loop = stack.slice(stack.indexOf(t));
+          const loop = path.slice(at.get(t) ?? 0);
           const said = [...loop, t].map((x) => "'" + x.name + "'").join(" → ");
           for (const x of loop) drop(x, "its aliases loop: " + said);
-        } else if (!state.has(t)) visit(t);
+        } else if (!state.has(t)) enter(t);
       }
-      stack.pop();
-      state.set(r, 2);
-    };
-    for (const r of live()) if (!state.has(r)) visit(r);
+    }
     for (const r of live()) if (targets(r).indexOf(r.name) >= 0) drop(r, "it aliases itself");
     // The tables in an order where each one's aliases name rows of itself or of an earlier table.
-    const deps = (c: Coll): Set<Coll> => {
+    const depsOf = new Map<Coll, Set<Coll>>();
+    for (const c of g.colls) {
       const s = new Set<Coll>();
       for (const r of c.rows) if (!dropped.has(r)) for (const a of targets(r)) { const t = byName.get(a); if (t && t.coll !== c) s.add(t.coll); }
-      return s;
-    };
+      depsOf.set(c, s);
+    }
     order = [];
     const placed = new Set<Coll>();
     const pending = g.colls.slice();
     while (pending.length) {
-      const i = pending.findIndex((c) => [...deps(c)].every((d) => placed.has(d)));
+      const i = pending.findIndex((c) => [...(depsOf.get(c) ?? [])].every((d) => placed.has(d)));
       const next = pending.splice(i >= 0 ? i : 0, 1)[0];
       if (!next) break;
       order.push(next);
       placed.add(next);
     }
+    const place = new Map<Coll, number>(order.map((c, i) => [c, i]));
     for (const [i, c] of order.entries()) {
       for (const r of c.rows) {
         if (dropped.has(r)) continue;
         for (const a of targets(r)) {
           const t = byName.get(a);
-          if (t && t.coll !== c && order.indexOf(t.coll) > i) { drop(r, "its alias " + dotted(a) + " is in collection '" + t.coll.name + "', which aliases this one too (one of the two tables would have to come first)"); break; }
+          if (t && t.coll !== c && (place.get(t.coll) ?? -1) > i) { drop(r, "its alias " + dotted(a) + " is in collection '" + t.coll.name + "', which aliases this one too (one of the two tables would have to come first)"); break; }
         }
       }
     }
-    if (dropped.size !== before) changed = true;
+    if (dropped.size !== before || queue.length) changed = true;
   }
   for (const c of g.colls) c.rows = c.rows.filter((r) => !dropped.has(r));
   return order.filter((c) => c.rows.length > 0);
 }
 
 /** The style token `s` as a createStyles row, or why it cannot be one. `vars` are the seeded rows by name. */
-function styleOf(s: StyleToken, g: Gather, vars: ReadonlyMap<string, Row>): Parsed<SeedStyle> {
+function styleOf(s: StyleToken, g: Gather, vars: ReadonlyMap<string, Row>, styles: ReadonlyMap<string, StyleToken>): Parsed<SeedStyle> {
   // A style token that is an alias of another one takes the value that one is seeded with (its default mode's, which
   // is not always its $value), else the token's value.
   let value = s.value;
   for (let hops = 0, a = aliasName(value); a !== null && hops < 20; hops++, a = aliasName(value)) {
     const target = a;
-    const st = g.styles.find((x) => x.name === target);
+    const st = styles.get(target);
     const t = g.raw.get(target);
-    if (!st && !t) return { bad: "its alias {" + target.split("/").join(".") + "} names " + (g.known.has(target) ? "a token that is not seeded" : "no token here") };
+    if (!st && !t) {
+      if (g.known.has(target)) g.wait(s.name, target);
+      return { bad: "its alias {" + target.split("/").join(".") + "} names " + (g.known.has(target) ? "a token that is not seeded" : "no token here") };
+    }
     value = st ? st.value : t?.value;
   }
   /** A sub-value that names a variable: the row, of the type the field takes, or why not. */
   const bound = (field: string, name: string, want: VariableTypeName): Parsed<Row> => {
     const r = vars.get(name);
-    if (!r) return { bad: field + " names {" + name.split("/").join(".") + "}, which is not seeded" };
+    if (!r && styles.has(name)) return { bad: field + " names {" + name.split("/").join(".") + "}, a style token (a field is bound to a variable)" };
+    if (!r) {
+      if (g.has(name)) g.wait(s.name, name);
+      return { bad: field + " names {" + name.split("/").join(".") + "}, " + (g.has(name) ? "which is not seeded" : "and there is no such token here") };
+    }
     if (r.type !== want) return { bad: field + " names '" + name + "', a " + r.type + " token (it takes a " + want + " one)" };
     return { ok: r };
   };
@@ -574,8 +661,10 @@ function build(g: Gather): Built {
   const vars = new Map<string, Row>();
   for (const c of order) for (const r of c.rows) vars.set(r.name, r);
   const styles: SeedStyle[] = [];
+  const styleTokens = new Map<string, StyleToken>();
+  for (const s of g.styles) if (!styleTokens.has(s.name)) styleTokens.set(s.name, s);
   for (const s of g.styles) {
-    const st = styleOf(s, g, vars);
+    const st = styleOf(s, g, vars, styleTokens);
     if ("bad" in st) g.unmapped.push({ token: s.name, reason: st.bad });
     else styles.push(st.ok);
   }
@@ -625,6 +714,7 @@ export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefin
   const base = opts.collection || DEFAULT_SEED_COLLECTION;
   const g = new Gather();
   for (const [n, t] of flatten(doc, g)) g.raw.set(n, t);
+  if (g.raw.size > MAX_SEED_TOKENS) return { error: tooManyTokens(source, g.raw.size, "in the file") };
   // The modes each token has, and the groups they make (a Map keyed by the mode list: names are free text). A group's
   // modes are in its default-first order: the plugin makes the first mode the collection's default.
   //   how sure: 2 the token's figma.com defaultMode (design-to-code writes it), 1 the one mode whose value is the
@@ -806,14 +896,21 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
   if (!isObj(doc)) return { error: source + " is not a DTCG resolver" };
   const parts = resolverParts(doc);
   if ("error" in parts) return { error: source + ": " + parts.error };
+  // Bounded before anything is built: the collections (one op each) and the tokens every build reads.
+  const collections = new Set(parts.sets.map((s) => s.collection)).size;
+  if (collections > MAX_SEED_COLLECTIONS) return { error: source + " makes " + collections + " collections; a seed makes at most " + MAX_SEED_COLLECTIONS + " (each is a createVariables op, and a figma_write batch takes at most " + MAX_SEED_COLLECTIONS + " ops): seed it from several resolvers" };
   // Phase 1, the walk (once): every file's tokens, and what the walk and the resolver's shape say about them (`said`).
   const said = new Gather();
+  /** the tokens read, and the size of their values (a shadow of many layers is read whole by every build) */
+  let read = 0, weight = 0;
   /** The tokens of a list of sources, later sources over earlier ones. */
   const tokensOf = (src: readonly unknown[]): Map<string, RawToken> => {
     const out = new Map<string, RawToken>();
     for (const s of src) {
       const tree = isObj(s) && hasOwn(s, "$ref") ? files.get(String(own(s, "$ref"))) : s;
-      for (const [n, t] of flatten(tree, said)) out.set(n, t);
+      const flat = flatten(tree, said);
+      read += flat.size;
+      for (const [n, t] of flat) { out.set(n, t); weight += valueSize(t.value); }
     }
     return out;
   };
@@ -863,6 +960,7 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
     if (dflt === undefined) { unmapAll("modifier '" + m.name + "' has no context"); continue; }
     b.mod = { name: m.name, modes: [dflt, ...keys.filter((k) => k !== dflt)], ctx };
   }
+  if (read > MAX_SEED_TOKENS) return { error: tooManyTokens(source, read, "across its sets and contexts") };
   // Phase 4, the seats: a name only modifiers give may be seeded by each collection whose modifier gives it, in order.
   // It sits in the first; only when a whole build (rows, styles, aliases) leaves it unseeded there does it move on.
   const seats = new Map<string, Build[]>();
@@ -933,22 +1031,56 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
     }
     return { g, built: build(g), base };
   };
-  // Decide, then commit: build, move every seated name the build left unseeded to its next seat, and build again until
-  // none moves. A seat only moves forward, so this ends; the last build is the result.
-  for (;;) {
+  // What one build reads: every token's value (its size), and a value per mode of each name a collection seeds.
+  let cost = weight;
+  for (const b of colls.values()) {
+    if (!b.mod) { cost += b.base.size; continue; }
+    const names = new Set<string>(b.base.keys());
+    for (const t of b.mod.ctx.values()) for (const n of t.keys()) names.add(n);
+    cost += names.size * Math.max(1, b.mod.modes.length);
+  }
+  if (cost > MAX_SEED_WORK) return { error: source + " would read " + cost + " values in one build (each token's value, and each name once per mode of its collection), more than the " + MAX_SEED_WORK + " a seed reads: split it into smaller files" };
+  // Decide, then commit: build; a seated name the build left unseeded for a reason of its own (a bad value, a type, no
+  // default value: nothing another name's seat changes) moves to its next seat; one left unseeded because a token it
+  // aliases or binds is not seeded YET (that token may still move on, or wait on one that may) stays put and is tried
+  // again; then build again. It ends: a round that moves no seat changes nothing (a build depends only on the seats),
+  // and every round that leaves a name unseeded in a seat moves one — if each such name only waits (they wait on each
+  // other), they all move as if their failure were their own. A seat only moves forward, so there are at most as many
+  // rounds as seats, plus one; MAX_SEED_WORK bounds what they read in all. The last build is the result.
+  for (let builds = 1; ; builds++) {
+    if (builds * cost > MAX_SEED_WORK) {
+      const open = [...seats.keys()].filter((n) => { const l = seats.get(n) ?? []; return (seat.get(n) ?? 0) < l.length - 1; });
+      return { error: source + ": the seed stopped after " + (builds - 1) + " builds of " + cost + " values each (at most " + MAX_SEED_WORK + " in all): names only modifiers give ("
+        + open.slice(0, 3).map((n) => "'" + n + "'").join(", ") + (open.length > 3 ? " and " + (open.length - 3) + " more" : "") + ") fail in one collection after another, and each try builds the seed again: give each in one collection's modifier, or in a set" };
+    }
     const { g, built, base } = attempt();
     const seeded = seededNames(built);
-    let moved = false;
-    for (const [n, list] of seats) {
-      const i = seat.get(n) ?? 0;
-      const b = list[i];
-      if (!b || seeded.has(n)) continue;
+    // The names that may still be seeded: a seated one with a later seat, and (in turn) every unseeded one waiting on one.
+    const unsettled = new Set<string>();
+    for (const [n, list] of seats) if (!seeded.has(n) && (seat.get(n) ?? 0) < list.length - 1) unsettled.add(n);
+    const waitedOnBy = new Map<string, string[]>();
+    for (const [n, ts] of g.waits) if (!seeded.has(n)) for (const t of ts) { const l = waitedOnBy.get(t); if (l) l.push(n); else waitedOnBy.set(t, [n]); }
+    for (const todo = [...unsettled]; todo.length;) {
+      for (const n of waitedOnBy.get(todo.pop() ?? "") ?? []) if (!unsettled.has(n)) { unsettled.add(n); todo.push(n); }
+    }
+    const waiting = (n: string): boolean => [...(g.waits.get(n) ?? [])].some((t) => unsettled.has(t));
+    const move = (n: string, list: readonly Build[], i: number, b: Build): void => {
       const why = g.unmapped.slice(base).filter((u) => u.token === n).map((u) => u.reason);
       const prefix = list.length > 1 ? "in collection '" + b.name + "': " : "";
       for (const r of why.length ? why : ["it is not seeded"]) left.push({ token: n, reason: prefix + r });
       seat.set(n, i + 1);
+    };
+    let moved = false;
+    const stayed: Array<[string, readonly Build[], number, Build]> = [];
+    for (const [n, list] of seats) {
+      const i = seat.get(n) ?? 0;
+      const b = list[i];
+      if (!b || seeded.has(n)) continue;
+      if (waiting(n)) { stayed.push([n, list, i, b]); continue; }
+      move(n, list, i, b);
       moved = true;
     }
+    if (!moved && stayed.length) { for (const [n, list, i, b] of stayed) move(n, list, i, b); moved = true; }
     if (moved) continue;
     for (const u of left) g.part(u.token, u.reason, true);
     return finish(g, source, built);

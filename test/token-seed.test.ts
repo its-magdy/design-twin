@@ -10,7 +10,7 @@ import { tokens } from "./fixtures.ts";
 import { toDTCG, toResolver } from "../design-to-code/tokens.ts";
 import type { Variable, VariableValue } from "../bridge/src/doc-types.ts";
 import { checkCreateStyles, checkCreateVariables, MAX_TABLE_ROWS } from "../bridge/src/create-spec.ts";
-import { isResolverDoc, refProblem, resolverRefs, seedFromDtcg, seedFromResolver, type SeedOutcome, type SeedResult, type SeedRow, type SeedStylesOp, type SeedVariablesOp } from "../bridge/src/token-seed.ts";
+import { isResolverDoc, MAX_SEED_COLLECTIONS, MAX_SEED_TOKENS, MAX_SEED_WORK, refProblem, resolverRefs, seedFromDtcg, seedFromResolver, type SeedOutcome, type SeedResult, type SeedRow, type SeedStylesOp, type SeedVariablesOp } from "../bridge/src/token-seed.ts";
 import { inputIndex, loadSeedTokens, seededPreview, seededReply, type SeedRecord } from "../bridge/src/seed-file.ts";
 import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 import type { WritePreviewStep, WriteResult } from "../bridge/src/commands.ts";
@@ -267,7 +267,7 @@ console.log("\nstyles:");
     tokens: { fontFamily: "font/family/body", fontWeight: "font/weight/bold", fontSize: "font/size/md" } } }));
   check("a line height that is a multiple (or names one) is a percentage, not bound; rem font size × 16", same(lead?.set, { font: "Inter", size: 16, lineHeight: { unit: "percent", value: 150 } }));
   check("a typography alias takes its target's value", same(st.find((s) => s.name === "type/alias")?.set, body?.set));
-  check("a style that names a token that is not seeded is listed", /fontSize names \{font\.size\.nope\}, which is not seeded/.test(reasonOf(o, "type/broken")));
+  check("a style that names a token the files do not have is listed, saying so", /fontSize names \{font\.size\.nope\}, and there is no such token here/.test(reasonOf(o, "type/broken")));
   const card = st.find((s) => s.name === "elevation/card"), stack = st.find((s) => s.name === "elevation/stack");
   check("a shadow token is an effect style, its colour and blur bound to their variables", same(card, { name: "elevation/card", kind: "effect", set: { effects: [
     { type: "drop_shadow", color: "#00000040", offset: { x: 0, y: 2 }, radius: 8, spread: 0, tokens: { color: "shadow/color", radius: "shadow/blur" } }] } }));
@@ -547,6 +547,99 @@ console.log("\nround 5: every skip path lists what is under it, and a seat is ta
     && ["n", "s", "c"].every((k) => partOf(op, k) === "") && same(rowOf(op, "k"), ["k", "color", "#00000080"]) && /the mode's opacity was seeded/.test(partOf(op, "k")) && clean(op));
 }
 
+console.log("\nround 6: a seat moves on only for a failure of its own, never for an alias still settling:");
+{
+  const r6 = (text: string): SeedOutcome => seedFromResolver(JSON.parse(text) as unknown, new Map());
+  const collOfRow = (o: SeedOutcome, name: string): string | undefined => tables(o).find((t) => t.variables.some((r) => r[0] === name))?.collection;
+  const chain = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":2}}]}}}}`);
+  check(`an alias to a name a later collection seeds waits for it, and is seeded (${JSON.stringify(res(chain))})`,
+    same(rowOf(chain, "x"), ["x", "number", { aliasOf: "y" }]) && same(rowOf(chain, "y"), ["y", "number", 2]) && collOfRow(chain, "x") === "A" && collOfRow(chain, "y") === "B"
+    && same(tables(chain).map((t) => t.collection), ["B", "A"]) && /^in collection 'A': not a number/.test(partOf(chain, "y")) && reasonOf(chain, "x") === "" && clean(chain) && valid(chain));
+  const deep = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]},"C":{"sources":[]}},"modifiers":{
+    "A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"{z}"},"z":{"$type":"number","$value":"bad"}}]}},
+    "B":{"contexts":{"L":[{"y":{"$type":"number","$value":"{z}"},"z":{"$type":"number","$value":"worse"}}]}},
+    "C":{"contexts":{"L":[{"z":{"$type":"number","$value":3}}]}}}}`);
+  check(`…through a chain: each waits until the one it names settles, two collections on (${JSON.stringify(res(deep))})`,
+    same(rowOf(deep, "x"), ["x", "number", { aliasOf: "y" }]) && same(rowOf(deep, "y"), ["y", "number", { aliasOf: "z" }]) && same(rowOf(deep, "z"), ["z", "number", 3])
+    && collOfRow(deep, "x") === "A" && collOfRow(deep, "y") === "A" && collOfRow(deep, "z") === "C" && res(deep).unmapped.length === 0 && clean(deep) && valid(deep));
+  const untyped = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$value":"{y}"}}],"D":[{"x":{"$value":"{y}"},"y":{"$type":"number","$value":1}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":2}}]}}}}`);
+  check(`…an untyped alias typed by the collection that seeds its target (${JSON.stringify(res(untyped))})`,
+    same(rowOf(untyped, "x"), ["x", "number", { aliasOf: "y" }, { aliasOf: "y" }]) && same(rowOf(untyped, "y"), ["y", "number", 2]) && reasonOf(untyped, "x") === "" && clean(untyped));
+  const style = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"t":{"$type":"typography","$value":{"fontFamily":"Inter","fontSize":"{y}"}},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":14}}]}}}}`);
+  check(`…and a style bound to it (${JSON.stringify(res(style))})`,
+    stylesOf(style).find((s) => s.name === "t")?.set.tokens?.fontSize === "y" && same(rowOf(style, "y"), ["y", "number", 14]) && reasonOf(style, "t") === "" && clean(style));
+  // A name that fails in a seat for a reason of its own still moves on; one whose target never seeds is said so.
+  const never = r6(`{"sets":{"A":{"sources":[{"keep":{"$type":"number","$value":1}}]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":"worse"}}]}}}}`);
+  check(`…a target no collection can seed: the alias is unmapped, saying so (${JSON.stringify(res(never))})`,
+    rowOf(never, "x") === undefined && rowOf(never, "y") === undefined && /names a token that is not seeded/.test(reasonOf(never, "x")) && listed(res(never).unmapped, "y") === 2 && clean(never));
+}
+
+console.log("\nround 6: a resolver's work is bounded before it is built:");
+{
+  const r6 = (o: object): SeedOutcome => seedFromResolver(JSON.parse(JSON.stringify(o)) as unknown, new Map());
+  /** `n` empty sets, each with a modifier giving `x`: a bad number in every one but the last. */
+  const seats = (n: number): object => {
+    const sets: Record<string, unknown> = {}, modifiers: Record<string, unknown> = {};
+    for (let i = 0; i < n; i++) { sets["S" + i] = { sources: [] }; modifiers["S" + i] = { contexts: { L: [{ x: { $type: "number", $value: i === n - 1 ? 1 : "bad" } }] } }; }
+    return { sets, modifiers };
+  };
+  let t0 = performance.now();
+  const wide = r6(seats(4000));
+  let ms = performance.now() - t0;
+  check(`4,000 collections are refused up front (one createVariables op each, and a batch takes 50) in ${Math.round(ms)} ms (${"error" in wide ? wide.error : "seeded"})`,
+    "error" in wide && /4000 collections; a seed makes at most 50/.test(wide.error) && ms < 1000);
+  const fifty = r6(seats(MAX_SEED_COLLECTIONS));
+  check(`…50 are read, the name seeded by the last that can (${"error" in fifty ? fifty.error : tables(fifty).map((t) => t.collection).join(",")})`, same(rowOf(fifty, "x"), ["x", "number", 1]) && clean(fifty));
+  const many: Record<string, unknown> = {};
+  for (let i = 0; i <= MAX_SEED_TOKENS; i++) many["t" + i] = { $type: "number", $value: i };
+  const tooMany = r6({ sets: { A: { sources: [many] } } });
+  check(`a resolver whose sets and contexts hold more than ${MAX_SEED_TOKENS} tokens is refused (${"error" in tooMany ? tooMany.error : "seeded"})`,
+    "error" in tooMany && new RegExp("holds " + (MAX_SEED_TOKENS + 1) + " tokens .*, more than the " + MAX_SEED_TOKENS + " a seed reads").test(tooMany.error));
+  const flat = dtcg(JSON.stringify(many));
+  check(`…and so is a tokens.dtcg.json (${"error" in flat ? flat.error : "seeded"})`, "error" in flat && new RegExp("holds " + (MAX_SEED_TOKENS + 1) + " tokens .*, more than the " + MAX_SEED_TOKENS + " a seed reads").test(flat.error));
+  // The worst case at the caps: 50 collections, each giving every name of a chain; a name fails in each collection but
+  // the last, and only once the name it aliases has settled (so the names move on one after another).
+  const worst = (len: number): object => {
+    const sets: Record<string, unknown> = {}, modifiers: Record<string, unknown> = {};
+    for (let c = 0; c < MAX_SEED_COLLECTIONS; c++) {
+      const last = c === MAX_SEED_COLLECTIONS - 1;
+      const ctx: Record<string, unknown> = {};
+      for (let k = 0; k < len; k++) ctx["x" + k] = k === len - 1 ? { $type: "number", $value: last ? 1 : "bad" } : { $type: last ? "number" : "color", $value: "{x" + (k + 1) + "}" };
+      sets["S" + c] = { sources: [] };
+      modifiers["S" + c] = { contexts: { L: [ctx], D: [ctx] } };
+    }
+    return { sets, modifiers };
+  };
+  const len = Math.floor(MAX_SEED_TOKENS / (2 * MAX_SEED_COLLECTIONS));
+  t0 = performance.now();
+  const chain = r6(worst(len));
+  ms = performance.now() - t0;
+  console.log(`  (the worst case at the caps: ${len * 2 * MAX_SEED_COLLECTIONS} tokens, ${Math.round(ms)} ms: ${"error" in chain ? chain.error : "seeded"})`);
+  check(`…the worst case at the caps (a chain of ${len} names over ${MAX_SEED_COLLECTIONS} collections, each failing in turn) ends in under 1 s, refused saying why (${Math.round(ms)} ms)`,
+    ms < 1000 && "error" in chain && /stopped after \d+ builds/.test(chain.error));
+  const short = r6(worst(4));
+  check(`…and a short one is seeded in full (${"error" in short ? short.error : JSON.stringify(tables(short).map((t) => t.collection))})`,
+    ["x0", "x1", "x2", "x3"].every((n) => rowOf(short, n) !== undefined) && res(short).unmapped.length === 0 && clean(short));
+  // A value's size counts: one shadow of many layers, built again while a name moves through 50 collections.
+  const layers = Array.from({ length: 15000 }, () => ({ color: "#000000", offsetX: "0px", offsetY: "1px", blur: "2px" }));
+  const heavy = seats(MAX_SEED_COLLECTIONS) as { sets: Record<string, unknown> };
+  heavy.sets.S0 = { sources: [{ sh: { $type: "shadow", $value: layers } }] };
+  t0 = performance.now();
+  const shadow = r6(heavy);
+  ms = performance.now() - t0;
+  check(`…and so does a shadow of 15,000 layers built again in every round (${Math.round(ms)} ms: ${"error" in shadow ? shadow.error : "seeded"})`,
+    ms < 1000 && "error" in shadow && /stopped after \d+ builds of \d+ values each/.test(shadow.error));
+  // One build alone over the limit: names × modes (empty contexts cost nothing to write).
+  const base: Record<string, unknown> = {}, contexts: Record<string, unknown> = {};
+  for (let i = 0; i < 1000; i++) base["n" + i] = { $type: "number", $value: i };
+  for (let m = 0; m <= MAX_SEED_WORK / 1000; m++) contexts["m" + m] = [];
+  t0 = performance.now();
+  const wideModes = r6({ sets: { A: { sources: [base] } }, modifiers: { A: { contexts } } });
+  ms = performance.now() - t0;
+  check(`a resolver whose one build would read more than ${MAX_SEED_WORK} values is refused before it is built (${Math.round(ms)} ms: ${"error" in wideModes ? wideModes.error : "seeded"})`,
+    ms < 1000 && "error" in wideModes && /values in one build/.test(wideModes.error));
+}
+
 // ---------------------------------------------------------------- the invariant, over many random files
 console.log("\nrandom token files: every token in exactly one table or in `unmapped`:");
 {
@@ -656,6 +749,18 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     };
     if (isO(doc)) grp(doc, []);
   };
+  /** The same count over a resolver's every set and context (inline sources). */
+  const countResolver = (parsed: unknown): Set<string> => {
+    const counted = new Set<string>();
+    const walkSources = (v: unknown): void => { if (Array.isArray(v)) for (const s of v) countTokens(s, counted); };
+    /** An own property of parsed JSON ("__proto__" included), or undefined. */
+    const at = (o: unknown, k: string): unknown => { const d = typeof o === "object" && o !== null ? Object.getOwnPropertyDescriptor(o, k) : undefined; return d ? (d.value as unknown) : undefined; };
+    const keysOf = (o: unknown): string[] => (typeof o === "object" && o !== null ? Object.keys(o) : []);
+    const setsV = at(parsed, "sets"), modsV = at(parsed, "modifiers");
+    for (const s of keysOf(setsV)) walkSources(at(at(setsV, s), "sources"));
+    for (const m of keysOf(modsV)) { const ctx = at(at(modsV, m), "contexts"); for (const k of keysOf(ctx)) walkSources(at(ctx, k)); }
+    return counted;
+  };
 
   /** What breaks the invariant in an outcome, or null. */
   const broken = (o: SeedOutcome, counted: ReadonlySet<string>): string | null => {
@@ -670,6 +775,11 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     for (const n of seeded) if (!counted.has(n)) return "a seeded name no file gives: " + JSON.stringify(n);
     for (const u of o.unmapped) if (seeded.has(u.token)) return "unmapped but seeded: " + JSON.stringify(u.token);
     for (const u of o.partly) if (!seeded.has(u.token)) return "a partly note on a token not seeded: " + JSON.stringify(u.token);
+    // A note that says a target is not seeded is false when that target is in a table.
+    for (const u of o.unmapped) {
+      const m = /\{([^{}]+)\}(?: names a token that is not seeded|, which is not seeded)/.exec(u.reason);
+      if (m && m[1] && seeded.has(m[1].split(".").join("/"))) return "an unmapped note says {" + m[1] + "} is not seeded, and it is: " + JSON.stringify(u);
+    }
     if (!clean(o)) return "not clean (a note says the wrong collection, or an unmapped entry says it was seeded)";
     if (!valid(o)) return "a table the create checks refuse";
     return null;
@@ -722,16 +832,31 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     const order = [...sets.map(([s]) => j({ $ref: "#/sets/" + s })), ...mods.map(([m]) => j({ $ref: "#/modifiers/" + m }))];
     const text = obj([["sets", obj(sets)], ["modifiers", obj(mods)], ["resolutionOrder", "[" + order.join(",") + "]"]]);
     const parsed = JSON.parse(text) as unknown;
-    const counted = new Set<string>();
-    const walkSources = (v: unknown): void => { if (Array.isArray(v)) for (const s of v) countTokens(s, counted); };
-    /** An own property of parsed JSON ("__proto__" included), or undefined. */
-    const at = (o: unknown, k: string): unknown => { const d = typeof o === "object" && o !== null ? Object.getOwnPropertyDescriptor(o, k) : undefined; return d ? (d.value as unknown) : undefined; };
-    const keysOf = (o: unknown): string[] => (typeof o === "object" && o !== null ? Object.keys(o) : []);
-    const setsV = at(parsed, "sets"), modsV = at(parsed, "modifiers");
-    for (const s of keysOf(setsV)) walkSources(at(at(setsV, s), "sources"));
-    for (const m of keysOf(modsV)) { const ctx = at(at(modsV, m), "contexts"); for (const k of keysOf(ctx)) walkSources(at(ctx, k)); }
-    const why = broken(seedFromResolver(parsed, new Map()), counted);
+    const why = broken(seedFromResolver(parsed, new Map()), countResolver(parsed));
     if (why) failures.push("resolver " + why + " in " + text);
+  }
+  // Alias chains across names only modifiers give, in several collections: each name a bad value, a good one, an
+  // alias (typed, of another type, or untyped) or a style bound to one, so a name's seat depends on another's.
+  const POOL = ["p", "q", "r", "s", "g/x"];
+  const poolRef = (): string => "{" + pick([...POOL, "keep", "nope"]).split("/").join(".") + "}";
+  const cTok = (): string => {
+    const r = rnd();
+    if (r < 0.2) return j({ $type: "number", $value: pick([1, 2, "bad"]) });
+    if (r < 0.45) return j({ $type: "number", $value: poolRef() });
+    if (r < 0.55) return j({ $type: "color", $value: pick([poolRef(), "#ffffff", "nope"]) });
+    if (r < 0.75) return j({ $value: poolRef() });
+    if (r < 0.85) return j({ $type: "typography", $value: { fontFamily: "Inter", fontSize: pick([poolRef(), "16px"]) } });
+    return j({ $type: "number", $value: chance(0.5) ? 3 : poolRef() });
+  };
+  const cTree = (): string => obj(Array.from({ length: Math.floor(rnd() * 4) }, () => [pick(POOL), cTok()] as const));
+  for (let i = 0; i < 2500; i++, cases++) {
+    const colls = ["A", "B", "C", "D"].slice(0, 2 + Math.floor(rnd() * 3));
+    const sets = colls.map((c, ci) => [c, obj([["sources", ci === 0 && chance(0.8) ? "[" + j({ keep: { $type: "number", $value: 1 } }) + "]" : "[]"]])] as const);
+    const mods = colls.filter(() => chance(0.9)).map((c) => [c, obj([["contexts", obj((chance(0.6) ? ["L"] : ["L", "D"]).map((k) => [k, "[" + cTree() + "]"] as const))]])] as const);
+    const text = obj([["sets", obj(sets)], ["modifiers", obj(mods)]]);
+    const parsed = JSON.parse(text) as unknown;
+    const why = broken(seedFromResolver(parsed, new Map()), countResolver(parsed));
+    if (why) failures.push("chain " + why + " in " + text);
   }
   const ms = performance.now() - t0;
   console.log(`  (${cases} random files in ${Math.round(ms)} ms)`);
@@ -749,7 +874,7 @@ console.log("\nthe files (seed-file.ts):");
     if (!abs.startsWith(dir + path.sep)) throw new Error(`${what} must stay inside the directory this server was started in`);
     return abs;
   };
-  const load = (ops: Array<Record<string, unknown> & { op: string }>) => loadSeedTokens(ops, inside);
+  const load = (ops: Array<Record<string, unknown> & { op: string }>) => loadSeedTokens(ops, inside, dir);
   const err = (r: ReturnType<typeof load>): string => ("error" in r ? r.error : "(loaded)");
   put("tokens.dtcg.json", { color: { $type: "color", bg: { $value: "#ffffff" } }, type: { $type: "typography", body: { $value: { fontFamily: "Inter", fontSize: "16px" } } } });
   const r = load([{ op: "seedTokens", file: "tokens.dtcg.json", collection: "Theme" }, { op: "createTree", tree: { name: "S" } }]);
@@ -783,6 +908,25 @@ console.log("\nthe files (seed-file.ts):");
   put("huge.json", " ".repeat(MAX_SPEC_FILE_BYTES + 1));
   check("a file over the size limit is refused", /huge\.json is \d+ bytes; a token file is at most/.test(err(load([{ op: "seedTokens", file: "huge.json" }]))));
   check("a path outside the directory is refused", /must stay inside the directory/.test(err(load([{ op: "seedTokens", file: "../elsewhere.json" }]))));
+  // A symbolic link inside the directory to a file outside it is refused too (the path check alone is by name).
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "dt-seed-out-"));
+  fs.writeFileSync(path.join(out, "outside.json"), JSON.stringify({ secret: { $type: "number", $value: 7 } }));
+  fs.symlinkSync(path.join(out, "outside.json"), path.join(dir, "link.json"));
+  fs.symlinkSync(out, path.join(dir, "shared"));
+  check(`a token file that is a link to a file outside the directory is refused (${err(load([{ op: "seedTokens", file: "link.json" }]))})`,
+    /ops\[0\]\.file: \S*link\.json leads, through a symbolic link, to .*outside\.json, outside the directory this server was started in/.test(err(load([{ op: "seedTokens", file: "link.json" }]))));
+  check("…and one under a linked directory", /leads, through a symbolic link, to .*outside\.json, outside the directory/.test(err(load([{ op: "seedTokens", file: "shared/outside.json" }]))));
+  put("link.resolver.json", { sets: { A: { sources: [{ $ref: "link.json" }] } } });
+  put("dirlink.resolver.json", { sets: { A: { sources: [{ $ref: "shared/outside.json" }] } } });
+  check(`…and so is a $ref that is one (${err(load([{ op: "seedTokens", file: "link.resolver.json" }]))})`,
+    /\$ref 'link\.json': .*link\.json leads, through a symbolic link, to .*outside\.json, outside the directory/.test(err(load([{ op: "seedTokens", file: "link.resolver.json" }])))
+    && /\$ref 'shared\/outside\.json': .*leads, through a symbolic link/.test(err(load([{ op: "seedTokens", file: "dirlink.resolver.json" }]))));
+  fs.symlinkSync(path.join(dir, "tokens.dtcg.json"), path.join(dir, "inner.json"));
+  check(`a link to a file inside the directory is read (${err(load([{ op: "seedTokens", file: "inner.json" }]))})`, "ops" in load([{ op: "seedTokens", file: "inner.json" }]));
+  const rootLink = path.join(out, "root-link");
+  fs.symlinkSync(dir, rootLink);
+  check("…and so is a file when the directory itself is reached through a link", "ops" in loadSeedTokens([{ op: "seedTokens", file: "tokens.dtcg.json" }], (p) => path.resolve(rootLink, p), rootLink));
+  fs.rmSync(out, { recursive: true, force: true });
   // The dry run's sentence counts the tokens seeded in part apart from the ones not seeded.
   put("moded.json", { t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "16px" }, $extensions: { "figma.com": { defaultMode: "Light",
     modes: { Dark: { fontFamily: "Inter", fontSize: "18px" }, Light: { fontFamily: "Inter", fontSize: "16px" } } } } } });

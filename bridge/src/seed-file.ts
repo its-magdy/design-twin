@@ -4,7 +4,8 @@
 // are the create tables' own, and no token value passes through the model.
 //
 // Every file read — the token file, a resolver's every `$ref` — stays inside the directory the server was started in
-// (the `resolve` callback refuses the rest), is a regular file, at most MAX_SPEC_FILE_BYTES, and JSON. A `$ref` that is
+// (the `resolve` callback refuses the rest by name; then the file's real path, its symbolic links followed, must be
+// inside the directory's real path), is a regular file, at most MAX_SPEC_FILE_BYTES, and JSON. A `$ref` that is
 // a URL, an absolute path, a pointer into the resolver or a fragment is refused (token-seed.ts refProblem).
 //
 // The reply to a seeded table is cut to what changed: the rows created or updated (with their ids) and a count of the
@@ -38,13 +39,21 @@ type InOp = { op: string; file?: unknown; collection?: unknown } & Record<string
 /** The extensions of the formats this does not read: CSS, Tailwind's theme.css and the native token files. */
 const NOT_READ = /\.(css|scss|sass|less|swift|kt|kts|dart|js|jsx|ts|tsx|mjs|cjs)$/i;
 
-/** A JSON file read whole, or why it is not: missing, not a file, too big, not JSON. */
-function readJson(file: string, at: string): { json: unknown } | { error: string } {
+/** A JSON file read whole, or why it is not: missing, outside `realRoot` once its links are followed, not a file, too
+ *  big, not JSON. `resolve` checks a path by name only, so a symbolic link inside the directory could lead out of it:
+ *  the file read is the one the link leads to, and it must be inside the directory's own real path. */
+function readJson(file: string, at: string, realRoot: string): { json: unknown } | { error: string } {
+  let real: string;
+  try { real = fs.realpathSync(file); } catch { return { error: `${at}: no file at ${file}` }; }
+  const rel = path.relative(realRoot, real);
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+    return { error: `${at}: ${file} leads, through a symbolic link, to ${real}, outside the directory this server was started in (${realRoot}); a token file and every $ref it names must be inside it` };
+  }
   let stat: fs.Stats;
-  try { stat = fs.statSync(file); } catch { return { error: `${at}: no file at ${file}` }; }
+  try { stat = fs.statSync(real); } catch { return { error: `${at}: no file at ${file}` }; }
   if (!stat.isFile()) return { error: `${at}: ${file} is not a file` };
   if (stat.size > MAX_SPEC_FILE_BYTES) return { error: `${at}: ${file} is ${stat.size} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
-  try { return { json: JSON.parse(fs.readFileSync(file, "utf8")) as unknown }; } catch (e) {
+  try { return { json: JSON.parse(fs.readFileSync(real, "utf8")) as unknown }; } catch (e) {
     return { error: `${at}: ${file} is not valid JSON (${e instanceof Error ? e.message : String(e)}); seedTokens reads ${SEED_FORMATS}` };
   }
 }
@@ -52,9 +61,12 @@ function readJson(file: string, at: string): { json: unknown } | { error: string
 /**
  * Every seedTokens op replaced by the tables its file makes, or the first problem: a file that is refused, not read,
  * or makes nothing; a seedTokens after an op that is not a create table (they run first); more than MAX_WRITE_OPS ops
- * once expanded. `resolve` turns a path into the file to read and throws, with the reason, when it refuses it.
+ * once expanded. `resolve` turns a path into the file to read and throws, with the reason, when it refuses it; `root`
+ * is the directory every file must be in once its symbolic links are followed (the server's own).
  */
-export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: string, what: string) => string): { ops: Array<T | SeedOp>; seeds: SeedRecord[] } | { error: string } {
+export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: string, what: string) => string, root: string = process.cwd()): { ops: Array<T | SeedOp>; seeds: SeedRecord[] } | { error: string } {
+  let realRoot: string;
+  try { realRoot = fs.realpathSync(root); } catch { realRoot = path.resolve(root); }
   const out: Array<T | SeedOp> = [];
   const seeds: SeedRecord[] = [];
   const firstOther = ops.findIndex((o) => o.op !== "seedTokens" && o.op !== "createVariables" && o.op !== "createStyles");
@@ -67,7 +79,7 @@ export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: s
     if (NOT_READ.test(o.file)) return { error: `${at}.file: '${o.file}' is not read (CSS and native token files lose the '/' grouping of the names); seedTokens reads ${SEED_FORMATS}` };
     let file: string;
     try { file = resolve(o.file, `${at}.file`); } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
-    const top = readJson(file, `${at}.file`);
+    const top = readJson(file, `${at}.file`, realRoot);
     if ("error" in top) return top;
     const result = (() => {
       if (!isResolverDoc(top.json)) return seedFromDtcg(top.json, { collection: typeof o.collection === "string" ? o.collection : undefined, source: o.file });
@@ -80,7 +92,7 @@ export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: s
         const what = `${at}.file (${o.file}) $ref '${ref}'`;
         let p: string;
         try { p = resolve(path.join(path.dirname(file), ref), what); } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
-        const r = readJson(p, what);
+        const r = readJson(p, what, realRoot);
         if ("error" in r) return r;
         files.set(ref, r.json);
       }
