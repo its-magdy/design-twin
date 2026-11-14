@@ -54,7 +54,7 @@ calls and can bind variables. A create with no `parentId` lands on the current p
     `{id, key, unchanged: true}`.
   - `createVariables` `{id, result, modesAdded?, rows}` (the collection, `created` / `updated` / `unchanged`, then per
     row `[id, "created" | "updated" | "unchanged"]` in table order) · `createStyles` `{rows}` (per row `[id, …]`).
-  - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?}`
+  - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?, partly?}`
     (`created` / `updated` list `[name, id]`, `unchanged` counts the rest; the styles table is `{styles: true, …}`).
   - `patch` `{id, unbound?}` · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
     the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
@@ -271,8 +271,10 @@ passes through the call. It goes first in a batch, like the tables; the 50-op li
 - Names: the path joined with `/`; `{a.b}` is an alias of `a/b`. color → hex, dimension → px (rem × 16), number,
   string, fontFamily, fontWeight, a boolean kept as a string token → boolean; `typography` → a text style, `shadow` → an
   effect style, their `{ref}`s bound (a style has no modes: the default's value, a differing mode listed).
-- `unmapped` lists each token not seeded, with why (gradient, duration, an alias to nothing, a loop, a token inside a token, …). The dry run's
-  `seedTokens` step has the tables' steps (with their `plan`) under `tables`, and `unmapped`.
+- `unmapped` lists each token in no table, with why (gradient, duration, an alias to nothing, a loop, a token inside a
+  token, …). `partly` lists each token seeded only in part, with what was left out (a style's other modes,
+  extended-collection overrides, a name given twice). The dry run's `seedTokens` step has the tables' steps (with their
+  `plan`) under `tables`, then `unmapped` and `partly`; its `change` counts the two apart.
 
 ## Variable modes
 

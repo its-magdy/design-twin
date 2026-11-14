@@ -16,11 +16,14 @@ import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 import type { WritePreviewStep, WriteResult } from "../bridge/src/commands.ts";
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
-const res = (o: SeedOutcome): SeedResult => ("error" in o ? { ops: [], unmapped: [{ token: "(error)", reason: o.error }] } : o);
+const res = (o: SeedOutcome): SeedResult => ("error" in o ? { ops: [], unmapped: [{ token: "(error)", reason: o.error }], partly: [] } : o);
 const tables = (o: SeedOutcome): SeedVariablesOp[] => res(o).ops.filter((x): x is SeedVariablesOp => x.op === "createVariables");
 const stylesOf = (o: SeedOutcome): SeedStylesOp["styles"] => res(o).ops.find((x): x is SeedStylesOp => x.op === "createStyles")?.styles ?? [];
 const rowOf = (o: SeedOutcome, name: string): SeedRow | undefined => tables(o).flatMap((t) => t.variables).find((r) => r[0] === name);
 const reasonOf = (o: SeedOutcome, name: string): string => res(o).unmapped.find((u) => u.token === name)?.reason ?? "";
+/** What a seeded token left out (its `partly` note), or "". */
+const partOf = (o: SeedOutcome, name: string): string => res(o).partly.find((u) => u.token === name)?.reason ?? "";
+const listed = (l: ReadonlyArray<{ token: string }>, name: string): number => l.filter((u) => u.token === name).length;
 const dtcg = (text: string, collection?: string): SeedOutcome => seedFromDtcg(JSON.parse(text) as unknown, { collection });
 /** Every seeded table passes the create tables' own shape check. */
 const valid = (o: SeedOutcome): boolean => res(o).ops.every((op) => (op.op === "createVariables" ? checkCreateVariables(op).problems.length === 0 : checkCreateStyles(op).problems.length === 0));
@@ -161,7 +164,7 @@ console.log("\nnames and aliases:");
     "me": { "$type": "color", "$value": "{me}" },
     "intoLoop": { "$type": "color", "$value": "{loop1}" }
   }`);
-  check("a name two paths reach once joined with '/': the first seeded, the second listed", rowOf(o, "a/b/c")?.[2] === 1 && /two paths make this name/.test(reasonOf(o, "a/b/c")));
+  check("a name two paths reach once joined with '/': the first seeded, the second in `partly`", rowOf(o, "a/b/c")?.[2] === 1 && /two paths make this name/.test(partOf(o, "a/b/c")) && reasonOf(o, "a/b/c") === "");
   check("an empty name, a name with '.', a stray value: listed", /empty name/.test(reasonOf(o, "")) && /'\.'/.test(reasonOf(o, "x.y")) && /neither a token/.test(reasonOf(o, "loose")));
   check("an alias with no $type takes its target's type, through another alias", same(rowOf(o, "ref"), ["ref", "color", { aliasOf: "base" }]) && same(rowOf(o, "refRef"), ["refRef", "color", { aliasOf: "ref" }]));
   check("an alias to a token not here is listed, and so is one that aliases it", /names no token here/.test(reasonOf(o, "gone")) && /not seeded/.test(reasonOf(o, "chain")) && !rowOf(o, "gone") && !rowOf(o, "chain"));
@@ -195,6 +198,14 @@ console.log("\nmodes and collections (tokens.dtcg.json):");
     [["Tokens", ["Light", "Dark"], [["a", "number", 2, 2], ["b", "number", 3, 4]]]]));
   check("…a later token's clear default orders a group the first token left open", same(modesOf(`{ "a": { "$type": "number", "$value": 2, "$extensions": { "figma.com": { "modes": { "Light": 2, "Dark": 2 } } } }, "b": { "$type": "number", "$value": 4, "$extensions": { "figma.com": { "modes": { "Light": 3, "Dark": 4 } } } } }`),
     [["Tokens", ["Dark", "Light"], [["a", "number", 2, 2], ["b", "number", 4, 3]]]]));
+  check("…the one mode whose value is the $value, whatever its keys' order", same(modesOf(`{ "a": { "$type": "color", "$value": { "colorSpace": "srgb", "components": [1, 0, 0], "alpha": 1 }, "$extensions": { "figma.com": { "modes": {
+    "Dark": { "alpha": 1, "components": [0, 0, 0], "colorSpace": "srgb" }, "Light": { "components": [1, 0, 0], "colorSpace": "srgb", "alpha": 1 } } } } } }`),
+    [["Tokens", ["Light", "Dark"], [["a", "color", "#ff0000", "#000000"]]]]));
+  const over = dtcg(`{ "a": { "$type": "number", "$value": 1, "$extensions": { "figma.com": { "extensionOverrides": { "Sub": 2 } } } },
+    "b": { "$type": "number", "$value": "nine", "$extensions": { "figma.com": { "extensionOverrides": { "Sub": 2 } } } } }`);
+  check("extended-collection overrides: a seeded token's are in `partly`; a token not seeded keeps only its own reason",
+    same(rowOf(over, "a"), ["a", "number", 1]) && /extended-collection overrides are not seeded/.test(partOf(over, "a")) && reasonOf(over, "a") === ""
+    && listed(res(over).unmapped, "b") === 1 && !/overrides/.test(reasonOf(over, "b")) && partOf(over, "b") === "");
   const clash = dtcg(`{
     "p": { "$type": "number", "$value": 1 },
     "x": { "$type": "number", "$value": 1, "$extensions": { "figma.com": { "modes": { "A / B": 1, "C": 2 } } } },
@@ -250,9 +261,18 @@ console.log("\nstyles:");
       "modes": { "Dark": { "fontFamily": "Inter", "fontSize": "18px" }, "Light": { "fontFamily": "Inter", "fontSize": "16px" } } } } },
     "u": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "12px" }, "$extensions": { "figma.com": { "modes": { "Light": { "fontFamily": "Inter", "fontSize": "12px" }, "Dark": { "fontFamily": "Inter", "fontSize": "12px" } } } } }
   }`);
-  check("a typography token with modes: the default's value is the style, and the differing mode is listed",
-    same(stylesOf(moded).find((s) => s.name === "t")?.set, { font: "Inter", size: 16 }) && /a style has no modes; only the 'Light' value was seeded \('Dark' differs\)/.test(reasonOf(moded, "t"))
-    && stylesOf(moded).some((s) => s.name === "u") && reasonOf(moded, "u") === "");
+  check("a typography token with modes: the default's value is the style, and the differing mode is in `partly`, not `unmapped`",
+    same(stylesOf(moded).find((s) => s.name === "t")?.set, { font: "Inter", size: 16 }) && /a style has no modes; only the 'Light' value was seeded \('Dark' differs\)/.test(partOf(moded, "t"))
+    && reasonOf(moded, "t") === "" && stylesOf(moded).some((s) => s.name === "u") && partOf(moded, "u") === "" && res(moded).unmapped.length === 0);
+  // A style whose other mode fails: only the failure is said (it is in no table), never "was seeded".
+  const failed = dtcg(`{ "n": { "$type": "number", "$value": 1 }, "t": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "16px" }, "$extensions": { "figma.com": { "defaultMode": "Light",
+    "modes": { "Dark": { "fontFamily": "Inter", "fontSize": "18px" }, "Light": { "fontSize": "{font.size.nope}" } } } } } }`);
+  check("a style with modes that cannot be made: one `unmapped` entry (its own reason), no `partly` note",
+    listed(res(failed).unmapped, "t") === 1 && /fontSize names \{font\.size\.nope\}/.test(reasonOf(failed, "t")) && listed(res(failed).partly, "t") === 0 && !stylesOf(failed).some((s) => s.name === "t"));
+  // The same fields in another order are the same value.
+  const reordered = dtcg(`{ "t": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "16px" }, "$extensions": { "figma.com": { "defaultMode": "Light",
+    "modes": { "Light": { "fontFamily": "Inter", "fontSize": "16px" }, "Dark": { "fontSize": "16px", "fontFamily": "Inter" } } } } } }`);
+  check("a style mode with the same fields in another order is not said to differ", stylesOf(reordered).some((s) => s.name === "t") && partOf(reordered, "t") === "" && res(reordered).unmapped.length === 0);
   const doc = (x: object): unknown => JSON.parse(JSON.stringify(x)) as unknown;
   const rs = seedFromResolver(doc({
     sets: { Core: { sources: [{ shadow: { $type: "shadow", $value: { color: "#000000", offsetX: "0px", offsetY: "1px", blur: "2px" } }, gap: { $type: "number", $value: 1 } }] } },
@@ -260,7 +280,7 @@ console.log("\nstyles:");
     resolutionOrder: [{ $ref: "#/sets/Core" }, { $ref: "#/modifiers/theme" }],
   }), new Map());
   check("a shadow a resolver context overrides: the default's value is the style, the context listed",
-    same(stylesOf(rs).find((s) => s.name === "shadow")?.set.effects?.map((e) => ("color" in e ? e.color : null)), ["#000000"]) && /only the 'light' value was seeded \('dark' differs\)/.test(reasonOf(rs, "shadow")));
+    same(stylesOf(rs).find((s) => s.name === "shadow")?.set.effects?.map((e) => ("color" in e ? e.color : null)), ["#000000"]) && /only the 'light' value was seeded \('dark' differs\)/.test(partOf(rs, "shadow")) && reasonOf(rs, "shadow") === "");
 }
 
 console.log("\na token with children:");
@@ -309,7 +329,13 @@ console.log("\nresolvers:");
     modifiers: { Sub: { contexts: { none: [], One: [{ a: { $type: "number", $value: 2 } }] }, default: "none", $extensions: { "figma.com": { collection: "Sub", defaultMode: "none" } } } },
     resolutionOrder: [{ $ref: "#/sets/Core" }, { $ref: "#/modifiers/Sub" }],
   }), new Map());
-  check("an extended collection's override modifier (its collection has no set) is listed, the base seeded", same(rowOf(ext, "a"), ["a", "number", 1]) && /extended collection's overrides are not seeded/.test(reasonOf(ext, "a")));
+  check("an extended collection's override modifier (its collection has no set) is in `partly`, the base seeded", same(rowOf(ext, "a"), ["a", "number", 1]) && /extended collection's overrides are not seeded/.test(partOf(ext, "a")) && reasonOf(ext, "a") === "");
+  const extOnly = seedFromResolver(doc({
+    sets: { Core: { sources: [{ a: { $type: "number", $value: 1 } }] } },
+    modifiers: { Sub: { contexts: { none: [], One: [{ z: { $type: "number", $value: 2 } }] }, default: "none", $extensions: { "figma.com": { collection: "Sub" } } } },
+    resolutionOrder: [{ $ref: "#/sets/Core" }, { $ref: "#/modifiers/Sub" }],
+  }), new Map());
+  check("…and a token only such a modifier has is in `unmapped`", /extended collection's overrides are not seeded/.test(reasonOf(extOnly, "z")) && partOf(extOnly, "z") === "");
   const cross = seedFromResolver(doc({
     sets: { A: { sources: [{ a1: { $type: "number", $value: 1 }, a2: { $type: "number", $value: "{b1}" } }] }, B: { sources: [{ b1: { $type: "number", $value: 2 }, b2: { $type: "number", $value: "{a1}" } }] } },
     resolutionOrder: [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }],
@@ -317,7 +343,7 @@ console.log("\nresolvers:");
   check("two collections that alias each other: the alias that would need the later table is listed, the rest valid", (rowOf(cross, "a2") === undefined) !== (rowOf(cross, "b2") === undefined)
     && /which aliases this one too/.test(reasonOf(cross, "a2") + reasonOf(cross, "b2")) && valid(cross));
   const twice = seedFromResolver(doc({ sets: { A: { sources: [{ x: { $type: "number", $value: 1 } }] }, B: { sources: [{ x: { $type: "number", $value: 2 } }] } }, resolutionOrder: [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }] }), new Map());
-  check("a token two sets give is seeded once, in the first, and the second listed", same(rowOf(twice, "x"), ["x", "number", 1]) && /seeded once, in collection 'A'/.test(reasonOf(twice, "x")));
+  check("a token two sets give is seeded once, in the first, and the second in `partly`", same(rowOf(twice, "x"), ["x", "number", 1]) && /seeded once, in collection 'A'/.test(partOf(twice, "x")) && reasonOf(twice, "x") === "");
   check("$ref refusals: a URL, an absolute path, a pointer, a fragment", /URL/.test(refProblem("https://example.com/t.json") ?? "") && /absolute/.test(refProblem("/etc/t.json") ?? "")
     && /points into the resolver/.test(refProblem("#/sets/x") ?? "") && /#fragment/.test(refProblem("t.json#/a") ?? "") && refProblem("tokens/t.json") === null && /URL or a drive path/.test(refProblem("C:\\t.json") ?? ""));
   const bad = resolverRefs(doc({ sets: { A: { sources: [{ $ref: "https://example.com/t.json" }] } }, resolutionOrder: [{ $ref: "#/sets/A" }] }));
@@ -341,7 +367,7 @@ console.log("\nthe files (seed-file.ts):");
   put("tokens.dtcg.json", { color: { $type: "color", bg: { $value: "#ffffff" } }, type: { $type: "typography", body: { $value: { fontFamily: "Inter", fontSize: "16px" } } } });
   const r = load([{ op: "seedTokens", file: "tokens.dtcg.json", collection: "Theme" }, { op: "createTree", tree: { name: "S" } }]);
   check("seedTokens becomes its tables in place, the op after it kept", "ops" in r && same(r.ops.map((o) => o.op), ["createVariables", "createStyles", "createTree"])
-    && same(r.seeds, [{ index: 0, file: "tokens.dtcg.json", first: 0, count: 2, unmapped: [], tables: [{ collection: "Theme", names: ["color/bg"] }, { collection: null, names: ["type/body"] }] }]));
+    && same(r.seeds, [{ index: 0, file: "tokens.dtcg.json", first: 0, count: 2, unmapped: [], partly: [], tables: [{ collection: "Theme", names: ["color/bg"] }, { collection: null, names: ["type/body"] }] }]));
   put("tokens.resolver.json", { version: "2025.10", sets: { Core: { sources: [{ $ref: "tokens/core.json" }] } }, resolutionOrder: [{ $ref: "#/sets/Core" }] });
   put("tokens/core.json", { gap: { $type: "number", $value: 4 } });
   const rr = load([{ op: "seedTokens", file: "tokens.resolver.json" }]);
@@ -370,6 +396,13 @@ console.log("\nthe files (seed-file.ts):");
   put("huge.json", " ".repeat(MAX_SPEC_FILE_BYTES + 1));
   check("a file over the size limit is refused", /huge\.json is \d+ bytes; a token file is at most/.test(err(load([{ op: "seedTokens", file: "huge.json" }]))));
   check("a path outside the directory is refused", /must stay inside the directory/.test(err(load([{ op: "seedTokens", file: "../elsewhere.json" }]))));
+  // The dry run's sentence counts the tokens seeded in part apart from the ones not seeded.
+  put("moded.json", { t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "16px" }, $extensions: { "figma.com": { defaultMode: "Light",
+    modes: { Dark: { fontFamily: "Inter", fontSize: "18px" }, Light: { fontFamily: "Inter", fontSize: "16px" } } } } } });
+  const md = load([{ op: "seedTokens", file: "moded.json" }]);
+  const mdChange = "seeds" in md ? String((seededPreview({ dryRun: true, creates: 1, invalid: 0, steps: [{ index: 0, op: "createStyles", effect: "creates", target: null }] }, md.seeds).steps as Array<Record<string, unknown>>)[0]?.change) : "";
+  check(`a style seeded from its default mode only: the dry run says 'seeded in part', not 'not seeded' (${mdChange})`,
+    mdChange === "seeds from 'moded.json': 1 style; 1 token is seeded in part (`partly`)");
   check("a missing file, a directory, no file given", /no file at/.test(err(load([{ op: "seedTokens", file: "nope.json" }]))) && /is not a file/.test(err(load([{ op: "seedTokens", file: "tokens" }])))
     && /ops\[0\]\.file: must be the path/.test(err(load([{ op: "seedTokens" }]))));
   check("seedTokens after an op that is not a create table is refused (it runs first)", /ops\[1\]: seedTokens goes before every other op of a batch \(it comes after ops\[0\], a createTree\)/.test(err(load([{ op: "createTree", tree: {} }, { op: "seedTokens", file: "tokens.dtcg.json" }]))));
@@ -383,6 +416,7 @@ console.log("\nthe files (seed-file.ts):");
 console.log("\nthe reply, cut to what changed:");
 {
   const seeds: SeedRecord[] = [{ index: 0, file: "t.json", first: 0, count: 2, unmapped: [{ token: "motion/fast", reason: "a duration token has no Figma variable or style" }],
+    partly: [{ token: "Body", reason: "a style has no modes; only the 'Light' value was seeded ('Dark' differs)" }],
     tables: [{ collection: "Theme", names: ["a", "b", "c"] }, { collection: null, names: ["Body"] }] }];
   const r: WriteResult = { ok: true, applied: [
     { id: "C:1", result: "unchanged", rows: [["V:1", "unchanged"], ["V:2", "updated"], ["V:3", "created"]] },
@@ -392,7 +426,7 @@ console.log("\nthe reply, cut to what changed:");
   const out = seededReply(r, seeds);
   check("a seed's tables are one entry at its op's index: only the created and updated rows, by name, and a count of the rest",
     same(out.applied, [
-      { seeded: "t.json", tables: [{ collection: "Theme", id: "C:1", result: "unchanged", created: [["c", "V:3"]], updated: [["b", "V:2"]], unchanged: 1 }, { styles: true, unchanged: 1 }], unmapped: seeds[0]?.unmapped },
+      { seeded: "t.json", tables: [{ collection: "Theme", id: "C:1", result: "unchanged", created: [["c", "V:3"]], updated: [["b", "V:2"]], unchanged: 1 }, { styles: true, unchanged: 1 }], unmapped: seeds[0]?.unmapped, partly: seeds[0]?.partly },
       { id: "9:1", created: { frames: 1, texts: 0 } },
     ]));
   const fail = seededReply({ ok: false, applied: [], failedAt: 1, failedOp: "createStyles", error: "ops[1] (createStyles): boom" }, seeds);
@@ -402,16 +436,16 @@ console.log("\nthe reply, cut to what changed:");
   const off = seededReply({ ok: false, refused: "edits-off", error: "off", applied: [{ id: "C:1", result: "created", rows: [["V:1", "created"], ["V:2", "created"], ["V:3", "created"]] }, { rows: [["S:1", "created"]] }] }, seeds);
   check("a failure with no failedAt (edits turned off partway): the tables that stay are folded like a success's",
     off.failedAt === undefined && off.error === "off" && same(off.applied, [{ seeded: "t.json", tables: [
-      { collection: "Theme", id: "C:1", result: "created", created: [["a", "V:1"], ["b", "V:2"], ["c", "V:3"]], unchanged: 0 }, { styles: true, created: [["Body", "S:1"]], unchanged: 0 }], unmapped: seeds[0]?.unmapped }]));
+      { collection: "Theme", id: "C:1", result: "created", created: [["a", "V:1"], ["b", "V:2"], ["c", "V:3"]], unchanged: 0 }, { styles: true, created: [["Body", "S:1"]], unchanged: 0 }], unmapped: seeds[0]?.unmapped, partly: seeds[0]?.partly }]));
   const late = seededReply({ ok: false, failedAt: 2, failedOp: "createTree", error: "x", applied: [{ id: "C:1", result: "unchanged", rows: [["V:1", "unchanged"], ["V:2", "unchanged"], ["V:3", "updated"]] }] }, seeds);
   check("a failure with a failedAt, and a seed's first table staying: folded too (only the tables that stay)",
-    late.failedAt === 1 && same(late.applied, [{ seeded: "t.json", tables: [{ collection: "Theme", id: "C:1", result: "unchanged", updated: [["c", "V:3"]], unchanged: 2 }], unmapped: seeds[0]?.unmapped }]));
+    late.failedAt === 1 && same(late.applied, [{ seeded: "t.json", tables: [{ collection: "Theme", id: "C:1", result: "unchanged", updated: [["c", "V:3"]], unchanged: 2 }], unmapped: seeds[0]?.unmapped, partly: seeds[0]?.partly }]));
   const step = (index: number, op: WritePreviewStep["op"], extra: Partial<WritePreviewStep> = {}): WritePreviewStep => ({ index, op, effect: "creates", target: null, ...extra });
   const p = seededPreview({ dryRun: true, creates: 3, invalid: 0, steps: [step(0, "createVariables", { plan: { create: ["a"], update: [] } }), step(1, "createStyles"), step(2, "createTree")] }, seeds);
   const steps = Array.isArray(p.steps) ? (p.steps as Array<Record<string, unknown>>) : [];
-  check("the dry run: one step for the seed (its tables' steps under it, the plan kept, the unmapped listed), the next at index 1",
-    steps.length === 2 && steps[0]?.op === "seedTokens" && same(steps[0]?.unmapped, seeds[0]?.unmapped) && same((steps[0]?.tables as unknown[])[0], { op: "createVariables", effect: "creates", target: null, plan: { create: ["a"], update: [] } })
-    && /seeds from 't\.json': collection 'Theme' \(3 variables\), 1 style; 1 token is not seeded/.test(String(steps[0]?.change)) && steps[1]?.index === 1 && p.creates === 2);
+  check("the dry run: one step for the seed (its tables' steps under it, the plan kept, the unmapped and the partly listed), the next at index 1",
+    steps.length === 2 && steps[0]?.op === "seedTokens" && same(steps[0]?.unmapped, seeds[0]?.unmapped) && same(steps[0]?.partly, seeds[0]?.partly) && same((steps[0]?.tables as unknown[])[0], { op: "createVariables", effect: "creates", target: null, plan: { create: ["a"], update: [] } })
+    && /seeds from 't\.json': collection 'Theme' \(3 variables\), 1 style; 1 token is seeded in part \(`partly`\); 1 token is not seeded \(`unmapped`\)$/.test(String(steps[0]?.change)) && steps[1]?.index === 1 && p.creates === 2);
   check("nothing seeded: the reply and the preview are as they were", seededReply(r, []) === r);
 }
 

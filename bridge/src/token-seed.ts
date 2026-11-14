@@ -23,11 +23,12 @@
 //   number, string, boolean (a string token with $extensions["figma.com"].originalType "boolean"), fontFamily (the
 //                first family of a list), fontWeight (a named weight → its number)
 //   typography   a text style; shadow an effect style. A sub-value that is a `{ref}` is bound to that variable. A style
-//                has no modes: the default mode's value is seeded, and a mode whose value differs is listed.
+//                has no modes: the default mode's value is seeded, and a mode whose value differs is listed in `partly`.
 // A token with children (a token cannot also be a group; DTCG puts a group's own token in `$root`): each child listed.
 // Anything else (gradient, cubicBezier, duration, border, transition, strokeStyle, an unknown type, a bad value, an
-// alias to a token that is not here, a name two paths reach) is listed in `unmapped` with the reason, never dropped
-// silently. A description is not carried (the create tables have no field for it).
+// alias to a token that is not here) is listed in `unmapped` with the reason, never dropped silently. A token that is
+// seeded but not in full (a style's other modes, extended-collection overrides, a name two paths or two sets reach)
+// is listed in `partly` with what was left out. A description is not carried (the create tables have no field for it).
 //
 // Names come from the project's files, so they are never keys of a plain object: Maps, own-property reads.
 // Pure: no Node, no file system (the files are read by seed-file.ts).
@@ -36,7 +37,7 @@ import { formatHex, parseHexColor } from "./hex-color.ts";
 import { isUnknownArray } from "./json-util.ts";
 import { checkStyleSet, type EffectSpec, type SourceValue, type StyleSet } from "./source-spec.ts";
 
-/** A token that is not seeded, and why. */
+/** A token that is not seeded (or, in `partly`, seeded only in part), and why. */
 export interface SeedUnmapped { token: string; reason: string }
 /** One row of a seeded createVariables table: [name, type, a value per mode…]. */
 export type SeedRow = [string, VariableTypeName, ...SourceValue[]];
@@ -44,9 +45,9 @@ export interface SeedVariablesOp { op: "createVariables"; collection: string; mo
 export interface SeedStyle { name: string; kind: "text" | "effect"; set: StyleSet }
 export interface SeedStylesOp { op: "createStyles"; styles: SeedStyle[] }
 export type SeedOp = SeedVariablesOp | SeedStylesOp;
-/** The tables a token file makes (variables first, in an order where each table's aliases name earlier ones), and the
- *  tokens left out. */
-export interface SeedResult { ops: SeedOp[]; unmapped: SeedUnmapped[] }
+/** The tables a token file makes (variables first, in an order where each table's aliases name earlier ones), the
+ *  tokens in no table (`unmapped`), and the tokens in a table but seeded only in part (`partly`). */
+export interface SeedResult { ops: SeedOp[]; unmapped: SeedUnmapped[]; partly: SeedUnmapped[] }
 export type SeedOutcome = SeedResult | { error: string };
 
 /** The collection a tokens.dtcg.json lands in when the op names none. */
@@ -66,6 +67,18 @@ function own(o: Obj, k: string): unknown {
   return d ? d.value : undefined;
 }
 const hasOwn = (o: Obj, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+/** Are two parsed JSON values the same, whatever their keys' order? Own keys only ("__proto__" included). */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => sameJson(x, b[i]));
+  }
+  if (!isObj(a) || !isObj(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => hasOwn(b, k) && sameJson(own(a, k), own(b, k)));
+}
 /** The `figma.com` extension of a token, or null. */
 function figmaExt(node: Obj): Obj | null {
   const ext = own(node, "$extensions");
@@ -91,7 +104,8 @@ interface RawToken { name: string; type: string | null; value: unknown; ext: Obj
 
 /** The tokens of a DTCG tree by name, in document order. A name reached twice (a key with `/` in it), an empty name, a
  *  name an alias could not spell, a group's $extends: listed. */
-function flatten(doc: unknown, unmapped: SeedUnmapped[]): Map<string, RawToken> {
+function flatten(doc: unknown, g: Gather): Map<string, RawToken> {
+  const { unmapped } = g;
   const out = new Map<string, RawToken>();
   /** The tokens under a token (a token and a group cannot share a name: DTCG puts a group's own token in `$root`). */
   const inside = (node: Obj, path: readonly string[], token: string): void => {
@@ -106,7 +120,7 @@ function flatten(doc: unknown, unmapped: SeedUnmapped[]): Map<string, RawToken> 
     const name = path.join("/");
     inside(node, path, name || "$root");
     if (!path.length) { unmapped.push({ token: "$root", reason: "a token needs a name" }); return; }
-    if (out.has(name)) { unmapped.push({ token: name, reason: "two paths make this name once joined with '/'; the first is seeded" }); return; }
+    if (out.has(name)) { g.part(name, "two paths make this name once joined with '/'; the first is seeded"); return; }
     const t = own(node, "$type");
     out.set(name, { name, type: typeof t === "string" ? t : inherited, value: own(node, "$value"), ext: figmaExt(node) });
   };
@@ -259,6 +273,10 @@ class Gather {
   readonly colls: Coll[] = [];
   readonly styles: StyleToken[] = [];
   readonly unmapped: SeedUnmapped[] = [];
+  /** What a seeded token leaves out. Kept (in `partly`) only if the token ends up in a table; else dropped, or with
+   *  `orUnmapped` moved to `unmapped` (finish sorts them). */
+  readonly partNotes: Array<SeedUnmapped & { orUnmapped: boolean }> = [];
+  part(token: string, reason: string, orUnmapped = false): void { this.partNotes.push({ token, reason, orUnmapped }); }
   /** every token by name, for the type of an alias-only token and the value a style's reference names */
   readonly raw = new Map<string, RawToken>();
   coll(name: string, modes: string[]): Coll {
@@ -290,8 +308,9 @@ class Gather {
       // A style has no modes: the default mode's value (the first) is the style; a mode that differs is said.
       const [first, ...rest] = values;
       const value = first && values.length > 1 ? first.value : t.value;
-      const differ = rest.filter((mv) => JSON.stringify(mv.value) !== JSON.stringify(value)).map((mv) => "'" + (mv.mode ?? "?") + "'");
-      if (differ.length) this.unmapped.push({ token: t.name, reason: "a style has no modes; only the '" + (first?.mode ?? "?") + "' value was seeded (" + differ.join(", ") + (differ.length === 1 ? " differs)" : " differ)") });
+      const differ = rest.filter((mv) => !sameJson(mv.value, value)).map((mv) => "'" + (mv.mode ?? "?") + "'");
+      // Said only if the style is made (finish): a style that fails keeps only its own reason, in `unmapped`.
+      if (differ.length) this.part(t.name, "a style has no modes; only the '" + (first?.mode ?? "?") + "' value was seeded (" + differ.join(", ") + (differ.length === 1 ? " differs)" : " differ)"));
       this.styles.push({ name: t.name, type, value });
       return;
     }
@@ -538,11 +557,18 @@ function finish(g: Gather, source: string): SeedOutcome {
     variables: c.rows.map((r): SeedRow => [r.name, r.type, ...r.cells]),
   }));
   if (styles.length) ops.push({ op: "createStyles", styles });
+  // A note on what a token leaves out holds only for a token in a table.
+  const seeded = new Set<string>([...vars.keys(), ...styles.map((s) => s.name)]);
+  const partly: SeedUnmapped[] = [];
+  for (const n of g.partNotes) {
+    if (seeded.has(n.token)) partly.push({ token: n.token, reason: n.reason });
+    else if (n.orUnmapped) g.unmapped.push({ token: n.token, reason: n.reason });
+  }
   if (!ops.length) {
     const first = g.unmapped.slice(0, 3).map((u) => "'" + u.token + "': " + u.reason).join("; ");
     return { error: "no token in " + source + " could be seeded" + (first ? " (" + first + (g.unmapped.length > 3 ? "; and " + (g.unmapped.length - 3) + " more" : "") + ")" : " (it holds no tokens)") };
   }
-  return { ops, unmapped: g.unmapped };
+  return { ops, unmapped: g.unmapped, partly };
 }
 
 // ---------------------------------------------------------------- tokens.dtcg.json
@@ -556,7 +582,7 @@ export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefin
   if (isResolverDoc(doc)) return { error: source + " is a DTCG resolver; read it with seedFromResolver" };
   const base = opts.collection || DEFAULT_SEED_COLLECTION;
   const g = new Gather();
-  for (const [n, t] of flatten(doc, g.unmapped)) g.raw.set(n, t);
+  for (const [n, t] of flatten(doc, g)) g.raw.set(n, t);
   // The modes each token has, and the groups they make (a Map keyed by the mode list: names are free text). A group's
   // modes are in its default-first order: the plugin makes the first mode the collection's default.
   //   how sure: 2 the token's figma.com defaultMode (design-to-code writes it), 1 the one mode whose value is the
@@ -577,8 +603,7 @@ export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefin
       continue;
     }
     const declared = t.ext ? own(t.ext, "defaultMode") : undefined;
-    const valueText = JSON.stringify(t.value);
-    const matching = modes.filter((m) => JSON.stringify(own(modesV, m)) === valueText);
+    const matching = modes.filter((m) => sameJson(own(modesV, m), t.value));
     const [dflt, sure] = typeof declared === "string" && modes.indexOf(declared) >= 0 ? [declared, 2] : matching.length === 1 && matching[0] !== undefined ? [matching[0], 1] : [modes[0] ?? "", 0];
     const ordered = [dflt, ...modes.filter((m) => m !== dflt)];
     const key = keyOf(modes);
@@ -618,7 +643,7 @@ export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefin
     g.add(p.t, collOf(p.key), values);
   }
   // Composite overrides an extended collection layers on a token are not seeded: say so, once per token.
-  for (const t of g.raw.values()) if (t.ext && own(t.ext, "extensionOverrides") !== undefined) g.unmapped.push({ token: t.name, reason: "its extended-collection overrides are not seeded (the base value is)" });
+  for (const t of g.raw.values()) if (t.ext && own(t.ext, "extensionOverrides") !== undefined) g.part(t.name, "its extended-collection overrides are not seeded (the base value is)");
   // Tables in first-seen order of their groups, so a one-mode collection made first stays first.
   return finish(g, source);
 }
@@ -735,7 +760,7 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
     const out = new Map<string, RawToken>();
     for (const s of src) {
       const tree = isObj(s) && hasOwn(s, "$ref") ? files.get(String(own(s, "$ref"))) : s;
-      for (const [n, t] of flatten(tree, g.unmapped)) out.set(n, t);
+      for (const [n, t] of flatten(tree, g)) out.set(n, t);
     }
     return out;
   };
@@ -748,7 +773,7 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
     if (!b) { b = { name: s.collection, base: new Map(), mod: null }; colls.set(s.collection, b); }
     for (const [n, t] of tokensOf(s.sources)) {
       const was = owner.get(n);
-      if (was && was !== b) { g.unmapped.push({ token: n, reason: "set '" + s.name + "' has it too; it is seeded once, in collection '" + was.name + "'" }); continue; }
+      if (was && was !== b) { g.part(n, "set '" + s.name + "' has it too; it is seeded once, in collection '" + was.name + "'"); continue; }
       owner.set(n, b);
       b.base.set(n, t);
       if (!g.raw.has(n)) g.raw.set(n, t);
@@ -760,7 +785,8 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
     for (const [k, src] of m.contexts) ctx.set(k, tokensOf(src));
     const names = new Set<string>();
     for (const t of ctx.values()) for (const n of t.keys()) names.add(n);
-    const unmapAll = (reason: string): void => { for (const n of names) g.unmapped.push({ token: n, reason }); };
+    // A token a set has too is still seeded (its set's value): the note is then a `partly` one.
+    const unmapAll = (reason: string): void => { for (const n of names) g.part(n, reason, true); };
     let b: Build | undefined;
     if (m.collection !== null) {
       b = colls.get(m.collection);
@@ -797,7 +823,7 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
     for (const t of mod.ctx.values()) for (const n of t.keys()) if (names.indexOf(n) < 0) names.push(n);
     for (const n of names) {
       const o = owner.get(n);
-      if (o && o !== b) { g.unmapped.push({ token: n, reason: "modifier '" + mod.name + "' sets it, and it is in collection '" + o.name + "'" }); continue; }
+      if (o && o !== b) { g.part(n, "modifier '" + mod.name + "' sets it, and it is in collection '" + o.name + "'", true); continue; }
       const at = (m: string): RawToken | undefined => mod.ctx.get(m)?.get(n) ?? b.base.get(n) ?? (b.base.has(n) ? undefined : mod.ctx.get(dflt)?.get(n));
       const first = at(dflt);
       if (!first) { g.unmapped.push({ token: n, reason: "no value in the default mode '" + dflt + "'" }); continue; }

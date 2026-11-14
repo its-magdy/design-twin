@@ -41,7 +41,9 @@ list of merged PRs.
   it as `$extensions["figma.com"].defaultMode`, and a file without it gives the mode whose value is the `$value`. Names are the path joined with `/`, `{a.b}` an alias. Colours, dimensions (rem × 16),
   numbers, strings, font families and weights, and booleans become variables; `typography` and `shadow` tokens become
   text and effect styles bound to them (a style takes the default mode's value; a mode that differs is listed). What
-  cannot be seeded (a gradient, a duration, an alias to nothing, a loop, a token inside a token, …) is listed in `unmapped` with the reason. The reply lists only the rows created or updated, with a count of the
+  cannot be seeded (a gradient, a duration, an alias to nothing, a loop, a token inside a token, …) is listed in
+  `unmapped` with the reason. A token seeded only in part (a style's other modes, extended-collection overrides) is
+  listed in `partly`, and the dry run counts the two apart. The reply lists only the rows created or updated, with a count of the
   unchanged ones, so a second seed of the same file reports no change. Every file read stays inside the server's
   directory, is JSON and at most 2 MB; a `$ref` that is a URL, absolute or a pointer is refused, and so are CSS and
   native token files. A resolver's set files now keep a boolean's origin (`originalType`), as tokens.dtcg.json does.

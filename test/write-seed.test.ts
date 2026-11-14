@@ -142,7 +142,7 @@ void (async () => {
     check("the dry run: one seedTokens step, its tables under it with the plugin's plan, the unmapped token listed, nothing written",
       dstep?.op === "seedTokens" && dstep.index === 0 && dtables.length === 2 && same(dtables[0]?.plan, { create: ["collection 'Kit'", "font/family", "font/size/md", "shadow/color"], update: [] })
       && same(dtables[1]?.plan, { create: ["text/body", "elevation/card"], update: [] }) && same(dstep.unmapped, [{ token: "motion/fast", reason: "a duration token has no Figma variable or style" }])
-      && dry.creates === 1 && dry.invalid === 0 && writes.length === 0 && collNamed("Kit") === undefined);
+      && same(dstep.partly, []) && /; 1 token is not seeded \(`unmapped`\)$/.test(String(dstep.change)) && dry.creates === 1 && dry.invalid === 0 && writes.length === 0 && collNamed("Kit") === undefined);
 
     // ---- the resolver lands: two collections, modes, aliases across them
     const first = await call({ ops: [{ op: "seedTokens", file: "tokens.resolver.json" }] });

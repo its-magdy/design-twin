@@ -1254,17 +1254,23 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   a string token whose `$extensions["figma.com"].originalType` is `boolean`. A group's `$type` holds for the tokens
   in it. A `typography` token is a text style and a `shadow` token an effect style; a `{ref}` in it is bound to that
   variable. A line height that is a multiple of the font size is set as a percentage, not bound. A style has no
-  modes: it takes the default mode's value, and a mode whose value differs is listed in `unmapped`.
+  modes: it takes the default mode's value, and a mode whose value differs is listed in `partly`.
 - Not seeded, and listed in `unmapped` with the reason: gradient, cubicBezier, duration, border, transition and
   strokeStyle tokens, an unknown `$type`, a value that cannot be read, an alias to a token that is not in the files
-  (and a token that aliases one that is not seeded), a loop of aliases, a name two paths make once joined, a colour
-  alias with an opacity of its own, a token inside another token (a token cannot also be a group; DTCG puts a group's
-  own token in `$root`). A description is not carried. A collection over 1,000 variables is refused.
-- The reply puts one entry at the op's own index: `{seeded: file, tables, unmapped?}`. Each table is
+  (and a token that aliases one that is not seeded), a loop of aliases, a colour alias with an opacity of its own, a
+  token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`). A
+  description is not carried. A collection over 1,000 variables is refused.
+- Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
+  extended-collection overrides, a name two paths make once joined (the first is seeded), a token a second set or
+  another collection's modifier also gives (the first is seeded). `unmapped` holds only tokens in no table.
+- The reply puts one entry at the op's own index: `{seeded: file, tables, unmapped?, partly?}`. Each table is
   `{collection, id, result, modesAdded?, created?, updated?, unchanged}` (or `{styles: true, …}`), where `created` and
   `updated` list `[name, id]` and `unchanged` counts the rest. A second identical seed reports nothing created or
-  updated. A failed write's `applied` is folded the same way (only the tables that stay applied). The dry run gives
-  one `seedTokens` step with its tables' steps (and their `plan`) under `tables`, and the `unmapped` list.
+  updated. A failed write's `applied` is folded the same way (only the tables that stay applied), unless the plugin
+  put changes back. Then `applied` and `restored` are the plugin's own rows, indexed by the expanded ops (the tables
+  the seed became); `failedAt` is still the index of the agent's op. The dry run gives one `seedTokens` step with its
+  tables' steps (and their `plan`) under `tables`, and the `unmapped` and `partly` lists. Its `change` counts them
+  apart, e.g. "1 style; 1 token is seeded in part; 2 tokens are not seeded", each with the list it is in.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

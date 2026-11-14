@@ -8,7 +8,8 @@
 // a URL, an absolute path, a pointer into the resolver or a fragment is refused (token-seed.ts refProblem).
 //
 // The reply to a seeded table is cut to what changed: the rows created or updated (with their ids) and a count of the
-// unchanged ones, with the tokens that were not seeded beside them. A second identical seed reports no change.
+// unchanged ones, with the tokens that were not seeded (`unmapped`) and the ones seeded only in part (`partly`) beside
+// them. A second identical seed reports no change.
 import fs from "node:fs";
 import path from "node:path";
 import type { AppliedWrite, CreateOutcome, WritePreviewStep, WriteResult } from "./commands.ts";
@@ -30,6 +31,7 @@ export interface SeedRecord {
   /** each table: a collection's name, or null for the styles; and its row names in order */
   tables: Array<{ collection: string | null; names: string[] }>;
   unmapped: SeedUnmapped[];
+  partly: SeedUnmapped[];
 }
 type InOp = { op: string; file?: unknown; collection?: unknown } & Record<string, unknown>;
 
@@ -86,7 +88,7 @@ export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: s
     })();
     if ("error" in result) return { error: result.error.startsWith("ops[") ? result.error : `${at} (seedTokens): ${result.error}` };
     seeds.push({
-      index: i, file: o.file, first: out.length, count: result.ops.length, unmapped: result.unmapped,
+      index: i, file: o.file, first: out.length, count: result.ops.length, unmapped: result.unmapped, partly: result.partly,
       tables: result.ops.map((t) => (t.op === "createVariables" ? { collection: t.collection, names: t.variables.map((r) => r[0]) } : { collection: null, names: t.styles.map((s) => s.name) })),
     });
     out.push(...result.ops);
@@ -120,7 +122,7 @@ interface SeededTable {
   unchanged: number;
 }
 /** What a seedTokens op did, in the reply's `applied`, at the op's own index. */
-export interface SeededWrite { seeded: string; tables: SeededTable[]; unmapped?: SeedUnmapped[] }
+export interface SeededWrite { seeded: string; tables: SeededTable[]; unmapped?: SeedUnmapped[]; partly?: SeedUnmapped[] }
 
 function seededTable(t: SeedRecord["tables"][number], a: AppliedWrite | undefined): SeededTable {
   const created: Array<[string, string]> = [], updated: Array<[string, string]> = [];
@@ -154,7 +156,7 @@ function foldApplied(applied: readonly AppliedWrite[], seeds: readonly SeedRecor
     if (s && e === s.first) {
       const n = Math.min(s.count, applied.length - e);
       const tables = s.tables.slice(0, n).map((t, j) => seededTable(t, applied[e + j]));
-      out.push({ seeded: s.file, tables, ...(s.unmapped.length ? { unmapped: s.unmapped } : {}) });
+      out.push({ seeded: s.file, tables, ...(s.unmapped.length ? { unmapped: s.unmapped } : {}), ...(s.partly.length ? { partly: s.partly } : {}) });
       e += n;
       k++;
       continue;
@@ -183,7 +185,7 @@ export function seededReply(r: WriteResult, seeds: readonly SeedRecord[]): Write
   return { ...r, applied };
 }
 
-/** A dry run's step for a seedTokens op: its tables' steps under it, and the tokens not seeded. */
+/** A dry run's step for a seedTokens op: its tables' steps under it, the tokens not seeded, and those seeded in part. */
 export interface SeedPreviewStep {
   index: number;
   op: "seedTokens";
@@ -192,8 +194,14 @@ export interface SeedPreviewStep {
   change: string;
   tables: Array<Omit<WritePreviewStep, "index">>;
   unmapped: SeedUnmapped[];
+  partly: SeedUnmapped[];
   invalid?: string;
   refusedByFile?: string;
+}
+/** "N token(s) <what>" for the tokens of a list (a token listed twice counts once), or nothing. */
+function tokenCount(list: readonly SeedUnmapped[], one: string, many: string): string[] {
+  const n = new Set(list.map((u) => u.token)).size;
+  return n ? [n + " token" + (n === 1 ? " " + one : "s " + many)] : [];
 }
 /** A dry run's steps with each seedTokens op's tables folded into one step at the op's index; the counts follow. */
 export function seededPreview(p: { steps: WritePreviewStep[] } & Record<string, unknown>, seeds: readonly SeedRecord[]): Record<string, unknown> {
@@ -209,11 +217,14 @@ export function seededPreview(p: { steps: WritePreviewStep[] } & Record<string, 
       const change = "seeds from '" + s.file + "': " + [
         ...vars.map((t) => "collection '" + t.collection + "' (" + t.names.length + " variable" + (t.names.length === 1 ? "" : "s") + ")"),
         ...(styles ? [styles.names.length + " style" + (styles.names.length === 1 ? "" : "s")] : []),
-      ].join(", ") + (s.unmapped.length ? "; " + s.unmapped.length + " token" + (s.unmapped.length === 1 ? " is" : "s are") + " not seeded (`unmapped`)" : "");
+      ].join(", ") + [
+        ...tokenCount(s.partly, "is seeded in part (`partly`)", "are seeded in part (`partly`)"),
+        ...tokenCount(s.unmapped, "is not seeded (`unmapped`)", "are not seeded (`unmapped`)"),
+      ].map((x) => "; " + x).join("");
       const invalid = tables.map((t) => t.invalid).filter((x): x is string => x !== undefined);
       const refused = tables.map((t) => t.refusedByFile).filter((x): x is string => x !== undefined);
       steps.push({
-        index: s.index, op: "seedTokens", effect: "creates", target: s.file, change, tables, unmapped: s.unmapped,
+        index: s.index, op: "seedTokens", effect: "creates", target: s.file, change, tables, unmapped: s.unmapped, partly: s.partly,
         ...(invalid.length ? { invalid: invalid.join("\n") } : {}), ...(refused.length ? { refusedByFile: refused.join("\n") } : {}),
       });
       e += s.count;
