@@ -214,6 +214,35 @@ export const cases: Case[] = [{
       && same(Object.values(a.valuesByMode), [alias(b.id)]) && same(Object.values(b.valuesByMode), [alias(c.id)]) && same(Object.values(c.valuesByMode), [4]));
   },
 }, {
+  name: "createVariables: no step of a re-sent table passes through a loop through another collection, another mode, or the put-back",
+  async run() {
+    // Through a variable outside the table: x (another collection) aliases b, b aliases a; a → x with b made a value.
+    const w = await createWorld();
+    const one = await write(w, [
+      { op: "createVariables", collection: "Inner", variables: [["p", "number", 1], ["q", "number", { aliasOf: "p" }]] },
+      { op: "createVariables", collection: "Outer", variables: [["x", "number", { aliasOf: "q" }]] },
+    ]);
+    const flip = await write(w, [{ op: "createVariables", collection: "Inner", variables: [["p", "number", { aliasOf: "x" }], ["q", "number", 5]] }]);
+    const p = w.byName("p"), x = w.byName("x");
+    ok("[LOOPS] p → x lands while x still aliases q, which the same table makes a value", one.ok && flip.ok && p !== undefined && x !== undefined && same(Object.values(p.valuesByMode), [alias(x.id)]));
+    // Another mode: in both modes s → r, and the table makes r → s → t; Dark's old s → r must not meet Light's new r → s.
+    const two = await write(w, [{ op: "createVariables", collection: "Modes", modes: ["Light", "Dark"], variables: [["r", "number", 1, 1], ["s", "number", { aliasOf: "r" }, { aliasOf: "r" }], ["t", "number", 2, 2]] }]);
+    const re = await write(w, [{ op: "createVariables", collection: "Modes", modes: ["Light", "Dark"], variables: [["r", "number", { aliasOf: "s" }, { aliasOf: "s" }], ["s", "number", { aliasOf: "t" }, { aliasOf: "t" }], ["t", "number", 2, 2]] }]);
+    const r = w.byName("r"), s = w.byName("s"), t = w.byName("t");
+    ok("[LOOPS] an alias chain reversed in two modes lands, row order and mode order aside", two.ok && re.ok && r !== undefined && s !== undefined && t !== undefined
+      && same(Object.values(r.valuesByMode), [alias(s.id), alias(s.id)]) && same(Object.values(s.valuesByMode), [alias(t.id), alias(t.id)]));
+    // The put-back: a new variable's alias is written back too, so restoring an old alias cannot close a loop through it.
+    const start = await write(w, [{ op: "createVariables", collection: "Back", modes: ["Light", "Dark"], variables: [["u", "number", 1, 1], ["v", "number", 2, 2], ["k", "number", { aliasOf: "v" }, 3]] }]);
+    const k = w.byName("k"), u = w.byName("u"), v = w.byName("v");
+    const kBefore = JSON.stringify(k?.valuesByMode), vBefore = JSON.stringify(v?.valuesByMode);
+    const failed = await write(w, [
+      { op: "createVariables", collection: "Back", modes: ["Light", "Dark"], variables: [["v", "number", { aliasOf: "n" }, 2], ["k", "number", { aliasOf: "u" }, 3], ["n", "number", 0, { aliasOf: "k" }]] },
+      { op: "patch", nodeId: "8:1", set: { fills: [{ type: "solid", color: "#000000" }] } },
+    ]);
+    ok("[LOOPS] a batch that fails after such a table is put back whole: the old aliases back, the new variable gone", start.ok && !failed.ok && failed.failedAt === 1
+      && (failed.restored ?? []).length === 1 && u !== undefined && JSON.stringify(k?.valuesByMode) === kBefore && JSON.stringify(v?.valuesByMode) === vBefore && w.byName("n") === undefined);
+  },
+}, {
   name: "createVariables: the table's own shape is checked by the dry run, the wire and the plugin alike",
   async run() {
     const w = await createWorld();

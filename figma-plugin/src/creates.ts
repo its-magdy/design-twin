@@ -401,6 +401,10 @@ function cellValue(v: SourceValue, target: Target | undefined, refs: ResolvedRef
 /** A value as Figma holds it, copied (an RGBA or an alias object is frozen, and a later change must not reach it). */
 const copyValue = (x: VariableValue | undefined): VariableValue | undefined => (x && typeof x === "object" ? JSON.parse(JSON.stringify(x)) as VariableValue : x);
 
+/** A plain value of a type, held for a moment by a cell whose alias is being replaced. */
+const placeholder = (type: VariableResolvedDataType): VariableValue =>
+  type === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : type === "FLOAT" ? 0 : type === "BOOLEAN" ? false : "";
+
 /** Figma's refusal of a mode, with what to do when it is the file plan's limit. */
 function modeRefused(what: string, e: unknown): Error {
   const msg = errMsg(e);
@@ -420,8 +424,10 @@ function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => v
     applied, kind: "created variable table", what: "the variables of the collection '" + t.name + "'",
     restore(allowed) {
       const check = (): void => { if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off"); };
-      for (const k of kept.slice().reverse()) { check(); if (k.value !== undefined) k.v.setValueForMode(k.modeId, k.value); }
       if (made && coll) { check(); coll.remove(); return; }
+      // Every value written, new variables' too, set back newest first: each step back is a state the apply passed
+      // through, so none makes an alias loop.
+      for (const k of kept.slice().reverse()) { check(); if (k.value !== undefined) k.v.setValueForMode(k.modeId, k.value); }
       for (const v of createdVars.slice().reverse()) { check(); v.remove(); }
       for (const m of added.slice().reverse()) { check(); if (coll) coll.removeMode(m.id); }
     },
@@ -466,33 +472,31 @@ function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => v
     // A new variable in a collection whose other modes the table leaves out: its first value there too.
     if (!r.existing && r.values[0] !== undefined) for (const id of t.unlisted) cells.push({ r, v, modeId: id, mode: "", cell: 0 });
   }
-  // The order the cells are set in: every raw value first (that clears the aliases they replace), then each alias after
-  // the alias of the row it names in that mode, so no step passes through a loop the finished table does not have
-  // (b → a while a still aliases b, when the same table makes a a value).
-  const isAlias = (c: Cell): boolean => typeof c.r.values[c.cell] === "object";
-  const order: Cell[] = cells.filter((c) => !isAlias(c));
-  const byKey = new Map<string, Cell>();
-  const key = (r: RowTarget, modeId: string): string => r.index + "|" + modeId;
-  for (const c of cells) if (isAlias(c)) byKey.set(key(c.r, c.modeId), c);
-  const done = new Set<Cell>();
-  const visit = (c: Cell, depth: number): void => {
-    if (done.has(c) || depth > cells.length) return;
-    done.add(c);
-    const target = c.r.targets[c.cell];
-    if (target && "row" in target && target.row.op === c.r.op) {
-      const dep = byKey.get(key(target.row, c.modeId));
-      if (dep) visit(dep, depth + 1);
-    }
-    order.push(c);
-  };
-  for (const c of cells) if (isAlias(c)) visit(c, 0);
-  for (const c of order) {
-    const value = c.r.values[c.cell];
-    if (value === undefined) continue;
+  // Two passes, so no step passes through an alias loop the finished table does not have (in any mode, whatever the
+  // row order, through variables outside the table too). First every cell the table sets drops the alias it holds
+  // (raw cells take their value; alias cells a plain placeholder of the type); then the aliases are set. Every
+  // graph in between is part of the finished one, which the up-front check found free of loops.
+  const write = (c: Cell, value: VariableValue): void => {
     consent();
     const old = copyValue(c.v.valuesByMode[c.modeId]);
-    try { c.v.setValueForMode(c.modeId, cellValue(value, c.r.targets[c.cell], refs, c.r.type)); } catch (e) { throw modeRefused("the value of '" + c.r.name + "' for mode '" + (c.mode || "the default") + "'", e); }
-    if (c.r.existing) kept.push({ v: c.v, modeId: c.modeId, value: old });
+    try { c.v.setValueForMode(c.modeId, value); } catch (e) { throw modeRefused("the value of '" + c.r.name + "' for mode '" + (c.mode || "the default") + "'", e); }
+    kept.push({ v: c.v, modeId: c.modeId, value: old });
+  };
+  const isAliasValue = (x: VariableValue | undefined): boolean => typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS";
+  const aliasCells: Cell[] = [];
+  for (const c of cells) {
+    const value = c.r.values[c.cell];
+    if (value === undefined) continue;
+    if (typeof value === "object") {
+      aliasCells.push(c);
+      if (isAliasValue(c.v.valuesByMode[c.modeId])) write(c, placeholder(c.r.type));
+      continue;
+    }
+    write(c, cellValue(value, c.r.targets[c.cell], refs, c.r.type));
+  }
+  for (const c of aliasCells) {
+    const value = c.r.values[c.cell];
+    if (value !== undefined) write(c, cellValue(value, c.r.targets[c.cell], refs, c.r.type));
   }
   const outcome: Array<[string, CreateOutcome]> = [];
   for (const r of t.rows) {

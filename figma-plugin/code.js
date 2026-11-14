@@ -9504,6 +9504,7 @@
     return { r: c.r, g: c.g, b: c.b, a: c.a === void 0 ? 1 : c.a };
   }
   var copyValue = (x) => x && typeof x === "object" ? JSON.parse(JSON.stringify(x)) : x;
+  var placeholder = (type) => type === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : type === "FLOAT" ? 0 : type === "BOOLEAN" ? false : "";
   function modeRefused(what, e) {
     const msg = errMsg(e);
     return new Error("Figma refused " + what + ": " + msg + (/limit/i.test(msg) ? " (this file's Figma plan limits how many modes a collection has; send fewer modes, or move the file to a plan with more)" : ""));
@@ -9523,14 +9524,14 @@
         const check = () => {
           if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
         };
-        for (const k of kept.slice().reverse()) {
-          check();
-          if (k.value !== void 0) k.v.setValueForMode(k.modeId, k.value);
-        }
         if (made && coll) {
           check();
           coll.remove();
           return;
+        }
+        for (const k of kept.slice().reverse()) {
+          check();
+          if (k.value !== void 0) k.v.setValueForMode(k.modeId, k.value);
         }
         for (const v of createdVars.slice().reverse()) {
           check();
@@ -9591,34 +9592,31 @@
       });
       if (!r.existing && r.values[0] !== void 0) for (const id of t.unlisted) cells.push({ r, v, modeId: id, mode: "", cell: 0 });
     }
-    const isAlias = (c2) => typeof c2.r.values[c2.cell] === "object";
-    const order = cells.filter((c2) => !isAlias(c2));
-    const byKey = /* @__PURE__ */ new Map();
-    const key = (r, modeId) => r.index + "|" + modeId;
-    for (const c2 of cells) if (isAlias(c2)) byKey.set(key(c2.r, c2.modeId), c2);
-    const done = /* @__PURE__ */ new Set();
-    const visit2 = (c2, depth) => {
-      if (done.has(c2) || depth > cells.length) return;
-      done.add(c2);
-      const target = c2.r.targets[c2.cell];
-      if (target && "row" in target && target.row.op === c2.r.op) {
-        const dep = byKey.get(key(target.row, c2.modeId));
-        if (dep) visit2(dep, depth + 1);
-      }
-      order.push(c2);
-    };
-    for (const c2 of cells) if (isAlias(c2)) visit2(c2, 0);
-    for (const c2 of order) {
-      const value = c2.r.values[c2.cell];
-      if (value === void 0) continue;
+    const write = (c2, value) => {
       consent2();
       const old = copyValue(c2.v.valuesByMode[c2.modeId]);
       try {
-        c2.v.setValueForMode(c2.modeId, cellValue(value, c2.r.targets[c2.cell], refs2, c2.r.type));
+        c2.v.setValueForMode(c2.modeId, value);
       } catch (e) {
         throw modeRefused("the value of '" + c2.r.name + "' for mode '" + (c2.mode || "the default") + "'", e);
       }
-      if (c2.r.existing) kept.push({ v: c2.v, modeId: c2.modeId, value: old });
+      kept.push({ v: c2.v, modeId: c2.modeId, value: old });
+    };
+    const isAliasValue = (x) => typeof x === "object" && x !== null && "type" in x && x.type === "VARIABLE_ALIAS";
+    const aliasCells = [];
+    for (const c2 of cells) {
+      const value = c2.r.values[c2.cell];
+      if (value === void 0) continue;
+      if (typeof value === "object") {
+        aliasCells.push(c2);
+        if (isAliasValue(c2.v.valuesByMode[c2.modeId])) write(c2, placeholder(c2.r.type));
+        continue;
+      }
+      write(c2, cellValue(value, c2.r.targets[c2.cell], refs2, c2.r.type));
+    }
+    for (const c2 of aliasCells) {
+      const value = c2.r.values[c2.cell];
+      if (value !== void 0) write(c2, cellValue(value, c2.r.targets[c2.cell], refs2, c2.r.type));
     }
     const outcome = [];
     for (const r of t.rows) {
