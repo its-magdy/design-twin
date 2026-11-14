@@ -1658,6 +1658,7 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       const setExt = {};
       if (opacity !== void 0) setExt.opacity = opacity;
       if (cls === "percent") setExt.unit = "percent";
+      if (v.type === "BOOLEAN") setExt.originalType = "boolean";
       if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf;
       continue;

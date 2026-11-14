@@ -531,6 +531,8 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
       const setExt: DtcgFigmaExtension = {};
       if (opacity !== undefined) setExt.opacity = opacity;
       if (cls === "percent") setExt.unit = "percent";
+      // …and a boolean's origin, so a set file read back (bridge/src/token-seed.ts) makes a boolean, not a string.
+      if (v.type === "BOOLEAN") setExt.originalType = "boolean";
       if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf; continue;
     }

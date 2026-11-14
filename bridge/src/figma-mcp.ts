@@ -39,7 +39,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
-import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp } from "./commands.ts";
+import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -151,6 +151,7 @@ import { screenOutline } from "./outline.ts";
 import type { OutlineLevel, OutlineSource } from "./outline.ts";
 import { findMapFile } from "./project-layout.ts";
 import { loadSpecFiles } from "./spec-file.ts";
+import { loadSeedTokens, MAX_WRITE_OPS, seededPreview, seededReply } from "./seed-file.ts";
 import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
@@ -715,7 +716,8 @@ const hexColor = z.string().regex(HEX_COLOR_RE, `must be ${HEX_COLOR_HINT}`);
 // published JSON schema keeps a single `pattern`. setFill's `color` stays strict: it has no "none".
 const hexColorOrEmpty = z.string().regex(new RegExp(`^(?:${HEX_COLOR_RE.source.slice(1, -1)}|)$`), `must be ${HEX_COLOR_HINT}, or "" for no fill`);
 const writeOpShape = z.object({
-  op: z.enum(WRITE_OP_NAMES),
+  // seedTokens is read by this server into create tables (seed-file.ts): the plugin never sees it.
+  op: z.enum([...WRITE_OP_NAMES, "seedTokens"]),
   parentId: z.string().optional(),
   name: z.string().optional(),
   width: z.number().optional(),
@@ -750,6 +752,8 @@ const writeOpShape = z.object({
   modes: z.array(z.string()).optional(),
   variables: z.array(z.array(z.unknown())).optional(),
   styles: z.array(z.record(z.string(), z.unknown())).optional(),
+  // seedTokens: a project's token file (DTCG, or a DTCG resolver), read by this server into the create tables above.
+  file: z.string().optional(),
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
@@ -847,6 +851,7 @@ registerTool(
       "patch {nodeId, set}: change the given fields of an existing node | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
+      "seedTokens {file, collection?}: those tables from the project's tokens.dtcg.json or tokens.resolver.json | " +
       "setVariableMode {nodeId, collection, mode} / clearVariableMode {nodeId, collection}: a frame's variable mode | " +
       "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
       "createFrame, createText, setFill, setText: one node or property per op. " +
@@ -860,8 +865,8 @@ registerTool(
       ops: z.array(writeOpShape)
         // Writes are not transactional and cannot be undone from here, so a runaway batch is bounded:
         // 50 ops is several screens' worth of frames/text, and a larger job is simply several calls.
-        .max(50, "at most 50 ops per call — split a larger job into several calls (writes cannot be undone from here)")
-        .describe("Ordered list of write operations (each must have an `op` field). At most 50 per call."),
+        .max(MAX_WRITE_OPS, `at most ${MAX_WRITE_OPS} ops per call — split a larger job into several calls (writes cannot be undone from here)`)
+        .describe(`Ordered list of write operations (each must have an \`op\` field). At most ${MAX_WRITE_OPS} per call.`),
       dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection; when one is connected it also reports editsAllowed — false means a real write would be refused)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
@@ -876,15 +881,21 @@ registerTool(
     // A spec given by path is read into the op first, so it meets every check below exactly as the same spec inline.
     const loaded = loadSpecFiles(a.ops || [], (p, what) => assertInsideCwd(p, what));
     if ("error" in loaded) return errorResult(loaded.error + ". Nothing was changed.");
-    const ops = loaded.ops;
+    // …and so is a token file: seedTokens becomes its create tables in place (seed-file.ts).
+    const seeded = loadSeedTokens(loaded.ops, (p, what) => assertInsideCwd(p, what));
+    if ("error" in seeded) return errorResult(seeded.error + ". Nothing was changed.");
+    const { seeds } = seeded;
+    const ops = seeded.ops.filter((o): o is typeof o & { op: WriteOpName } => o.op !== "seedTokens");
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
-    if (a.dryRun) return textResult(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)));
+    if (a.dryRun) return textResult(seededPreview(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)), seeds));
     // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
     // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
     // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write
     // nobody is waiting for. A batch already running is not stopped by it (writes have no cancel point).
-    const r = await ask("write", { ops }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    const sent = await ask("write", { ops }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    // A seeded table's reply is cut to what changed, at the seedTokens op's own index (seed-file.ts).
+    const r = seededReply(sent, seeds);
     // Refused whole — the designer has not consented ("Allow edits" off), rejected the batch on the review card, or
     // nobody reviewed it: nothing was tried, so there is no op index and nothing to clean up. The answer is the
     // PERSON's, so say exactly what they did or must do (and pass on their reason) rather than "write failed".

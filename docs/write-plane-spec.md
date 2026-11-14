@@ -15,7 +15,8 @@ instance's `rows` table and the root's named `fragments` placed by `use` — are
 are built; starting from nothing — `createVariables` (a collection, its modes and every variable as one table, aliases
 included) and `createStyles` (paint, text and effect styles whose values name variables), a name the file has updated
 in place, both first in a batch so the specs and patches after them name what they make — is built; seeding them from
-code tokens and creating components are not)
+code tokens — `seedTokens`, a project's `tokens.dtcg.json` or `tokens.resolver.json` read by the MCP server into those
+tables, modes included, the tokens it cannot map listed — is built; creating components is not)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -44,7 +45,7 @@ system first, then compose from it by name:
 | Starting point | Route |
 |---|---|
 | A ready-made library can be enabled in the file | compose from it by name; nothing else is needed |
-| The project has tokens in code | a script turns them into the variable and style table, landed from disk at almost no token cost |
+| The project has tokens in code | `seedTokens` reads them (DTCG, or a DTCG resolver) into the variable and style tables, landed from disk at almost no token cost (built) |
 | Truly blank | create the variables and styles as one table, create a small kit of components once, then compose |
 
 A set of variables or styles is sent as one compact table, not an op each. A component is a tree spec

@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 1101,
+  "toolDefinition": 1137,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -149,6 +149,15 @@
         "out": 959,
         "in": 859,
         "total": 1818
+      }
+    },
+    "seed-tokens": {
+      "start-from-nothing": {
+        "calls": 2,
+        "ops": 2,
+        "out": 803,
+        "in": 886,
+        "total": 1689
       }
     }
   }

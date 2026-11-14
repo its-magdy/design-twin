@@ -418,7 +418,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    The create tables come first in a batch and run first: what they will make is the batch's plan
    (`figma-plugin/src/batch-plan.ts`), so a later op's name for a new variable or text style resolves, like an import,
    once they have run. A spec given as `treeFile` is read by the MCP server
-   (`spec-file.ts`) and never reaches the plugin as a path. The design record is `docs/write-plane-spec.md`; the
+   (`spec-file.ts`) and never reaches the plugin as a path; so is a `seedTokens` op's token file (`seed-file.ts`,
+   mapped by `token-seed.ts`), which becomes the create tables in its place, so the plugin sees only those. The design record is `docs/write-plane-spec.md`; the
    token cost of each route is measured by `test/write-cost.test.ts`.
 
 ## Security posture
@@ -528,7 +529,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   the file has is updated in place rather than duplicated (only local collections and styles count; a library's with
   the same name is left alone), and everything a table made is removed again, with what it changed set back, when any
   op of the batch fails. The same `writeImpact` dry run says which names each table would create and which it would
-  update.
+  update. The tables can come from the project's own token file (`seedTokens`): the MCP server reads a DTCG file or a
+  DTCG resolver, inside the directory it was started in, and the token values never pass through the model.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).
