@@ -580,7 +580,7 @@ async function applyStyles(t: StylesTarget, refs: ResolvedRefs, consent: () => v
 export async function applyCreates(res: CreateResolution, consent: () => void, changes: Change[]): Promise<Map<number, AppliedWrite>> {
   const rows = new Map<number, AppliedWrite>();
   const ordered = [...res.targets].sort((a, b) => a[0] - b[0]);
-  // Before any table sets an alias, every alias any table of the batch replaces on an existing variable is dropped (a
+  // Before the first alias is set, every alias the batch's tables replace on an existing variable is dropped (a
   // plain placeholder of its type), so an old alias a later table replaces cannot close a loop with a new alias an
   // earlier one sets. The first variable table does it, as the first thing its Change puts back last.
   const tables = ordered.map(([, t]) => t).filter((t): t is VariablesTarget => t.kind === "variables");
