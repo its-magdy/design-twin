@@ -56,7 +56,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   path and up to three candidates).
 - Failed partway: `Write failed at op N`, with what was put back (`restored`) and what stays (`applied`). Not all of it
   may come back: with Allow edits turned off mid-batch nothing is put back; a value that cannot be restored is named in
-  the error; a node already deleted stays deleted. Read `applied` before a retry, so nothing is made twice.
+  the error; a node already deleted stays deleted; an imported library item stays, and is not listed in `applied`.
+  Read `applied` before a retry, so nothing is made twice.
 - A dry run: `{dryRun: true, creates, overwrites, moves?, deletes?, invalid, refusedByFile?, steps, editsAllowed,
   reviewWrites?, note}`; each step has `effect`, `target`, a one-sentence `change`, `fields` (one row per field of a
   patch or a style), `warnings`, `invalid` (every problem), and for a source edit `affects` and `refusedByFile`. A

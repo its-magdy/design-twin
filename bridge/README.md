@@ -912,7 +912,7 @@ export tools' whole-frame reference PNG; see `--screenshot` above),
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
-create, overwrite, move or delete without touching the file — a batch that fails partway is put back as far as it can be (what stays is listed
+create, overwrite, move or delete without touching the file — a batch that fails partway is put back as far as it can be (what stays, bar imported library items, is listed
 in `applied`), but one that landed is undone only by the designer's Cmd-Z, so preview anything that overwrites; refused outright when the file is in read-only Dev Mode — and **refused unless the designer has
 ticked "Allow edits"** in the plugin window, see below), and two that read the export already on disk and
 need no Figma connection — `design_get_component` (one component's variant node trees) and
@@ -971,10 +971,12 @@ names each offending field by path, so a client without the skill can still corr
 **A batch is checked whole, and put back on failure as far as it can be.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
 node has), and a batch with any problem is refused whole, every problem listed. Then each op keeps what it replaces:
 if one fails partway, everything the batch already did is put back — values restored, nodes it created removed, moved
-nodes returned to their parent and place — and listed as `restored`; whatever stays is listed as `applied`. Not all of it always comes back: once the
-designer turns "Allow edits" off the plugin changes nothing more, not even to undo its own work, and a value that
-cannot be restored is named in the error. Deletes run last, once everything else has landed, because a deleted node
-cannot be brought back. The batch is one Cmd-Z step for the designer.
+nodes returned to their parent and place — and listed as `restored`. Not all of it always comes back: once the
+designer turns "Allow edits" off the plugin changes nothing more, not even to undo its own work (so putting back can
+also stop partway), a value that cannot be restored is named in the error, and a library item imported for the batch
+stays. Deletes run last, once everything else has landed, because a deleted node cannot be brought back. `applied`
+lists what stays — the changes not put back and the deletes already run — but not imported library items; a batch
+that fails while importing has an empty `applied`. The batch is one Cmd-Z step for the designer.
 A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
 sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
 runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's
@@ -993,7 +995,7 @@ library collection the file does not use yet is refused by name (using it means 
 which a write cannot do yet); one the file already uses works by its exact id. The reply names the collection and
 the mode before and after (`inherited` when none was set), and the dry run says the same change in words (it does
 not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes are put back
-with the rest of the batch.
+with the rest of the batch, as far as it can be (see above).
 
 `createTree` creates a whole screen in one op. `tree` is the root frame, written the way the read export writes a
 node: the same field names and values, defaults left out, no ids and no parent references. A node is a `FRAME`, a
@@ -1045,7 +1047,7 @@ is touched: the spec itself (by the dry run, the bridge and the plugin alike), t
 every design-system name against the file, with up to three candidates for each miss — and a bad spec, page, font or
 name refuses the whole batch.
 The tree is built hidden, then moved to its page and shown only when every node is in place, so it lands whole or not
-at all; if a later op of the batch fails, the tree is removed and listed as `restored`. Without `x`/`y` on the root,
+at all; if a later op of the batch fails, the tree is removed and listed as `restored` (as far as the batch can be put back). Without `x`/`y` on the root,
 the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
 The reply is small: `{id, created: {frames, texts, instances, clones}, handles, unbound}` for the tree (`instances`,
 `clones`, `handles` and `unbound` only when there are any), plus `warnings` for anything that had no effect (an `x`/`y` inside auto-layout,
@@ -1106,7 +1108,7 @@ same key comes back and the result is still in the file, it is updated instead o
 - a frame whose children change order is reordered, and a layer the designer added inside keeps its place.
 
 Removals run last, with the batch's deletes; a node to be removed that holds a layer this key did not build refuses
-the batch (move the layer out, or keep the node in the spec). Everything else is put back like any op's if the batch
+the batch (move the layer out, or keep the node in the spec). Everything else is put back like any op's (as far as it can be) if the batch
 fails, and the update is one Cmd-Z step. `page` must be left out or name the page the result is on. One key may appear
 once per batch. If the result was deleted, the key builds a new one.
 
@@ -1155,7 +1157,7 @@ A library variable the file already uses is found by its key even when its libra
 local variables that alias it and the local styles bound to it): it can be bound in a spec, a patch or a style's
 `tokens` with no import, and a source edit of it is refused as a library's. A file on a Figma plan that allows fewer
 modes than a copied collection has refuses a value for a mode past the limit; the error names the mode and the plan,
-and the batch is put back.
+and the batch is put back as far as it can be.
 
 - `setVariable` sets a local variable's value per mode. `values` maps a mode's exact name (or its modeId) to a value as
   the read export's `values` writes one: a hex colour for a colour variable, a number, a string, `true`/`false`, or
@@ -1182,8 +1184,8 @@ With a plugin connected, the dry run asks it what each source edit carries to (`
 through a style bound to the variable), `affects.styles` and `affects.variables` the styles and aliases bound to a
 variable, and `affects.instances` a main component's instances. A source edit the file refuses as it is now shows
 `refusedByFile` with the reason. With no plugin connected the preview says the counts are missing, rather than
-guessing. If a later op of the batch fails, a source edit is put back with the rest (a variable's old values and
-aliases, a style's paints, effects, fonts and its bound variables).
+guessing. If a later op of the batch fails, a source edit is put back with the rest, as far as the batch can be (a
+variable's old values and aliases, a style's paints, effects, fonts and its bound variables).
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

@@ -106,7 +106,8 @@ item it named may already have been imported: an import only makes the item avai
 - **An op failed partway** (`Write failed at op N`) → the batch tries to put back what it did, and lists that as
   `restored`. Not everything always comes back: when **Allow edits** is turned off mid-batch the plugin changes nothing
   more, not even to undo its own work, so every change so far stays; a value that cannot be restored stays (the error
-  says which); and nodes already deleted cannot be brought back. Whatever stays is listed under `applied`, with ids.
+  says which); nodes already deleted cannot be brought back; and a library item imported for the batch stays. What
+  stays is listed under `applied`, with ids — all but those imported items.
   Read it — or read the nodes back with an outline — before you retry, and send only what is missing, so nothing is
   made twice.
 

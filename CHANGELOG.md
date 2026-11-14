@@ -26,7 +26,7 @@ list of merged PRs.
   changes were put back lists them.
 - A `figma_write` batch is now put back when an op fails: everything the batch already did is put back (values
   restored, created nodes removed, moved nodes returned) and listed as `restored`, as far as it can be (not once Allow
-  edits is turned off mid-batch; what stays is listed in `applied`). Before, only variable-mode
+  edits is turned off mid-batch; what stays, bar imported library items, is listed in `applied`). Before, only variable-mode
   changes and `createTree` trees were put back; `createFrame`, `createText`, `setFill` and `setText` stayed applied.
   `figma_write`'s definition grew from 1,184 to 1,304 estimated tokens.
 
@@ -123,7 +123,7 @@ list of merged PRs.
   brand version of a screen one op on its frame, and `clearVariableMode` (`nodeId`, `collection`) puts it back on the
   mode it inherits. Collections and modes are given by exact name or id. A name that matches nothing or several
   things refuses the whole batch before anything runs, with up to three candidates. If a later op in the batch
-  fails, the mode changes are put back. A library collection the file doesn't use yet is refused by name.
+  fails, the mode changes are put back as far as they can be. A library collection the file doesn't use yet is refused by name.
 - `dtwin outline <screen.json> [--budget N]` prints the same outline for a screen already on disk.
 - `plan-skeleton` now gives each instance the component map covers a ready `codeUsage`: the module and export (a
   matching `variantOverrides` target included), the code props with translated values, and the slots. Anything the map
