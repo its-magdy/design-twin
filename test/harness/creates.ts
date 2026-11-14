@@ -317,6 +317,17 @@ export const cases: Case[] = [{
     ok("[STYLES] the existing paint style changed in place (one style named Primary of each kind)", w.paint.description === "The main colour" && w.scene.localStyles.paint.filter((s) => s.name === "Primary").length === 1);
     const again = await write(w, [{ op: "createStyles", styles: [{ name: "Primary", kind: "paint", set: { description: "The main colour", paints: [{ type: "solid", color: "#00ff00" }] } }] }]);
     ok("[STYLES] re-sent as it is: unchanged", again.ok && same(again.applied[0]?.rows, [[w.paint.id, "unchanged"]]));
+    // Found live: Figma moves a bound field's raw value to what its variable resolves to (a variable written earlier in
+    // the batch does it), so the raw value read before the re-send differs from the one sent. Only the binding counts.
+    if (brand && card) {
+      brand.paints = paints.map((p) => ({ ...p, color: { r: 1, g: 1, b: 1 } }));
+      card.effects = fx.map((e) => ({ ...e, radius: 16, color: { r: 0.1, g: 0.1, b: 0.1, a: 1 } }));
+    }
+    const bound = await write(w, [{ op: "createStyles", styles: [
+      { name: "Brand", kind: "paint", set: { paints: [{ type: "solid", tokens: { color: "color/brand" } }] } },
+      { name: "Card", kind: "effect", set: { effects: [{ type: "drop_shadow", color: "#00000040", offset: { x: 0, y: 2 }, radius: 8, tokens: { color: "gray/900", radius: "space/base" } }] } },
+    ] }]);
+    ok("[STYLES] re-sent with its bound raw values moved by Figma: still unchanged (the bindings are the same)", bound.ok && same(bound.applied[0]?.rows?.map((x) => x[1]), ["unchanged", "unchanged"]));
   },
 }, {
   name: "the ops after the create ops name what they make: a spec, a patch; a source edit of a new name is pointed at its row",

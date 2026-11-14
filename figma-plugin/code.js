@@ -1560,15 +1560,15 @@
       const say = (msg) => {
         problems.push(path + ": " + msg);
       };
-      const own2 = {};
+      const own3 = {};
       const set = {};
       for (const k of Object.keys(n)) {
         const v = n[k];
         if (v === void 0) continue;
         if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path + "." + k + ": not on a copy \u2014 " + NOT_ON_CLONE[k]);
-        else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own2 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
+        else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own3 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
       }
-      problems.push(...objectProblems(own2, CLONE_RULES, path));
+      problems.push(...objectProblems(own3, CLONE_RULES, path));
       const self = Object.keys(set).length ? patch(set, path) : null;
       if (self) problems.push(...self.problems);
       if (parentFlex !== null && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
@@ -9312,10 +9312,10 @@
     const uses = [];
     const existingRows = /* @__PURE__ */ new Set();
     for (const r2 of allRows) if (r2.existing) existingRows.add(r2.existing.id);
-    const lookup = (ref2, own2, use, bad) => {
-      const mine = own2 === null ? void 0 : allRows.filter((r2) => r2.op === own2 && r2.name === ref2)[0];
+    const lookup = (ref2, own3, use, bad) => {
+      const mine = own3 === null ? void 0 : allRows.filter((r2) => r2.op === own3 && r2.name === ref2)[0];
       if (mine) return { row: mine };
-      const rows = allRows.filter((r2) => r2.name === ref2 && r2.op !== own2);
+      const rows = allRows.filter((r2) => r2.name === ref2 && r2.op !== own3);
       const inFile = locals.filter((v) => v.name === ref2 && !existingRows.has(v.id)).length;
       if (rows.length + inFile > 1) {
         bad(use.path + ": variable '" + ref2 + "' matches " + (rows.length + inFile) + " variables (" + rows.map((r2) => "a row of ops[" + r2.op + "]").concat(inFile ? [inFile + " in the file"] : []).join(", ") + ") \u2014 pass the one meant by key or id, or rename one");
@@ -9682,13 +9682,44 @@
         if (!v) throw new Error("variable '" + ref2 + "' was not resolved before the batch ran");
         variables.set(ref2, v);
       }
-      const before = s.existing ? styleSnapshot(st) : "";
+      const before = s.existing ? comparableStyle(st) : "";
       const target = { style: st, set: s.row.set, refs: { instances: /* @__PURE__ */ new Map(), variables, textStyles: /* @__PURE__ */ new Map() }, font: null, bound: s.bound };
       edits.push(await applyStyle(target, consent2));
-      outcome.push([st.id, !s.existing ? "created" : styleSnapshot(st) === before ? "unchanged" : "updated"]);
+      outcome.push([st.id, !s.existing ? "created" : comparableStyle(st) === before ? "unchanged" : "updated"]);
     }
     applied.rows = outcome;
     return applied;
+  }
+  var isRecord2 = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+  var own2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  function comparableStyle(st) {
+    const parsed = JSON.parse(styleSnapshot(st));
+    if (!Array.isArray(parsed)) return JSON.stringify(parsed);
+    const kept = parsed[0];
+    const textBound = parsed[1];
+    const drop = (o, bound) => {
+      if (!isRecord2(bound)) return;
+      for (const k of Object.keys(bound)) {
+        if (k === "offsetX" || k === "offsetY") {
+          const off = o.offset;
+          if (isRecord2(off)) delete off[k === "offsetX" ? "x" : "y"];
+          continue;
+        }
+        if (k === "fontFamily" || k === "fontStyle" || k === "fontWeight") {
+          delete o.fontName;
+          continue;
+        }
+        if (own2(o, k)) delete o[k];
+      }
+    };
+    if (isRecord2(kept)) {
+      for (const list of [kept.paints, kept.effects]) {
+        if (!Array.isArray(list)) continue;
+        for (const item of list) if (isRecord2(item)) drop(item, item.boundVariables);
+      }
+      drop(kept, textBound);
+    }
+    return JSON.stringify(parsed);
   }
   async function applyCreates(res, consent2, changes) {
     const rows = /* @__PURE__ */ new Map();

@@ -563,13 +563,41 @@ async function applyStyles(t: StylesTarget, refs: ResolvedRefs, consent: () => v
       if (!v) throw new Error("variable '" + ref + "' was not resolved before the batch ran");
       variables.set(ref, v);
     }
-    const before = s.existing ? styleSnapshot(st) : "";
+    const before = s.existing ? comparableStyle(st) : "";
     const target: StyleTarget = { style: st, set: s.row.set, refs: { instances: new Map(), variables, textStyles: new Map() }, font: null, bound: s.bound };
     edits.push(await applyStyle(target, consent));
-    outcome.push([st.id, !s.existing ? "created" : styleSnapshot(st) === before ? "unchanged" : "updated"]);
+    outcome.push([st.id, !s.existing ? "created" : comparableStyle(st) === before ? "unchanged" : "updated"]);
   }
   applied.rows = outcome;
   return applied;
+}
+
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+
+/** A style as "unchanged" compares it: its snapshot without the raw value of a field bound to a variable. Figma moves that
+ *  raw value as the variable resolves (a variable written earlier in the batch does it), so only the binding counts. */
+function comparableStyle(st: AnyStyle): string {
+  const parsed: unknown = JSON.parse(styleSnapshot(st));
+  if (!Array.isArray(parsed)) return JSON.stringify(parsed);
+  const kept: unknown = parsed[0];
+  const textBound: unknown = parsed[1];
+  const drop = (o: Record<string, unknown>, bound: unknown): void => {
+    if (!isRecord(bound)) return;
+    for (const k of Object.keys(bound)) {
+      if (k === "offsetX" || k === "offsetY") { const off = o.offset; if (isRecord(off)) delete off[k === "offsetX" ? "x" : "y"]; continue; }
+      if (k === "fontFamily" || k === "fontStyle" || k === "fontWeight") { delete o.fontName; continue; }
+      if (own(o, k)) delete o[k];
+    }
+  };
+  if (isRecord(kept)) {
+    for (const list of [kept.paints, kept.effects]) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) if (isRecord(item)) drop(item, item.boundVariables);
+    }
+    drop(kept, textBound);
+  }
+  return JSON.stringify(parsed);
 }
 
 /**
