@@ -49,7 +49,7 @@ list of merged PRs.
   name unique in it) to a patch of that layer, so several similar screens cost only what differs. An instance takes
   `rows` (each an object of property values, or with `columns` a list of them) and makes one instance per row. The
   root's `fragments` names parts that are not components, placed anywhere with `{use: name, edits?}`. All three are
-  checked whole before anything is built and put back with the batch if it fails; the reply counts copies as `created.clones`. The
+  checked whole before anything is built and put back with the batch, as far as it can be, if it fails; the reply counts copies as `created.clones`. The
   write-cost suite records the several-similar-screens job on the new route: 1,773 estimated tokens against 2,604 for
   the four ops. `figma_write`'s definition grew by about 90 estimated tokens.
 - `figma_write` can change a design-system source once, and Figma carries the change to everything that uses it.
