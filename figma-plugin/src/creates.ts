@@ -490,7 +490,8 @@ function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => v
   for (const r of t.rows) {
     const v = r.variable;
     if (!v) throw new Error("variable '" + r.name + "' was not made");
-    before.set(r, r.existing ? start.get(r.existing) ?? JSON.stringify(v.valuesByMode) : "");
+    const was = r.existing ? start.get(r.existing) : undefined;
+    before.set(r, r.existing ? (was !== undefined ? was : JSON.stringify(v.valuesByMode)) : "");
     t.modes.forEach((m, j) => { const id = ids[j]; if (id !== undefined && r.values[j] !== undefined) cells.push({ r, v, modeId: id, mode: m.name, cell: j }); });
     // A new variable in a collection whose other modes the table leaves out: its first value there too.
     if (!r.existing && r.values[0] !== undefined) for (const id of t.unlisted) cells.push({ r, v, modeId: id, mode: "", cell: 0 });

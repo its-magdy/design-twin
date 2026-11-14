@@ -9507,7 +9507,6 @@
     return new Error("Figma refused " + what + ": " + msg + (/limit/i.test(msg) ? " (this file's Figma plan limits how many modes a collection has; send fewer modes, or move the file to a plan with more)" : ""));
   }
   function applyVariables(t, refs2, consent2, changes, clear, start) {
-    var _a;
     let coll = t.collection;
     let made = false;
     const added = [];
@@ -9606,7 +9605,8 @@
     for (const r of t.rows) {
       const v = r.variable;
       if (!v) throw new Error("variable '" + r.name + "' was not made");
-      before.set(r, r.existing ? (_a = start.get(r.existing)) != null ? _a : JSON.stringify(v.valuesByMode) : "");
+      const was = r.existing ? start.get(r.existing) : void 0;
+      before.set(r, r.existing ? was !== void 0 ? was : JSON.stringify(v.valuesByMode) : "");
       t.modes.forEach((m, j) => {
         const id = ids[j];
         if (id !== void 0 && r.values[j] !== void 0) cells.push({ r, v, modeId: id, mode: m.name, cell: j });
