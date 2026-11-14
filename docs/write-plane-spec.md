@@ -2,10 +2,10 @@
 
 Status: **accepted, partly built** (the four ops `figma_write` started with are the baseline this replaces; setting a
 node's variable mode by name, `setVariableMode` / `clearVariableMode`, is built; the tree spec, `createTree` — frames,
-auto-layout and text, placement, all or nothing — is built; design-system references in it — instances of a named
+auto-layout and text, placement, checked whole — is built; design-system references in it — instances of a named
 component with property values, variables, text styles, library imports under the consent gate — are built; patch by
-id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the whole batch put back when an
-op fails, one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
+id — `patch` with one row per field, `move` and `delete` of the session's own nodes, the batch put back when an
+op fails (as far as it can be: not once Allow edits is turned off, and what stays is reported in `applied`), one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
 result in place and replies with only what changed are built; source edits — `setVariable` and `setStyle` on this
 file's own variables and paint, text and effect styles, a `patch` of a main component, a library's refused naming the
 library, and the dry run's count of what follows (`writeImpact`) — are built; clone and patch — a `createTree` node
@@ -115,9 +115,11 @@ screens.
 
 ### Safety
 
-14. **All or nothing.** Everything is checked before the file is touched: names resolve, fonts exist,
+14. **All or nothing, as far as the plugin can put things back.** Everything is checked before the file is touched: names resolve, fonts exist,
     parents exist. A new tree is built to the side and attached only when complete. A patch batch keeps
-    the old values and restores them when a later op fails.
+    the old values and restores them when a later op fails — best effort: nothing is put back once the designer
+    turns Allow edits off mid-batch, a restore can fail for one change, an imported library item and a deleted node
+    stay, and whatever survives is reported in `applied`.
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
 16. **One undo per batch.**

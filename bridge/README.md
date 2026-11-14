@@ -912,8 +912,8 @@ export tools' whole-frame reference PNG; see `--screenshot` above),
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
-create, overwrite, move or delete without touching the file — a batch that fails partway is put back whole, but one
-that landed is undone only by the designer's Cmd-Z, so preview anything that overwrites; refused outright when the file is in read-only Dev Mode — and **refused unless the designer has
+create, overwrite, move or delete without touching the file — a batch that fails partway is put back as far as it can be (what stays is listed
+in `applied`), but one that landed is undone only by the designer's Cmd-Z, so preview anything that overwrites; refused outright when the file is in read-only Dev Mode — and **refused unless the designer has
 ticked "Allow edits"** in the plugin window, see below), and two that read the export already on disk and
 need no Figma connection — `design_get_component` (one component's variant node trees) and
 `design_drift_lint` (the component map vs the export; see below). The frame-walking export tools accept opt-in read flags
@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, all or nothing) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, for a source edit with a plugin connected, what follows it: `affects`) |
+| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, for a source edit with a plugin connected, what follows it: `affects`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -968,7 +968,7 @@ rule, and carries this grammar in a reference file the agent reads only when it 
 description is only the op names with a line each, the dry-run rule and a pointer to that reference. A refused batch
 names each offending field by path, so a client without the skill can still correct a call.
 
-**A batch is all or nothing.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
+**A batch is checked whole, and put back on failure as far as it can be.** Every op is checked before the first one runs (names, nodes, fonts, the fields each
 node has), and a batch with any problem is refused whole, every problem listed. Then each op keeps what it replaces:
 if one fails partway, everything the batch already did is put back — values restored, nodes it created removed, moved
 nodes returned to their parent and place — and listed as `restored`; whatever stays is listed as `applied`. Not all of it always comes back: once the
@@ -978,7 +978,7 @@ cannot be brought back. The batch is one Cmd-Z step for the designer.
 A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
 sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
 runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's
-auto-layout on and then fills a child is accepted, and one that cannot work fails there and is put back whole. Names
+auto-layout on and then fills a child is accepted, and one that cannot work fails there and is put back (as above). Names
 (components, variables, text styles, pages, collections) always resolve against the file as it is before the batch:
 renaming a component and naming it by its new name, or changing a component and relying on that change in a
 `createTree` instance, takes two calls.
@@ -1054,7 +1054,7 @@ read node can be fed back in: what the read writes on an ordinary frame or text 
 the node counts, where it lands, the handles, the fonts, the components, variables and text styles it names, and how
 many raw values stay unbound (it does not read the file, so the names are checked when applied). A spec holds at most 500 nodes.
 
-**Copies, rows and fragments** (all three are checked and land all or nothing, like the rest of a spec):
+**Copies, rows and fragments** (all three are checked whole before anything is built, like the rest of a spec):
 
 - **A copy with its differences.** A node `{clone: "12:34", …}` is a copy of the existing node with that id, with every
   layer and value it has (a nested main component is copied as an instance of it). Its other fields are a `patch` of

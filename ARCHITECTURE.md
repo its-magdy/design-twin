@@ -401,9 +401,12 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    code→design path. Kept a separate process so the write surface never touches the CLI's read path.
    Writes are still a small fixed set of safe ops with a `dryRun` preview, not a general authoring API, and
    the plugin applies none of them until the designer ticks **Allow edits** in its window (see Security posture).
-   A batch is all or nothing (`figma-plugin/src/writes.ts`): every op is resolved against the file before the first
-   runs, each op that changes the file returns a `Change` that can put it back (`write-batch.ts`), and a failure
-   partway puts back the whole batch; deletes run last since a deleted node cannot be restored. One batch is one
+   A batch is checked whole and put back on failure as far as it can be (`figma-plugin/src/writes.ts`): every op is
+   resolved against the file before the first runs, each op that changes the file returns a `Change` that can put it
+   back (`write-batch.ts`), and a failure partway puts those back, newest first. That is best effort: when the designer
+   turns Allow edits off mid-batch nothing is put back (the plugin changes nothing more, not even to undo its own
+   work), a restore can stop partway or fail for one change, a library item imported for the batch stays, and deletes
+   run last since a deleted node cannot be restored. Whatever survives is reported in `applied`. One batch is one
    Cmd-Z step (`commitUndo` before and after).
    The op table (`bridge/src/commands.ts` `WRITE_OPS`, 12 ops) is read by all three places a write is checked —
    the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
