@@ -9579,29 +9579,52 @@
       r.variable = v;
       if (r.planned) r.planned.made = v;
     }
+    const cells = [];
+    const before = /* @__PURE__ */ new Map();
+    for (const r of t.rows) {
+      const v = r.variable;
+      if (!v) throw new Error("variable '" + r.name + "' was not made");
+      before.set(r, r.existing ? JSON.stringify(v.valuesByMode) : "");
+      t.modes.forEach((m, j) => {
+        const id = ids[j];
+        if (id !== void 0 && r.values[j] !== void 0) cells.push({ r, v, modeId: id, mode: m.name, cell: j });
+      });
+      if (!r.existing && r.values[0] !== void 0) for (const id of t.unlisted) cells.push({ r, v, modeId: id, mode: "", cell: 0 });
+    }
+    const isAlias = (c2) => typeof c2.r.values[c2.cell] === "object";
+    const order = cells.filter((c2) => !isAlias(c2));
+    const byKey = /* @__PURE__ */ new Map();
+    const key = (r, modeId) => r.index + "|" + modeId;
+    for (const c2 of cells) if (isAlias(c2)) byKey.set(key(c2.r, c2.modeId), c2);
+    const done = /* @__PURE__ */ new Set();
+    const visit2 = (c2, depth) => {
+      if (done.has(c2) || depth > cells.length) return;
+      done.add(c2);
+      const target = c2.r.targets[c2.cell];
+      if (target && "row" in target && target.row.op === c2.r.op) {
+        const dep = byKey.get(key(target.row, c2.modeId));
+        if (dep) visit2(dep, depth + 1);
+      }
+      order.push(c2);
+    };
+    for (const c2 of cells) if (isAlias(c2)) visit2(c2, 0);
+    for (const c2 of order) {
+      const value = c2.r.values[c2.cell];
+      if (value === void 0) continue;
+      consent2();
+      const old = copyValue(c2.v.valuesByMode[c2.modeId]);
+      try {
+        c2.v.setValueForMode(c2.modeId, cellValue(value, c2.r.targets[c2.cell], refs2, c2.r.type));
+      } catch (e) {
+        throw modeRefused("the value of '" + c2.r.name + "' for mode '" + (c2.mode || "the default") + "'", e);
+      }
+      if (c2.r.existing) kept.push({ v: c2.v, modeId: c2.modeId, value: old });
+    }
     const outcome = [];
     for (const r of t.rows) {
       const v = r.variable;
       if (!v) throw new Error("variable '" + r.name + "' was not made");
-      const before = r.existing ? JSON.stringify(v.valuesByMode) : "";
-      const set = (modeId, mode, cell) => {
-        const value = r.values[cell];
-        if (value === void 0) return;
-        consent2();
-        const old = copyValue(v.valuesByMode[modeId]);
-        try {
-          v.setValueForMode(modeId, cellValue(value, r.targets[cell], refs2, r.type));
-        } catch (e) {
-          throw modeRefused("the value of '" + r.name + "' for mode '" + (mode || "the default") + "'", e);
-        }
-        if (r.existing) kept.push({ v, modeId, value: old });
-      };
-      t.modes.forEach((m, j) => {
-        const id = ids[j];
-        if (id !== void 0) set(id, m.name, j);
-      });
-      if (!r.existing) for (const id of t.unlisted) set(id, "", 0);
-      outcome.push([v.id, !r.existing ? "created" : JSON.stringify(v.valuesByMode) === before ? "unchanged" : "updated"]);
+      outcome.push([v.id, !r.existing ? "created" : JSON.stringify(v.valuesByMode) === before.get(r) ? "unchanged" : "updated"]);
     }
     applied.result = made ? "created" : added.length ? "updated" : "unchanged";
     if (added.length && !made) applied.modesAdded = added.map((m) => m.name);

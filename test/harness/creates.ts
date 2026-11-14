@@ -193,6 +193,27 @@ export const cases: Case[] = [{
     ok("[CREATE] none of the refused batches left a variable behind", Object.keys(w.scene.variables).length === before + 3);
   },
 }, {
+  name: "createVariables: re-sending a table that reverses an alias lands in either row order",
+  async run() {
+    const w = await createWorld();
+    const made = await write(w, [{ op: "createVariables", collection: "Rev", variables: [["a", "number", { aliasOf: "b" }], ["b", "number", 1]] }]);
+    const a = w.byName("a"), b = w.byName("b");
+    ok("[ORDER] the starting table: a aliases b", made.ok && a !== undefined && b !== undefined && same(Object.values(a.valuesByMode), [alias(b.id)]));
+    // b now aliases a and a becomes a value: the row for b first would pass through b → a → b unless a is set first.
+    const flip = await write(w, [{ op: "createVariables", collection: "Rev", variables: [["b", "number", { aliasOf: "a" }], ["a", "number", 2]] }]);
+    ok("[ORDER] the alias reversed with the aliasing row first: lands, both reported updated", flip.ok && a !== undefined && b !== undefined
+      && same(Object.values(b.valuesByMode), [alias(a.id)]) && same(Object.values(a.valuesByMode), [2]) && same(flip.applied[0]?.rows?.map((x) => x[1]), ["updated", "updated"]));
+    const back = await write(w, [{ op: "createVariables", collection: "Rev", variables: [["b", "number", 1], ["a", "number", { aliasOf: "b" }]] }]);
+    ok("[ORDER] and back, with the value row first: lands", back.ok && a !== undefined && b !== undefined
+      && same(Object.values(a.valuesByMode), [alias(b.id)]) && same(Object.values(b.valuesByMode), [1]));
+    // A chain that reverses: c → b → a becomes a → b → c, the aliasing rows first (a → b while b still aliases a).
+    const chain = await write(w, [{ op: "createVariables", collection: "Rev", variables: [["c", "number", { aliasOf: "b" }], ["b", "number", { aliasOf: "a" }], ["a", "number", 3]] }]);
+    const rev = await write(w, [{ op: "createVariables", collection: "Rev", variables: [["a", "number", { aliasOf: "b" }], ["b", "number", { aliasOf: "c" }], ["c", "number", 4]] }]);
+    const c = w.byName("c");
+    ok("[ORDER] a three-row alias chain reversed: lands", chain.ok && rev.ok && a !== undefined && b !== undefined && c !== undefined
+      && same(Object.values(a.valuesByMode), [alias(b.id)]) && same(Object.values(b.valuesByMode), [alias(c.id)]) && same(Object.values(c.valuesByMode), [4]));
+  },
+}, {
   name: "createVariables: the table's own shape is checked by the dry run, the wire and the plugin alike",
   async run() {
     const w = await createWorld();

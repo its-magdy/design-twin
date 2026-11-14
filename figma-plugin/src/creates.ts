@@ -454,23 +454,51 @@ function applyVariables(t: VariablesTarget, refs: ResolvedRefs, consent: () => v
     r.variable = v;
     if (r.planned) r.planned.made = v;
   }
+  // Every cell the table sets: (row, mode, which value).
+  interface Cell { r: RowTarget; v: Variable; modeId: string; mode: string; cell: number }
+  const cells: Cell[] = [];
+  const before = new Map<RowTarget, string>();
+  for (const r of t.rows) {
+    const v = r.variable;
+    if (!v) throw new Error("variable '" + r.name + "' was not made");
+    before.set(r, r.existing ? JSON.stringify(v.valuesByMode) : "");
+    t.modes.forEach((m, j) => { const id = ids[j]; if (id !== undefined && r.values[j] !== undefined) cells.push({ r, v, modeId: id, mode: m.name, cell: j }); });
+    // A new variable in a collection whose other modes the table leaves out: its first value there too.
+    if (!r.existing && r.values[0] !== undefined) for (const id of t.unlisted) cells.push({ r, v, modeId: id, mode: "", cell: 0 });
+  }
+  // The order the cells are set in: every raw value first (that clears the aliases they replace), then each alias after
+  // the alias of the row it names in that mode, so no step passes through a loop the finished table does not have
+  // (b → a while a still aliases b, when the same table makes a a value).
+  const isAlias = (c: Cell): boolean => typeof c.r.values[c.cell] === "object";
+  const order: Cell[] = cells.filter((c) => !isAlias(c));
+  const byKey = new Map<string, Cell>();
+  const key = (r: RowTarget, modeId: string): string => r.index + "|" + modeId;
+  for (const c of cells) if (isAlias(c)) byKey.set(key(c.r, c.modeId), c);
+  const done = new Set<Cell>();
+  const visit = (c: Cell, depth: number): void => {
+    if (done.has(c) || depth > cells.length) return;
+    done.add(c);
+    const target = c.r.targets[c.cell];
+    if (target && "row" in target && target.row.op === c.r.op) {
+      const dep = byKey.get(key(target.row, c.modeId));
+      if (dep) visit(dep, depth + 1);
+    }
+    order.push(c);
+  };
+  for (const c of cells) if (isAlias(c)) visit(c, 0);
+  for (const c of order) {
+    const value = c.r.values[c.cell];
+    if (value === undefined) continue;
+    consent();
+    const old = copyValue(c.v.valuesByMode[c.modeId]);
+    try { c.v.setValueForMode(c.modeId, cellValue(value, c.r.targets[c.cell], refs, c.r.type)); } catch (e) { throw modeRefused("the value of '" + c.r.name + "' for mode '" + (c.mode || "the default") + "'", e); }
+    if (c.r.existing) kept.push({ v: c.v, modeId: c.modeId, value: old });
+  }
   const outcome: Array<[string, CreateOutcome]> = [];
   for (const r of t.rows) {
     const v = r.variable;
     if (!v) throw new Error("variable '" + r.name + "' was not made");
-    const before = r.existing ? JSON.stringify(v.valuesByMode) : "";
-    const set = (modeId: string, mode: string, cell: number): void => {
-      const value = r.values[cell];
-      if (value === undefined) return;
-      consent();
-      const old = copyValue(v.valuesByMode[modeId]);
-      try { v.setValueForMode(modeId, cellValue(value, r.targets[cell], refs, r.type)); } catch (e) { throw modeRefused("the value of '" + r.name + "' for mode '" + (mode || "the default") + "'", e); }
-      if (r.existing) kept.push({ v, modeId, value: old });
-    };
-    t.modes.forEach((m, j) => { const id = ids[j]; if (id !== undefined) set(id, m.name, j); });
-    // A new variable in a collection whose other modes the table leaves out: its first value there too.
-    if (!r.existing) for (const id of t.unlisted) set(id, "", 0);
-    outcome.push([v.id, !r.existing ? "created" : JSON.stringify(v.valuesByMode) === before ? "unchanged" : "updated"]);
+    outcome.push([v.id, !r.existing ? "created" : JSON.stringify(v.valuesByMode) === before.get(r) ? "unchanged" : "updated"]);
   }
   applied.result = made ? "created" : added.length ? "updated" : "unchanged";
   if (added.length && !made) applied.modesAdded = added.map((m) => m.name);
