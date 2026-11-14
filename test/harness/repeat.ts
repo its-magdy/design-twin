@@ -225,6 +225,18 @@ export const cases: Case[] = [{
     const oddKids = kids(alive().find((n) => n.id === oddRows.applied[0]?.id));
     ok("[ROWS] a property named \"__proto__\" is set like any other", oddRows.ok === true && oddKids.length === 2
       && oddKids.every((n, i) => isNode(n.props) && Object.prototype.hasOwnProperty.call(n.props, "__proto__") && Object.getOwnPropertyDescriptor(n.props, "__proto__")?.value === ["On", "Off"][i]));
+    // …and put back like any other when a later op fails, and dropped by a keyed re-send like any other.
+    const oddId = must(oddKids[0]?.id, "odd instance");
+    const back = await api.applyWrites([{ op: "patch", nodeId: oddId, set: JSON.parse('{"props": {"__proto__": "Off"}}') as Record<string, unknown> }, { op: "setFill", nodeId: "gone:1", color: "#fff" }]);
+    const oddNow = alive().find((n) => n.id === oddId);
+    ok("[ROWS] a patch of a \"__proto__\" property is put back when a later op fails",
+      back.ok === false && back.restored?.length === 1 && isNode(oddNow?.props) && Object.getOwnPropertyDescriptor(oddNow.props, "__proto__")?.value === "On");
+    const keyedOdd = (props: string): Record<string, unknown> => JSON.parse('{"key": "odd", "children": [{"component": "Odd", "handle": "o", "props": ' + props + '}]}') as Record<string, unknown>;
+    const ko1 = await api.applyWrites([{ op: "createTree", tree: keyedOdd('{"__proto__": "On"}') }]);
+    const ko2 = await api.applyWrites([{ op: "createTree", tree: keyedOdd("{}") }]);
+    const rebuilt = alive().find((n) => n.id === ko2.applied[0]?.handles?.o);
+    ok("[ROWS] a keyed re-send that drops a \"__proto__\" property builds the instance anew, at the default",
+      ko2.ok === true && rebuilt !== undefined && rebuilt.id !== ko1.applied[0]?.handles?.o && isNode(rebuilt.props) && !Object.prototype.hasOwnProperty.call(rebuilt.props, "__proto__"));
     const dry = writeOpPreview({ op: "createTree", tree: { children: [{ component: "Button", rows: [{ Label: "A" }, { Label: "B" }] }] } }, 0);
     ok("[ROWS] the dry run counts the rows' instances", /with 3 nodes \(1 frame, 0 texts, 2 instances\)/.test(dry.change ?? ""));
     const count = alive().length;

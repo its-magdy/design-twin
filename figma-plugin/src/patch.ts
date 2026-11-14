@@ -469,7 +469,8 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
     for (const k of Object.keys(t.props)) {
       const p = n.componentProperties[k];
       if (!p) continue;
-      old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
+      // An own property, whatever the name (a property may be named "__proto__").
+      Object.defineProperty(old, k, { value: p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value, enumerable: true, writable: true, configurable: true });
       was.set(k, shown(k));
     }
     steps.push(() => { if ([...was].some(([k, v]) => shown(k) !== v)) n.setProperties(old); });

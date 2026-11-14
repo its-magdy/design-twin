@@ -5728,7 +5728,8 @@
       if (a.component !== b.component) return "its component changed";
       if (changed.indexOf("name") >= 0 && b.name === void 0) return "its name was dropped";
       if (changed.indexOf("box") >= 0 && b.box === void 0) return "its size was dropped";
-      const gone = Object.keys(a.props || {}).filter((k) => !b.props || !(k in b.props));
+      const bp = b.props;
+      const gone = Object.keys(a.props || {}).filter((k) => !bp || !Object.prototype.hasOwnProperty.call(bp, k));
       if (gone.length) return "a property it set was dropped";
     }
     if (kind === "TEXT") {
@@ -6906,7 +6907,7 @@
       for (const k of Object.keys(t.props)) {
         const p = n.componentProperties[k];
         if (!p) continue;
-        old[k] = p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value;
+        Object.defineProperty(old, k, { value: p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value, enumerable: true, writable: true, configurable: true });
         was.set(k, shown3(k));
       }
       steps.push(() => {

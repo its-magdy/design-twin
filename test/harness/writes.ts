@@ -219,8 +219,8 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
           const set = isNode(fields.props) ? fields.props : {};
           const vp = isNode(fields.mainComponent) && isNode(fields.mainComponent.variantProperties) ? fields.mainComponent.variantProperties : {};
           const bound = isNode(fields.propBound) ? fields.propBound : {};
-          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? vp[k] : k in set ? set[k] : d.defaultValue,
-            ...(isNode(bound[k]) ? { boundVariables: { value: bound[k] } } : {}) }]));
+          return Object.fromEntries(Object.entries(defs).map(([k, d]) => [k, { type: d.type, value: d.type === "VARIANT" ? (Object.prototype.hasOwnProperty.call(vp, k) ? vp[k] : Object.prototype.hasOwnProperty.call(set, k) ? set[k] : d.defaultValue) : Object.prototype.hasOwnProperty.call(set, k) ? set[k] : d.defaultValue,
+            ...(Object.prototype.hasOwnProperty.call(bound, k) && isNode(bound[k]) ? { boundVariables: { value: bound[k] } } : {}) }]));
         },
       });
       fields.props = {};

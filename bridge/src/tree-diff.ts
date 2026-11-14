@@ -133,7 +133,9 @@ function rebuildReason(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed
     if (a.component !== b.component) return "its component changed";
     if (changed.indexOf("name") >= 0 && b.name === undefined) return "its name was dropped";
     if (changed.indexOf("box") >= 0 && b.box === undefined) return "its size was dropped";
-    const gone = Object.keys(a.props || {}).filter((k) => !b.props || !(k in b.props));
+    // Own keys only: a property may be named "__proto__", which `in` would find on every object.
+    const bp = b.props;
+    const gone = Object.keys(a.props || {}).filter((k) => !bp || !Object.prototype.hasOwnProperty.call(bp, k));
     if (gone.length) return "a property it set was dropped";
   }
   if (kind === "TEXT") {
