@@ -11,7 +11,7 @@ import { toDTCG, toResolver } from "../design-to-code/tokens.ts";
 import type { Variable, VariableValue } from "../bridge/src/doc-types.ts";
 import { checkCreateStyles, checkCreateVariables, MAX_TABLE_ROWS } from "../bridge/src/create-spec.ts";
 import { isResolverDoc, MAX_SEED_COLLECTIONS, MAX_SEED_TOKENS, MAX_SEED_WORK, refProblem, resolverRefs, seedFromDtcg, seedFromResolver, type SeedOutcome, type SeedResult, type SeedRow, type SeedStylesOp, type SeedVariablesOp } from "../bridge/src/token-seed.ts";
-import { inputIndex, loadSeedTokens, seededPreview, seededReply, type SeedRecord } from "../bridge/src/seed-file.ts";
+import { inputIndex, loadSeedTokens, nodeSeedIo, readSeedJson, sameFile, seededPreview, seededReply, type SeedIo, type SeedRecord } from "../bridge/src/seed-file.ts";
 import { MAX_SPEC_FILE_BYTES } from "../bridge/src/spec-file.ts";
 import type { WritePreviewStep, WriteResult } from "../bridge/src/commands.ts";
 
@@ -45,6 +45,26 @@ const clean = (o: SeedOutcome): boolean => {
     && o.unmapped.every((u) => !seeded.has(u.token) && !SAYS_SEEDED.test(u.reason)) && o.partly.every((u) => seeded.has(u.token) && from(u));
 };
 const valid = (o: SeedOutcome): boolean => res(o).ops.every((op) => (op.op === "createVariables" ? checkCreateVariables(op).problems.length === 0 : checkCreateStyles(op).problems.length === 0));
+/** Words that would tell of a name moving between collections: there is no such move (a name only modifiers give is
+ *  the first collection's, seeded there or not at all). */
+const SEAT_MOVE = /in collection '[^']*': |\bseats?\b|moves? on|moved|tried (?:first|in)|by the next|a later collection/i;
+/** What is false in an outcome's notes, or null: a note that says a target is not seeded when it is, one that tells of
+ *  a seat move, or a "gives it too" note on a name seeded in another collection than the one it names. */
+const notesTrue = (o: SeedOutcome): string | null => {
+  if ("error" in o) return SEAT_MOVE.test(o.error) ? "a refusal tells of a seat move: " + o.error : null;
+  const seededIn = new Map<string, string | null>();
+  for (const t of tables(o)) for (const r of t.variables) seededIn.set(r[0], t.collection);
+  for (const s of stylesOf(o)) seededIn.set(s.name, null);
+  for (const u of [...o.unmapped, ...o.partly]) {
+    if (SEAT_MOVE.test(u.reason)) return "a note tells of a seat move: " + JSON.stringify(u);
+    const m = /\{([^{}]+)\}(?: names a token that is not seeded|, which is not seeded)/.exec(u.reason);
+    if (m && m[1] && seededIn.has(m[1].split(".").join("/"))) return "a note says {" + m[1] + "} is not seeded, and it is: " + JSON.stringify(u);
+    const f = /gives it too; only the first collection whose modifier gives it, '([^']*)', is read/.exec(u.reason);
+    const at = seededIn.get(u.token);
+    if (f && typeof at === "string" && at !== f[1]) return "a note names '" + f[1] + "' as the first collection, and the name is seeded in '" + at + "': " + JSON.stringify(u);
+  }
+  return null;
+};
 
 // ---------------------------------------------------------------- the round trip
 console.log("\nthe round trip: a design system emitted by toDTCG and toResolver, read back:");
@@ -390,7 +410,7 @@ console.log("\nevery token is in a table (perhaps with a `partly` note) or in `u
     resolutionOrder: [...order, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }],
   }), new Map());
   check(`a token only modifiers give, in two collections: seeded once, in the first, the other in \`partly\` (${JSON.stringify(tables(ctxTwice).map((t) => t.variables))})`,
-    same(rowOf(ctxTwice, "n"), ["n", "number", 1, 2]) && /modifier 'mb' sets it too; it is seeded from collection 'A'/.test(partOf(ctxTwice, "n")) && clean(ctxTwice));
+    same(rowOf(ctxTwice, "n"), ["n", "number", 1, 2]) && /modifier 'mb' gives it too; only the first collection whose modifier gives it, 'A', is read/.test(partOf(ctxTwice, "n")) && clean(ctxTwice));
 
   const one = dtcg(`{"n":{"$type":"number","$value":1,"$extensions":{"figma.com":{"modes":{"Only":2}}}},"c":{"$type":"color","$value":"#ffffff","$extensions":{"figma.com":{"modes":{"Only":"#000000"},"modeOpacity":{"Only":50}}}},"t":{"$type":"typography","$value":{"fontFamily":"Inter","fontSize":"16px"},"$extensions":{"figma.com":{"modes":{"Only":{"fontFamily":"Inter","fontSize":"18px"}}}}}}`);
   check(`a token with one mode: its mode's value (and that mode's opacity) for a variable and a style alike, a $value that differs in \`partly\` (${JSON.stringify(res(one))})`,
@@ -444,23 +464,30 @@ console.log("\nthe default mode types a token, and a name is claimed only once i
   check(`an alias to a token only a modifier gives takes the default context's type (${JSON.stringify(res(aliasLater))})`,
     same(rowOf(aliasLater, "r"), ["r", "number", { aliasOf: "n" }]) && same(rowOf(aliasLater, "n"), ["n", "number", 3, 4]) && clean(aliasLater));
 
-  // A collection that cannot seed a token leaves it for a later one.
+  // A token only modifiers give is the first collection's: one that cannot seed it leaves it unseeded (never for a
+  // later one), its reason the first's and the later modifier's value said beside it.
+  const NOTED_B = /modifier 'mb' gives it too; only the first collection whose modifier gives it, 'A', is read/;
   const two = { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } };
   const twoOrder = [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }];
   const mb = { contexts: { l: [{ n: { $type: "number", $value: 3 } }], d: [{ n: { $type: "number", $value: 4 } }] }, default: "l", $extensions: { "figma.com": { collection: "B" } } };
   const noDefault = seedFromResolver(doc({ sets: two, modifiers: {
     ma: { contexts: { l: [], d: [{ n: { $type: "number", $value: 2 } }] }, default: "l", $extensions: { "figma.com": { collection: "A" } } }, mb }, resolutionOrder: twoOrder }), new Map());
-  check(`a token the first collection has no default value for is seeded by the next, the first's reason in \`partly\` (${JSON.stringify(res(noDefault))})`,
-    same(rowOf(noDefault, "n"), ["n", "number", 3, 4]) && /no value in the default mode 'l' of modifier 'ma'/.test(partOf(noDefault, "n")) && reasonOf(noDefault, "n") === "" && clean(noDefault));
+  /** `n` not seeded: its reasons in `unmapped` are the first collection's (`why`) and the later modifier's note. */
+  const notSeeded = (o: SeedOutcome, why: RegExp, name = "n"): boolean => {
+    const rs = res(o).unmapped.filter((u) => u.token === name).map((u) => u.reason);
+    return rowOf(o, name) === undefined && rs.length === 2 && why.test(rs[0] ?? "") && NOTED_B.test(rs[1] ?? "") && partOf(o, name) === "" && clean(o);
+  };
+  check(`a token the first collection has no default value for is not seeded, the next not tried (${JSON.stringify(res(noDefault))})`,
+    notSeeded(noDefault, /^no value in the default mode 'l' of modifier 'ma'$/));
   const badFirst = seedFromResolver(doc({ sets: two, modifiers: {
     ma: { contexts: { l: [{ n: { $type: "number", $value: "nine" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } }, mb }, resolutionOrder: twoOrder }), new Map());
-  check(`…and one it cannot read: the next seeds it, the failure said as the first collection's (${JSON.stringify(res(badFirst))})`,
-    same(rowOf(badFirst, "n"), ["n", "number", 3, 4]) && /^in collection 'A': not a number/.test(partOf(badFirst, "n")) && reasonOf(badFirst, "n") === "" && clean(badFirst));
+  check(`…and one it cannot read: not seeded, for the first collection's reason (${JSON.stringify(res(badFirst))})`,
+    notSeeded(badFirst, /^not a number/));
   const neither = seedFromResolver(doc({ sets: two, modifiers: {
     ma: { contexts: { l: [{ n: { $type: "number", $value: "nine" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } },
     mb: { contexts: { l: [{ n: { $type: "number", $value: "ten" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "B" } } } }, resolutionOrder: twoOrder }), new Map());
-  check(`…and neither can: in \`unmapped\` with both reasons, never said to be in a collection (${JSON.stringify(res(neither))})`,
-    rowOf(neither, "n") === undefined && listed(res(neither).unmapped, "n") === 2 && partOf(neither, "n") === "" && clean(neither));
+  check(`…and when neither can, only the first's reason is given (the second is not read) (${JSON.stringify(res(neither))})`,
+    notSeeded(neither, /^not a number: "nine"/) && !/ten/.test(JSON.stringify(res(neither))));
 
   // A style that aliases another takes the value that one is seeded with (its default mode's), not its $value.
   const oneModeAlias = dtcg(`{ "t": { "$type": "typography", "$value": { "fontFamily": "Inter", "fontSize": "16px" }, "$extensions": { "figma.com": { "modes": { "Only": { "fontFamily": "Inter", "fontSize": "18px" } } } } },
@@ -491,7 +518,7 @@ console.log("\na $value on the document root, and opacity:");
     same(stylesOf(shadow).find((s) => s.name === "s")?.set.effects?.map((e) => ("color" in e ? e.color : null)), ["#000000"]) && /a style takes no figma\.com opacity/.test(partOf(shadow, "s")) && !/the mode's opacity was seeded/.test(partOf(shadow, "s")) && clean(shadow));
 }
 
-console.log("\nround 5: every skip path lists what is under it, and a seat is taken only by a collection that seeds it:");
+console.log("\nround 5: every skip path lists what is under it; a name only modifiers give is the first collection's:");
 {
   const doc = (o: object): unknown => JSON.parse(JSON.stringify(o)) as unknown;
   const rootGroup = dtcg(`{ "$root": { "a": { "$type": "color", "$value": "#ffffff" } } }`);
@@ -509,7 +536,9 @@ console.log("\nround 5: every skip path lists what is under it, and a seat is ta
     /under 'a\.b', which has a name with '\.'/.test(reasonOf(badSeg, "a.b/c")) && /under 'a\.b'/.test(reasonOf(badSeg, "a.b/d/e")) && reasonOf(badSeg, "a.b") === ""
     && /an empty name/.test(reasonOf(badSeg, "")) && /under '', which has an empty name/.test(reasonOf(badSeg, "/f")) && same(rowOf(badSeg, "ok"), ["ok", "number", 1]) && clean(badSeg));
 
-  // A collection that cannot seed a name leaves no type, value or claim behind: the next one seeds it, whatever the order.
+  // The first collection (in the sets' order, whatever the modifiers' order) owns a name only modifiers give: one that
+  // cannot seed it leaves it unseeded, and an alias to it is said to name a token that is not seeded.
+  const NOTED_B = /modifier 'mb' gives it too; only the first collection whose modifier gives it, 'A', is read/;
   const typedBy = (mbFirst: boolean): SeedOutcome => {
     const ma = { contexts: { l: [{ z: { $type: "color", $value: "nope" } }], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } };
     const mb = { contexts: { l: [{ z: { $type: "number", $value: 4 } }], d: [{ z: { $type: "number", $value: 5 } }] }, default: "l", $extensions: { "figma.com": { collection: "B" } } };
@@ -521,8 +550,10 @@ console.log("\nround 5: every skip path lists what is under it, and a seat is ta
   };
   for (const mbFirst of [false, true]) {
     const o = typedBy(mbFirst);
-    check(`an alias to a token a failing collection tried first takes the type of the one that seeds it (modifiers ${mbFirst ? "mb, ma" : "ma, mb"}: ${JSON.stringify(res(o))})`,
-      same(rowOf(o, "z"), ["z", "number", 4, 5]) && same(rowOf(o, "a"), ["a", "number", { aliasOf: "z" }, { aliasOf: "z" }]) && /^in collection 'A': not a colour/.test(partOf(o, "z")) && reasonOf(o, "a") === "" && clean(o) && valid(o));
+    const zs = res(o).unmapped.filter((u) => u.token === "z").map((u) => u.reason);
+    check(`a name the first collection cannot seed is not seeded, and an alias to it says so (modifiers ${mbFirst ? "mb, ma" : "ma, mb"}: ${JSON.stringify(res(o))})`,
+      rowOf(o, "z") === undefined && rowOf(o, "a") === undefined && zs.length === 2 && /^not a colour/.test(zs[0] ?? "") && NOTED_B.test(zs[1] ?? "")
+      && /^its alias \{z\} names a token that is not seeded$/.test(reasonOf(o, "a")) && clean(o) && valid(o));
   }
   const two = { A: { sources: [{ a: { $type: "number", $value: 1 } }] }, B: { sources: [{ b: { $type: "number", $value: 1 } }] } };
   const twoOrder = [{ $ref: "#/sets/A" }, { $ref: "#/sets/B" }, { $ref: "#/modifiers/ma" }, { $ref: "#/modifiers/mb" }];
@@ -530,11 +561,16 @@ console.log("\nround 5: every skip path lists what is under it, and a seat is ta
     ma: { contexts: { l: [inA], d: [] }, default: "l", $extensions: { "figma.com": { collection: "A" } } },
     mb: { contexts: { l: [inB], d: [inBd] }, default: "l", $extensions: { "figma.com": { collection: "B" } } } }, resolutionOrder: twoOrder }), new Map());
   const style = pair({ t: { $type: "typography", $value: { fontSize: "{missing}" } } }, { t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "18px" } } }, {});
-  check(`a style the first collection cannot make is made by the next (${JSON.stringify(res(style))})`,
-    stylesOf(style).find((s) => s.name === "t")?.set.size === 18 && /^in collection 'A': fontSize names \{missing\}/.test(partOf(style, "t")) && reasonOf(style, "t") === "" && clean(style));
+  /** Not seeded: the first collection's reason, then the later modifier's note. */
+  const firstOnly = (o: SeedOutcome, name: string, why: RegExp): boolean => {
+    const rs = res(o).unmapped.filter((u) => u.token === name).map((u) => u.reason);
+    return rs.length === 2 && why.test(rs[0] ?? "") && NOTED_B.test(rs[1] ?? "") && partOf(o, name) === "" && clean(o);
+  };
+  check(`a style the first collection cannot make is not made by the next (${JSON.stringify(res(style))})`,
+    !stylesOf(style).some((s) => s.name === "t") && firstOnly(style, "t", /^fontSize names \{missing\}/));
   const dropped = pair({ n: { $type: "number", $value: "{missing}" } }, { n: { $type: "number", $value: 3 } }, { n: { $type: "number", $value: 4 } });
   check(`…and a row the alias check drops (${JSON.stringify(res(dropped))})`,
-    same(rowOf(dropped, "n"), ["n", "number", 3, 4]) && /^in collection 'A': its alias \{missing\} names no token here/.test(partOf(dropped, "n")) && reasonOf(dropped, "n") === "" && clean(dropped));
+    rowOf(dropped, "n") === undefined && firstOnly(dropped, "n", /^its alias \{missing\} names no token here$/));
 
   // The one-mode opacity note is said only of a colour whose seeded cell carries that opacity.
   const op = dtcg(`{ "base": { "$type": "color", "$value": "#000000" },
@@ -547,96 +583,100 @@ console.log("\nround 5: every skip path lists what is under it, and a seat is ta
     && ["n", "s", "c"].every((k) => partOf(op, k) === "") && same(rowOf(op, "k"), ["k", "color", "#00000080"]) && /the mode's opacity was seeded/.test(partOf(op, "k")) && clean(op));
 }
 
-console.log("\nround 6: a seat moves on only for a failure of its own, never for an alias still settling:");
+console.log("\nround 7: a name only modifiers give is the first collection's, seeded there or not at all, in one build:");
 {
-  const r6 = (text: string): SeedOutcome => seedFromResolver(JSON.parse(text) as unknown, new Map());
-  const collOfRow = (o: SeedOutcome, name: string): string | undefined => tables(o).find((t) => t.variables.some((r) => r[0] === name))?.collection;
-  const chain = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":2}}]}}}}`);
-  check(`an alias to a name a later collection seeds waits for it, and is seeded (${JSON.stringify(res(chain))})`,
-    same(rowOf(chain, "x"), ["x", "number", { aliasOf: "y" }]) && same(rowOf(chain, "y"), ["y", "number", 2]) && collOfRow(chain, "x") === "A" && collOfRow(chain, "y") === "B"
-    && same(tables(chain).map((t) => t.collection), ["B", "A"]) && /^in collection 'A': not a number/.test(partOf(chain, "y")) && reasonOf(chain, "x") === "" && clean(chain) && valid(chain));
-  const deep = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]},"C":{"sources":[]}},"modifiers":{
-    "A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"{z}"},"z":{"$type":"number","$value":"bad"}}]}},
-    "B":{"contexts":{"L":[{"y":{"$type":"number","$value":"{z}"},"z":{"$type":"number","$value":"worse"}}]}},
-    "C":{"contexts":{"L":[{"z":{"$type":"number","$value":3}}]}}}}`);
-  check(`…through a chain: each waits until the one it names settles, two collections on (${JSON.stringify(res(deep))})`,
-    same(rowOf(deep, "x"), ["x", "number", { aliasOf: "y" }]) && same(rowOf(deep, "y"), ["y", "number", { aliasOf: "z" }]) && same(rowOf(deep, "z"), ["z", "number", 3])
-    && collOfRow(deep, "x") === "A" && collOfRow(deep, "y") === "A" && collOfRow(deep, "z") === "C" && res(deep).unmapped.length === 0 && clean(deep) && valid(deep));
-  const untyped = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$value":"{y}"}}],"D":[{"x":{"$value":"{y}"},"y":{"$type":"number","$value":1}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":2}}]}}}}`);
-  check(`…an untyped alias typed by the collection that seeds its target (${JSON.stringify(res(untyped))})`,
-    same(rowOf(untyped, "x"), ["x", "number", { aliasOf: "y" }, { aliasOf: "y" }]) && same(rowOf(untyped, "y"), ["y", "number", 2]) && reasonOf(untyped, "x") === "" && clean(untyped));
-  const style = r6(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"t":{"$type":"typography","$value":{"fontFamily":"Inter","fontSize":"{y}"}},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":14}}]}}}}`);
-  check(`…and a style bound to it (${JSON.stringify(res(style))})`,
-    stylesOf(style).find((s) => s.name === "t")?.set.tokens?.fontSize === "y" && same(rowOf(style, "y"), ["y", "number", 14]) && reasonOf(style, "t") === "" && clean(style));
-  // A name that fails in a seat for a reason of its own still moves on; one whose target never seeds is said so.
-  const never = r6(`{"sets":{"A":{"sources":[{"keep":{"$type":"number","$value":1}}]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":"worse"}}]}}}}`);
-  check(`…a target no collection can seed: the alias is unmapped, saying so (${JSON.stringify(res(never))})`,
-    rowOf(never, "x") === undefined && rowOf(never, "y") === undefined && /names a token that is not seeded/.test(reasonOf(never, "x")) && listed(res(never).unmapped, "y") === 2 && clean(never));
+  const r7 = (text: string): SeedOutcome => seedFromResolver(JSON.parse(text) as unknown, new Map());
+  const KEEP = `{"keep":{"$type":"number","$value":1}}`;
+  const reasons = (o: SeedOutcome, name: string): string[] => res(o).unmapped.filter((u) => u.token === name).map((u) => u.reason);
+  const NOTED = /^modifier 'B' gives it too; only the first collection whose modifier gives it, 'A', is read$/;
+  /** The two cases of round 7's review, A's `y` given: `x` and `y` only A's and B's modifiers give, A first. */
+  const blocker = (y: object, aSources = "[]"): string => `{"sets":{"A":{"sources":${aSources}},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"d":[{"x":{"$type":"number","$value":"{y}"},"y":${JSON.stringify(y)}}]}},"B":{"contexts":{"d":[{"y":{"$type":"number","$value":7}}]}}}}`;
+  const LOOP_Y = { $type: "number", $value: "{x}" }, MISSING_Y = { $type: "string", $value: "{missing}" };
+
+  const loop = r7(blocker(LOOP_Y));
+  check(`an alias loop A owns: nothing seeded, so refused, listing both loop entries and B's value as a note (${"error" in loop ? loop.error : "seeded"})`,
+    "error" in loop && /^no token in the resolver could be seeded \('x': its aliases loop: 'x' → 'y' → 'x'; 'y': its aliases loop: 'x' → 'y' → 'x'; 'y': modifier 'B' gives it too; only the first collection whose modifier gives it, 'A', is read\)$/.test(loop.error)
+    && notesTrue(loop) === null);
+  const loopKeep = r7(blocker(LOOP_Y, "[" + KEEP + "]"));
+  check(`…with a token that seeds beside them: x and y unmapped ("aliases loop"), B's y a note on y's entry (${JSON.stringify(res(loopKeep))})`,
+    rowOf(loopKeep, "x") === undefined && rowOf(loopKeep, "y") === undefined && same(reasons(loopKeep, "x"), ["its aliases loop: 'x' → 'y' → 'x'"])
+    && reasons(loopKeep, "y").length === 2 && /aliases loop/.test(reasons(loopKeep, "y")[0] ?? "") && NOTED.test(reasons(loopKeep, "y")[1] ?? "")
+    && res(loopKeep).partly.length === 0 && same(tables(loopKeep).map((t) => t.collection), ["A"]) && clean(loopKeep) && notesTrue(loopKeep) === null);
+  const missing = r7(blocker(MISSING_Y));
+  check(`A's y a string aliasing nothing: refused, every note true (${"error" in missing ? missing.error : "seeded"})`,
+    "error" in missing && /^no token in the resolver could be seeded \('x': its alias \{y\} names a string token, and it is a number one; 'y': its alias \{missing\} names no token here; 'y': modifier 'B' gives it too; only the first collection whose modifier gives it, 'A', is read\)$/.test(missing.error)
+    && notesTrue(missing) === null);
+  const missingKeep = r7(blocker(MISSING_Y, "[" + KEEP + "]"));
+  check(`…with a token that seeds beside them: the same three entries, each true of the result (${JSON.stringify(res(missingKeep))})`,
+    same(reasons(missingKeep, "x"), ["its alias {y} names a string token, and it is a number one"]) && same(reasons(missingKeep, "y").slice(0, 1), ["its alias {missing} names no token here"])
+    && NOTED.test(reasons(missingKeep, "y")[1] ?? "") && rowOf(missingKeep, "y") === undefined && same(rowOf(missingKeep, "keep"), ["keep", "number", 1]) && clean(missingKeep) && notesTrue(missingKeep) === null);
+
+  // A later collection that could seed the name never does: the alias to it is unmapped, saying so (truly).
+  const chain = r7(`{"sets":{"A":{"sources":[${KEEP}]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":2}}]}}}}`);
+  check(`a name A cannot seed is not moved to B, and an alias to it is unmapped (${JSON.stringify(res(chain))})`,
+    rowOf(chain, "y") === undefined && rowOf(chain, "x") === undefined && /^not a number/.test(reasons(chain, "y")[0] ?? "") && NOTED.test(reasons(chain, "y")[1] ?? "")
+    && same(reasons(chain, "x"), ["its alias {y} names a token that is not seeded"]) && clean(chain) && notesTrue(chain) === null);
+  const style = r7(`{"sets":{"A":{"sources":[${KEEP}]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"t":{"$type":"typography","$value":{"fontFamily":"Inter","fontSize":"{y}"}},"y":{"$type":"number","$value":"bad"}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":14}}]}}}}`);
+  check(`…and so is a style bound to it (${JSON.stringify(res(style))})`,
+    !stylesOf(style).some((s) => s.name === "t") && same(reasons(style, "t"), ["fontSize names {y}, which is not seeded"]) && clean(style) && notesTrue(style) === null);
+  const seeded = r7(`{"sets":{"A":{"sources":[]},"B":{"sources":[]}},"modifiers":{"A":{"contexts":{"L":[{"x":{"$type":"number","$value":"{y}"},"y":{"$type":"number","$value":1}}]}},"B":{"contexts":{"L":[{"y":{"$type":"number","$value":2}}]}}}}`);
+  check(`…and one A can seed is A's, B's value in \`partly\` (${JSON.stringify(res(seeded))})`,
+    same(rowOf(seeded, "y"), ["y", "number", 1]) && same(rowOf(seeded, "x"), ["x", "number", { aliasOf: "y" }]) && same(tables(seeded).map((t) => t.collection), ["A"])
+    && NOTED.test(partOf(seeded, "y")) && res(seeded).unmapped.length === 0 && clean(seeded) && notesTrue(seeded) === null);
 }
 
-console.log("\nround 6: a resolver's work is bounded before it is built:");
+console.log("\na resolver's work is bounded before it is built:");
 {
   const r6 = (o: object): SeedOutcome => seedFromResolver(JSON.parse(JSON.stringify(o)) as unknown, new Map());
-  /** `n` empty sets, each with a modifier giving `x`: a bad number in every one but the last. */
-  const seats = (n: number): object => {
+  /** `n` empty sets, each with a modifier giving `x`. */
+  const colls = (n: number): object => {
     const sets: Record<string, unknown> = {}, modifiers: Record<string, unknown> = {};
-    for (let i = 0; i < n; i++) { sets["S" + i] = { sources: [] }; modifiers["S" + i] = { contexts: { L: [{ x: { $type: "number", $value: i === n - 1 ? 1 : "bad" } }] } }; }
+    for (let i = 0; i < n; i++) { sets["S" + i] = { sources: [] }; modifiers["S" + i] = { contexts: { L: [{ x: { $type: "number", $value: i } }] } }; }
     return { sets, modifiers };
   };
   let t0 = performance.now();
-  const wide = r6(seats(4000));
+  const wide = r6(colls(4000));
   let ms = performance.now() - t0;
   check(`4,000 collections are refused up front (one createVariables op each, and a batch takes 50) in ${Math.round(ms)} ms (${"error" in wide ? wide.error : "seeded"})`,
     "error" in wide && /4000 collections; a seed makes at most 50/.test(wide.error) && ms < 1000);
-  const fifty = r6(seats(MAX_SEED_COLLECTIONS));
-  check(`…50 are read, the name seeded by the last that can (${"error" in fifty ? fifty.error : tables(fifty).map((t) => t.collection).join(",")})`, same(rowOf(fifty, "x"), ["x", "number", 1]) && clean(fifty));
+  const fifty = r6(colls(MAX_SEED_COLLECTIONS));
+  check(`…50 are read, the name the first's (${"error" in fifty ? fifty.error : tables(fifty).map((t) => t.collection).join(",")})`,
+    same(rowOf(fifty, "x"), ["x", "number", 0]) && same(tables(fifty).map((t) => t.collection), ["S0"]) && res(fifty).partly.length === MAX_SEED_COLLECTIONS - 1 && clean(fifty));
+  const TOO_MANY = new RegExp("holds more than " + MAX_SEED_TOKENS + " tokens .*, the most a seed reads");
   const many: Record<string, unknown> = {};
   for (let i = 0; i <= MAX_SEED_TOKENS; i++) many["t" + i] = { $type: "number", $value: i };
   const tooMany = r6({ sets: { A: { sources: [many] } } });
-  check(`a resolver whose sets and contexts hold more than ${MAX_SEED_TOKENS} tokens is refused (${"error" in tooMany ? tooMany.error : "seeded"})`,
-    "error" in tooMany && new RegExp("holds " + (MAX_SEED_TOKENS + 1) + " tokens .*, more than the " + MAX_SEED_TOKENS + " a seed reads").test(tooMany.error));
+  check(`a resolver whose sets and contexts hold more than ${MAX_SEED_TOKENS} tokens is refused (${"error" in tooMany ? tooMany.error : "seeded"})`, "error" in tooMany && TOO_MANY.test(tooMany.error));
   const flat = dtcg(JSON.stringify(many));
-  check(`…and so is a tokens.dtcg.json (${"error" in flat ? flat.error : "seeded"})`, "error" in flat && new RegExp("holds " + (MAX_SEED_TOKENS + 1) + " tokens .*, more than the " + MAX_SEED_TOKENS + " a seed reads").test(flat.error));
-  // The worst case at the caps: 50 collections, each giving every name of a chain; a name fails in each collection but
-  // the last, and only once the name it aliases has settled (so the names move on one after another).
-  const worst = (len: number): object => {
-    const sets: Record<string, unknown> = {}, modifiers: Record<string, unknown> = {};
-    for (let c = 0; c < MAX_SEED_COLLECTIONS; c++) {
-      const last = c === MAX_SEED_COLLECTIONS - 1;
-      const ctx: Record<string, unknown> = {};
-      for (let k = 0; k < len; k++) ctx["x" + k] = k === len - 1 ? { $type: "number", $value: last ? 1 : "bad" } : { $type: last ? "number" : "color", $value: "{x" + (k + 1) + "}" };
-      sets["S" + c] = { sources: [] };
-      modifiers["S" + c] = { contexts: { L: [ctx], D: [ctx] } };
-    }
-    return { sets, modifiers };
+  check(`…and so is a tokens.dtcg.json (${"error" in flat ? flat.error : "seeded"})`, "error" in flat && TOO_MANY.test(flat.error));
+  // Tokens the walk turns down count too: names no alias could spell (`bad.N`), and one token that seeds.
+  const rejected = (n: number): Record<string, unknown> => {
+    const o: Record<string, unknown> = {};
+    for (let i = 0; i < n; i++) o["bad." + i] = { $type: "number", $value: i };
+    o.ok = { $type: "number", $value: 1 };
+    return o;
   };
-  const len = Math.floor(MAX_SEED_TOKENS / (2 * MAX_SEED_COLLECTIONS));
   t0 = performance.now();
-  const chain = r6(worst(len));
+  const badFlat = dtcg(JSON.stringify(rejected(MAX_SEED_TOKENS + 1)));
   ms = performance.now() - t0;
-  console.log(`  (the worst case at the caps: ${len * 2 * MAX_SEED_COLLECTIONS} tokens, ${Math.round(ms)} ms: ${"error" in chain ? chain.error : "seeded"})`);
-  check(`…the worst case at the caps (a chain of ${len} names over ${MAX_SEED_COLLECTIONS} collections, each failing in turn) ends in under 1 s, refused saying why (${Math.round(ms)} ms)`,
-    ms < 1000 && "error" in chain && /stopped after \d+ builds/.test(chain.error));
-  const short = r6(worst(4));
-  check(`…and a short one is seeded in full (${"error" in short ? short.error : JSON.stringify(tables(short).map((t) => t.collection))})`,
-    ["x0", "x1", "x2", "x3"].every((n) => rowOf(short, n) !== undefined) && res(short).unmapped.length === 0 && clean(short));
-  // A value's size counts: one shadow of many layers, built again while a name moves through 50 collections.
-  const layers = Array.from({ length: 15000 }, () => ({ color: "#000000", offsetX: "0px", offsetY: "1px", blur: "2px" }));
-  const heavy = seats(MAX_SEED_COLLECTIONS) as { sets: Record<string, unknown> };
-  heavy.sets.S0 = { sources: [{ sh: { $type: "shadow", $value: layers } }] };
-  t0 = performance.now();
-  const shadow = r6(heavy);
-  ms = performance.now() - t0;
-  check(`…and so does a shadow of 15,000 layers built again in every round (${Math.round(ms)} ms: ${"error" in shadow ? shadow.error : "seeded"})`,
-    ms < 1000 && "error" in shadow && /stopped after \d+ builds of \d+ values each/.test(shadow.error));
-  // One build alone over the limit: names × modes (empty contexts cost nothing to write).
+  check(`a tokens.dtcg.json of ${MAX_SEED_TOKENS + 1} turned-down tokens and one good one is refused, not seeded with ${MAX_SEED_TOKENS + 1} unmapped (${Math.round(ms)} ms: ${"error" in badFlat ? badFlat.error : res(badFlat).unmapped.length + " unmapped"})`,
+    "error" in badFlat && TOO_MANY.test(badFlat.error) && ms < 1000);
+  const badInline = r6({ sets: { A: { sources: [rejected(MAX_SEED_TOKENS + 1)] } } });
+  check(`…and so is a resolver's inline source of them (${"error" in badInline ? badInline.error : res(badInline).unmapped.length + " unmapped"})`, "error" in badInline && TOO_MANY.test(badInline.error));
+  const half = Math.ceil((MAX_SEED_TOKENS + 1) / 2);
+  const split = r6({ sets: { A: { sources: [rejected(half)] } }, modifiers: { A: { contexts: { L: [rejected(half)] } } } });
+  check(`…and the count is shared by a set and a context (${"error" in split ? split.error : res(split).unmapped.length + " unmapped"})`, "error" in split && TOO_MANY.test(split.error));
+  const under = dtcg(JSON.stringify(rejected(MAX_SEED_TOKENS - 1)));
+  check(`…while ${MAX_SEED_TOKENS - 1} of them and one good one are read (${"error" in under ? under.error : res(under).unmapped.length + " unmapped"})`,
+    same(rowOf(under, "ok"), ["ok", "number", 1]) && res(under).unmapped.length === MAX_SEED_TOKENS - 1);
+  // The build alone over the limit: names × modes (empty contexts cost nothing to write).
   const base: Record<string, unknown> = {}, contexts: Record<string, unknown> = {};
   for (let i = 0; i < 1000; i++) base["n" + i] = { $type: "number", $value: i };
   for (let m = 0; m <= MAX_SEED_WORK / 1000; m++) contexts["m" + m] = [];
   t0 = performance.now();
   const wideModes = r6({ sets: { A: { sources: [base] } }, modifiers: { A: { contexts } } });
   ms = performance.now() - t0;
-  check(`a resolver whose one build would read more than ${MAX_SEED_WORK} values is refused before it is built (${Math.round(ms)} ms: ${"error" in wideModes ? wideModes.error : "seeded"})`,
+  check(`a resolver whose build would read more than ${MAX_SEED_WORK} values is refused before it is built (${Math.round(ms)} ms: ${"error" in wideModes ? wideModes.error : "seeded"})`,
     ms < 1000 && "error" in wideModes && /values in one build/.test(wideModes.error));
 }
 
@@ -764,6 +804,9 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
 
   /** What breaks the invariant in an outcome, or null. */
   const broken = (o: SeedOutcome, counted: ReadonlySet<string>): string | null => {
+    // A note that says a target is not seeded when it is, or that tells of a seat move, is false.
+    const lie = notesTrue(o);
+    if (lie !== null) return lie;
     if ("error" in o) return counted.size && /it holds no tokens/.test(o.error) ? "refused as holding no tokens: " + o.error : null;
     const rows = tables(o).flatMap((t) => t.variables.map((r) => r[0]));
     const styleNames = stylesOf(o).map((s) => s.name);
@@ -775,11 +818,6 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     for (const n of seeded) if (!counted.has(n)) return "a seeded name no file gives: " + JSON.stringify(n);
     for (const u of o.unmapped) if (seeded.has(u.token)) return "unmapped but seeded: " + JSON.stringify(u.token);
     for (const u of o.partly) if (!seeded.has(u.token)) return "a partly note on a token not seeded: " + JSON.stringify(u.token);
-    // A note that says a target is not seeded is false when that target is in a table.
-    for (const u of o.unmapped) {
-      const m = /\{([^{}]+)\}(?: names a token that is not seeded|, which is not seeded)/.exec(u.reason);
-      if (m && m[1] && seeded.has(m[1].split(".").join("/"))) return "an unmapped note says {" + m[1] + "} is not seeded, and it is: " + JSON.stringify(u);
-    }
     if (!clean(o)) return "not clean (a note says the wrong collection, or an unmapped entry says it was seeded)";
     if (!valid(o)) return "a table the create checks refuse";
     return null;
@@ -836,7 +874,8 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     if (why) failures.push("resolver " + why + " in " + text);
   }
   // Alias chains across names only modifiers give, in several collections: each name a bad value, a good one, an
-  // alias (typed, of another type, or untyped) or a style bound to one, so a name's seat depends on another's.
+  // alias (typed, of another type, or untyped) or a style bound to one, the same names in several collections. Each
+  // name is the first collection's whose modifier gives it: a row of it is in that collection's table, never another's.
   const POOL = ["p", "q", "r", "s", "g/x"];
   const poolRef = (): string => "{" + pick([...POOL, "keep", "nope"]).split("/").join(".") + "}";
   const cTok = (): string => {
@@ -849,13 +888,38 @@ console.log("\nrandom token files: every token in exactly one table or in `unmap
     return j({ $type: "number", $value: chance(0.5) ? 3 : poolRef() });
   };
   const cTree = (): string => obj(Array.from({ length: Math.floor(rnd() * 4) }, () => [pick(POOL), cTok()] as const));
+  /** The rule, checked from the file itself: each pool name's row is in the table of the first modifier (in order) that
+   *  gives it, and every later modifier that gives it is one "gives it too" note on it. */
+  const firstOwns = (o: SeedOutcome, parsed: unknown): string | null => {
+    if ("error" in o) return null;
+    const at = (v: unknown, k: string): unknown => (typeof v === "object" && v !== null ? Object.getOwnPropertyDescriptor(v, k)?.value as unknown : undefined);
+    const keysOf = (v: unknown): string[] => (typeof v === "object" && v !== null ? Object.keys(v) : []);
+    const givers = new Map<string, string[]>();
+    const modsV = at(parsed, "modifiers");
+    for (const m of keysOf(modsV)) {
+      const names = new Set<string>();
+      const ctx = at(at(modsV, m), "contexts");
+      for (const k of keysOf(ctx)) { const list = at(ctx, k); if (Array.isArray(list)) for (const tree of list) for (const n of keysOf(tree)) names.add(n); }
+      for (const n of names) { const l = givers.get(n); if (l) l.push(m); else givers.set(n, [m]); }
+    }
+    for (const t of tables(o)) for (const r of t.variables) {
+      const first = givers.get(r[0])?.[0];
+      if (first !== undefined && t.collection !== first) return "'" + r[0] + "' seeded in '" + t.collection + "', not in '" + first + "', the first collection whose modifier gives it";
+    }
+    for (const [n, list] of givers) {
+      const notes = [...o.unmapped, ...o.partly].filter((u) => u.token === n && /gives it too; only the first collection whose modifier gives it/.test(u.reason)).length;
+      if (notes !== list.length - 1) return "'" + n + "': " + (list.length - 1) + " later modifiers give it, and " + notes + " notes say so";
+    }
+    return null;
+  };
   for (let i = 0; i < 2500; i++, cases++) {
     const colls = ["A", "B", "C", "D"].slice(0, 2 + Math.floor(rnd() * 3));
     const sets = colls.map((c, ci) => [c, obj([["sources", ci === 0 && chance(0.8) ? "[" + j({ keep: { $type: "number", $value: 1 } }) + "]" : "[]"]])] as const);
     const mods = colls.filter(() => chance(0.9)).map((c) => [c, obj([["contexts", obj((chance(0.6) ? ["L"] : ["L", "D"]).map((k) => [k, "[" + cTree() + "]"] as const))]])] as const);
     const text = obj([["sets", obj(sets)], ["modifiers", obj(mods)]]);
     const parsed = JSON.parse(text) as unknown;
-    const why = broken(seedFromResolver(parsed, new Map()), countResolver(parsed));
+    const o = seedFromResolver(parsed, new Map());
+    const why = broken(o, countResolver(parsed)) ?? firstOwns(o, parsed);
     if (why) failures.push("chain " + why + " in " + text);
   }
   const ms = performance.now() - t0;
@@ -926,6 +990,31 @@ console.log("\nthe files (seed-file.ts):");
   const rootLink = path.join(out, "root-link");
   fs.symlinkSync(dir, rootLink);
   check("…and so is a file when the directory itself is reached through a link", "ops" in loadSeedTokens([{ op: "seedTokens", file: "tokens.dtcg.json" }], (p) => path.resolve(rootLink, p), rootLink));
+  // The bytes read are the file opened, and that file is the one whose real path was checked (the same device and
+  // inode): a path swapped for a link to a file outside between the check and the read cannot be read.
+  check("sameFile: one file is the same device and inode, another file is not", sameFile({ dev: 1, ino: 2 }, { dev: 1, ino: 2 }) && !sameFile({ dev: 1, ino: 2 }, { dev: 1, ino: 3 }) && !sameFile({ dev: 1, ino: 2 }, { dev: 2, ino: 2 })
+    && sameFile(fs.statSync(path.join(dir, "inner.json")), fs.statSync(path.join(dir, "tokens.dtcg.json"))) && !sameFile(fs.statSync(path.join(dir, "tokens.dtcg.json")), fs.statSync(path.join(out, "outside.json"))));
+  const realDir = fs.realpathSync(dir);
+  const outsidePath = path.join(out, "outside.json");
+  /** The descriptors opened and closed (Node's calls, counted). */
+  let opened = 0, closed = 0;
+  const swapIo: SeedIo = {
+    ...nodeSeedIo,
+    // The path is a link to a file outside when it is opened, and the inside file again when its real path is read.
+    open: (p) => { opened++; return nodeSeedIo.open(p.endsWith("tokens.dtcg.json") ? outsidePath : p); },
+    close: (fd) => { closed++; nodeSeedIo.close(fd); },
+  };
+  const swapped = readSeedJson(path.join(dir, "tokens.dtcg.json"), "ops[0].file", realDir, swapIo);
+  check(`a file swapped for a link to one outside between the open and the check is refused, nothing of it read (${"error" in swapped ? swapped.error : JSON.stringify(swapped.json)})`,
+    "error" in swapped && /tokens\.dtcg\.json changed while it was read \(the file opened is not the one at .*tokens\.dtcg\.json\); seed again/.test(swapped.error) && !JSON.stringify(swapped).includes("secret") && opened === 1 && closed === 1);
+  opened = 0; closed = 0;
+  const kept = readSeedJson(path.join(dir, "tokens.dtcg.json"), "ops[0].file", realDir, { ...swapIo, open: (p) => { opened++; return nodeSeedIo.open(p); } });
+  check("…the same file read with nothing swapped is read, its descriptor closed", "json" in kept && opened === 1 && closed === 1);
+  closed = 0;
+  const outRead = readSeedJson(path.join(dir, "link.json"), "ops[0].file", realDir, swapIo);
+  check("…and a refused link closes its descriptor too", "error" in outRead && /leads, through a symbolic link/.test(outRead.error) && closed === 1);
+  const noOpen = readSeedJson(path.join(dir, "tokens"), "ops[0].file", realDir, { ...nodeSeedIo, open: () => { throw new Error("EISDIR"); } });
+  check(`a path that cannot be opened (a directory on Windows) says what is there (${"error" in noOpen ? noOpen.error : "read"})`, "error" in noOpen && /tokens is not a file$/.test(noOpen.error));
   fs.rmSync(out, { recursive: true, force: true });
   // The dry run's sentence counts the tokens seeded in part apart from the ones not seeded.
   put("moded.json", { t: { $type: "typography", $value: { fontFamily: "Inter", fontSize: "16px" }, $extensions: { "figma.com": { defaultMode: "Light",

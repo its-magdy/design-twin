@@ -45,8 +45,10 @@ list of merged PRs.
   `unmapped` with the reason. A token seeded only in part (a style's other modes, extended-collection overrides) is
   listed in `partly`, and the dry run counts the two apart. The reply lists only the rows created or updated, with a count of the
   unchanged ones, so a second seed of the same file reports no change. Every file read stays inside the server's
-  directory (its symbolic links followed), is JSON and at most 2 MB; a seed makes at most 50 collections, reads at
-  most 20,000 tokens, and a resolver's builds read at most 1,500,000 values in all; a `$ref` that is a URL, absolute or a pointer is refused, and so are CSS and
+  directory (its symbolic links followed, and the file read is the file checked), is JSON and at most 2 MB; a seed
+  makes at most 50 collections, reads at most 20,000 tokens (a token not seeded counts too), and a resolver's build
+  reads at most 1,500,000 values. A token only modifiers give is seeded by the first collection whose modifier gives
+  it, or not at all; another collection's value for it is listed. A `$ref` that is a URL, absolute or a pointer is refused, and so are CSS and
   native token files. A resolver's set files now keep a boolean's origin (`originalType`), as tokens.dtcg.json does.
   The write-cost suite records the start-from-nothing job seeded from a token file: 1,689 estimated tokens.
   `figma_write`'s definition grew from 1,101 to 1,137 estimated tokens.

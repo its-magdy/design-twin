@@ -4,8 +4,9 @@
 // are the create tables' own, and no token value passes through the model.
 //
 // Every file read — the token file, a resolver's every `$ref` — stays inside the directory the server was started in
-// (the `resolve` callback refuses the rest by name; then the file's real path, its symbolic links followed, must be
-// inside the directory's real path), is a regular file, at most MAX_SPEC_FILE_BYTES, and JSON. A `$ref` that is
+// (the `resolve` callback refuses the rest by name; then the file is opened, and its real path, its symbolic links
+// followed, must be inside the directory's real path and be the file opened: the bytes read are that file's), is a
+// regular file, at most MAX_SPEC_FILE_BYTES, and JSON. A `$ref` that is
 // a URL, an absolute path, a pointer into the resolver or a fragment is refused (token-seed.ts refProblem).
 //
 // The reply to a seeded table is cut to what changed: the rows created or updated (with their ids) and a count of the
@@ -39,22 +40,67 @@ type InOp = { op: string; file?: unknown; collection?: unknown } & Record<string
 /** The extensions of the formats this does not read: CSS, Tailwind's theme.css and the native token files. */
 const NOT_READ = /\.(css|scss|sass|less|swift|kt|kts|dart|js|jsx|ts|tsx|mjs|cjs)$/i;
 
+/** The file system calls readSeedJson makes: Node's, or a test's (to swap a file between two of them). */
+export interface SeedIo {
+  /** opens a file to read (without blocking on a pipe) and returns its descriptor */
+  open(file: string): number;
+  fstat(fd: number): fs.Stats;
+  realpath(file: string): string;
+  stat(file: string): fs.Stats;
+  /** reads the open file from its start, at most `max` bytes: null when there are more */
+  read(fd: number, max: number): Buffer | null;
+  close(fd: number): void;
+}
+export const nodeSeedIo: SeedIo = {
+  // O_NONBLOCK: a named pipe is opened without waiting for a writer (then refused as not a file); it does not change
+  // how a regular file reads. Windows has no such flag.
+  open: (file) => fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0)),
+  fstat: (fd) => fs.fstatSync(fd),
+  realpath: (file) => fs.realpathSync(file),
+  stat: (file) => fs.statSync(file),
+  read: (fd, max) => {
+    const buf = Buffer.alloc(max + 1);
+    let n = 0;
+    for (let got = 1; got > 0 && n <= max;) { got = fs.readSync(fd, buf, n, buf.length - n, n); n += got; }
+    return n > max ? null : buf.subarray(0, n);
+  },
+  close: (fd) => fs.closeSync(fd),
+};
+/** Are two stats of one file (the same device and inode)? */
+export const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean => a.dev === b.dev && a.ino === b.ino;
+
 /** A JSON file read whole, or why it is not: missing, outside `realRoot` once its links are followed, not a file, too
  *  big, not JSON. `resolve` checks a path by name only, so a symbolic link inside the directory could lead out of it:
- *  the file read is the one the link leads to, and it must be inside the directory's own real path. */
-function readJson(file: string, at: string, realRoot: string): { json: unknown } | { error: string } {
-  let real: string;
-  try { real = fs.realpathSync(file); } catch { return { error: `${at}: no file at ${file}` }; }
-  const rel = path.relative(realRoot, real);
-  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
-    return { error: `${at}: ${file} leads, through a symbolic link, to ${real}, outside the directory this server was started in (${realRoot}); a token file and every $ref it names must be inside it` };
+ *  the file read is the one the link leads to, and it must be inside the directory's own real path. The file is opened
+ *  first and read from that descriptor; its real path must be inside the directory AND be the file opened (the same
+ *  device and inode), so a path swapped for a link between the check and the read cannot lead out of it. */
+export function readSeedJson(file: string, at: string, realRoot: string, io: SeedIo = nodeSeedIo): { json: unknown } | { error: string } {
+  let fd: number;
+  try { fd = io.open(file); } catch {
+    // Windows opens no directory: say what is there. Nothing is read from this path.
+    let there: fs.Stats | null = null;
+    try { there = io.stat(file); } catch { /* nothing there */ }
+    return { error: there === null ? `${at}: no file at ${file}` : !there.isFile() ? `${at}: ${file} is not a file` : `${at}: ${file} could not be opened` };
   }
-  let stat: fs.Stats;
-  try { stat = fs.statSync(real); } catch { return { error: `${at}: no file at ${file}` }; }
-  if (!stat.isFile()) return { error: `${at}: ${file} is not a file` };
-  if (stat.size > MAX_SPEC_FILE_BYTES) return { error: `${at}: ${file} is ${stat.size} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
-  try { return { json: JSON.parse(fs.readFileSync(real, "utf8")) as unknown }; } catch (e) {
-    return { error: `${at}: ${file} is not valid JSON (${e instanceof Error ? e.message : String(e)}); seedTokens reads ${SEED_FORMATS}` };
+  try {
+    let opened: fs.Stats, real: string, now: fs.Stats;
+    try { opened = io.fstat(fd); real = io.realpath(file); } catch { return { error: `${at}: no file at ${file}` }; }
+    const rel = path.relative(realRoot, real);
+    if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+      return { error: `${at}: ${file} leads, through a symbolic link, to ${real}, outside the directory this server was started in (${realRoot}); a token file and every $ref it names must be inside it` };
+    }
+    try { now = io.stat(real); } catch { return { error: `${at}: ${file} changed while it was read (${real} is gone); seed again` }; }
+    if (!sameFile(opened, now)) return { error: `${at}: ${file} changed while it was read (the file opened is not the one at ${real}); seed again` };
+    if (!opened.isFile()) return { error: `${at}: ${file} is not a file` };
+    if (opened.size > MAX_SPEC_FILE_BYTES) return { error: `${at}: ${file} is ${opened.size} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
+    let bytes: Buffer | null;
+    try { bytes = io.read(fd, MAX_SPEC_FILE_BYTES); } catch (e) { return { error: `${at}: ${file} could not be read (${e instanceof Error ? e.message : String(e)})` }; }
+    if (bytes === null) return { error: `${at}: ${file} is more than ${MAX_SPEC_FILE_BYTES} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
+    try { return { json: JSON.parse(bytes.toString("utf8")) as unknown }; } catch (e) {
+      return { error: `${at}: ${file} is not valid JSON (${e instanceof Error ? e.message : String(e)}); seedTokens reads ${SEED_FORMATS}` };
+    }
+  } finally {
+    try { io.close(fd); } catch { /* already closed: nothing to give back */ }
   }
 }
 
@@ -79,7 +125,7 @@ export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: s
     if (NOT_READ.test(o.file)) return { error: `${at}.file: '${o.file}' is not read (CSS and native token files lose the '/' grouping of the names); seedTokens reads ${SEED_FORMATS}` };
     let file: string;
     try { file = resolve(o.file, `${at}.file`); } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
-    const top = readJson(file, `${at}.file`, realRoot);
+    const top = readSeedJson(file, `${at}.file`, realRoot);
     if ("error" in top) return top;
     const result = (() => {
       if (!isResolverDoc(top.json)) return seedFromDtcg(top.json, { collection: typeof o.collection === "string" ? o.collection : undefined, source: o.file });
@@ -92,7 +138,7 @@ export function loadSeedTokens<T extends InOp>(ops: readonly T[], resolve: (p: s
         const what = `${at}.file (${o.file}) $ref '${ref}'`;
         let p: string;
         try { p = resolve(path.join(path.dirname(file), ref), what); } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
-        const r = readJson(p, what, realRoot);
+        const r = readSeedJson(p, what, realRoot);
         if ("error" in r) return r;
         files.set(ref, r.json);
       }

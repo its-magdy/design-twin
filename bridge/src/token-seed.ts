@@ -16,9 +16,8 @@
 //                         set's name), and the modifier of that collection gives its modes (the default first). A
 //                         context file holds only what differs from the set's values. A token is typed by its set, else
 //                         by the default context (never by the context listed first); a context of another kind of
-//                         $type is refused. A name only modifiers give is seeded by the first collection that can:
-//                         tried in one, the whole build checked, and only then moved on (the failed try leaves nothing)
-//                         — and only for a failure of its own: an alias to a name still settling waits for it.
+//                         $type is refused. A name only modifiers give is the first collection's whose modifier gives
+//                         it: seeded there or not at all (another collection's modifier value for it is said).
 //                         Bounded before it is built: MAX_SEED_COLLECTIONS, MAX_SEED_TOKENS, MAX_SEED_WORK.
 // Not read: tokens.css, Tailwind's theme.css and the native files. A CSS name has lost the `/` grouping.
 //
@@ -68,25 +67,17 @@ export const REM_PX = 16;
  *  ops (seed-file.ts MAX_WRITE_OPS). More is refused before anything is built. */
 export const MAX_SEED_COLLECTIONS = 50;
 /** The most tokens one seed reads: a tokens.dtcg.json's, or a resolver's across its sets and every context (a name two
- *  of them give counts each time). More is refused before anything is built. */
+ *  of them give counts each time, and so does every token the walk turns down: a bad name, a token inside a token, a
+ *  name reached twice). The walk stops and the seed is refused once it passes this, before anything is built. */
 export const MAX_SEED_TOKENS = 20_000;
-/** The most a resolver's builds may read in all: each build reads every token and every value of every mode (a name's
- *  value per mode of its collection), and a name only modifiers give that fails in one collection after another makes
- *  the whole seed build again. Past this the seed is refused, saying so; at the caps above it stays under a second. */
+/** The most one resolver's build may read: a value per mode of each name a collection seeds (a modifier of many
+ *  contexts multiplies its names), and one per name of a collection with no modifier. Past this the seed is refused
+ *  before it is built. */
 export const MAX_SEED_WORK = 1_500_000;
-/** The size of a parsed JSON value: 1 for each value in it, itself included (walked with its own stack). */
-function valueSize(v: unknown): number {
-  let n = 0;
-  for (const todo: unknown[] = [v]; todo.length;) {
-    const x = todo.pop();
-    n++;
-    if (Array.isArray(x)) for (const y of x) todo.push(y);
-    else if (isObj(x)) for (const k of Object.keys(x)) todo.push(own(x, k));
-  }
-  return n;
-}
-const tooManyTokens = (source: string, n: number, where: string): string =>
-  source + " holds " + n + " tokens " + where + ", more than the " + MAX_SEED_TOKENS + " a seed reads: split it into smaller files";
+/** Thrown by the walk (flatten) the moment the tokens it has met pass MAX_SEED_TOKENS. */
+class TooManyTokens extends Error {}
+const tooManyTokens = (source: string, where: string): string =>
+  source + " holds more than " + MAX_SEED_TOKENS + " tokens " + where + ", the most a seed reads (every token counts, one that is not seeded too): split it into smaller files";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -136,16 +127,19 @@ interface RawToken { name: string; type: string | null; value: unknown; ext: Obj
 /** The tokens of a DTCG tree by name, in document order. Every token of the tree is either here or listed (in
  *  `unmapped`, or as a note when its name is seeded): a name reached twice (a key with `/` in it), a name an alias
  *  could not spell and everything under it, a token inside a token, a stray value, a token with no name. A group's
- *  $extends is noted. No subtree is passed over without its tokens listed. */
+ *  $extends is noted. No subtree is passed over without its tokens listed. Every token met, kept or listed, counts
+ *  towards MAX_SEED_TOKENS (`g.met`, shared by every tree of one seed): past it, TooManyTokens stops the walk. */
 function flatten(doc: unknown, g: Gather): Map<string, RawToken> {
-  const { unmapped } = g;
   const out = new Map<string, RawToken>();
+  /** One more token met (each entry of `unmapped` the walk makes, and each token it keeps or notes). */
+  const met = (): void => { if (++g.met > MAX_SEED_TOKENS) throw new TooManyTokens(); };
+  const unmap = (token: string, reason: string): void => { met(); g.unmapped.push({ token, reason }); };
   const named = (segs: readonly string[]): string => (segs.length ? segs.join("/") : "$root");
   /** A key that is a step of a path where no token is read: every key but a node's own `$` fields ($root is a step). */
   const step = (k: string): boolean => k === "$root" || !k.startsWith("$");
   /** Every token (and stray value) at and under `node`, none of them read: the node itself `why`, the rest `under`. */
   const listAll = (node: unknown, segs: readonly string[], why: string, under: string): void => {
-    if (!isObj(node) || hasOwn(node, "$value")) unmapped.push({ token: named(segs), reason: why });
+    if (!isObj(node) || hasOwn(node, "$value")) unmap(named(segs), why);
     if (!isObj(node)) return;
     for (const [k, child] of Object.entries(node)) if (step(k)) listAll(child, [...segs, k], under, under);
   };
@@ -155,7 +149,8 @@ function flatten(doc: unknown, g: Gather): Map<string, RawToken> {
     const name = named(segs);
     const why = "it is inside token '" + name + "' (a token cannot also be a group; a group's own token goes in $root)";
     for (const [k, child] of Object.entries(node)) if (step(k)) listAll(child, [...childSegs, k], why, why);
-    if (!segs.length) { unmapped.push({ token: name, reason: "a token needs a name" }); return; }
+    if (!segs.length) { unmap(name, "a token needs a name"); return; }
+    met();
     if (out.has(name)) { g.part(name, "two paths make this name once joined with '/'; the first is seeded"); return; }
     const t = own(node, "$type");
     out.set(name, { name, type: typeof t === "string" ? t : inherited, value: own(node, "$value"), ext: figmaExt(node) });
@@ -173,14 +168,14 @@ function flatten(doc: unknown, g: Gather): Map<string, RawToken> {
         // group itself.
         if (isObj(child) && hasOwn(child, "$value")) leaf(segs, child, type, [...segs, "$root"]);
         else if (isObj(child)) walk(child, segs, type);
-        else unmapped.push({ token: named(segs), reason: "its $root is neither a token (no $value) nor a group" });
+        else unmap(named(segs), "its $root is neither a token (no $value) nor a group");
         continue;
       }
       if (k.startsWith("$")) continue; // the group's own fields ($type, $description, $extensions, …)
       const at = [...segs, k];
       const bad = !k.trim() ? "an empty name" : /[.{}]/.test(k) ? "a name with '.', '{' or '}' (no alias could name it)" : null;
       if (bad !== null) listAll(child, at, bad, "it is under '" + named(at) + "', which has " + bad);
-      else if (!isObj(child)) unmapped.push({ token: named(at), reason: "neither a token (no $value) nor a group" });
+      else if (!isObj(child)) unmap(named(at), "neither a token (no $value) nor a group");
       else if (hasOwn(child, "$value")) leaf(at, child, type, at);
       else walk(child, at, type);
     }
@@ -326,14 +321,8 @@ class Gather {
   readonly known = new Set<string>();
   /** Is `name` a token of the files (seeded or not)? */
   has(name: string): boolean { return this.raw.has(name) || this.known.has(name); }
-  /** For a token that failed because a token it aliases (or binds) is not seeded: those targets. A resolver's seats tell
-   *  such a failure (it may pass once the target settles) from one of the token's own. */
-  readonly waits = new Map<string, Set<string>>();
-  wait(token: string, target: string): void {
-    const s = this.waits.get(token);
-    if (s) s.add(target);
-    else this.waits.set(token, new Set([target]));
-  }
+  /** The tokens the walk (flatten) has met so far, over every tree of this seed: bounded by MAX_SEED_TOKENS. */
+  met = 0;
   /** typeOf's answers: `raw` is complete before the first one is asked. */
   private readonly typed = new Map<string, string | null>();
   coll(name: string, modes: string[]): Coll {
@@ -366,12 +355,6 @@ class Gather {
     const type = this.typeOf(t.name);
     if (type === null) {
       const a = aliasName(t.value);
-      // Untyped through its aliases to a name no seat gives a token yet: it may be typed once that one settles.
-      const seen = new Set<string>();
-      for (let n = a; n !== null && !seen.has(n); n = aliasName(this.raw.get(n)?.value)) {
-        seen.add(n);
-        if (!this.raw.has(n)) { if (this.known.has(n)) this.wait(t.name, n); break; }
-      }
       this.unmapped.push({ token: t.name, reason: a !== null && !this.raw.has(a) ? "its alias {" + a.split("/").join(".") + "} names " + (this.known.has(a) ? "a token that is not seeded" : "no token here") : "no $type (on it, a group above it, or the token it aliases)" });
       return false;
     }
@@ -431,12 +414,10 @@ function settle(g: Gather): Coll[] {
   const dropped = new Map<Row, string>();
   /** Rows dropped whose aliasers are not re-checked yet. */
   const queue: Row[] = [];
-  /** `waitOn`: the target whose not being seeded is the reason (Gather.waits). */
-  const drop = (r: Row, reason: string, waitOn?: string): void => {
+  const drop = (r: Row, reason: string): void => {
     if (dropped.has(r)) return;
     dropped.set(r, reason);
     g.unmapped.push({ token: r.name, reason });
-    if (waitOn !== undefined) g.wait(r.name, waitOn);
     queue.push(r);
   };
   const live = (): Row[] => g.colls.flatMap((c) => c.rows.filter((r) => !dropped.has(r)));
@@ -448,9 +429,9 @@ function settle(g: Gather): Coll[] {
       const t = byName.get(a);
       if (!t) {
         if (styleNames.has(a)) drop(r, "its alias " + dotted(a) + " names a style token");
-        else if (g.has(a)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded", a);
+        else if (g.has(a)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded");
         else drop(r, "its alias " + dotted(a) + " names no token here");
-      } else if (dropped.has(t)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded", a);
+      } else if (dropped.has(t)) drop(r, "its alias " + dotted(a) + " names a token that is not seeded");
       else if (t.type !== r.type) drop(r, "its alias " + dotted(a) + " names a " + t.type + " token, and it is a " + r.type + " one");
       if (dropped.has(r)) return;
     }
@@ -534,7 +515,6 @@ function styleOf(s: StyleToken, g: Gather, vars: ReadonlyMap<string, Row>, style
     const st = styles.get(target);
     const t = g.raw.get(target);
     if (!st && !t) {
-      if (g.known.has(target)) g.wait(s.name, target);
       return { bad: "its alias {" + target.split("/").join(".") + "} names " + (g.known.has(target) ? "a token that is not seeded" : "no token here") };
     }
     value = st ? st.value : t?.value;
@@ -544,7 +524,6 @@ function styleOf(s: StyleToken, g: Gather, vars: ReadonlyMap<string, Row>, style
     const r = vars.get(name);
     if (!r && styles.has(name)) return { bad: field + " names {" + name.split("/").join(".") + "}, a style token (a field is bound to a variable)" };
     if (!r) {
-      if (g.has(name)) g.wait(s.name, name);
       return { bad: field + " names {" + name.split("/").join(".") + "}, " + (g.has(name) ? "which is not seeded" : "and there is no such token here") };
     }
     if (r.type !== want) return { bad: field + " names '" + name + "', a " + r.type + " token (it takes a " + want + " one)" };
@@ -670,10 +649,10 @@ function build(g: Gather): Built {
   }
   return { order, vars, styles };
 }
-const seededNames = (b: Built): Set<string> => new Set<string>([...b.vars.keys(), ...b.styles.map((s) => s.name)]);
 
-/** The tables, once every reader has gathered its tokens (`built`: already checked). */
-function finish(g: Gather, source: string, built: Built = build(g)): SeedOutcome {
+/** The tables, once every reader has gathered its tokens: one build, and its result is the seed's. */
+function finish(g: Gather, source: string): SeedOutcome {
+  const built = build(g);
   const { order, styles } = built;
   for (const c of order) {
     if (c.rows.length > MAX_TABLE_ROWS) return { error: "collection '" + c.name + "' would have " + c.rows.length + " variables, and a table takes at most " + MAX_TABLE_ROWS + " (split " + source + " into smaller sets)" };
@@ -685,7 +664,7 @@ function finish(g: Gather, source: string, built: Built = build(g)): SeedOutcome
   }));
   if (styles.length) ops.push({ op: "createStyles", styles });
   // A note on what a token leaves out holds only for a token in a table.
-  const seeded = seededNames(built);
+  const seeded = new Set<string>([...built.vars.keys(), ...styles.map((s) => s.name)]);
   const partly: SeedUnmapped[] = [];
   for (const n of g.partNotes) {
     if (seeded.has(n.token)) partly.push({ token: n.token, reason: n.reason });
@@ -713,8 +692,12 @@ export function seedFromDtcg(doc: unknown, opts: { collection?: string | undefin
   if (isResolverDoc(doc)) return { error: source + " is a DTCG resolver; read it with seedFromResolver" };
   const base = opts.collection || DEFAULT_SEED_COLLECTION;
   const g = new Gather();
-  for (const [n, t] of flatten(doc, g)) g.raw.set(n, t);
-  if (g.raw.size > MAX_SEED_TOKENS) return { error: tooManyTokens(source, g.raw.size, "in the file") };
+  try {
+    for (const [n, t] of flatten(doc, g)) g.raw.set(n, t);
+  } catch (e) {
+    if (e instanceof TooManyTokens) return { error: tooManyTokens(source, "in the file") };
+    throw e;
+  }
   // The modes each token has, and the groups they make (a Map keyed by the mode list: names are free text). A group's
   // modes are in its default-first order: the plugin makes the first mode the collection's default.
   //   how sure: 2 the token's figma.com defaultMode (design-to-code writes it), 1 the one mode whose value is the
@@ -896,193 +879,130 @@ export function seedFromResolver(doc: unknown, files: ReadonlyMap<string, unknow
   if (!isObj(doc)) return { error: source + " is not a DTCG resolver" };
   const parts = resolverParts(doc);
   if ("error" in parts) return { error: source + ": " + parts.error };
-  // Bounded before anything is built: the collections (one op each) and the tokens every build reads.
+  // Bounded before anything is built: the collections (one op each), then the tokens met (phase 1) and the values read.
   const collections = new Set(parts.sets.map((s) => s.collection)).size;
   if (collections > MAX_SEED_COLLECTIONS) return { error: source + " makes " + collections + " collections; a seed makes at most " + MAX_SEED_COLLECTIONS + " (each is a createVariables op, and a figma_write batch takes at most " + MAX_SEED_COLLECTIONS + " ops): seed it from several resolvers" };
-  // Phase 1, the walk (once): every file's tokens, and what the walk and the resolver's shape say about them (`said`).
-  const said = new Gather();
-  /** the tokens read, and the size of their values (a shadow of many layers is read whole by every build) */
-  let read = 0, weight = 0;
+  // Phase 1, the walk (once): every file's tokens, and what the walk and the resolver's shape say about them. Every
+  // token met counts (g.met, over every set and context): past MAX_SEED_TOKENS the walk stops and the seed is refused.
+  const g = new Gather();
   /** The tokens of a list of sources, later sources over earlier ones. */
   const tokensOf = (src: readonly unknown[]): Map<string, RawToken> => {
     const out = new Map<string, RawToken>();
     for (const s of src) {
       const tree = isObj(s) && hasOwn(s, "$ref") ? files.get(String(own(s, "$ref"))) : s;
-      const flat = flatten(tree, said);
-      read += flat.size;
-      for (const [n, t] of flat) { out.set(n, t); weight += valueSize(t.value); }
+      for (const [n, t] of flatten(tree, g)) out.set(n, t);
     }
     return out;
   };
-  // Phase 2, the sets: one collection each (two sets of one collection are one). A name a set gives is that set's
-  // collection's (the first set's, whole — its type and its value — when two sets give it; the later one is said).
   interface Build { name: string; base: Map<string, RawToken>; mod: { name: string; modes: string[]; ctx: Map<string, Map<string, RawToken>> } | null }
   const colls = new Map<string, Build>();
+  /** The collection whose set gives a name. */
   const owner = new Map<string, Build>();
-  const setTokens = new Map<string, RawToken>();
-  for (const s of parts.sets) {
-    let b = colls.get(s.collection);
-    if (!b) { b = { name: s.collection, base: new Map(), mod: null }; colls.set(s.collection, b); }
-    for (const [n, t] of tokensOf(s.sources)) {
-      const was = owner.get(n);
-      if (was) { said.part(n, "set '" + s.name + "' has it too; it is seeded once, " + (was === b ? "from the first set" : "in collection '" + was.name + "'")); continue; }
-      owner.set(n, b);
-      b.base.set(n, t);
-      setTokens.set(n, t);
-    }
-  }
-  // Phase 3, the modifiers: the modes of one collection each. Nothing here decides who seeds a name.
-  for (const m of parts.mods) {
-    const ctx = new Map<string, Map<string, RawToken>>();
-    for (const [k, src] of m.contexts) ctx.set(k, tokensOf(src));
-    const names = new Set<string>();
-    for (const t of ctx.values()) for (const n of t.keys()) names.add(n);
-    // A token a set has too is still seeded (its set's value): the note is then a `partly` one.
-    const unmapAll = (reason: string): void => { for (const n of names) said.part(n, reason, true); };
-    let b: Build | undefined;
-    if (m.collection !== null) {
-      b = colls.get(m.collection);
-      if (!b) { unmapAll("modifier '" + m.name + "' overrides collection '" + m.collection + "', which no set makes (an extended collection's overrides are not seeded)"); continue; }
-    } else {
-      b = colls.get(m.name);
-      if (!b) {
-        const owners = new Set<Build>();
-        for (const n of names) { const o = owner.get(n); if (o) owners.add(o); }
-        if (owners.size !== 1) { unmapAll(owners.size ? "modifier '" + m.name + "' changes tokens of several collections; a collection has one set of modes" : "modifier '" + m.name + "' changes tokens no set has"); continue; }
-        b = [...owners][0];
+  const readFiles = (): void => {
+    // Phase 2, the sets: one collection each (two sets of one collection are one). A name a set gives is that set's
+    // collection's (the first set's, whole — its type and its value — when two sets give it; the later one is said).
+    for (const s of parts.sets) {
+      let b = colls.get(s.collection);
+      if (!b) { b = { name: s.collection, base: new Map(), mod: null }; colls.set(s.collection, b); }
+      for (const [n, t] of tokensOf(s.sources)) {
+        const was = owner.get(n);
+        if (was) { g.part(n, "set '" + s.name + "' has it too; it is seeded once, " + (was === b ? "from the first set" : "in collection '" + was.name + "'")); continue; }
+        owner.set(n, b);
+        b.base.set(n, t);
+        g.raw.set(n, t);
       }
     }
-    if (!b) continue;
-    if (b.mod) { unmapAll("modifier '" + m.name + "' is a second set of modes for collection '" + b.name + "' (it has '" + b.mod.name + "')"); continue; }
-    const keys = m.contexts.map(([k]) => k);
-    if (keys.some((k) => !k.trim())) { unmapAll("modifier '" + m.name + "' has a context with an empty name"); continue; }
-    const dflt = m.dflt !== null && keys.indexOf(m.dflt) >= 0 ? m.dflt : keys[0];
-    if (dflt === undefined) { unmapAll("modifier '" + m.name + "' has no context"); continue; }
-    b.mod = { name: m.name, modes: [dflt, ...keys.filter((k) => k !== dflt)], ctx };
-  }
-  if (read > MAX_SEED_TOKENS) return { error: tooManyTokens(source, read, "across its sets and contexts") };
-  // Phase 4, the seats: a name only modifiers give may be seeded by each collection whose modifier gives it, in order.
-  // It sits in the first; only when a whole build (rows, styles, aliases) leaves it unseeded there does it move on.
-  const seats = new Map<string, Build[]>();
-  for (const b of colls.values()) if (b.mod) {
-    for (const t of b.mod.ctx.values()) for (const n of t.keys()) {
-      if (owner.has(n)) continue;
-      const list = seats.get(n);
-      if (!list) seats.set(n, [b]);
-      else if (list.indexOf(b) < 0) list.push(b);
-    }
-  }
-  const seat = new Map<string, number>();
-  /** Why a name failed in the seats it left, as notes (`partly` if a later seat seeds it, else `unmapped`). */
-  const left: SeedUnmapped[] = [];
-  const kindOf = (t: string): string => VARIABLE_TYPE.get(t) ?? t;
-  // Phase 5, a build from the seats: fresh state each time, every type read from the finished raw table.
-  const attempt = (): { g: Gather; built: Built; base: number } => {
-    const g = new Gather();
-    g.unmapped.push(...said.unmapped);
-    g.partNotes.push(...said.partNotes);
-    for (const [n, t] of setTokens) g.raw.set(n, t);
-    // A seated name is known by its seat's default context (never by whichever context the files list first).
-    for (const [n, list] of seats) {
-      const b = list[seat.get(n) ?? 0];
-      const tok = b?.mod ? b.mod.ctx.get(b.mod.modes[0] ?? "")?.get(n) : undefined;
-      if (tok) g.raw.set(n, tok);
-      else g.known.add(n);
-    }
-    const base = g.unmapped.length;
-    // Each collection's rows: a value per mode — the mode's context, else the set's value.
-    for (const b of colls.values()) {
-      let made: Coll | null = null;
-      const coll = (): Coll => (made ??= g.coll(b.name, b.mod ? b.mod.modes : []));
-      if (!b.mod) {
-        for (const t of b.base.values()) g.add(t, coll, [{ value: t.value, opacity: t.ext ? own(t.ext, "opacity") : undefined }]);
-        continue;
-      }
-      const mod = b.mod;
-      const dflt = mod.modes[0] ?? "";
-      const names = new Set<string>(b.base.keys());
-      for (const t of mod.ctx.values()) for (const n of t.keys()) names.add(n);
-      for (const n of names) {
-        const o = owner.get(n);
-        if (o && o !== b) { g.part(n, "modifier '" + mod.name + "' sets it too; it is seeded from collection '" + o.name + "'"); continue; }
-        if (!o) {
-          const list = seats.get(n) ?? [];
-          const i = seat.get(n) ?? 0, mine = list.indexOf(b);
-          if (mine < i) continue; // it failed here: `left` says why
-          const sitting = list[i];
-          if (mine > i) { if (sitting) g.part(n, "modifier '" + mod.name + "' sets it too; it is seeded from collection '" + sitting.name + "'"); continue; }
+    // Phase 3, the modifiers: the modes of one collection each.
+    for (const m of parts.mods) {
+      const ctx = new Map<string, Map<string, RawToken>>();
+      for (const [k, src] of m.contexts) ctx.set(k, tokensOf(src));
+      const names = new Set<string>();
+      for (const t of ctx.values()) for (const n of t.keys()) names.add(n);
+      // A token a set has too is still seeded (its set's value): the note is then a `partly` one.
+      const unmapAll = (reason: string): void => { for (const n of names) g.part(n, reason, true); };
+      let b: Build | undefined;
+      if (m.collection !== null) {
+        b = colls.get(m.collection);
+        if (!b) { unmapAll("modifier '" + m.name + "' overrides collection '" + m.collection + "', which no set makes (an extended collection's overrides are not seeded)"); continue; }
+      } else {
+        b = colls.get(m.name);
+        if (!b) {
+          const owners = new Set<Build>();
+          for (const n of names) { const o = owner.get(n); if (o) owners.add(o); }
+          if (owners.size !== 1) { unmapAll(owners.size ? "modifier '" + m.name + "' changes tokens of several collections; a collection has one set of modes" : "modifier '" + m.name + "' changes tokens no set has"); continue; }
+          b = [...owners][0];
         }
-        const set = b.base.get(n);
-        const at = (m: string): RawToken | undefined => mod.ctx.get(m)?.get(n) ?? set ?? mod.ctx.get(dflt)?.get(n);
-        const first = at(dflt);
-        if (!first) { g.unmapped.push({ token: n, reason: "no value in the default mode '" + dflt + "' of modifier '" + mod.name + "'" }); continue; }
-        // Typed by its set's token, else by the default context's (g.raw holds this seat's).
-        const typed: RawToken = set ?? first;
-        // Every context that gives a $type of its own gives one that makes the same kind of variable (or style).
-        const type = g.typeOf(n);
-        const clash = type === null ? undefined : mod.modes.find((m) => { const t = at(m); const tt = t ? tokenType(t) : null; return tt !== null && kindOf(tt) !== kindOf(type); });
-        const clashTok = clash === undefined ? undefined : at(clash);
-        if (clash !== undefined && clashTok && type !== null) {
-          g.unmapped.push({ token: n, reason: "modifier '" + mod.name + "' gives it $type '" + String(tokenType(clashTok)) + "' in context '" + clash + "', and " + (set ? "its set" : "the default context '" + dflt + "'") + " makes it a " + type + " token" });
-          continue;
-        }
-        g.add(typed, coll, mod.modes.map((m) => { const t = at(m) ?? first; return { value: t.value, opacity: t.ext ? own(t.ext, "opacity") : undefined, mode: m }; }));
       }
+      if (!b) continue;
+      if (b.mod) { unmapAll("modifier '" + m.name + "' is a second set of modes for collection '" + b.name + "' (it has '" + b.mod.name + "')"); continue; }
+      const keys = m.contexts.map(([k]) => k);
+      if (keys.some((k) => !k.trim())) { unmapAll("modifier '" + m.name + "' has a context with an empty name"); continue; }
+      const dflt = m.dflt !== null && keys.indexOf(m.dflt) >= 0 ? m.dflt : keys[0];
+      if (dflt === undefined) { unmapAll("modifier '" + m.name + "' has no context"); continue; }
+      b.mod = { name: m.name, modes: [dflt, ...keys.filter((k) => k !== dflt)], ctx };
     }
-    return { g, built: build(g), base };
   };
-  // What one build reads: every token's value (its size), and a value per mode of each name a collection seeds.
-  let cost = weight;
+  try { readFiles(); } catch (e) {
+    if (e instanceof TooManyTokens) return { error: tooManyTokens(source, "across its sets and contexts") };
+    throw e;
+  }
+  // Phase 4, who seeds a name only modifiers give: the first collection (in the sets' order) whose modifier gives it.
+  // It is seeded there or not at all, typed by that modifier's default context (never by whichever context the files
+  // list first); another collection's modifier value for it is said.
+  const first = new Map<string, Build>();
+  for (const b of colls.values()) if (b.mod) {
+    for (const t of b.mod.ctx.values()) for (const n of t.keys()) if (!owner.has(n) && !first.has(n)) first.set(n, b);
+  }
+  for (const [n, b] of first) {
+    const tok = b.mod ? b.mod.ctx.get(b.mod.modes[0] ?? "")?.get(n) : undefined;
+    if (tok) g.raw.set(n, tok);
+    else g.known.add(n);
+  }
+  // What the build reads: a value per mode of each name a collection seeds.
+  let cost = 0;
   for (const b of colls.values()) {
     if (!b.mod) { cost += b.base.size; continue; }
     const names = new Set<string>(b.base.keys());
     for (const t of b.mod.ctx.values()) for (const n of t.keys()) names.add(n);
     cost += names.size * Math.max(1, b.mod.modes.length);
   }
-  if (cost > MAX_SEED_WORK) return { error: source + " would read " + cost + " values in one build (each token's value, and each name once per mode of its collection), more than the " + MAX_SEED_WORK + " a seed reads: split it into smaller files" };
-  // Decide, then commit: build; a seated name the build left unseeded for a reason of its own (a bad value, a type, no
-  // default value: nothing another name's seat changes) moves to its next seat; one left unseeded because a token it
-  // aliases or binds is not seeded YET (that token may still move on, or wait on one that may) stays put and is tried
-  // again; then build again. It ends: a round that moves no seat changes nothing (a build depends only on the seats),
-  // and every round that leaves a name unseeded in a seat moves one — if each such name only waits (they wait on each
-  // other), they all move as if their failure were their own. A seat only moves forward, so there are at most as many
-  // rounds as seats, plus one; MAX_SEED_WORK bounds what they read in all. The last build is the result.
-  for (let builds = 1; ; builds++) {
-    if (builds * cost > MAX_SEED_WORK) {
-      const open = [...seats.keys()].filter((n) => { const l = seats.get(n) ?? []; return (seat.get(n) ?? 0) < l.length - 1; });
-      return { error: source + ": the seed stopped after " + (builds - 1) + " builds of " + cost + " values each (at most " + MAX_SEED_WORK + " in all): names only modifiers give ("
-        + open.slice(0, 3).map((n) => "'" + n + "'").join(", ") + (open.length > 3 ? " and " + (open.length - 3) + " more" : "") + ") fail in one collection after another, and each try builds the seed again: give each in one collection's modifier, or in a set" };
+  if (cost > MAX_SEED_WORK) return { error: source + " would read " + cost + " values in one build (each name once per mode of its collection), more than the " + MAX_SEED_WORK + " a seed reads: split it into smaller files" };
+  // Phase 5, the build (once): each collection's rows, a value per mode — the mode's context, else the set's value.
+  // A collection's table is made only once a row of it is (Gather.add), and a row claims its name only once it
+  // survives the checks (finish: add, settle, styleOf).
+  const kindOf = (t: string): string => VARIABLE_TYPE.get(t) ?? t;
+  for (const b of colls.values()) {
+    let made: Coll | null = null;
+    const coll = (): Coll => (made ??= g.coll(b.name, b.mod ? b.mod.modes : []));
+    if (!b.mod) {
+      for (const t of b.base.values()) g.add(t, coll, [{ value: t.value, opacity: t.ext ? own(t.ext, "opacity") : undefined }]);
+      continue;
     }
-    const { g, built, base } = attempt();
-    const seeded = seededNames(built);
-    // The names that may still be seeded: a seated one with a later seat, and (in turn) every unseeded one waiting on one.
-    const unsettled = new Set<string>();
-    for (const [n, list] of seats) if (!seeded.has(n) && (seat.get(n) ?? 0) < list.length - 1) unsettled.add(n);
-    const waitedOnBy = new Map<string, string[]>();
-    for (const [n, ts] of g.waits) if (!seeded.has(n)) for (const t of ts) { const l = waitedOnBy.get(t); if (l) l.push(n); else waitedOnBy.set(t, [n]); }
-    for (const todo = [...unsettled]; todo.length;) {
-      for (const n of waitedOnBy.get(todo.pop() ?? "") ?? []) if (!unsettled.has(n)) { unsettled.add(n); todo.push(n); }
+    const mod = b.mod;
+    const dflt = mod.modes[0] ?? "";
+    const names = new Set<string>(b.base.keys());
+    for (const t of mod.ctx.values()) for (const n of t.keys()) names.add(n);
+    for (const n of names) {
+      const o = owner.get(n);
+      if (o && o !== b) { g.part(n, "modifier '" + mod.name + "' sets it too; it is seeded from collection '" + o.name + "'"); continue; }
+      const f = o ? undefined : first.get(n);
+      if (f && f !== b) { g.part(n, "modifier '" + mod.name + "' gives it too; only the first collection whose modifier gives it, '" + f.name + "', is read", true); continue; }
+      const set = b.base.get(n);
+      const at = (m: string): RawToken | undefined => mod.ctx.get(m)?.get(n) ?? set ?? mod.ctx.get(dflt)?.get(n);
+      const firstTok = at(dflt);
+      if (!firstTok) { g.unmapped.push({ token: n, reason: "no value in the default mode '" + dflt + "' of modifier '" + mod.name + "'" }); continue; }
+      // Typed by its set's token, else by the default context's (g.raw holds that one).
+      const typed: RawToken = set ?? firstTok;
+      // Every context that gives a $type of its own gives one that makes the same kind of variable (or style).
+      const type = g.typeOf(n);
+      const clash = type === null ? undefined : mod.modes.find((m) => { const t = at(m); const tt = t ? tokenType(t) : null; return tt !== null && kindOf(tt) !== kindOf(type); });
+      const clashTok = clash === undefined ? undefined : at(clash);
+      if (clash !== undefined && clashTok && type !== null) {
+        g.unmapped.push({ token: n, reason: "modifier '" + mod.name + "' gives it $type '" + String(tokenType(clashTok)) + "' in context '" + clash + "', and " + (set ? "its set" : "the default context '" + dflt + "'") + " makes it a " + type + " token" });
+        continue;
+      }
+      g.add(typed, coll, mod.modes.map((m) => { const t = at(m) ?? firstTok; return { value: t.value, opacity: t.ext ? own(t.ext, "opacity") : undefined, mode: m }; }));
     }
-    const waiting = (n: string): boolean => [...(g.waits.get(n) ?? [])].some((t) => unsettled.has(t));
-    const move = (n: string, list: readonly Build[], i: number, b: Build): void => {
-      const why = g.unmapped.slice(base).filter((u) => u.token === n).map((u) => u.reason);
-      const prefix = list.length > 1 ? "in collection '" + b.name + "': " : "";
-      for (const r of why.length ? why : ["it is not seeded"]) left.push({ token: n, reason: prefix + r });
-      seat.set(n, i + 1);
-    };
-    let moved = false;
-    const stayed: Array<[string, readonly Build[], number, Build]> = [];
-    for (const [n, list] of seats) {
-      const i = seat.get(n) ?? 0;
-      const b = list[i];
-      if (!b || seeded.has(n)) continue;
-      if (waiting(n)) { stayed.push([n, list, i, b]); continue; }
-      move(n, list, i, b);
-      moved = true;
-    }
-    if (!moved && stayed.length) { for (const [n, list, i, b] of stayed) move(n, list, i, b); moved = true; }
-    if (moved) continue;
-    for (const u of left) g.part(u.token, u.reason, true);
-    return finish(g, source, built);
   }
+  return finish(g, source);
 }
