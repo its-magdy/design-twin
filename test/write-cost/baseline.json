@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 1567,
+  "toolDefinition": 1653,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -117,6 +117,22 @@
         "out": 60,
         "in": 744,
         "total": 804
+      }
+    },
+    "clone-repeat": {
+      "new-screen": {
+        "calls": 2,
+        "ops": 1,
+        "out": 374,
+        "in": 919,
+        "total": 1293
+      },
+      "similar-screens": {
+        "calls": 4,
+        "ops": 2,
+        "out": 155,
+        "in": 1618,
+        "total": 1773
       }
     }
   }

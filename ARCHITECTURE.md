@@ -495,6 +495,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   across sessions, because the result's nodes carry the key in this plugin's own plugin data; a node that holds a layer
   without that key (the designer's) refuses the batch instead. A spec given by path (`treeFile`) is read by the MCP
   server, inside the directory it runs in, and reaches the plugin as an inline spec.
+- A copy (`createTree`'s `clone`, `figma-plugin/src/clones.ts`) reads any node of the file but changes none: the
+  source is duplicated with Figma's own `clone()`, its keyed stamps are cleared on the copy, and the copy's patches
+  are set on the copy alone, inside the tree being built, so a failure removes it with the tree. Row tables and
+  fragments (`bridge/src/tree-expand.ts`) never reach the plugin as such: every reader of a spec expands them first
+  and checks, previews and builds the plain tree that results.
 - A source edit reaches further than one node: `setVariable`, `setStyle` and a `patch` of a main component change what
   every layer using them shows (`figma-plugin/src/sources.ts`). Only this file's own sources can be changed: a
   variable, style or component that lives in another library file is refused, naming the library when Figma says

@@ -55,9 +55,13 @@ export interface Use {
 /** A key as Figma writes one: 40 hex digits. */
 const isKey = (ref: string): boolean => /^[0-9a-f]{40}$/i.test(ref);
 
-/** Every reference `spec` makes, with its path (as checkTree names it). */
-function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[] {
+/** Every reference `spec` makes, with its path (as checkTree names it: `labels` holds the path the agent wrote for a node
+ *  a fragment or a row table made). A copy's references are its patches' (clones.ts cloneUses). */
+function usesOf(index: number, s: TreeNodeSpec, at: string, out: Use[], labels: ReadonlyMap<object, string>): Use[] {
   const kind = nodeKind(s);
+  const lab = labels.get(s);
+  const path = lab !== undefined ? lab : at;
+  if (kind === "CLONE") return out;
   const op = "createTree";
   if (kind === "INSTANCE" && s.component !== undefined) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
   if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
@@ -72,14 +76,14 @@ function usesOf(index: number, s: TreeNodeSpec, path: string, out: Use[]): Use[]
     if (k === "fills" && s.fills) continue;
     names.forEach((ref, i) => out.push({ index, op, path: path + ".tokens." + k + (names.length > 1 ? "[" + i + "]" : ""), kind: "variable", ref, type }));
   }
-  (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out));
+  (s.children || []).forEach((c, i) => usesOf(index, c, path + ".children[" + i + "]", out, labels));
   return out;
 }
 
-/** Every reference the createTree specs of a batch make (`specs`: op index → spec). */
-export function treeUses(specs: ReadonlyMap<number, TreeNodeSpec>): Use[] {
+/** Every reference the createTree specs of a batch make (`specs`: op index → the spec as built, and its paths). */
+export function treeUses(specs: ReadonlyMap<number, { spec: TreeNodeSpec; labels: ReadonlyMap<object, string> }>): Use[] {
   const uses: Use[] = [];
-  for (const [index, spec] of specs) usesOf(index, spec, "tree", uses);
+  for (const [index, { spec, labels }] of specs) usesOf(index, spec, "tree", uses, labels);
   return uses;
 }
 

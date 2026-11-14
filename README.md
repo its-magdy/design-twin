@@ -326,7 +326,7 @@ Registered as `designtwin`, so tools appear as `mcp__designtwin__<tool>`:
 `figma_export_selection`, `figma_export_url`, `figma_export_design_system`, `figma_write`. Two more read the export
 already on disk and need no Figma connection: `design_get_component` and `design_drift_lint`.
 
-`figma_write` applies a small set of safe ops (create a screen, a frame or text; change a node; set or clear a
+`figma_write` applies a small set of safe ops (create a screen, or copy one with only its differences; a frame or text; change a node; set or clear a
 variable mode; change a local variable, style or main component once so everything using it follows) and runs no
 arbitrary code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**.
 

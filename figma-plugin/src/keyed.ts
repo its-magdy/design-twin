@@ -26,7 +26,7 @@ import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type OldNode, ty
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { KEY_DATA, readIndex, SPEC_DATA, stampNode } from "./keyed-store";
 import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
-import { buildSubtree, createdCount, newMade, type TreeTarget } from "./tree";
+import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "./tree";
 import type { Change, OpProblem } from "./write-batch";
 
 /** A createTree op that updates the result its key names. */
@@ -346,7 +346,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
     changed.push({ id: up.ref.id, ...(up.spec.handle !== undefined ? { handle: up.spec.handle } : {}), fields: up.fields });
   }
-  const made = newMade(t.refs);
+  const made = newMade(t.refs, t.clones);
   const built: SceneNode[] = [];
   for (const b of plan.builds) {
     consent();
@@ -354,7 +354,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     const n = await buildSubtree(b.spec, b.parent as FrameNode, made, consent);
     // On the list before it is stamped: a stamp that throws removes it with the batch.
     changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
-    for (const [m, s] of made.pairs.slice(from)) stampNode(m, key, s);
+    stampAll(made, key, from);
     built.push(n);
   }
   const replaced = plan.builds.map((b) => b.replaces);

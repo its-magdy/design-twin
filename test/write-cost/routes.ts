@@ -322,6 +322,55 @@ export const sourceEdit: Route = {
   },
 };
 
+// ---- clone and patch, and repetition (#169): several similar screens are copies of the one the file has, each sending
+// only its differences — the texts that read otherwise, by the ids the source's outline gave (one read, as the four-op
+// route makes) — all in one figma_write. A new screen's runs of instances of one component are one row table each.
+/** Every text of `w`, in document order. */
+const textsOfWant = (w: Want): string[] => (isFrame(w) ? (w.children ?? []).flatMap(textsOfWant) : [w.text]);
+/** `node` (a tree spec from dsTreeOf) with every run of two or more instances of one component, setting the same
+ *  properties, written as one instance with a table of rows. */
+function withRows(node: Record<string, unknown>): Record<string, unknown> {
+  const kids = Array.isArray(node.children) ? (node.children as Array<Record<string, unknown>>).map(withRows) : null;
+  if (!kids) return node;
+  const out: Array<Record<string, unknown>> = [];
+  const plain = (k: Record<string, unknown>): boolean => typeof k.component === "string" && Object.keys(k).every((f) => f === "component" || f === "props");
+  const columnsOf = (k: Record<string, unknown>): string[] => Object.keys(k.props ?? {});
+  for (let i = 0; i < kids.length;) {
+    const first = kids[i];
+    if (!first) break;
+    let j = i + 1;
+    while (j < kids.length && plain(first) && plain(kids[j] ?? {}) && kids[j]?.component === first.component && columnsOf(kids[j] ?? {}).join() === columnsOf(first).join()) j++;
+    if (j - i < 2) { out.push(first); i++; continue; }
+    const columns = columnsOf(first);
+    out.push({ component: first.component, columns, rows: kids.slice(i, j).map((k) => columns.map((c) => ((k.props ?? {}) as Record<string, unknown>)[c])) });
+    i = j;
+  }
+  return { ...node, children: out };
+}
+
+export const cloneRepeat: Route = {
+  name: "clone-repeat",
+  ticket: "#169",
+  jobs: {
+    "new-screen": async (s, b) => {
+      const r = must(await s.call("figma_write", { ops: [{ op: "createTree", tree: withRows(dsTreeOf(b.want, b.kit)) }] }, "write"), "figma_write");
+      const [root] = appliedIds(r);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+    "similar-screens": async (s, b) => {
+      const texts = (await readOutline(s, b.sourceId, "find")).filter((n) => n.type === "TEXT");
+      const ops = b.want.map((want) => {
+        const wanted = textsOfWant(want);
+        if (!isFrame(want) || wanted.length !== texts.length) throw new Error("the screen to make is not shaped like the source");
+        const edits: Record<string, { text: string }> = {};
+        texts.forEach((n, i) => { const t = wanted[i]; if (t !== undefined && n.text !== t) edits[n.id] = { text: t }; });
+        return { op: "createTree", tree: { clone: b.sourceId, name: want.frame, edits } };
+      });
+      for (const id of appliedIds(must(await s.call("figma_write", { ops }, "write"), "figma_write"))) await readOutline(s, id, "verify");
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -337,5 +386,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat];
 export const BASELINE = fourOp.name;

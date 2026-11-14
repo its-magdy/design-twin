@@ -689,6 +689,26 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
 }
 
 /**
+ * Set a patch resolved against a source's layer on `node`, the same layer of a fresh copy of it (clones.ts): the checks
+ * that read the file are run against the copy where it is now, then the fields are set. Nothing is kept to put back:
+ * the copy is new, and a throw removes it with the tree it is in.
+ */
+export async function patchCopy(t: PatchTarget, node: SceneNode, consent: () => void): Promise<void> {
+  const on: PatchTarget = { ...t, node };
+  const fit = unfit(node, t.set);
+  const problems = fit.kind.concat(fit.state);
+  if (on.props && node.type === "INSTANCE") { const v = await variantProblem(node, on.props); if (v) problems.push(v); }
+  if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+  if (on.fontsLater && node.type === "TEXT") {
+    for (const f of await fontsToKeep(node)) {
+      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+    }
+  }
+  consent();
+  await setFields(on, consent);
+}
+
+/**
  * Apply a resolved patch, keeping what it replaces. Its Change is on `changes` before the first field is set, so a
  * patch stopped partway ("Allow edits" turned off during the text-style await) is still reported as applied. A patch
  * that throws puts back what it already set before the error goes on (unless `allowed` says "Allow edits" is off by

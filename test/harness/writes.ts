@@ -113,13 +113,16 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
  * setTextStyleIdAsync (to untick "Allow edits" there).
  */
-async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
+export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
   let seq = 0;
   // getNodeByIdAsync's live table (the world's own): every node made here is found by id until it is removed.
   const reg: { nodes: Record<string, FakeNode> | null } = { nodes: null };
   const register = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") reg.nodes[n.id] = n; };
   const unregister = (n: FakeNode): void => { if (reg.nodes && typeof n.id === "string") delete reg.nodes[n.id]; for (const c of kids(n)) unregister(c); };
   const made: FakeNode[] = [];
+  /** every node clone() was called on, in order */
+  const cloned: FakeNode[] = [];
+  const raw = new WeakMap<FakeNode, FakeNode>(); // a node's own fields, behind the proxy that checks what Figma refuses
   const imports: string[] = [];
   const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
@@ -291,6 +294,27 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     };
     // An instance has the children API too, and refuses a new child (insertInto), as Figma's does.
     if (type !== "TEXT") { fields.children = []; fields.appendChild = type === "FRAME" ? appendTo(n) : (c: FakeNode) => insertInto(n)(0, c); fields.insertChild = insertInto(n); }
+    // Figma's clone(): a new node with every value and layer of this one (plugin data included), on the current page.
+    fields.clone = () => {
+      if (trap.has("clone")) throw new Error("in Figma: cannot clone " + String(fields.name));
+      const c = node(type, isNode(fields.mainComponent) ? fields.mainComponent : main);
+      const cf = raw.get(c);
+      if (!cf) throw new Error("fake: no fields for the copy");
+      for (const k of Object.keys(fields)) {
+        const v = fields[k];
+        if (typeof v === "function" || COPY_SKIP.has(k)) continue;
+        cf[k] = Array.isArray(v) ? v.slice() as unknown[] : isNode(v) ? { ...v } : v;
+      }
+      for (const k of data.keys()) (c.setPluginData as (k: string, v: string) => void)(k, data.get(k) ?? "");
+      for (const k of kids(n)) {
+        if (typeof k.clone !== "function") throw new Error("fake: a fixture layer cannot be cloned");
+        const kc = (k.clone as () => FakeNode)();
+        appendTo(c)(kc);
+      }
+      cloned.push(n);
+      return c;
+    };
+    raw.set(n, fields);
     made.push(n);
     register(n);
     appendTo(current)(n); // Figma puts a new node on the current page
@@ -326,8 +350,10 @@ async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
    *  parent is null, so everything below it is gone with it, as in Figma) */
   const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
-  return { ...w, made, alive, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
+  return { ...w, made, alive, cloned, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
 }
+/** The fields a copy does not take from its source: its identity and its place. */
+const COPY_SKIP = new Set(["id", "parent", "removed", "children", "mainComponent", "componentProperties"]);
 
 // ---- the design system a kit world has: components, variables, text styles, and a library
 

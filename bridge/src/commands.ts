@@ -25,7 +25,8 @@ import { isRecord } from "./json-util.ts";
 import { READ_OPTS, type ReadOptName } from "./read-opts.ts";
 import { checkPatch, describePatch, isPatchSet, patchRefusal, patchRows, type PatchRow, type PatchSet } from "./patch-spec.ts";
 import { checkStyleSet, checkVariableEdit, describeStyleEdit, describeVariableEdit, isStyleSet, sourceRefusal, styleRows, type SourceValue, type StyleField, type StyleSet } from "./source-spec.ts";
-import { checkTree, describeTree, isTreeSpec, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
+import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
+import { checkTree } from "./tree-check.ts";
 
 // ---------------------------------------------------------------- arguments
 
@@ -218,9 +219,9 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
 function treePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
   const base = { index, op: o.op, effect: "creates" as const, target: o.page ? `new frame on page '${o.page}'` : "new frame on the current page" };
   if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
-  const { problems, summary } = checkTree(o.tree);
-  if (problems.length || !isTreeSpec(o.tree)) return { ...base, invalid: problems.join("\n") };
-  return { ...base, change: describeTree(o.tree, o.page, summary), ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
+  const { problems, summary, expanded } = checkTree(o.tree);
+  if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
+  return { ...base, change: describeTree(expanded, o.page, summary), ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
 }
 
 /** A patch op's preview: the node, one row per field it sets, the change in one sentence — or every problem. */
@@ -414,8 +415,8 @@ export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | Sc
  *  names the collection and the mode before and after (by name; "inherited" when no mode was set on the node). */
 export interface AppliedWrite {
   id?: string;
-  /** createTree: how many nodes the tree made (`instances` only when it made any) */
-  created?: { frames: number; texts: number; instances?: number };
+  /** createTree: how many nodes the tree made (`instances` and `clones`, the copies of existing nodes, only when it made any) */
+  created?: { frames: number; texts: number; instances?: number; clones?: number };
   /** createTree / patch: the raw values where a variable or text style could stand (colours, spacing, radii, stroke
    *  weights, a tree's texts without a style); absent when none */
   unbound?: number;

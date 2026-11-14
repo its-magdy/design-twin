@@ -122,6 +122,7 @@ export function canvas(): Canvas {
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
       ...pluginData(),
       get absoluteBoundingBox() { return box(n); },
+      clone() { return cloneOf(n); },
     };
     nodes[id] = n;
     return n;
@@ -146,6 +147,7 @@ export function canvas(): Canvas {
       getRangeAllFontNames: () => Object.freeze([FONT]), // frozen, as Figma's
       ...pluginData(),
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
+      clone() { return cloneOf(n); },
     });
     Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter
     textRuns(n); // the run API a write keeps a text with, to put it back if its batch fails
@@ -191,6 +193,21 @@ export function canvas(): Canvas {
       }
     };
     return f;
+  };
+
+  // Figma's clone(): a new node with every value and layer of this one, not yet in any parent (the plugin puts it in
+  // one). A field read through an accessor (a text's characters and name, the bounding box) is the accessor's own.
+  const cloneOf = (src: CNode): CNode => {
+    if (src.type === "INSTANCE" || src.id.startsWith("I")) throw new Error("canvas: copying an instance is not modelled");
+    const copy = src.type === "TEXT" ? textNode({ text: String(src.characters ?? "") }) : frameLike(src.type, { name: src.name });
+    for (const k of Object.keys(src)) {
+      if (k === "id" || k === "parent" || k === "children") continue;
+      const d = Object.getOwnPropertyDescriptor(src, k);
+      if (!d || d.get || d.set || typeof d.value === "function") continue;
+      copy[k] = Array.isArray(d.value) ? [...(d.value as unknown[])] : d.value;
+    }
+    for (const k of src.children ?? []) adopt(copy, cloneOf(k));
+    return copy;
   };
 
   const c: Canvas = {

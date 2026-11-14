@@ -8,7 +8,9 @@ id — `patch` with one row per field, `move` and `delete` of the session's own 
 op fails, one undo per batch — is built; a spec from disk (`treeFile`) and a root `key` whose re-send updates the
 result in place and replies with only what changed are built; source edits — `setVariable` and `setStyle` on this
 file's own variables and paint, text and effect styles, a `patch` of a main component, a library's refused naming the
-library, and the dry run's count of what follows (`writeImpact`) — are built)
+library, and the dry run's count of what follows (`writeImpact`) — are built; clone and patch — a `createTree` node
+`clone` that copies an existing node with its own and its layers' differences (`edits`) — and repetition — an
+instance's `rows` table and the root's named `fragments` placed by `use` — are built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -85,9 +87,12 @@ screens.
 | Colour or brand update | change the variable or style once | one op; Figma propagates |
 | Fault in a repeated part | patch the local main component once | one op; instances follow |
 
-6. **Clone and patch.** A spec node may say "copy this node, with these overrides".
-7. **Repetition.** An instance takes a table of per-row property values; a fragment defined once in the
-   spec is reused by name for parts that are not components.
+6. **Clone and patch.** A spec node may say "copy this node, with these overrides": `{clone: id, edits}`, the
+   node's own fields a patch of the copy and each edit a patch of one of its layers (by id, or a name unique in the
+   source). Built: `figma-plugin/src/clones.ts`.
+7. **Repetition.** An instance takes a table of per-row property values (`rows`, optionally with `columns`); a
+   fragment defined once in the spec (the root's `fragments`) is reused by name (`use`, with `edits`) for parts that
+   are not components. Both are expanded before the spec is checked (`bridge/src/tree-expand.ts`).
 8. **Bulk patch by rule.** A patch may select nodes by a rule (text equals, fill equals, uses a variable,
    is an instance of, name matches) within a scope (selection, page, listed pages, file). Its dry run
    answers with counts per page and a few samples, never the full match list. A real run above a
