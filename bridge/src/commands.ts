@@ -28,6 +28,7 @@ import { checkCreateStyles, checkCreateVariables, describeCreateStyles, describe
 import { checkStyleSet, checkVariableEdit, describeStyleEdit, describeVariableEdit, isStyleSet, sourceRefusal, styleRows, type SourceValue, type StyleField, type StyleSet } from "./source-spec.ts";
 import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
+import { componentRootOf } from "./component-spec.ts";
 
 // ---------------------------------------------------------------- arguments
 
@@ -234,7 +235,9 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
 /** A createTree op's preview: where the frame lands, what it makes in one sentence, and — for a spec the plugin would
  *  refuse — every problem (the same list writeOpError refuses with). */
 function treePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
-  const base = { index, op: o.op, effect: "creates" as const, target: o.page ? `new frame on page '${o.page}'` : "new frame on the current page" };
+  const comp = componentRootOf(o.tree);
+  const what = comp ? (comp.type === "COMPONENT_SET" ? "component set" : "component") : "frame";
+  const base = { index, op: o.op, effect: "creates" as const, target: o.page ? `new ${what} on page '${o.page}'` : `new ${what} on the current page` };
   if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
   const { problems, summary, expanded } = checkTree(o.tree);
   if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
@@ -577,6 +580,12 @@ export interface WriteResult {
   restored?: AppliedWrite[];
   /** What the batch accepted but had no effect (a createTree spec's x/y inside auto-layout, …). Absent when none. */
   warnings?: string[];
+  /** On success, when Figma split the batch into several undo steps: how many Cmd-Z presses take it back. Figma ends a
+   *  step at each component property declared, edited or deleted; the batch declares and edits first and deletes last,
+   *  so the first press removes everything it shows. Absent when the batch is one step. */
+  undoSteps?: number;
+  /** With `undoSteps`: what each press takes back, in a sentence to pass on to the designer. */
+  undoNote?: string;
 }
 
 /** What follows a source edit (writeImpact): the layers that use the variable or style (directly, or through an alias

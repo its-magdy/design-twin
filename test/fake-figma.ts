@@ -266,9 +266,12 @@ export interface World {
   send(msg: unknown): Promise<PostedMessage[]>;
   /** every figma.notify message, in order */
   notified: string[];
-  /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each). A box, not a number or a
-   *  getter, so it stays live through the `{ ...world }` spreads the harness helpers make. */
-  undo: { commits: number };
+  /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each), and how many steps Figma ended
+   *  on its own: it ends the open step at each addComponentProperty, editComponentProperty and deleteComponentProperty
+   *  call, the call included (seen live). A fake component counts those when its componentApi is given the world's `undo`
+   *  (below); `onImplicit` runs at each one, to see the file as that step leaves it. A box, not a number or a getter, so
+   *  it stays live through the `{ ...world }` spreads the harness helpers make. */
+  undo: { commits: number; implicit: number; onImplicit: ((call: string) => void) | null };
   /** what clientStorage holds (seed it with Scene.clientStorage) */
   storage: Map<string, unknown>;
   /** Tick "Allow edits" the way the plugin window does (a set-allow-edits message) — what a write case needs. */
@@ -356,7 +359,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   if (selection) currentPage.selection = selection;
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
-  const undo = { commits: 0 };
+  const undo: World["undo"] = { commits: 0, implicit: 0, onImplicit: null };
   const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
   // The document's own plugin data: what the plugin sets reads back; anything else is what the scene says (or "").
@@ -620,14 +623,17 @@ export interface FakePropDef { type: string; defaultValue: unknown; preferredVal
  * componentPropertyDefinitions answers them all — a set's with its VARIANT properties first, read from its variants'
  * `variantProperties` (options in variant order, the first variant's value the default). A variant (a component inside a
  * set) throws on every one of them, as Figma's does. Definitions are kept in a Map and answered as own properties, so a
- * property may be called "__proto__", "constructor" or "toString".
+ * property may be called "__proto__", "constructor" or "toString". With `undo` (the world's box), each successful add,
+ * edit and delete ends an undo step, as Figma's does (World.undo).
  */
 let followingDefault = false;
 /** True while a layer bound to a property is given the property's new default (componentApi's editComponentProperty):
  *  a fake that refuses a write to a bound field lets that one through. */
 export const followsDefault = (): boolean => followingDefault;
-export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], nextId: () => string): void {
+export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], nextId: () => string, undo?: () => World["undo"]): void {
   const defs = new Map<string, FakePropDef>();
+  // Figma ends the open undo step after each of the three calls that change a definition (World.undo).
+  const ended = (call: string): void => { const u = undo ? undo() : null; if (!u) return; u.implicit++; if (u.onImplicit) u.onImplicit(call); };
   const parentType = (): unknown => { const p = node.parent; return typeof p === "object" && p !== null ? (p as FakeNode).type : undefined; };
   const guard = (what: string): void => { if (node.type === "COMPONENT" && parentType() === "COMPONENT_SET") throw new Error("in Figma: " + what + " can only be used on a component set or a non-variant component"); };
   const own = (o: Record<string, unknown>, k: string, v: unknown): void => { Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true }); };
@@ -658,6 +664,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     const key = name + "#" + nextId();
     // A swap without suggestions answers an empty list.
     defs.set(key, { type, defaultValue, ...(options && options.preferredValues ? { preferredValues: options.preferredValues } : type === "INSTANCE_SWAP" ? { preferredValues: [] } : {}) });
+    ended("addComponentProperty");
     return key;
   };
   node.editComponentProperty = (key: string, value: { name?: string; defaultValue?: unknown; preferredValues?: unknown[] }) => {
@@ -665,7 +672,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     const d = defs.get(key);
     if (!d) throw new Error("in Figma: no property " + key);
     const next: FakePropDef = { ...d, ...(value.defaultValue !== undefined ? { defaultValue: value.defaultValue } : {}), ...(value.preferredValues !== undefined ? { preferredValues: value.preferredValues } : {}) };
-    if (value.name !== undefined && value.name !== bare(key)) { defs.delete(key); const k2 = value.name + "#" + nextId(); defs.set(k2, next); return k2; }
+    if (value.name !== undefined && value.name !== bare(key)) { defs.delete(key); const k2 = value.name + "#" + nextId(); defs.set(k2, next); ended("editComponentProperty"); return k2; }
     defs.set(key, next);
     // A layer bound to the property shows its new default (its text, its visibility), as in Figma.
     const field = d.type === "TEXT" ? "characters" : d.type === "BOOLEAN" ? "visible" : null;
@@ -677,6 +684,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
         try { Reflect.set(l, field, value.defaultValue); } finally { followingDefault = false; }
       }
     }
+    ended("editComponentProperty");
     return key;
   };
   node.deleteComponentProperty = (key: string) => {
@@ -689,6 +697,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
       for (const [f, k] of Object.entries(r as Record<string, unknown>)) if (k !== key) own(left, f, k);
       l.componentPropertyReferences = left;
     }
+    ended("deleteComponentProperty");
   };
 }
 

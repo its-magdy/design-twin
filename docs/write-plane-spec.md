@@ -129,7 +129,13 @@ screens.
     that fails while importing has an empty `applied`).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
-16. **One undo per batch.**
+16. **One undo per batch.** Figma ends an undo step at each addComponentProperty, editComponentProperty and
+    deleteComponentProperty call, the call included (seen live), and a plugin cannot merge steps. A batch that declares,
+    edits or deletes component properties is therefore split, and ordered so the first Undo removes everything it
+    shows: every new component is built hidden and its properties declared, and every updated component's properties
+    added and edited, before anything else; property deletes run last of all. Each further press takes back one
+    declaration or edit (with the hidden new components); several deletes are each a step, and come back first. The
+    reply says so: `undoSteps` (how many presses) and `undoNote`.
 17. **Limited destruction.** Create anywhere; overwrite properties of existing nodes; delete and reparent
     only nodes created in the same session.
 18. **Consent.** "Allow edits" stays the master switch. A designer review step (approve or reject each

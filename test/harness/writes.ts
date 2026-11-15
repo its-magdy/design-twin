@@ -314,7 +314,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     // A main component and a set: Figma's property API, instances made from it (and found again), a set's default variant.
     if (type === "COMPONENT" || type === "COMPONENT_SET") {
       Object.assign(fields, { key: "local-" + String(fields.id), remote: false, description: "" });
-      componentApi(fields, () => made, () => String(++propSeq) + ":0");
+      componentApi(fields, () => made, () => String(++propSeq) + ":0", () => w.undo);
     }
     if (type === "COMPONENT") {
       // A variant's values are read from its name, as Figma reads them (null outside a set).

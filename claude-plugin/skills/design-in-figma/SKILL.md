@@ -8,7 +8,8 @@ argument-hint: "[what to make or change, and where: page, frame name, node id or
 
 `figma_write` is the one write tool: a batch of typed ops (at most 50 per call), checked whole against the file before
 anything changes, put back if an op fails partway (as far as it can: see [When a write is refused](#when-a-write-is-refused)),
-one Cmd-Z step for the designer. No code an agent sends ever runs. Every
+one Cmd-Z step for the designer (bar component properties: Figma makes each declaration its own step, and the reply's
+`undoSteps` says how many; see references/grammar.md, Components). No code an agent sends ever runs. Every
 write here goes through it; the CLI has no write command.
 
 **The grammar is in [`references/grammar.md`](references/grammar.md). Read it before you compose your first op** —

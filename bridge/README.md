@@ -979,7 +979,12 @@ designer turns "Allow edits" off the plugin changes nothing more, not even to un
 also stop partway), a value that cannot be restored is named in the error, and a library item imported for the batch
 stays. Deletes run last, once everything else has landed, because a deleted node cannot be brought back. `applied`
 lists what stays — the changes not put back and the deletes already run — but not imported library items; a batch
-that fails while importing has an empty `applied`. The batch is one Cmd-Z step for the designer.
+that fails while importing has an empty `applied`. The batch is one Cmd-Z step for the designer, except that Figma
+ends an undo step at each component property a write declares, edits or deletes. A batch with those builds its new
+components hidden and declares their properties (and adds and edits the properties of the components it updates)
+before anything else, and deletes properties last, so the first Cmd-Z removes everything it shows and each further one
+takes back a declaration or edit, with the hidden new components; several deletes are each a step, and come back
+first. The reply then carries `undoSteps` (how many presses) and `undoNote` (what each does).
 A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
 sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
 runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's

@@ -142,6 +142,8 @@ export interface DefsPlan {
   remove: Array<{ key: string; name: string }>;
   /** what each kept layer's wiring needs (planWiring, filled in once the plan is made) */
   wiring: WiringStep[];
+  /** the definitions declareDefs added or edited, by name (their keys): set once it has run */
+  declared?: Map<string, string>;
 }
 
 /** Plan the definitions of the component a re-send updates; `bad` hears what cannot change in place. */
@@ -255,20 +257,18 @@ export function unwireGoing(p: DefsPlan, consent: () => void, changes: Change[])
   return out;
 }
 
-/** A re-send's component work, once its nodes are updated and built: the definitions added and edited (a field still
- *  bound to an edited property follows its new default), then the wiring each kept layer gains and every layer the
- *  re-send built wired. `unwired` are the layers unwireGoing changed. Each step is on `changes` as it lands. Returns
- *  what it changed, for the reply. */
-export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built: ReadonlyArray<readonly [SceneNode, TreeNodeSpec]>,
-  consent: () => void, changes: Change[]): { props: Map<string, string>; rewired: number } {
+/** A re-send's definitions added and edited (a field still bound to an edited property follows its new default), each a
+ *  Change on `changes` as it lands. A batch runs this for every component it updates before its other ops (writes.ts):
+ *  Figma ends an undo step at each addComponentProperty and editComponentProperty, so nothing the batch shows may come
+ *  before one. Kept on the plan (`declared`) for syncComponent. Returns how many calls it made. */
+export function declareDefs(p: DefsPlan, consent: () => void, changes: Change[]): number {
   const owner = p.owner;
   const changed = new Map<string, string>();
-  const keys = new Map(p.keys);
+  p.declared = changed;
   for (const d of p.add) {
     consent();
     const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : undefined);
     changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label(owner), restore() { owner.deleteComponentProperty(key); } });
-    keys.set(d.name, key);
     changed.set(d.name, key);
   }
   for (const e of p.edit) {
@@ -280,9 +280,22 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
     const back: { defaultValue: string | boolean; preferredValues?: InstanceSwapPreferredValue[] } = { defaultValue: e.was.defaultValue };
     if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
     changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label(owner), restore() { owner.editComponentProperty(key, back); } });
-    keys.set(e.def.name, key);
     changed.set(e.def.name, key);
   }
+  return p.add.length + p.edit.length;
+}
+
+/** A re-send's component work, once its nodes are updated and built: the definitions declareDefs added and edited (it
+ *  runs here if the batch has not run it), then the wiring each kept layer gains and every layer the re-send built
+ *  wired. `unwired` are the layers unwireGoing changed. Each step is on `changes` as it lands. Returns what it changed,
+ *  for the reply. */
+export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built: ReadonlyArray<readonly [SceneNode, TreeNodeSpec]>,
+  consent: () => void, changes: Change[]): { props: Map<string, string>; rewired: number } {
+  const owner = p.owner;
+  if (!p.declared) declareDefs(p, consent, changes);
+  const changed = new Map<string, string>(p.declared || []);
+  const keys = new Map(p.keys);
+  for (const [name, key] of changed) keys.set(name, key);
   const touched = new Set<SceneNode>(unwired);
   const wire = (n: SceneNode, r: Refs): void => {
     if (!("componentPropertyReferences" in n)) return;

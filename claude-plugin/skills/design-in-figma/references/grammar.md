@@ -46,7 +46,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
 
 ## Replies
 
-- A batch that landed: `{ok: true, applied: [...], warnings?}`, one entry per op.
+- A batch that landed: `{ok: true, applied: [...], warnings?, undoSteps?, undoNote?}`, one entry per op; `undoSteps`
+  and `undoNote` only when Figma split it into several undo steps ([Components](#components), Undo).
   - `createTree`: `{id, created: {frames, texts, instances?, clones?}, handles?, unbound?}`; `handles` maps each
     `handle` to its node's id, and `unbound` counts raw colours, spacing, radii and stroke weights where a variable
     could stand, and texts with no text style.
@@ -218,6 +219,14 @@ in place (below). It lands like a frame: on `page`, beside the existing frames, 
   back) is refused before anything runs — change one made by hand with a [patch](#patch) of its id. A property's type
   cannot change in place (give it a new name). The root takes no `key`; `component` on it is accepted only equal to
   `name` (the read writes it so).
+
+**Undo.** A batch is one Cmd-Z step, except that Figma ends an undo step at each component property a write declares,
+edits or deletes (the call included; a plugin cannot merge steps). So a batch builds every new component hidden and
+declares its properties, and adds and edits the properties of every component it updates, before anything else; it
+deletes properties last of all. The first Undo then removes everything the write shows (and brings back a property it
+deleted, if one); each further press takes back one declaration or edit, and with them the hidden new components. A
+batch split like that says so in its reply: `undoSteps` (how many presses) and `undoNote` (what each does, to pass on
+to the designer). Deleting several properties in one batch makes each its own step too, and those come back first.
 
 ```json
 {"op": "createTree", "tree": {

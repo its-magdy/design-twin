@@ -65,6 +65,18 @@ async function kitWorld(ops: WriteOp[] = [], opts: Parameters<typeof treeWorld>[
 }
 const screen = (props: Record<string, unknown>): WriteOp => ({ op: "createTree", tree: { name: "Screen", box: { w: 390, h: 844 }, layout: { display: "flex", flexDirection: "column", gap: 12 }, children: [{ component: "Button", handle: "cta", props }, { component: "Card", handle: "card", props: { Title: "Hello" } }] } });
 const refusal = (r: WriteResult): string => (r.ok ? "" : String(r.error));
+/** What the designer sees of the file: every shown node on every page (a hidden one and all below it left out), with the
+ *  fields that show. Property definitions are not in it: Figma shows them only in a panel. */
+function shown(w: W): string {
+  const out: unknown[] = [];
+  const walk = (n: FakeNode): void => {
+    if (n.visible === false || n.removed === true) return;
+    out.push([n.id, n.type, n.name, n.x, n.y, n.width, n.height, n.characters, n.fills, n.componentPropertyReferences, isObj(n.parent) ? n.parent.id : null]);
+    for (const k of kids(n)) walk(k);
+  };
+  for (const page of w.figma.root.children) for (const k of kids(page)) walk(k);
+  return JSON.stringify(out);
+}
 
 export const cases: Case[] = [
   {
@@ -81,6 +93,40 @@ export const cases: Case[] = [
       ok("[COMPONENTS] stamped with its name as key (a re-send finds it)", typeof c?.getPluginData === "function" && (c.getPluginData as (k: string) => string)("dtwin.key") === "dtwin/component:Card");
       ok("[COMPONENTS] placed right of the existing frames", typeof c?.x === "number" && c.x >= 890);
       ok("[COMPONENTS] one undo step per batch (commitUndo before and after)", w.undo.commits === 4);
+    },
+  },
+  {
+    name: "Figma ends an undo step at each property declared: a batch declares them all first, so its last step holds everything it shows",
+    async run() {
+      const { w } = await kitWorld([card]);
+      const badge: WriteOp = { op: "createTree", tree: { type: "COMPONENT", name: "Badge", props: { Text: { type: "TEXT", default: "New" }, Dot: { type: "BOOLEAN", default: true } },
+        children: [{ name: "Dot", box: { w: 6, h: 6 }, propRefs: { visible: "Dot" } }, { name: "Text", text: "New", propRefs: { characters: "Text" } }] } };
+      const panel: WriteOp = { op: "createTree", tree: { name: "Panel", box: { w: 200, h: 100 }, children: [{ name: "Note", text: "Hi" }] } };
+      // The Card re-sent: a property added, its Body text changed.
+      const tree = JSON.parse(JSON.stringify(card.tree)) as { props: Record<string, unknown>; children: Array<Record<string, unknown>> };
+      tree.props.Footer = { type: "BOOLEAN", default: true };
+      const body = tree.children[1];
+      if (body) body.text = "New body";
+      const card2: WriteOp = { op: "createTree", tree };
+      const before = shown(w);
+      const implicit = w.undo.implicit;
+      const seen: string[] = [];
+      w.undo.onImplicit = () => { seen.push(shown(w)); };
+      const r = await write(w, [panel, button(), badge, card2]);
+      w.undo.onImplicit = null;
+      const after = shown(w);
+      ok("[COMPONENTS-UNDO] the batch lands: the frame, the set, the new component, the re-sent Card", r.ok && r.applied.length === 4 && one(w, "FRAME", "Panel")?.visible === true && one(w, "COMPONENT_SET", "Button")?.visible === true &&
+        one(w, "COMPONENT", "Badge")?.visible === true && child(one(w, "COMPONENT", "Card"), "Body")?.characters === "New body");
+      // Button 3, Badge 2, the Card's Footer 1: six calls, each ending a step of its own.
+      ok("[COMPONENTS-UNDO] six property declarations, so Figma ended six steps before the batch's last one", w.undo.implicit - implicit === 6 && seen.length === 6);
+      ok("[COMPONENTS-UNDO] when the last of them ended its step nothing the batch shows had happened: undoing the last step takes back all it shows", seen[seen.length - 1] === before && after !== before);
+      ok("[COMPONENTS-UNDO] the frame op comes first in the batch, yet runs after every declaration", seen.every((v) => !v.includes("\"Panel\"")) && after.includes("\"Panel\""));
+      ok("[COMPONENTS-UNDO] the reply says how many Undos take it back, and what each does", r.undoSteps === 7 && typeof r.undoNote === "string" &&
+        r.undoNote.includes("takes 7 Undos") && r.undoNote.includes("the first removes everything this write shows") && r.undoNote.includes("the other 6 take back"));
+      const plain = await write(w, [{ op: "createTree", tree: { name: "Plain", box: { w: 10, h: 10 } } }]);
+      ok("[COMPONENTS-UNDO] a batch that declares no property is one step, and says nothing of it", plain.ok && plain.undoSteps === undefined && plain.undoNote === undefined && w.undo.implicit - implicit === 6);
+      const solo = await kitWorld([{ op: "createTree", tree: { type: "COMPONENT", name: "Tag", props: { Text: { type: "TEXT", default: "Tag" } }, children: [{ name: "Text", text: "Tag", propRefs: { characters: "Text" } }] } }]);
+      ok("[COMPONENTS-UNDO] one new component with one property: two Undos (seen live), the first removes all it shows", solo.r.ok && solo.r.undoSteps === 2 && /takes 2 Undos .*the first removes everything this write shows; the last takes back the property it declared or edited first/.test(String(solo.r.undoNote)));
     },
   },
   {
@@ -183,6 +229,7 @@ export const cases: Case[] = [
       const row = rowOf(r);
       ok("[COMPONENTS] the reply: built (a Hint per variant, and sm's Label anew: its font edit is gone), the renamed variant, the new property's key, the dropped one", r.ok && isObj(row.props) && typeof row.props.Hint === "string" && same(row.propsRemoved, ["Show icon"]) && row.removed === 1 && same(row.created, { frames: 0, texts: 4 }) &&
         Array.isArray(row.changed) && same((row.changed as Array<{ id: string; fields: string[] }>).map((c) => c.fields), [["name"]]));
+      ok("[COMPONENTS] one property added first and one deleted last: two Undos, the first also bringing the deleted one back", r.undoSteps === 2 && /the first removes everything this write shows and brings back the property it deleted; the last takes back/.test(String(r.undoNote)));
       ok("[COMPONENTS] the set holds md/default, md/hover and lg/default: sm/default, its value changed, renamed in place (same ids)", same(kids(set).map((k) => k.name), ["Size=md, State=default", "Size=md, State=hover", "Size=lg, State=default"]) && same(kids(set).map((k) => k.id), ids));
       const defs = defsOf(set);
       ok("[COMPONENTS] Show icon is deleted, Hint declared; the options follow the variants", keyOf(defs, "Show icon") === undefined && keyOf(defs, "Hint") !== undefined && same(defs.Size?.variantOptions, ["md", "lg"]));
@@ -191,7 +238,7 @@ export const cases: Case[] = [
       const shows = isObj(inst?.componentProperties) ? inst.componentProperties : {};
       ok("[COMPONENTS] the instance follows: it has Hint now and no Show icon", hintKey !== undefined && isObj(shows[hintKey]) && !Object.keys(shows).some((k) => k.startsWith("Show icon#")) && isObj(inst?.mainComponent) && inst.mainComponent.name === "Size=md, State=default");
       const again = await write(w, [button(spec)]);
-      ok("[COMPONENTS] sent once more, the new spec is unchanged", again.ok && rowOf(again).unchanged === true);
+      ok("[COMPONENTS] sent once more, the new spec is unchanged", again.ok && rowOf(again).unchanged === true && again.undoSteps === undefined);
     },
   },
   {
@@ -307,6 +354,8 @@ export const cases: Case[] = [
     async run() {
       const preview = writeOpPreview(button(), 0);
       ok("[COMPONENTS] the preview describes the set, its variants and properties", preview.invalid === undefined && String(preview.change).includes("creates component set 'Button' of 3 variants") && String(preview.change).includes("'Label', 'Show icon', 'Icon'") && String(preview.change).includes("updated in place"));
+      ok("[COMPONENTS] its target names what it makes: a component set, a component, on its page", preview.target === "new component set on the current page" &&
+        writeOpPreview({ ...card, page: "Screens" }, 0).target === "new component on page 'Screens'");
       const { w } = await kitWorld();
       const fresh = await impact(w, [button()]);
       const s0 = fresh?.steps[0];

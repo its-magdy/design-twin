@@ -41,8 +41,12 @@ list of merged PRs.
   so a changed value or a column added, renamed or dropped renames them in place; only a dropped row's variant is
   removed, and the reply and the dry run warn how many instances it leaves without a main component. A wired layer's
   `text` or `hidden` must match its property's default (change the default instead), and `__proto__` cannot name a
-  property or a variant column. All or nothing and one undo step, like every write; one made by hand, or a component
-  the same batch makes, is refused. The write-cost suite records a blank-file job: tokens, a small kit, then one
+  property or a variant column. All or nothing, like every write; one made by hand, or a component
+  the same batch makes, is refused. A batch is one undo step, except that Figma ends a step at each component property
+  declared, edited or deleted: a batch makes its new components hidden and declares and edits every property first,
+  and deletes properties last, so the first Undo removes everything it shows and each further one takes back a
+  declaration or edit (with the hidden new components). The reply's `undoSteps` and `undoNote` say how many presses
+  take it back. The dry run's target for a component root says "new component" or "new component set". The write-cost suite records a blank-file job: tokens, a small kit, then one
   screen.
 - `figma_write` can seed those tables from the project's code tokens: `seedTokens {file, collection?}` names a
   `tokens.dtcg.json` or a `tokens.resolver.json` (with its set and context files), and the MCP server reads it into
