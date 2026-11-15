@@ -131,11 +131,10 @@ screens.
     before anything runs, listing every bad name with up to three candidates.
 16. **One undo per batch.** Figma ends an undo step at each addComponentProperty, editComponentProperty and
     deleteComponentProperty call, the call included (seen live), and a plugin cannot merge steps. A batch that declares,
-    edits or deletes component properties is therefore split, and ordered so the first Undo removes everything it
-    shows: every new component is built hidden and its properties declared, and every updated component's properties
-    added and edited, before anything else; property deletes run last of all. Each further press takes back one
-    declaration or edit (with the hidden new components); several deletes are each a step, and come back first. The
-    reply says so: `undoSteps` (how many presses) and `undoNote`.
+    edits or deletes component properties is therefore split: it still runs in op order (reordering it to make the
+    first Undo take back all it shows changed what the batch does), each press takes back the part after the previous
+    property call, and a new component an early press leaves is hidden. The reply says so: `undoSteps` (the property
+    calls, plus one if the batch changed the file after the last) and `undoNote`.
 17. **Limited destruction.** Create anywhere; overwrite properties of existing nodes; delete and reparent
     only nodes created in the same session.
 18. **Consent.** "Allow edits" stays the master switch. A designer review step (approve or reject each

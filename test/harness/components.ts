@@ -96,37 +96,76 @@ export const cases: Case[] = [
     },
   },
   {
-    name: "Figma ends an undo step at each property declared: a batch declares them all first, so its last step holds everything it shows",
+    name: "Figma ends an undo step at each property declared, edited or deleted: the reply counts the Undos a batch takes",
     async run() {
-      const { w } = await kitWorld([card]);
-      const badge: WriteOp = { op: "createTree", tree: { type: "COMPONENT", name: "Badge", props: { Text: { type: "TEXT", default: "New" }, Dot: { type: "BOOLEAN", default: true } },
-        children: [{ name: "Dot", box: { w: 6, h: 6 }, propRefs: { visible: "Dot" } }, { name: "Text", text: "New", propRefs: { characters: "Text" } }] } };
+      const tag = (n: number): WriteOp => {
+        const props: Record<string, unknown> = {};
+        const children: Array<Record<string, unknown>> = [];
+        for (let i = 1; i <= n; i++) { props["Text " + i] = { type: "TEXT", default: "T" + i }; children.push({ name: "Text " + i, text: "T" + i, propRefs: { characters: "Text " + i } }); }
+        return { op: "createTree", tree: { type: "COMPONENT", name: "Tag" + n, props, children } };
+      };
       const panel: WriteOp = { op: "createTree", tree: { name: "Panel", box: { w: 200, h: 100 }, children: [{ name: "Note", text: "Hi" }] } };
-      // The Card re-sent: a property added, its Body text changed.
-      const tree = JSON.parse(JSON.stringify(card.tree)) as { props: Record<string, unknown>; children: Array<Record<string, unknown>> };
+      const { w, r: plain } = await kitWorld([panel]);
+      ok("[COMPONENTS-UNDO] a plain frame batch is one step, and says nothing of it", plain.ok && plain.undoSteps === undefined && plain.undoNote === undefined && w.undo.implicit === 0);
+      const one1 = await write(w, [tag(1)]);
+      ok("[COMPONENTS-UNDO] one new component with one property: Figma ends one step at the declaration, and the reply says 2 Undos (seen live)", one1.ok && w.undo.implicit === 1 && one1.undoSteps === 2 &&
+        String(one1.undoNote).includes("takes 2 Undos") && String(one1.undoNote).includes("after the previous property call") && !String(one1.undoNote).includes("first Undo removes"));
+      const three = await write(w, [tag(3)]);
+      ok("[COMPONENTS-UNDO] one with three properties: three steps ended, 4 Undos", three.ok && w.undo.implicit === 4 && three.undoSteps === 4 && String(three.undoNote).includes("takes 4 Undos"));
+      // The Card re-sent with one unwired property more and nothing else: the add ends the batch's only step.
+      const { w: w2 } = await kitWorld([card]);
+      const tree = JSON.parse(JSON.stringify(card.tree)) as { props: Record<string, unknown> };
       tree.props.Footer = { type: "BOOLEAN", default: true };
-      const body = tree.children[1];
-      if (body) body.text = "New body";
-      const card2: WriteOp = { op: "createTree", tree };
-      const before = shown(w);
-      const implicit = w.undo.implicit;
+      const base = w2.undo.implicit;
+      const added = await write(w2, [{ op: "createTree", tree }]);
+      ok("[COMPONENTS-UNDO] a re-send that only adds a property, nothing after it: one Undo (seen live), nothing said", added.ok && w2.undo.implicit - base === 1 && added.undoSteps === undefined && added.undoNote === undefined);
+      // …then Footer dropped and Extra added: the add, then the delete last of all — two steps.
+      delete tree.props.Footer;
+      tree.props.Extra = { type: "TEXT", default: "x" };
+      const swapped = await write(w2, [{ op: "createTree", tree }]);
+      ok("[COMPONENTS-UNDO] a re-send adding one property and deleting one: two steps ended, 2 Undos", swapped.ok && w2.undo.implicit - base === 3 && swapped.undoSteps === 2 && same(rowOf(swapped).propsRemoved, ["Footer"]));
+      // A new component with two properties, then a frame op: the frame lands after the last declaration, so a step more.
+      const { w: w3 } = await kitWorld();
       const seen: string[] = [];
-      w.undo.onImplicit = () => { seen.push(shown(w)); };
-      const r = await write(w, [panel, button(), badge, card2]);
-      w.undo.onImplicit = null;
-      const after = shown(w);
-      ok("[COMPONENTS-UNDO] the batch lands: the frame, the set, the new component, the re-sent Card", r.ok && r.applied.length === 4 && one(w, "FRAME", "Panel")?.visible === true && one(w, "COMPONENT_SET", "Button")?.visible === true &&
-        one(w, "COMPONENT", "Badge")?.visible === true && child(one(w, "COMPONENT", "Card"), "Body")?.characters === "New body");
-      // Button 3, Badge 2, the Card's Footer 1: six calls, each ending a step of its own.
-      ok("[COMPONENTS-UNDO] six property declarations, so Figma ended six steps before the batch's last one", w.undo.implicit - implicit === 6 && seen.length === 6);
-      ok("[COMPONENTS-UNDO] when the last of them ended its step nothing the batch shows had happened: undoing the last step takes back all it shows", seen[seen.length - 1] === before && after !== before);
-      ok("[COMPONENTS-UNDO] the frame op comes first in the batch, yet runs after every declaration", seen.every((v) => !v.includes("\"Panel\"")) && after.includes("\"Panel\""));
-      ok("[COMPONENTS-UNDO] the reply says how many Undos take it back, and what each does", r.undoSteps === 7 && typeof r.undoNote === "string" &&
-        r.undoNote.includes("takes 7 Undos") && r.undoNote.includes("the first removes everything this write shows") && r.undoNote.includes("the other 6 take back"));
-      const plain = await write(w, [{ op: "createTree", tree: { name: "Plain", box: { w: 10, h: 10 } } }]);
-      ok("[COMPONENTS-UNDO] a batch that declares no property is one step, and says nothing of it", plain.ok && plain.undoSteps === undefined && plain.undoNote === undefined && w.undo.implicit - implicit === 6);
-      const solo = await kitWorld([{ op: "createTree", tree: { type: "COMPONENT", name: "Tag", props: { Text: { type: "TEXT", default: "Tag" } }, children: [{ name: "Text", text: "Tag", propRefs: { characters: "Text" } }] } }]);
-      ok("[COMPONENTS-UNDO] one new component with one property: two Undos (seen live), the first removes all it shows", solo.r.ok && solo.r.undoSteps === 2 && /takes 2 Undos .*the first removes everything this write shows; the last takes back the property it declared or edited first/.test(String(solo.r.undoNote)));
+      w3.undo.onImplicit = () => { seen.push(shown(w3)); };
+      const later = await write(w3, [tag(2), { op: "createTree", tree: { name: "After", box: { w: 10, h: 10 } } }]);
+      w3.undo.onImplicit = null;
+      ok("[COMPONENTS-UNDO] a new component with two properties and a later frame op: 3 Undos", later.ok && later.undoSteps === 3 && seen.length === 2);
+      ok("[COMPONENTS-UNDO] what an early Undo leaves: the new component hidden, the later frame not made", seen.every((v) => !v.includes("\"Tag2\"") && !v.includes("\"After\"")) && shown(w3).includes("\"Tag2\"") && shown(w3).includes("\"After\""));
+    },
+  },
+  {
+    name: "a batch runs in op order with component properties too: bound defaults, copies of patched nodes, placement",
+    async run() {
+      // An edited TEXT default, the layer unwired and its text kept: the layer keeps its text (unwired before the edit).
+      const { w } = await kitWorld([card]);
+      const tree = JSON.parse(JSON.stringify(card.tree)) as { props: Record<string, { type: string; default: unknown }>; children: Array<Record<string, unknown>> };
+      tree.props.Title = { type: "TEXT", default: "Heading" };
+      const title = tree.children[0];
+      if (title) delete title.propRefs;
+      const r = await write(w, [{ op: "createTree", tree }]);
+      const layer = child(one(w, "COMPONENT", "Card"), "Title");
+      ok("[COMPONENTS-ORDER] an edited default with its layer unwired: the layer keeps its own text", r.ok && layer?.characters === "Title" && Object.keys(refsOf(layer)).length === 0 &&
+        defsOf(one(w, "COMPONENT", "Card"))[keyOf(defsOf(one(w, "COMPONENT", "Card")), "Title") ?? ""]?.defaultValue === "Heading");
+      // A patch of a source node, then a component copying it: the copy has the patched text.
+      const src = await write(w, [{ op: "createTree", tree: { name: "Src", children: [{ name: "Note", text: "Old", handle: "note" }] } }]);
+      const srcId = String(rowOf(src).id);
+      const handles = rowOf(src).handles;
+      const noteId = isObj(handles) ? String(handles.note) : "";
+      const copy = await write(w, [{ op: "patch", nodeId: noteId, set: { text: "Patched" } },
+        { op: "createTree", tree: { type: "COMPONENT", name: "Wrap", props: { Label: { type: "TEXT", default: "L" } }, children: [{ clone: srcId }, { name: "Label", text: "L", propRefs: { characters: "Label" } }] } }]);
+      const wrap = one(w, "COMPONENT", "Wrap");
+      ok("[COMPONENTS-ORDER] a component copying a node an earlier patch changes gets the patched content", copy.ok && child(kids(wrap)[0], "Note")?.characters === "Patched");
+      // [a frame, a component]: placed as two writes one after the other would place them.
+      const wide: WriteOp = { op: "createTree", tree: { type: "COMPONENT", name: "Wide", box: { w: 9000, h: 50 }, props: { Label: { type: "TEXT", default: "L" } }, children: [{ name: "Label", text: "L", propRefs: { characters: "Label" } }] } };
+      const box: WriteOp = { op: "createTree", tree: { name: "Panel", box: { w: 200, h: 100 } } };
+      const { w: a } = await kitWorld([box, wide]);
+      const b = await treeWorld();
+      await write(b, [icon("Icon/Plus"), icon("Icon/Minus", "#999999")]);
+      await write(b, [box]);
+      await write(b, [wide]);
+      const at = (x: W, type: string, name: string): string => { const n = one(x, type, name); return JSON.stringify(n ? [n.x, n.y] : null); };
+      ok("[COMPONENTS-ORDER] [Panel, Wide component] places Panel (and Wide) as sequential writes would", at(a, "FRAME", "Panel") === at(b, "FRAME", "Panel") && at(a, "COMPONENT", "Wide") === at(b, "COMPONENT", "Wide") && at(a, "FRAME", "Panel") !== "null");
     },
   },
   {
@@ -229,7 +268,7 @@ export const cases: Case[] = [
       const row = rowOf(r);
       ok("[COMPONENTS] the reply: built (a Hint per variant, and sm's Label anew: its font edit is gone), the renamed variant, the new property's key, the dropped one", r.ok && isObj(row.props) && typeof row.props.Hint === "string" && same(row.propsRemoved, ["Show icon"]) && row.removed === 1 && same(row.created, { frames: 0, texts: 4 }) &&
         Array.isArray(row.changed) && same((row.changed as Array<{ id: string; fields: string[] }>).map((c) => c.fields), [["name"]]));
-      ok("[COMPONENTS] one property added first and one deleted last: two Undos, the first also bringing the deleted one back", r.undoSteps === 2 && /the first removes everything this write shows and brings back the property it deleted; the last takes back/.test(String(r.undoNote)));
+      ok("[COMPONENTS] one property added and one deleted last of all: two Undos", r.undoSteps === 2 && String(r.undoNote).includes("takes 2 Undos"));
       ok("[COMPONENTS] the set holds md/default, md/hover and lg/default: sm/default, its value changed, renamed in place (same ids)", same(kids(set).map((k) => k.name), ["Size=md, State=default", "Size=md, State=hover", "Size=lg, State=default"]) && same(kids(set).map((k) => k.id), ids));
       const defs = defsOf(set);
       ok("[COMPONENTS] Show icon is deleted, Hint declared; the options follow the variants", keyOf(defs, "Show icon") === undefined && keyOf(defs, "Hint") !== undefined && same(defs.Size?.variantOptions, ["md", "lg"]));

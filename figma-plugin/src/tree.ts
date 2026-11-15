@@ -55,9 +55,6 @@ export interface TreeTarget {
   refs: ResolvedRefs;
   /** set when the spec's key names a result the file already holds: the op updates it in place (keyed.ts) */
   update?: KeyedUpdate | undefined;
-  /** a new component the batch has already built hidden and declared the properties of (writes.ts, prepareComponent):
-   *  the op only wires, places and shows it */
-  prepared?: PreparedComponent | undefined;
 }
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
@@ -178,7 +175,7 @@ function resolvePage(ref: string | undefined): { ok: PageNode } | { error: strin
  */
 export async function buildTree(t: TreeTarget, consent: () => void): Promise<Change> {
   const comp = componentRootOf(t.spec);
-  if (comp) return buildComponent(t, consent);
+  if (comp) return buildComponent(t, comp.type, comp.name, consent);
   // Handles are the agent's own strings: a Map, so one called "__proto__" is a key like any other.
   const made = newMade(t.refs, t.clones);
   // A copy as the root (a screen like an existing one): the source's copy, made where Figma makes a new frame.
@@ -223,40 +220,15 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
   };
 }
 
-/** A new component a batch has built hidden and declared the properties of, before its other ops run (writes.ts): what
- *  finishComponent needs to wire, place and show it. `change` is on the batch's list already (its undo removes it). */
-export interface PreparedComponent {
-  root: ComponentNode | ComponentSetNode;
-  type: ComponentRootType;
-  name: string;
-  made: Made;
-  keys: Map<string, string>;
-  change: Change;
-}
-
 /**
  * Build a component spec (component-build.ts): a main component, or a set whose variants are built one by one and then
- * combined. Like a frame's, it is built hidden where Figma creates nodes and its properties declared (prepareComponent:
- * a batch does this for every new component first of all, since Figma ends an undo step at each declaration); then its
- * layers are wired, and only then is it moved to its page, placed and shown (finishComponent). Any throw removes
- * everything it made. It is stamped with its name as key, so the same name sent again updates it in place.
+ * combined. Like a frame's, it is built hidden where Figma creates nodes, its properties declared and its layers wired,
+ * and only then moved to its page, placed and shown; any throw removes everything it made. It is stamped with its name
+ * as key, so the same name sent again updates it in place.
  */
-async function buildComponent(t: TreeTarget, consent: () => void): Promise<Change> {
-  const p = await prepareComponent(t, consent);
-  try { finishComponent(t, p); } catch (e) {
-    try { p.root.remove(); } catch { /* already gone */ }
-    throw e;
-  }
-  return p.change;
-}
-
-/** The first half of a new component's build: made hidden on the page Figma creates nodes on, with its content and its
- *  property definitions, nothing wired and nothing shown. Throws, leaving nothing behind, when Figma refuses a value. */
-export async function prepareComponent(t: TreeTarget, consent: () => void): Promise<PreparedComponent> {
-  const comp = componentRootOf(t.spec);
-  if (!comp) throw new Error("createTree: the spec's root is not a component");
-  const { type, name } = comp;
+async function buildComponent(t: TreeTarget, type: ComponentRootType, name: string, consent: () => void): Promise<Change> {
   const made = newMade(t.refs, t.clones);
+  const key = componentKey(name);
   const parts: SceneNode[] = [];
   let root: ComponentNode | ComponentSetNode | null = null;
   try {
@@ -290,34 +262,25 @@ export async function prepareComponent(t: TreeTarget, consent: () => void): Prom
     }
     await finish(made, 0, 0, consent);
     const keys = addDefs(root, fileDefs(t.spec, t.refs));
+    wireAll(made.pairs, keys);
+    const { x, y } = placement(t.page, root, t.spec);
+    t.page.appendChild(root);
+    root.x = x;
+    root.y = y;
+    root.visible = t.spec.hidden !== true;
+    stampAll(made, key);
     markCreated(root);
+    const applied: AppliedWrite = { id: root.id, component: name, created: createdCount(made) };
+    if (type === "COMPONENT_SET" && applied.created) applied.created.variants = (t.spec.children || []).length;
+    if (keys.size) applied.props = propRecord(keys);
+    if (made.handles.size) applied.handles = handleRecord(made.handles);
+    if (t.summary.unbound) applied.unbound = t.summary.unbound;
     const built = root;
-    const applied: AppliedWrite = { id: built.id, component: name };
-    return { root: built, type, name, made, keys, change: { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); } } };
+    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); } };
   } catch (e) {
     for (const p of parts.slice().reverse()) { try { if (!p.removed) p.remove(); } catch { /* already gone */ } }
     throw e;
   }
-}
-
-/** The second half: its layers wired to the keys its properties got, then moved to its page, placed, shown and stamped.
- *  Fills in the reply on `p.change.applied`, and returns it. A throw leaves the removal to `p.change`. */
-export function finishComponent(t: TreeTarget, p: PreparedComponent): AppliedWrite {
-  const { root, made, keys } = p;
-  wireAll(made.pairs, keys);
-  const { x, y } = placement(t.page, root, t.spec);
-  t.page.appendChild(root);
-  root.x = x;
-  root.y = y;
-  root.visible = t.spec.hidden !== true;
-  stampAll(made, componentKey(p.name));
-  const applied = p.change.applied;
-  applied.created = createdCount(made);
-  if (p.type === "COMPONENT_SET") applied.created.variants = (t.spec.children || []).length;
-  if (keys.size) applied.props = propRecord(keys);
-  if (made.handles.size) applied.handles = handleRecord(made.handles);
-  if (t.summary.unbound) applied.unbound = t.summary.unbound;
-  return applied;
 }
 
 /** What a build made, as the reply counts it (`instances` and `clones` only when it made any). */

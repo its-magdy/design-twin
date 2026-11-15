@@ -581,8 +581,8 @@ export interface WriteResult {
   /** What the batch accepted but had no effect (a createTree spec's x/y inside auto-layout, …). Absent when none. */
   warnings?: string[];
   /** On success, when Figma split the batch into several undo steps: how many Cmd-Z presses take it back. Figma ends a
-   *  step at each component property declared, edited or deleted; the batch declares and edits first and deletes last,
-   *  so the first press removes everything it shows. Absent when the batch is one step. */
+   *  step at each component property declared, edited or deleted (the call included), so the count is those calls, plus
+   *  one when the batch changed the file after the last of them. Absent when the batch is one step. */
   undoSteps?: number;
   /** With `undoSteps`: what each press takes back, in a sentence to pass on to the designer. */
   undoNote?: string;

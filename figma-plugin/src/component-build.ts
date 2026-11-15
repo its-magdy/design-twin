@@ -92,8 +92,26 @@ export function fileDefs(spec: TreeNodeSpec, refs: ResolvedRefs): FileDef[] {
 /** Declare `defs` on a component (or set) the build just made: the key each got, by name. */
 export function addDefs(owner: Owner, defs: readonly FileDef[]): Map<string, string> {
   const keys = new Map<string, string>();
-  for (const d of defs) keys.set(d.name, owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : undefined));
+  for (const d of defs) { keys.set(d.name, owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : undefined)); propertyCalled(); }
   return keys;
+}
+
+/** Figma ends the open undo step at each addComponentProperty, editComponentProperty and deleteComponentProperty call,
+ *  the call included (seen live), and a plugin cannot merge steps. A batch counts those calls here, in the order they
+ *  run, and whether the file changed after the last of them, to say how many Undos take it back (writes.ts). */
+interface PropertySteps { calls: number; mark: number; after: boolean; changes: Change[] | null }
+const steps: PropertySteps = { calls: 0, mark: 0, after: false, changes: null };
+/** Start counting for a batch whose changes go on `changes`. */
+export function countPropertySteps(changes: Change[]): void { steps.calls = 0; steps.mark = 0; steps.after = false; steps.changes = changes; }
+/** A property definition call just ran (its own Change, if one, already on the list): a step ends here. */
+function propertyCalled(): void { steps.calls++; steps.after = false; steps.mark = steps.changes ? steps.changes.length : 0; }
+/** The batch changed the file in a way its change list does not hold (a node removed, a delete). */
+export function fileChanged(): void { if (steps.calls) steps.after = true; }
+/** How many Undos take the batch back: one per property call, and one more when the file changed after the last. */
+export function propertyUndoSteps(): number {
+  if (!steps.calls) return 1;
+  const later = steps.after || (steps.changes !== null && steps.changes.length > steps.mark);
+  return steps.calls + (later ? 1 : 0);
 }
 
 /** The references a spec node's `propRefs` make, keyed as componentPropertyReferences takes them (null: none). */
@@ -142,8 +160,6 @@ export interface DefsPlan {
   remove: Array<{ key: string; name: string }>;
   /** what each kept layer's wiring needs (planWiring, filled in once the plan is made) */
   wiring: WiringStep[];
-  /** the definitions declareDefs added or edited, by name (their keys): set once it has run */
-  declared?: Map<string, string>;
 }
 
 /** Plan the definitions of the component a re-send updates; `bad` hears what cannot change in place. */
@@ -257,18 +273,21 @@ export function unwireGoing(p: DefsPlan, consent: () => void, changes: Change[])
   return out;
 }
 
-/** A re-send's definitions added and edited (a field still bound to an edited property follows its new default), each a
- *  Change on `changes` as it lands. A batch runs this for every component it updates before its other ops (writes.ts):
- *  Figma ends an undo step at each addComponentProperty and editComponentProperty, so nothing the batch shows may come
- *  before one. Kept on the plan (`declared`) for syncComponent. Returns how many calls it made. */
-export function declareDefs(p: DefsPlan, consent: () => void, changes: Change[]): number {
+/** A re-send's component work, once its nodes are updated and built: the definitions added and edited (a field still
+ *  bound to an edited property follows its new default), then the wiring each kept layer gains and every layer the
+ *  re-send built wired. `unwired` are the layers unwireGoing changed. Each step is on `changes` as it lands. Returns
+ *  what it changed, for the reply. */
+export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built: ReadonlyArray<readonly [SceneNode, TreeNodeSpec]>,
+  consent: () => void, changes: Change[]): { props: Map<string, string>; rewired: number } {
   const owner = p.owner;
   const changed = new Map<string, string>();
-  p.declared = changed;
+  const keys = new Map(p.keys);
   for (const d of p.add) {
     consent();
     const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : undefined);
     changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label(owner), restore() { owner.deleteComponentProperty(key); } });
+    propertyCalled();
+    keys.set(d.name, key);
     changed.set(d.name, key);
   }
   for (const e of p.edit) {
@@ -280,22 +299,10 @@ export function declareDefs(p: DefsPlan, consent: () => void, changes: Change[])
     const back: { defaultValue: string | boolean; preferredValues?: InstanceSwapPreferredValue[] } = { defaultValue: e.was.defaultValue };
     if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
     changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label(owner), restore() { owner.editComponentProperty(key, back); } });
+    propertyCalled();
+    keys.set(e.def.name, key);
     changed.set(e.def.name, key);
   }
-  return p.add.length + p.edit.length;
-}
-
-/** A re-send's component work, once its nodes are updated and built: the definitions declareDefs added and edited (it
- *  runs here if the batch has not run it), then the wiring each kept layer gains and every layer the re-send built
- *  wired. `unwired` are the layers unwireGoing changed. Each step is on `changes` as it lands. Returns what it changed,
- *  for the reply. */
-export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built: ReadonlyArray<readonly [SceneNode, TreeNodeSpec]>,
-  consent: () => void, changes: Change[]): { props: Map<string, string>; rewired: number } {
-  const owner = p.owner;
-  if (!p.declared) declareDefs(p, consent, changes);
-  const changed = new Map<string, string>(p.declared || []);
-  const keys = new Map(p.keys);
-  for (const [name, key] of changed) keys.set(name, key);
   const touched = new Set<SceneNode>(unwired);
   const wire = (n: SceneNode, r: Refs): void => {
     if (!("componentPropertyReferences" in n)) return;
@@ -327,6 +334,7 @@ export function removeDefs(p: DefsPlan, consent: () => void, gone: (name: string
     if (!own(current, r.key)) continue;
     consent();
     p.owner.deleteComponentProperty(r.key);
+    propertyCalled();
     out.push(r.name);
     gone(r.name);
   }

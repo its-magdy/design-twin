@@ -7,10 +7,9 @@ import { REVIEW_WAIT_MS } from "../../bridge/src/timeouts.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
 import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
-import { buildTree, finishComponent, prepareComponent, resolveTreeOps, type TreeTarget } from "./tree";
+import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
-import { declareDefs, orphanWarnings, removeDefs } from "./component-build";
-import { componentRootOf } from "../../bridge/src/component-spec.ts";
+import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
@@ -205,8 +204,6 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
       // one by one, as they land.
       if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
-      // A new component the batch built hidden, its properties declared, before its other ops: wired, placed, shown.
-      if (tree.prepared) return finishComponent(tree, tree.prepared);
       const change = await buildTree(tree, consent);
       changes.push(change);
       return change.applied;
@@ -378,6 +375,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     commitUndo();
   }
   const changes: Change[] = [];
+  countPropertySteps(changes);
   // In op order: each op's applied row, filled as it lands (the deletes last).
   const rows: Array<AppliedWrite | undefined> = list.map(() => undefined);
   const fail = async (i: number, op: WriteOp, e: unknown): Promise<WriteResult> => {
@@ -452,32 +450,6 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     if (late.length) return refuseLate(late);
   }
   const warnings = [...trees.targets].reduce<string[]>((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
-  // Figma ends the open undo step at each addComponentProperty and editComponentProperty call (the call included; seen
-  // live), and a plugin cannot merge steps. So before every other op, each new component of the batch is built hidden
-  // where Figma creates nodes and its properties declared, and each component it updates gets its definitions added and
-  // edited: then the batch's last step holds everything it shows (the wiring, the placing and showing, every other op),
-  // and the first Cmd-Z takes all of that back; the steps before it hold only hidden components and definitions.
-  let declared = 0;
-  let prepared = false;
-  for (const [i, t] of trees.targets) {
-    const op = list[i];
-    if (!op) continue;
-    try {
-      const comp = t.update ? t.update.component : undefined;
-      if (comp) declared += declareDefs(comp.defs, consent, changes);
-      else if (!t.update && componentRootOf(t.spec)) {
-        consent();
-        const p = await prepareComponent(t, consent);
-        changes.push(p.change);
-        t.prepared = p;
-        prepared = true;
-        declared += p.keys.size;
-      }
-    } catch (e) {
-      return fail(i, op, e);
-    }
-  }
-  const declaredChanges = changes.length;
   for (const [i, op] of list.entries()) {
     if (op.op === "delete" || isCreateOp(op)) continue;
     try {
@@ -508,6 +480,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     try {
       consent();
       rows[i] = applyDelete(t);
+      fileChanged();
     } catch (e) {
       const r = await fail(i, op, e);
       const gone = rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true).length;
@@ -540,6 +513,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
         const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
         const id = n.id;
         n.remove();
+        fileChanged();
         gone.push(what);
         goneRows.push({ id, deleted: true });
       }
@@ -561,28 +535,14 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     }
   }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
-  // Each definition deleted is its own undo step too (the deletes run last of all, so the last one adds no step after).
-  const deleted = goneRows.reduce((n, r) => n + (r.propsRemoved ? r.propsRemoved.length : 0), 0);
-  const after = prepared || changes.length > declaredChanges || goneRows.length > 0 || rows.some((a) => a !== undefined && a.deleted === true);
-  const undo = undoSteps(declared, deleted, after);
-  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo ? { undoSteps: undo.steps, undoNote: undo.note } : {}) };
+  const undo = propertyUndoSteps();
+  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}) };
 }
 
-/** How many Cmd-Z presses take a batch back, and what each does, when Figma split it: it ends an undo step at each
- *  component property declared or edited (`declared`, run first) and at each one deleted (`deleted`, run last); `after`:
- *  the batch changed something between them. Null when the batch is one step. */
-function undoSteps(declared: number, deleted: number, after: boolean): { steps: number; note: string } | null {
-  if (!declared && !deleted) return null;
-  const steps = declared + (deleted ? deleted : after ? 1 : 0);
-  if (steps < 2) return null;
-  const head = "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps + " Undos (Cmd-Z) to take back: ";
-  if (!after && !deleted) return { steps, note: head + "each takes back one property declaration or edit, newest first." };
-  const parts: string[] = [];
-  if (deleted > 1) parts.push("the first " + (deleted - 1) + (deleted === 2 ? " brings back a property it deleted" : " each bring back a property it deleted"));
-  parts.push((deleted > 1 ? "the next" : "the first") + " removes everything this write shows" + (deleted ? " and brings back " + (deleted > 1 ? "the first property it deleted" : "the property it deleted") : ""));
-  if (declared === 1) parts.push("the last takes back the property it declared or edited first, with the hidden new component it belongs to, if one");
-  else if (declared) parts.push("the other " + declared + " take back, one per Undo, the property declarations and edits it made first, and the hidden new components they belong to");
-  return { steps, note: head + parts.join("; ") + "." };
+/** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */
+function undoNote(steps: number): string {
+  return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps +
+    " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component an early Undo leaves is hidden).";
 }
 
 /** A batch the review did not apply, refused whole: nothing in the file changed. */

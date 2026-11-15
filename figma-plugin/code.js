@@ -7608,9 +7608,9 @@
     const n = t.node;
     const set = t.set;
     const tok = set.tokens || {};
-    const steps = [];
+    const steps2 = [];
     const before = new Map(NUMBER_TOKEN_FIELDS.filter((k) => k in n).map((k) => [k, boundId(n, k)]));
-    steps.push(() => {
+    steps2.push(() => {
       for (const [k, id] of before) if (id === null && boundId(n, k) !== null) bindField(n, k, null);
     });
     if (t.props && n.type === "INSTANCE") {
@@ -7626,7 +7626,7 @@
         Object.defineProperty(old, k, { value: p.boundVariables && p.boundVariables.value ? p.boundVariables.value : p.value, enumerable: true, writable: true, configurable: true });
         was.set(k, shown4(k));
       }
-      steps.push(() => {
+      steps2.push(() => {
         if ([...was].some(([k, v]) => shown4(k) !== v)) n.setProperties(old);
       });
     }
@@ -7635,12 +7635,12 @@
     const sizeTouched = set.box !== void 0 || set.widthMode !== void 0 || set.heightMode !== void 0 || set.layout !== void 0 || set.props !== void 0 || set.autoResize !== void 0 || set.text !== void 0 || set.styles !== void 0 || tok.width !== void 0 || tok.height !== void 0 || limitsTouched;
     if (set.layout) {
       const props = keep(n, LAYOUT_PROPS);
-      steps.push(() => {
+      steps2.push(() => {
         for (const [k, v] of props) putBack(n, k, v);
       });
       if ("children" in n) {
         const kids = n.children.map((k) => ({ k, at: keep(k, ["layoutPositioning", "layoutGrow", "layoutAlign"]), w: k.width, h: k.height, sizing: keep(k, ["layoutSizingHorizontal", "layoutSizingVertical"]), x: k.x, y: k.y }));
-        steps.push(() => {
+        steps2.push(() => {
           const flex = isFlex2(t.node);
           for (const c of kids) {
             if (flex) for (const [k, v] of c.at) putBack(c.k, k, v);
@@ -7657,7 +7657,7 @@
       const sizing2 = keep(n, ["layoutSizingHorizontal", "layoutSizingVertical"]);
       const auto = keep(n, ["textAutoResize"]);
       const limits = limitsTouched ? keep(n, LIMITS2) : [];
-      steps.push(() => {
+      steps2.push(() => {
         for (const [k, v] of limits) putBack(n, k, v);
         if ((n.width !== w || n.height !== h) && "resize" in n) n.resize(w, h);
         const inFlex = isFlex2(t.node.parent);
@@ -7690,18 +7690,18 @@
     if (set.name !== void 0) plain.push(...keep(n, ["name"]));
     const geometry = ["width", "height", ...LIMITS2];
     for (const k of Object.keys(tok)) if (geometry.indexOf(k) < 0 && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
-    steps.push(() => {
+    steps2.push(() => {
       for (const [k, v] of plain) putBack(n, k, v);
     });
-    for (const link of links) steps.push(link);
+    for (const link of links) steps2.push(link);
     if (textRuns && n.type === "TEXT") {
       const text = await keepText(n);
-      steps.push((check) => text(() => {
+      steps2.push((check) => text(() => {
         check();
         return true;
       }));
     }
-    steps.push(() => {
+    steps2.push(() => {
       for (const [k, id] of before) {
         if (id === null || boundId(n, k) === id) continue;
         const v = t.bound.get(id);
@@ -7711,7 +7711,7 @@
     return async (allowed2) => {
       const check = checker(allowed2);
       const failed = [];
-      for (const step of steps) {
+      for (const step of steps2) {
         check();
         try {
           await step(check);
@@ -8094,8 +8094,31 @@
   }
   function addDefs(owner, defs) {
     const keys = /* @__PURE__ */ new Map();
-    for (const d of defs) keys.set(d.name, owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0));
+    for (const d of defs) {
+      keys.set(d.name, owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0));
+      propertyCalled();
+    }
     return keys;
+  }
+  var steps = { calls: 0, mark: 0, after: false, changes: null };
+  function countPropertySteps(changes) {
+    steps.calls = 0;
+    steps.mark = 0;
+    steps.after = false;
+    steps.changes = changes;
+  }
+  function propertyCalled() {
+    steps.calls++;
+    steps.after = false;
+    steps.mark = steps.changes ? steps.changes.length : 0;
+  }
+  function fileChanged() {
+    if (steps.calls) steps.after = true;
+  }
+  function propertyUndoSteps() {
+    if (!steps.calls) return 1;
+    const later2 = steps.after || steps.changes !== null && steps.changes.length > steps.mark;
+    return steps.calls + (later2 ? 1 : 0);
   }
   function refsFor(s, keys) {
     const r = s.propRefs;
@@ -8250,16 +8273,18 @@
     }
     return out;
   }
-  function declareDefs(p, consent2, changes) {
+  function syncComponent(p, unwired, built, consent2, changes) {
     const owner = p.owner;
     const changed = /* @__PURE__ */ new Map();
-    p.declared = changed;
+    const keys = new Map(p.keys);
     for (const d of p.add) {
       consent2();
       const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0);
       changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label2(owner), restore() {
         owner.deleteComponentProperty(key);
       } });
+      propertyCalled();
+      keys.set(d.name, key);
       changed.set(d.name, key);
     }
     for (const e of p.edit) {
@@ -8272,16 +8297,10 @@
       changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), restore() {
         owner.editComponentProperty(key, back);
       } });
+      propertyCalled();
+      keys.set(e.def.name, key);
       changed.set(e.def.name, key);
     }
-    return p.add.length + p.edit.length;
-  }
-  function syncComponent(p, unwired, built, consent2, changes) {
-    const owner = p.owner;
-    if (!p.declared) declareDefs(p, consent2, changes);
-    const changed = new Map(p.declared || []);
-    const keys = new Map(p.keys);
-    for (const [name, key] of changed) keys.set(name, key);
     const touched = new Set(unwired);
     const wire = (n, r) => {
       if (!("componentPropertyReferences" in n)) return;
@@ -8319,6 +8338,7 @@
       if (!own2(current3, r.key)) continue;
       consent2();
       p.owner.deleteComponentProperty(r.key);
+      propertyCalled();
       out.push(r.name);
       gone(r.name);
     }
@@ -8377,7 +8397,7 @@
     if (rewired) applied.rewired = rewired;
   }
   async function componentImpact(ops) {
-    const steps = [];
+    const steps2 = [];
     const planned = /* @__PURE__ */ new Map();
     const specs = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
@@ -8392,7 +8412,7 @@
       try {
         const uses = treeUses(specs).filter((u) => u.kind === "component");
         const r = await resolveRefs(uses, async () => null);
-        for (const p of r.problems) steps.push({ index: p.index, op: "createTree", problem: p.message });
+        for (const p of r.problems) steps2.push({ index: p.index, op: "createTree", problem: p.message });
       } finally {
         setPlannedComponents(/* @__PURE__ */ new Map());
       }
@@ -8405,11 +8425,11 @@
       const found = await existingComponent(c.type, c.name);
       const what = (c.type === "COMPONENT_SET" ? "component set '" : "component '") + c.name + "'";
       if ("problem" in found) {
-        steps.push({ index, op: op.op, problem: found.problem });
+        steps2.push({ index, op: op.op, problem: found.problem });
         continue;
       }
       if ("none" in found) {
-        steps.push({ index, op: op.op, plan: { create: [what], update: [] }, change: "would create " + what });
+        steps2.push({ index, op: op.op, plan: { create: [what], update: [] }, change: "would create " + what });
         continue;
       }
       let instances = 0;
@@ -8422,9 +8442,9 @@
       }
       const old = readOld(found.ours, componentKey(c.name));
       const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];
-      steps.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
+      steps2.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
     }
-    return steps;
+    return steps2;
   }
 
   // src/session.ts
@@ -8548,7 +8568,7 @@
   }
   async function buildTree(t, consent2) {
     const comp = componentRootOf(t.spec);
-    if (comp) return buildComponent(t, consent2);
+    if (comp) return buildComponent(t, comp.type, comp.name, consent2);
     const made = newMade(t.refs, t.clones);
     const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : void 0;
     const root = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
@@ -8591,24 +8611,9 @@
       }
     };
   }
-  async function buildComponent(t, consent2) {
-    const p = await prepareComponent(t, consent2);
-    try {
-      finishComponent(t, p);
-    } catch (e) {
-      try {
-        p.root.remove();
-      } catch {
-      }
-      throw e;
-    }
-    return p.change;
-  }
-  async function prepareComponent(t, consent2) {
-    const comp = componentRootOf(t.spec);
-    if (!comp) throw new Error("createTree: the spec's root is not a component");
-    const { type, name } = comp;
+  async function buildComponent(t, type, name, consent2) {
     const made = newMade(t.refs, t.clones);
+    const key = componentKey(name);
     const parts = [];
     let root = null;
     try {
@@ -8641,12 +8646,23 @@
       }
       await finish(made, 0, 0, consent2);
       const keys = addDefs(root, fileDefs(t.spec, t.refs));
+      wireAll(made.pairs, keys);
+      const { x, y } = placement(t.page, root, t.spec);
+      t.page.appendChild(root);
+      root.x = x;
+      root.y = y;
+      root.visible = t.spec.hidden !== true;
+      stampAll(made, key);
       markCreated(root);
+      const applied = { id: root.id, component: name, created: createdCount(made) };
+      if (type === "COMPONENT_SET" && applied.created) applied.created.variants = (t.spec.children || []).length;
+      if (keys.size) applied.props = propRecord(keys);
+      if (made.handles.size) applied.handles = handleRecord(made.handles);
+      if (t.summary.unbound) applied.unbound = t.summary.unbound;
       const built = root;
-      const applied = { id: built.id, component: name };
-      return { root: built, type, name, made, keys, change: { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
+      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
         built.remove();
-      } } };
+      } };
     } catch (e) {
       for (const p of parts.slice().reverse()) {
         try {
@@ -8656,23 +8672,6 @@
       }
       throw e;
     }
-  }
-  function finishComponent(t, p) {
-    const { root, made, keys } = p;
-    wireAll(made.pairs, keys);
-    const { x, y } = placement(t.page, root, t.spec);
-    t.page.appendChild(root);
-    root.x = x;
-    root.y = y;
-    root.visible = t.spec.hidden !== true;
-    stampAll(made, componentKey(p.name));
-    const applied = p.change.applied;
-    applied.created = createdCount(made);
-    if (p.type === "COMPONENT_SET") applied.created.variants = (t.spec.children || []).length;
-    if (keys.size) applied.props = propRecord(keys);
-    if (made.handles.size) applied.handles = handleRecord(made.handles);
-    if (t.summary.unbound) applied.unbound = t.summary.unbound;
-    return applied;
   }
   function createdCount(made) {
     const out = { frames: made.frames, texts: made.texts };
@@ -10068,7 +10067,7 @@
       if (warnings.indexOf(m) < 0) warnings.push(m);
     };
     const lookups = sourceLookups();
-    const steps = [];
+    const steps2 = [];
     const graph = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
       try {
@@ -10082,16 +10081,16 @@
           const c = nd ? componentOf(nd) : null;
           if (!nd || !c) continue;
           const lib = libraryComponentProblem(nd);
-          steps.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c, warn) } });
+          steps2.push(lib ? { index, op: op.op, problem: lib } : { index, op: op.op, affects: { instances: await instancesOf(c, warn) } });
           continue;
         }
         if (op.op === "setVariable" && op.variable) {
           const found = await lookups.variable(op.variable);
           if ("error" in found) {
-            steps.push({ index, op: op.op, problem: found.error });
+            steps2.push({ index, op: op.op, problem: found.error });
             continue;
           }
-          steps.push({ index, op: op.op, affects: await variableImpact(found.ok, lookups, graph, warn) });
+          steps2.push({ index, op: op.op, affects: await variableImpact(found.ok, lookups, graph, warn) });
           await projectAliases(op, found.ok, lookups, graph);
           continue;
         }
@@ -10099,18 +10098,18 @@
           const kind = isStyleSet(op.set) ? checkStyleSet(op.set).summary.kind : null;
           const found = await lookups.style(op.style, kind);
           if ("error" in found) {
-            steps.push({ index, op: op.op, problem: found.error });
+            steps2.push({ index, op: op.op, problem: found.error });
             continue;
           }
           const nodes = /* @__PURE__ */ new Set();
           await consumersOf(found.ok, nodes, warn);
-          steps.push({ index, op: op.op, affects: { nodes: nodes.size } });
+          steps2.push({ index, op: op.op, affects: { nodes: nodes.size } });
         }
       } catch (e) {
-        steps.push({ index, op: op.op, problem: "could not be counted: " + errMsg(e) });
+        steps2.push({ index, op: op.op, problem: "could not be counted: " + errMsg(e) });
       }
     }
-    return warnings.length ? { steps, warnings } : { steps };
+    return warnings.length ? { steps: steps2, warnings } : { steps: steps2 };
   }
 
   // src/creates.ts
@@ -10703,12 +10702,12 @@
   }
   async function createImpact(ops) {
     const res = await resolveCreateOps(ops);
-    const steps = [];
+    const steps2 = [];
     for (const [index, op] of ops.entries()) {
       if (!isCreateOp(op)) continue;
       const mine = res.problems.filter((p) => p.index === index);
       if (mine.length) {
-        steps.push({ index, op: op.op, problem: mine.map((p) => p.message).join("; ") });
+        steps2.push({ index, op: op.op, problem: mine.map((p) => p.message).join("; ") });
         continue;
       }
       const t = res.targets.get(index);
@@ -10723,16 +10722,16 @@
       } else {
         for (const s of t.rows) (s.existing ? plan.update : plan.create).push(s.row.name);
       }
-      steps.push({ index, op: op.op, plan });
+      steps2.push({ index, op: op.op, plan });
     }
-    return { steps };
+    return { steps: steps2 };
   }
   async function designImpact(ops) {
     const sources = await writeImpact(ops);
     const creates = await createImpact(ops);
     const components2 = await componentImpact(ops);
-    const steps = [...sources.steps, ...creates.steps, ...components2].sort((a, b) => a.index - b.index);
-    return sources.warnings ? { steps, warnings: sources.warnings } : { steps };
+    const steps2 = [...sources.steps, ...creates.steps, ...components2].sort((a, b) => a.index - b.index);
+    return sources.warnings ? { steps: steps2, warnings: sources.warnings } : { steps: steps2 };
   }
 
   // src/structure.ts
@@ -11028,7 +11027,6 @@
         if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
         consent();
         if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
-        if (tree.prepared) return finishComponent(tree, tree.prepared);
         const change = await buildTree(tree, consent);
         changes.push(change);
         return change.applied;
@@ -11173,6 +11171,7 @@
       commitUndo();
     }
     const changes = [];
+    countPropertySteps(changes);
     const rows = list.map(() => void 0);
     const fail = async (i, op, e) => {
       const revoked = e instanceof EditsRevoked;
@@ -11234,27 +11233,6 @@
       if (late.length) return refuseLate(late);
     }
     const warnings = [...trees.targets].reduce((all, [i, t]) => all.concat(t.summary.warnings.map((w) => "ops[" + i + "]." + w)), []);
-    let declared = 0;
-    let prepared = false;
-    for (const [i, t] of trees.targets) {
-      const op = list[i];
-      if (!op) continue;
-      try {
-        const comp = t.update ? t.update.component : void 0;
-        if (comp) declared += declareDefs(comp.defs, consent, changes);
-        else if (!t.update && componentRootOf(t.spec)) {
-          consent();
-          const p = await prepareComponent(t, consent);
-          changes.push(p.change);
-          t.prepared = p;
-          prepared = true;
-          declared += p.keys.size;
-        }
-      } catch (e) {
-        return fail(i, op, e);
-      }
-    }
-    const declaredChanges = changes.length;
     for (const [i, op] of list.entries()) {
       if (op.op === "delete" || isCreateOp(op)) continue;
       try {
@@ -11294,6 +11272,7 @@
       try {
         consent();
         rows[i] = applyDelete(t);
+        fileChanged();
       } catch (e) {
         const r = await fail(i, op, e);
         const gone2 = rows.filter((a) => a !== void 0 && a.deleted === true).length;
@@ -11304,8 +11283,8 @@
     const goneRows = [];
     const lostWith = async (i, op, e) => {
       const r = await fail(i, op, e);
-      const deleted2 = rows.filter((a) => a !== void 0 && a.deleted === true).length;
-      const lost = (deleted2 ? [deleted2 + " node(s) deleted"] : []).concat(gone);
+      const deleted = rows.filter((a) => a !== void 0 && a.deleted === true).length;
+      const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
       return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
     };
     for (const [i, t] of trees.targets) {
@@ -11325,6 +11304,7 @@
           const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
           const id = n.id;
           n.remove();
+          fileChanged();
           gone.push(what);
           goneRows.push({ id, deleted: true });
         }
@@ -11352,23 +11332,11 @@
       }
     }
     const done = rows.filter((a) => a !== void 0);
-    const deleted = goneRows.reduce((n, r) => n + (r.propsRemoved ? r.propsRemoved.length : 0), 0);
-    const after = prepared || changes.length > declaredChanges || goneRows.length > 0 || rows.some((a) => a !== void 0 && a.deleted === true);
-    const undo = undoSteps(declared, deleted, after);
-    return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo ? { undoSteps: undo.steps, undoNote: undo.note } : {} };
+    const undo = propertyUndoSteps();
+    return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {} };
   }
-  function undoSteps(declared, deleted, after) {
-    if (!declared && !deleted) return null;
-    const steps = declared + (deleted ? deleted : after ? 1 : 0);
-    if (steps < 2) return null;
-    const head = "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps + " Undos (Cmd-Z) to take back: ";
-    if (!after && !deleted) return { steps, note: head + "each takes back one property declaration or edit, newest first." };
-    const parts = [];
-    if (deleted > 1) parts.push("the first " + (deleted - 1) + (deleted === 2 ? " brings back a property it deleted" : " each bring back a property it deleted"));
-    parts.push((deleted > 1 ? "the next" : "the first") + " removes everything this write shows" + (deleted ? " and brings back " + (deleted > 1 ? "the first property it deleted" : "the property it deleted") : ""));
-    if (declared === 1) parts.push("the last takes back the property it declared or edited first, with the hidden new component it belongs to, if one");
-    else if (declared) parts.push("the other " + declared + " take back, one per Undo, the property declarations and edits it made first, and the hidden new components they belong to");
-    return { steps, note: head + parts.join("; ") + "." };
+  function undoNote(steps2) {
+    return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component an early Undo leaves is hidden).";
   }
   function reviewRefusal(o) {
     if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...o.reason !== void 0 ? { reason: o.reason } : {} };

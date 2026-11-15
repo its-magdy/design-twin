@@ -795,7 +795,7 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
     editsAllowed,
     ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
     ...(reviewWrites ? { reviewWrites: true } : {}),
-    note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch). " + sourceNote +
+    note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch, except that each component property it declares, edits or deletes is a step of its own: the reply's undoSteps says how many). " + sourceNote +
       (reviewWrites ? `A real write WAITS (up to ${Math.round(REVIEW_WAIT_MS / 60000)} min) until the designer applies or rejects it in the plugin window. ` : "") +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
@@ -850,7 +850,7 @@ registerTool(
       // Kept short on purpose (spec decision 19): every listing of the tools pays for it. The spec, patch and style
       // fields, the replies and the limits are the designtwin plugin's design-in-figma skill (references/grammar.md),
       // and a field this summary leaves out is still checked: the refusal names it by path.
-      "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch; a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
+      "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch, but each component property it declares, edits or deletes adds a step (the reply's `undoSteps`); a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
       "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
       "patch {nodeId, set}: change the given fields of an existing node | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
