@@ -29,6 +29,7 @@
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
+import { imagePaint } from "./images";
 import { fontOf, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
 import { checkTree } from "../../bridge/src/tree-check.ts";
 import { cloneUses, copiesOf, makeCopy, resolveClones, restamp, type CloneTarget, type CopyPatch } from "./clones";
@@ -429,8 +430,8 @@ const SIZING = { fill: "FILL", hug: "HUG" } as const;
 
 /** The node's paints: `fills` (each bound to its `tokens.color`), else one bound paint per name in `names` (the
  *  node's `tokens.fills` / `tokens.strokes` without the raw list). */
-function paints(fills: readonly TreeFill[] | undefined, names: string | string[] | undefined, made: Made): SolidPaint[] {
-  if (fills) return fills.map((f) => bindPaint(solid(f.color === undefined ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color, made));
+function paints(fills: readonly TreeFill[] | undefined, names: string | string[] | undefined, made: Made): Paint[] {
+  if (fills) return fills.map((f) => (f.type === "image" ? imagePaint(f) : bindPaint(solid(f.color === undefined ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color, made)));
   return nameList(names).map((n) => bindPaint(solid("#000000"), n, made));
 }
 const nameList = (v: string | string[] | undefined): string[] => (v === undefined ? [] : typeof v === "string" ? [v] : v);

@@ -206,7 +206,7 @@ export function checkPatch(set: unknown, path = "set"): { problems: string[]; su
 function unboundOf(set: Record<string, unknown>, t: Record<string, unknown>): number {
   const has = (k: string): boolean => t[k] !== undefined && t[k] !== null;
   let c = 0;
-  if (Array.isArray(set.fills)) for (const p of set.fills) if (isObj(p) && p.tokens === undefined) c++;
+  if (Array.isArray(set.fills)) for (const p of set.fills) if (isObj(p) && p.type !== "image" && p.tokens === undefined) c++;
   const st = isObj(set.strokes) ? set.strokes : null;
   if (st) {
     if (Array.isArray(st.colors) && !has("strokes")) c += st.colors.length;

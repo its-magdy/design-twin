@@ -24,6 +24,7 @@
 //     property's current value under the key setProperties takes.
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { checkPatch, isPatchSet, type PatchSet } from "../../bridge/src/patch-spec.ts";
+import { imagePaint } from "./images";
 import { NUMBER_TOKEN_FIELDS, type NumberTokenField, type TreeFill } from "../../bridge/src/tree-spec.ts";
 import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
@@ -592,7 +593,7 @@ function variable(t: PatchTarget, ref: string): Variable {
 const bindPaint = (t: PatchTarget, p: SolidPaint, ref: string | undefined): SolidPaint => (ref === undefined ? p : figma.variables.setBoundVariableForPaint(p, "color", variable(t, ref)));
 /** `paints` with every colour variable unbound (the colour each shows stays). */
 const unbindPaints = (paints: readonly Paint[]): Paint[] => paints.map((p) => (p.type === "SOLID" && p.boundVariables && p.boundVariables.color ? figma.variables.setBoundVariableForPaint(p, "color", null) : p));
-const fillPaints = (t: PatchTarget, fills: readonly TreeFill[]): SolidPaint[] => fills.map((f) => bindPaint(t, solid(f.color === undefined ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color));
+const fillPaints = (t: PatchTarget, fills: readonly TreeFill[]): Paint[] => fills.map((f) => (f.type === "image" ? imagePaint(f) : bindPaint(t, solid(f.color === undefined ? "#000000" : f.color, f.opacity), f.tokens && f.tokens.color)));
 
 /** Set the patch's fields on the node, in PATCH_FIELDS order. */
 async function setFields(t: PatchTarget, consent: () => void): Promise<void> {

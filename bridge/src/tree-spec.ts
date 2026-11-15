@@ -26,11 +26,29 @@ import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, RenderBox, SizeL
 import { parseHexColor, HEX_COLOR_HINT } from "./hex-color.ts";
 import { nearestNames, quoteList } from "./name-match.ts";
 import { expandTree, type TreeRow } from "./tree-expand.ts";
+import { IMAGE_HASH, IMAGE_ID, IMAGE_BYTES_REASON, inlineImageProblem } from "./image-spec.ts";
 import { componentRootOf, PROP_REF_FIELDS, PROP_REF_TYPES, propDefComponents, propDefsOf, propDefsProblems, propRefsShape, RESERVED_KEY_PREFIX, variantColumns, type ComponentRootType, type PropDefType, type TreePropDef } from "./component-spec.ts";
 
 /** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity, and the colour
  *  variable it is bound to (`tokens.color`: a variable's name, key or id; the colour may then be left out). */
-export interface TreeFill { type: "solid"; color?: string; opacity?: number; tokens?: { color: string } }
+export interface TreeSolidFill { type: "solid"; color?: string; opacity?: number; tokens?: { color: string } }
+/** An image paint (docs/write-plane-spec.md decision 12, image-spec.ts): a path on disk (`file`, which the MCP server
+ *  reads and gives the id of its bytes as `image`) or the hash of an image already in the file (`hash`); how it fills the
+ *  node (`scaleMode`, the read's lowercased one; `scale`, a tile's), and a paint opacity. `intrinsicSize`, which the read
+ *  writes, is accepted and sets nothing. */
+export interface TreeImageFill {
+  type: "image";
+  file?: string;
+  /** the sha-256 of the file's bytes: set by the MCP server, never by the spec's author */
+  image?: string;
+  hash?: string;
+  scaleMode?: "fill" | "fit" | "tile";
+  scale?: number;
+  opacity?: number;
+  intrinsicSize?: { w: number; h: number };
+}
+/** A paint a write sets: a solid colour, or an image. */
+export type TreeFill = TreeSolidFill | TreeImageFill;
 /** The node fields a number variable can be bound to: Figma's own field names, which the read writes under `tokens`. */
 export const NUMBER_TOKEN_FIELDS = [
   "itemSpacing", "counterAxisSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
@@ -297,7 +315,7 @@ const RADIUS_RULES: Record<keyof RadiusCorners, Rule> = { tl: nonNeg, tr: nonNeg
 const LIMIT_RULES: Record<keyof SizeLimits, Rule> = { minWidth: positive, maxWidth: positive, minHeight: positive, maxHeight: positive };
 const RENDER_BOX_RULES: Record<keyof RenderBox, Rule> = { x: num, y: num, w: nonNeg, h: nonNeg };
 const FILL_RULES: Readonly<Record<string, Rule>> = {
-  type: (v) => (v === "solid" ? null : typeof v === "string" ? "'" + v + "' cannot be written yet (solid can)" : "must be \"solid\""),
+  type: (v) => (v === "solid" || v === "image" ? null : typeof v === "string" ? "'" + v + "' cannot be written yet (solid and image can)" : "must be \"solid\" or \"image\""),
   color: hex,
   opacity: unit,
   tokens: (v) => {
@@ -308,10 +326,49 @@ const FILL_RULES: Readonly<Record<string, Rule>> = {
   blend: NOT_YET,
   visible: refuse("an invisible paint is never written; leave it out"),
 };
+/** An image paint's fields (image-spec.ts). The read's crop, rotation and colour filters cannot be written yet. */
+const IMAGE_FILL_RULES: Readonly<Record<string, Rule>> = {
+  type: oneOf("image"),
+  file: (v) => (typeof v === "string" && v.trim().length > 0 ? null : "must be the path of an image file (PNG, JPEG or GIF), relative to the directory the server was started in"),
+  hash: (v) => (typeof v === "string" && IMAGE_HASH.test(v) ? null : "is not an image hash (40 lowercase hex characters: the `hash` an image fill has in the read)"),
+  // Put there by the MCP server once it has read `file` (image-file.ts): the id of the bytes it sends beside the ops.
+  image: (v) => (typeof v === "string" && IMAGE_ID.test(v) ? null : "is set by the server (the id of the bytes it read from `file`); leave it out"),
+  scaleMode: (v) => (v === "crop" ? "'crop' cannot be written yet (fill, fit and tile can)" : oneOf("fill", "fit", "tile")(v)),
+  scale: (v) => (isNum(v) && v > 0 ? null : "must be a number > 0 (the tile's scale)"),
+  opacity: unit,
+  // The read writes it (the image's own size): accepted, and it sets nothing.
+  intrinsicSize: (v) => (isObj(v) ? objOf({ w: nonNeg, h: nonNeg })(v) : "must be an object {w, h} (it sets nothing)"),
+  transform: refuse("an image's crop cannot be written yet"), rotation: NOT_YET, filters: NOT_YET,
+  tokens: refuse("an image paint has no colour to bind to a variable"),
+  color: refuse("an image paint has no colour; a solid paint has"),
+  blend: NOT_YET,
+  visible: refuse("an invisible paint is never written; leave it out"),
+  data: refuse(IMAGE_BYTES_REASON), bytes: refuse(IMAGE_BYTES_REASON), base64: refuse(IMAGE_BYTES_REASON), src: refuse(IMAGE_BYTES_REASON), url: refuse(IMAGE_BYTES_REASON),
+};
+/** The first problem with an image paint, or null: its bytes or a link in it, a bad field, not exactly one of `file` and
+ *  `hash`, a `file` the server has not read (no `image`), a `scale` on a paint that is not tiled. */
+function imageFillProblem(p: Record<string, unknown>): string | null {
+  const inline = inlineImageProblem(p);
+  if (inline !== null) return inline;
+  const bad = objectProblems(p, IMAGE_FILL_RULES, "")[0];
+  if (bad) return bad;
+  if (p.file !== undefined && p.hash !== undefined) return "gives both `file` and `hash`; an image is one of them";
+  if (p.file === undefined && p.hash === undefined) return p.image !== undefined ? ".image: is set by the server (the id of the bytes it read from `file`); give `file`" : "is missing `file` (a path to a PNG, JPEG or GIF on disk) or `hash` (an image already in the file)";
+  if (p.file !== undefined && p.image === undefined) return ".file: an image file is read by figma_write on the MCP server, which sends its bytes with the batch; this one came without them";
+  if (p.hash !== undefined && p.image !== undefined) return ".image: is set by the server for a `file`; a `hash` paint has none";
+  if (p.scale !== undefined && p.scaleMode !== "tile") return ".scale: is the tile's scale; give scaleMode \"tile\" with it";
+  return null;
+}
 const fillsCheck: Check = (v) => {
-  if (!Array.isArray(v)) return "must be a list of paints ({type:\"solid\", color})";
+  if (!Array.isArray(v)) return "must be a list of paints ({type:\"solid\", color} or {type:\"image\", file | hash})";
   for (const [i, p] of v.entries()) {
     if (!isObj(p)) return "[" + i + "] must be a paint object";
+    if (p.type === undefined && (p.file !== undefined || p.hash !== undefined)) return "[" + i + "] is missing type: \"image\"";
+    if (p.type === "image") {
+      const img = imageFillProblem(p);
+      if (img !== null) return "[" + i + "]" + (img.startsWith(".") ? "" : " ") + img;
+      continue;
+    }
     const bad = objectProblems(p, FILL_RULES, "")[0];
     if (bad) return "[" + i + "]" + (bad.startsWith(".") ? "" : " ") + bad;
     if (p.color === undefined && p.tokens === undefined) return "[" + i + "] is missing color (a hex colour, or a colour variable in `tokens.color`)";
@@ -400,7 +457,7 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule; key: Rule } = {
   reactions: NOT_YET, variableModes: refuse("set a frame's mode with a setVariableMode op after the tree lands"),
   resolvedModes: refuse("it is read-only (what the frame inherits)"), annotations: NOT_YET, devStatus: NOT_YET,
   devStatusNote: NOT_YET, css: refuse("it is read-only"), pluginData: NOT_YET, sharedData: NOT_YET, motion: NOT_YET,
-  asset: refuse("images come in a later write step"), assetSkipped: refuse("it is read-only"), assetFrom: refuse("it is read-only"),
+  asset: refuse("an image is a fill: `fills: [{type: \"image\", file}]` (a path on disk) or `{type: \"image\", hash}` (one already in the file)"), assetSkipped: refuse("it is read-only"), assetFrom: refuse("it is read-only"),
   sourceTransform: refuse("it is read-only"), geometry: NOT_YET, tableCells: NOT_YET, reference: str, // the read's path to its reference PNG: accepted, sets nothing
   devResources: NOT_YET, runs: refuse("mixed-format text comes in a later write step; give one `font`"), href: NOT_YET,
   linkNode: NOT_YET, list: NOT_YET, indent: NOT_YET, textStyleOverrides: refuse("it is read-only (which fields differ from the text style)"), missingFont: refuse("it is read-only"),
@@ -460,7 +517,7 @@ function unboundOf(n: Record<string, unknown>, kind: NodeKind): number {
   const t = isObj(n.tokens) ? n.tokens : {};
   const has = (k: string): boolean => t[k] !== undefined;
   let c = 0;
-  if (Array.isArray(n.fills)) for (const p of n.fills) if (isObj(p) && p.tokens === undefined) c++;
+  if (Array.isArray(n.fills)) for (const p of n.fills) if (isObj(p) && p.type !== "image" && p.tokens === undefined) c++;
   if (kind === "TEXT") {
     const styled = isObj(n.styles) && n.styles.text !== undefined;
     if (!styled) c++;

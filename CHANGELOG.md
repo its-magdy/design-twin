@@ -32,6 +32,15 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can paint images. Any `fills` (a `createTree` node, a patch's `set.fills`, a paint style's `paints`)
+  takes `{type: "image", file}` (a PNG, JPEG or GIF in the project) or `{type: "image", hash}` (an image the file
+  already has), with `scaleMode` `fill`, `fit` or `tile`, a tile's `scale` and `opacity`. The MCP server reads each file
+  as safely as a token file (inside its directory by real path, a regular file, at most 8 MB), tells the format by its
+  bytes, refuses one over 4096 px a side, and sends each image's bytes once beside the ops (at most 32 MB a batch); an
+  image's bytes, a `data:` URI or a URL in a spec are refused. The plugin makes every image and checks every `hash`
+  before anything runs, so a bad one refuses the batch whole; the reply lists each image it made with its Figma hash
+  (`images`), and the dry run reads the files and says what each is. A keyed re-send of an unchanged file changes
+  nothing. A crop, rotation and filters are not written yet.
 - `figma_write` can create components: a `createTree` root with `type: "COMPONENT"` makes a local main component, and
   `type: "COMPONENT_SET"` a set of variants from a table (`variant`, `columns`, one row of values per variant with
   optional per-variant fields and `edits`). The root's `props` declares TEXT, BOOLEAN and INSTANCE_SWAP properties and

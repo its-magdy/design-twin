@@ -152,7 +152,8 @@ import { screenOutline } from "./outline.ts";
 import type { OutlineLevel, OutlineSource } from "./outline.ts";
 import { findMapFile } from "./project-layout.ts";
 import { loadSpecFiles } from "./spec-file.ts";
-import { loadSeedTokens, MAX_WRITE_OPS, seededPreview, seededReply } from "./seed-file.ts";
+import { inputIndex, loadSeedTokens, MAX_WRITE_OPS, seededPreview, seededReply } from "./seed-file.ts";
+import { imagePreview, loadImageFiles } from "./image-file.ts";
 import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
@@ -852,7 +853,7 @@ registerTool(
       // and a field this summary leaves out is still checked: the refusal names it by path.
       "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch, but each component property it declares, edits or deletes ends a step (the reply's `undoSteps`); a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
       "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
-      "patch {nodeId, set}: change the given fields of an existing node | " +
+      "patch {nodeId, set}: change the given fields of an existing node. An image is a fill {type:\"image\", file|hash}: a PNG/JPEG/GIF path, or a hash the file has | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
       "seedTokens {file, collection?}: those tables from the project's tokens.dtcg.json or tokens.resolver.json | " +
@@ -889,15 +890,20 @@ registerTool(
     const seeded = loadSeedTokens(loaded.ops, (p, what) => assertInsideCwd(p, what));
     if ("error" in seeded) return errorResult(seeded.error + ". Nothing was changed.");
     const { seeds } = seeded;
-    const ops = seeded.ops.filter((o): o is typeof o & { op: WriteOpName } => o.op !== "seedTokens");
+    // …and so is every image a paint names on disk (image-file.ts): each file read and checked once, the paint given the
+    // id of its bytes, the bytes sent once each beside the ops. They are never in a reply or the dry run.
+    const imaged = loadImageFiles(seeded.ops, (p, what) => assertInsideCwd(p, what), { label: (i) => inputIndex(seeds, i) });
+    if ("error" in imaged) return errorResult(imaged.error + ". Nothing was changed.");
+    const ops = imaged.ops.filter((o): o is typeof o & { op: WriteOpName } => o.op !== "seedTokens");
+    const images = Object.keys(imaged.images).length ? imaged.images : undefined;
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
-    if (a.dryRun) return textResult(seededPreview(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)), seeds));
+    if (a.dryRun) return textResult(seededPreview(imagePreview(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)), imaged.records, imaged.hashes), seeds));
     // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
     // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
     // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write
     // nobody is waiting for. A batch already running is not stopped by it (writes have no cancel point).
-    const sent = await ask("write", { ops }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    const sent = await ask("write", { ops, ...(images ? { images } : {}) }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
     // A seeded table's reply is cut to what changed, at the seedTokens op's own index (seed-file.ts).
     const r = seededReply(sent, seeds);
     // Refused whole — the designer has not consented ("Allow edits" off), rejected the batch on the review card, or

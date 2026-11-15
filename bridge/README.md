@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, and what a create table would make or update: `plan`) |
+| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`, the images made from files (`images`: file, hash, size); with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, and what a create table would make or update: `plan`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -1023,7 +1023,7 @@ node: the same field names and values, defaults left out, no ids and no parent r
 | `x`, `y` | the root: page coordinates; a child: its place in a parent without auto-layout, or an `absolute` one |
 | `sizeLimits` | `{minWidth, maxWidth, minHeight, maxHeight}`, each above 0 (leave one out for no limit) |
 | `strokesInLayout` | `true`: the strokes count toward the auto-layout size; on a frame without auto-layout it has no effect (a warning) |
-| `fills` | `[{type: "solid", color: "#hex", opacity?}]`; a frame without `fills` has none (not Figma's white) |
+| `fills` | `[{type: "solid", color: "#hex", opacity?}]`, or an image: `{type: "image", file}` (a path on disk) or `{type: "image", hash}` (below); a frame without `fills` has none (not Figma's white) |
 | `strokes` | `{colors: ["#hex"], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}`; the read's default `variableWidth: {profile: "uniform"}` is accepted |
 | `radius` | a number, or `{tl, tr, br, bl}` |
 | `opacity`, `clip` | as read; a frame without `clip: true` does not clip |
@@ -1230,6 +1230,32 @@ The dry run (with a plugin connected) gives each create op a `plan`: `create` li
 '…'`, `mode '…'` and the new rows' names) and `update` the names the file has already, changed in place. If any op of
 the batch fails, everything the tables made is removed (the collection, its added modes, the variables, the styles)
 and everything they changed is set back, with the rest of the batch.
+
+**Images** are fills. A paint `{type: "image", file: "<path>"}` names a PNG, JPEG or GIF on disk, relative to the
+directory the MCP server was started in; `{type: "image", hash: "<40 hex>"}` names an image the file already has (the
+`hash` of an image fill in the read, or one a write's reply gave). Either takes `scaleMode` (`fill`, the default, \|
+`fit` \| `tile`), `scale` (a tile's) and `opacity`; the read's `intrinsicSize` is accepted and sets nothing; a crop
+(`scaleMode: "crop"`, `transform`), `rotation`, `filters` and `tokens` are refused (not yet). They go wherever paints go:
+a `createTree` node's `fills` (a fragment, a row, a copy's edits), a patch's `set.fills`, a paint style's `paints`.
+
+- An image's bytes never go in a spec: a `data`, `bytes`, `base64`, `src` or `url` key, a `data:` URI or a URL as `file`
+  or `hash`, is refused before anything is read. So is an `image` key: the server sets it.
+- The MCP server reads every file before anything else checks the batch (after a `treeFile` is read in and
+  `seedTokens` became its tables), as safely as a token file: inside its directory by name and, once symbolic links are
+  followed, by real path; a regular file; at most 8 MB. The format is read from the bytes, not the name: PNG, JPEG or
+  GIF (a WebP, an SVG and the rest are refused by what they are), at most 4096 px on either side (Figma's limit). A
+  batch's images are at most 32 MB together; the same file named by many paints is read once. Any problem refuses the
+  call before the plugin is asked.
+- Each paint is sent as `{type: "image", file, image: <sha-256 of the bytes>, …}` and the bytes once per image beside
+  the ops (`images`: id → base64), only on the wire to the plugin: never in a reply, the dry run or the spec a keyed
+  re-send stores. So a re-send of an unchanged file changes nothing, and one whose file changed updates that fill.
+- The plugin makes each image (`figma.createImage`) before the batch touches the document, and looks up each `hash`;
+  bytes Figma cannot open, or a hash the file does not have, refuse the whole batch, naming the file or the hash. The
+  reply lists each image made from a file as `images: [{file, hash, w, h}]`, to reuse by `hash` in a later spec.
+- The dry run reads and checks the files too (it needs no plugin) and gives each step's `images` ("photo.png: PNG
+  800×600, 41 kB"); a `hash` is looked up only when the write runs.
+- The bridge's frame cap (`FIGMA_BRIDGE_MAX_PAYLOAD_MB`, 128 MB by default) must hold the batch's images as base64
+  (about 43 MB at the 32 MB cap); a lower cap refuses a batch that does not fit when it is sent.
 
 **Seeding the tables from the project's code tokens** is one op: `seedTokens {file, collection?}`. The MCP server reads
 the file and puts the tables it makes in the batch in its place, before anything else checks the batch. So no token

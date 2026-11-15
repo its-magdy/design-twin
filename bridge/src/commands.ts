@@ -29,6 +29,7 @@ import { checkStyleSet, checkVariableEdit, describeStyleEdit, describeVariableEd
 import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
+import { imageTableError, type ImageTable } from "./image-spec.ts";
 
 // ---------------------------------------------------------------- arguments
 
@@ -126,6 +127,10 @@ export interface WriteOp {
 }
 export interface WriteArgs {
   ops: WriteOp[];
+  /** The bytes of the images the ops' paints read from disk, once each: an image id (the sha-256 of its bytes, the
+   *  paint's `image`) → base64 (image-spec.ts). Put here by figma_write on the MCP server (image-file.ts), never by the
+   *  spec's author; absent when no paint names a file. */
+  images?: ImageTable | undefined;
 }
 
 /** A WriteOp field that holds a string. */
@@ -209,6 +214,9 @@ export interface WritePreviewStep {
   plan?: CreatePlan;
   /** "missing <fields>", or every problem with a createTree spec — the plugin refuses the batch up front for the same reason */
   invalid?: string;
+  /** the images its paints use, one line each: a file the server read ("photo.png: PNG 800×600, 41 kB"), or a hash the
+   *  file must have (checked when the write runs) — figma_write's dry run (image-file.ts imagePreview) */
+  images?: string[];
 }
 export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
   const row = WRITE_OPS[o.op];
@@ -586,6 +594,9 @@ export interface WriteResult {
   undoSteps?: number;
   /** With `undoSteps`: what each press takes back, in a sentence to pass on to the designer. */
   undoNote?: string;
+  /** On success: each image the batch made from a file, with the hash Figma gave it (a later spec can name it by `hash`)
+   *  and its size in pixels. Absent when no paint named a file. */
+  images?: Array<{ file: string; hash: string; w: number; h: number }>;
 }
 
 /** What follows a source edit (writeImpact): the layers that use the variable or style (directly, or through an alias
@@ -845,7 +856,7 @@ export function writeOpError(o: unknown, i: number): string | null {
 }
 const writeArgs: ArgsCheck = (a) => {
   if (!Array.isArray(a.ops)) return a.ops === undefined ? "`ops` is missing" : "`ops` is not an array";
-  return first(a.ops.map(writeOpError));
+  return first([...a.ops.map(writeOpError), imageTableError(a.images)]);
 };
 
 /** NoArgs: nothing is read, so nothing can be wrong (see the undeclared-key rule above). */

@@ -16,6 +16,7 @@
 // progress, run.ts, and the run chain, state.ts) starts empty for every case, and the code under test is never a stale committed code.js.
 import fs from "node:fs";
 import vm from "node:vm";
+import crypto from "node:crypto";
 import esbuild from "esbuild";
 import { CODE_JS, pluginBuildOptions } from "../figma-plugin/build-options.ts";
 import type {
@@ -23,6 +24,7 @@ import type {
 } from "../bridge/src/doc-types.ts";
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, WriteResult } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
+import { sniffImage } from "../bridge/src/image-file.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real
@@ -51,7 +53,7 @@ export interface FakeCollection {
   isExtension?: boolean; parentVariableCollectionId?: string; rootVariableCollectionId?: string; variableIds?: string[];
   variableOverrides?: Record<string, Record<string, unknown>>;
 }
-interface FakeImage { getSizeAsync(): Promise<{ width: number; height: number }>; getBytesAsync(): Promise<Uint8Array> }
+interface FakeImage { hash?: string; getSizeAsync(): Promise<{ width: number; height: number }>; getBytesAsync(): Promise<Uint8Array> }
 /** What the plugin posts to its UI (progress.ts): run-begin / progress / run-end frames. */
 export interface PostedMessage {
   type: string; source?: string; label?: string; phase?: string;
@@ -89,6 +91,10 @@ export interface FakeFigma {
   setCurrentPageAsync?(page: FakePage): Promise<void>;
   viewport?: { scrollAndZoomIntoView(nodes: FakeNode[]): void };
   getImageByHash(hash: string): FakeImage | null;
+  /** Figma's createImage: the image added to the file (the world's `images` table, by a hash of its bytes), or a throw
+   *  for bytes that are not a PNG, JPEG or GIF (as Figma's "Image type is unsupported") */
+  createImage(data: Uint8Array): FakeImage & { hash: string };
+  base64Decode(data: string): Uint8Array;
   getNodeByIdAsync(id: string): Promise<FakeNode | null>;
   getStyleByIdAsync(id: string): Promise<FakeNode | null>;
   importStyleByKeyAsync?(key: string): Promise<FakeNode>;
@@ -190,7 +196,7 @@ export interface DesignExportApi {
   listChildren(rawId: string): Promise<ListChildrenResult>;
   listLibraries(): Promise<ListLibrariesReply>;
   collectLibraryComponents(sink?: (m: string) => void): Promise<CatalogComponent[]>;
-  applyWrites(ops?: WriteOp[]): Promise<WriteResult>;
+  applyWrites(ops?: WriteOp[], images?: Record<string, string>): Promise<WriteResult>;
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
   collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
@@ -383,6 +389,16 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     },
     loadAllPagesAsync: async () => {},
     getImageByHash: (hash) => scene.images[hash] ?? null,
+    createImage: (data) => {
+      const s = sniffImage(data);
+      if ("error" in s) throw new Error("Image type is unsupported");
+      const hash = crypto.createHash("sha1").update(data).digest("hex");
+      const bytes = new Uint8Array(data);
+      const img = { hash, getSizeAsync: async () => ({ width: s.w, height: s.h }), getBytesAsync: async () => bytes };
+      scene.images[hash] = img;
+      return img;
+    },
+    base64Decode: (data) => new Uint8Array(Buffer.from(data, "base64")),
     getNodeByIdAsync: async (id) => scene.nodes[id] ?? null,
     getStyleByIdAsync: async (id) => {
       const s = scene.styles[id];

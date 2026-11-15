@@ -122,7 +122,7 @@ console.log("\nthe plan of a re-send:");
   const root = p2.updates.find((u) => u.ref === "root");
   check("a changed text: one update of that node, the text only", title !== undefined && JSON.stringify(title.fields) === "[\"text\"]" && JSON.stringify(title.set) === JSON.stringify({ text: "Hello there" }));
   check("the root: its layout whole and its fills, as a patch", root !== undefined && root.fields.join() === "layout,fills" &&
-    root.set?.layout?.gap === 24 && root.set.layout.flexDirection === "column" && root.set.fills?.[0]?.color === "#fafafa");
+    root.set?.layout?.gap === 24 && root.set.layout.flexDirection === "column" && JSON.stringify(root.set.fills?.[0]) === JSON.stringify({ type: "solid", color: "#fafafa" }));
   check("every patch the plan makes passes the patch check", p2.updates.every((u) => !u.set || checkPatch(u.set).problems.length === 0));
   check("nothing is built, removed or reordered", p2.builds.length + p2.removals.length + p2.orders.length === 0);
   check("the changed nodes get their new own spec stored", p2.stamps.map((s) => s.ref).sort().join() === "root,root/title");
