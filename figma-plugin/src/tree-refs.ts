@@ -31,7 +31,7 @@ import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { nodeKind, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { OpProblem } from "./write-batch";
 import { plannedComponent, plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
-import { componentRootOf, propDefComponents } from "../../bridge/src/component-spec.ts";
+import { componentRootOf, propDefComponents, propDefsOf } from "../../bridge/src/component-spec.ts";
 import { valueProps } from "../../bridge/src/tree-diff.ts";
 
 /** What a node of a spec resolved to, for the build. */
@@ -60,6 +60,10 @@ export interface Use {
   type?: VariableResolvedDataType;
   /** a component: the node that names it (an instance), or none for a swap property's default or suggestion */
   node?: TreeNodeSpec;
+  /** a component a swap property only suggests (never its default): just its key is kept */
+  suggestion?: true;
+  /** a component a swap property shows by default (its id is kept) */
+  swapDefault?: true;
 }
 
 /** A key as Figma writes one: 40 hex digits. */
@@ -75,7 +79,15 @@ function usesOf(index: number, s: TreeNodeSpec, at: string, out: Use[], labels: 
   const op = "createTree";
   if (kind === "INSTANCE" && s.component !== undefined) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
   // A component root's swap properties: the components they show and suggest.
-  if (at === "tree" && componentRootOf(s)) for (const ref of propDefComponents(s)) out.push({ index, op, path: path + ".props", kind: "component", ref });
+  if (at === "tree" && componentRootOf(s)) {
+    const defaults = new Set<string>();
+    for (const [, d] of propDefsOf(s)) if (d.type === "INSTANCE_SWAP" && typeof d.default === "string") defaults.add(d.default);
+    for (const ref of propDefComponents(s)) {
+      const u: Use = { index, op, path: path + ".props", kind: "component", ref };
+      if (defaults.has(ref)) u.swapDefault = true; else u.suggestion = true;
+      out.push(u);
+    }
+  }
   if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
   (s.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
   const t = s.tokens || {};
@@ -167,7 +179,8 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
 
   const imported: Array<{ use: Use; get: (allowed: () => boolean) => Promise<unknown> }> = [];
   for (const u of uses) {
-    const f: Found<unknown> = u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref))
+    const f: Found<unknown> = u.kind === "component" && (u.suggestion || u.swapDefault) ? await lookup(u.kind, (u.swapDefault ? "default" : "suggest") + "\u0000" + u.ref, () => file.swapDef(u.ref, u.swapDefault === true))
+      : u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref))
       : u.kind === "variable" ? await lookup(u.kind, u.ref, () => file.variable(u.ref))
       : await lookup(u.kind, u.ref, () => file.textStyle(u.ref));
     if ("error" in f) { bad(u, f.error); continue; }
@@ -422,6 +435,21 @@ function fileLookups() {
       const planned = owner.remote ? undefined : plannedComponent(owner.name);
       if (planned !== undefined) return { error: "component '" + ref + "' is one ops[" + planned + "] of this batch updates, and a batch resolves every name before it runs — use it in a later call" };
       return f;
+    },
+    // A swap property's default or suggestion naming a component the batch updates. An update keeps a set's and a
+    // standalone component's node (id and key), so a suggestion (which keeps the key) may name either, and a default
+    // (which keeps the id it shows) a standalone component. A variant inside a set may be dropped or renamed by the
+    // update, and a set's default variant may change: those are refused like an instance's use.
+    async swapDef(ref: string, isDefault: boolean): Promise<Found<ComponentNode | ComponentSetNode>> {
+      const f = await this.findComponent(ref);
+      if (!("ok" in f)) return f;
+      const c = f.ok;
+      const inSet = c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
+      const owner = inSet || c;
+      const planned = owner.remote ? undefined : plannedComponent(owner.name);
+      if (planned === undefined) return f;
+      if (!inSet && !(isDefault && c.type === "COMPONENT_SET")) return f;
+      return { error: "component '" + ref + "' is " + (inSet ? "a variant of '" + owner.name + "'" : "a set") + " that ops[" + planned + "] of this batch updates, and a batch resolves every name before it runs — " + (isDefault ? "default to it in a later call" : "suggest the set, or use it in a later call") };
     },
     async findComponent(ref: string): Promise<Found<ComponentNode | ComponentSetNode>> {
       let byId: BaseNode | null = null;

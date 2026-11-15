@@ -252,6 +252,21 @@ export const cases: Case[] = [
       const kept = w.alive().length;
       const upd = await write(w, [icon("Icon/Plus"), { op: "createTree", tree: { name: "Screen", children: [{ component: "Icon/Plus" }] } }]);
       ok("[COMPONENTS] a component the same batch updates is refused too, nothing made", made.ok && !upd.ok && refusal(upd).includes("ops[0] of this batch updates") && refusal(upd).includes("use it in a later call") && w.alive().length === kept);
+      // A swap default or suggestion may name a standalone component the batch updates (its id and key stay); a
+      // variant of a set the batch updates may not.
+      const chip = (prefer: string[]): WriteOp => ({ op: "createTree", tree: { type: "COMPONENT", name: "Chip", props: { Icon: { type: "INSTANCE_SWAP", default: "Icon/Minus", preferredValues: prefer } }, children: [{ component: "Icon/Minus", name: "Icon", propRefs: { mainComponent: "Icon" } }] } });
+      const minus = await write(w, [icon("Icon/Minus")]);
+      const chipMade = minus.ok ? await write(w, [chip(["Icon/Minus"])]) : minus;
+      const both = await write(w, [icon("Icon/Plus", "#222222"), chip(["Icon/Minus", "Icon/Plus", "Chip"])]);
+      ok("[COMPONENTS] a re-send may suggest components the same batch updates (itself too)", chipMade.ok && both.ok);
+      // A copy's swap value resolves with the batch's components known: a variant of a set the batch updates is refused.
+      const set = await write(w, [button()]);
+      const host = set.ok ? await write(w, [{ op: "createTree", tree: { name: "Host", children: [{ component: "Button", name: "B", props: { Size: "md", State: "default" } }] } }]) : set;
+      const hostId = host.ok ? String(rowOf(host).id) : "";
+      const sm = named(w, "COMPONENT", "Size=sm, State=default")[0];
+      const before2 = w.alive().length;
+      const cloned = await write(w, [button(), { op: "createTree", tree: { clone: hostId, edits: { B: { props: { Icon: sm ? sm.id : "" } } } } }]);
+      ok("[COMPONENTS] a copy's swap value naming a variant of a set the batch updates is refused, nothing made", host.ok && !!sm && !cloned.ok && refusal(cloned).includes("of this batch updates") && w.alive().length === before2);
     },
   },
   {

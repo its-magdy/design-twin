@@ -143,8 +143,10 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
 - An INSTANCE takes only `component`, `props`, `name`, `handle`, `hidden`, `box`, `x`/`y`, `absolute`, `grow`,
   `alignSelf`, `widthMode`/`heightMode`, `opacity`, `tokens` and (inside a component) `propRefs` (and the compatibility-only `renderBox`, `reference`): its content comes from its component.
 - A component another op of the same batch makes or updates is not there yet: every name resolves before the batch
-  runs, so the spec is refused ("create it in an earlier call" / "use it in a later call"). Make the kit in one call,
-  use it in the next. A wrong
+  runs, so the spec is refused ("create it in an earlier call" / "use it in a later call"), a copy's swap values
+  included. Make the kit in one call, use it in the next. A swap property's suggestions may name a set or component the
+  batch updates (itself too), and its default a standalone component the batch updates; a variant of a set the batch
+  updates may not be named. A wrong
   variable type, a property the component lacks, a variant value it does not have, or a hugging instance whose
   component has no auto-layout refuses the batch.
 

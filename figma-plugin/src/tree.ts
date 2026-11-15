@@ -91,6 +91,15 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     return p;
   };
 
+  // The components the batch makes or updates (by name), installed before anything resolves (a copy's swap values
+  // too): another spec of the same batch cannot use one yet. A component root's name is the spec's own, expanded or not.
+  const planned = new Map<string, number>();
+  for (const [index, op] of ops.entries()) {
+    const c = op.op === "createTree" ? componentRootOf(op.tree) : null;
+    if (c && !planned.has(c.name)) planned.set(c.name, index);
+  }
+  setPlannedComponents(planned);
+
   for (const [index, op] of ops.entries()) {
     if (op.op !== "createTree") continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
@@ -116,10 +125,6 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
     targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs() });
   }
-  // The components the batch makes or updates (by name): another spec of the same batch cannot use one yet.
-  const planned = new Map<string, number>();
-  for (const [index, { spec }] of specs) { const c = componentRootOf(spec); if (c && !planned.has(c.name)) planned.set(c.name, index); }
-  setPlannedComponents(planned);
   // Every op's references, resolved together (one lookup per name across the batch), into one shared map.
   const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
   problems.push(...r.problems);

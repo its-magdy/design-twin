@@ -6601,7 +6601,16 @@
     if (kind === "CLONE") return out;
     const op = "createTree";
     if (kind === "INSTANCE" && s.component !== void 0) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
-    if (at3 === "tree" && componentRootOf(s)) for (const ref2 of propDefComponents(s)) out.push({ index, op, path: path + ".props", kind: "component", ref: ref2 });
+    if (at3 === "tree" && componentRootOf(s)) {
+      const defaults = /* @__PURE__ */ new Set();
+      for (const [, d] of propDefsOf(s)) if (d.type === "INSTANCE_SWAP" && typeof d.default === "string") defaults.add(d.default);
+      for (const ref2 of propDefComponents(s)) {
+        const u = { index, op, path: path + ".props", kind: "component", ref: ref2 };
+        if (defaults.has(ref2)) u.swapDefault = true;
+        else u.suggestion = true;
+        out.push(u);
+      }
+    }
     if (kind === "TEXT" && s.styles && s.styles.text !== void 0) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
     (s.fills || []).forEach((f, i) => {
       if (f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" });
@@ -6669,7 +6678,7 @@
     const bad = report.bad;
     const imported = [];
     for (const u of uses) {
-      const f = u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref)) : u.kind === "variable" ? await lookup(u.kind, u.ref, () => file.variable(u.ref)) : await lookup(u.kind, u.ref, () => file.textStyle(u.ref));
+      const f = u.kind === "component" && (u.suggestion || u.swapDefault) ? await lookup(u.kind, (u.swapDefault ? "default" : "suggest") + "\0" + u.ref, () => file.swapDef(u.ref, u.swapDefault === true)) : u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref)) : u.kind === "variable" ? await lookup(u.kind, u.ref, () => file.variable(u.ref)) : await lookup(u.kind, u.ref, () => file.textStyle(u.ref));
       if ("error" in f) {
         bad(u, f.error);
         continue;
@@ -6933,6 +6942,21 @@
         const planned = owner.remote ? void 0 : plannedComponent(owner.name);
         if (planned !== void 0) return { error: "component '" + ref2 + "' is one ops[" + planned + "] of this batch updates, and a batch resolves every name before it runs \u2014 use it in a later call" };
         return f;
+      },
+      // A swap property's default or suggestion naming a component the batch updates. An update keeps a set's and a
+      // standalone component's node (id and key), so a suggestion (which keeps the key) may name either, and a default
+      // (which keeps the id it shows) a standalone component. A variant inside a set may be dropped or renamed by the
+      // update, and a set's default variant may change: those are refused like an instance's use.
+      async swapDef(ref2, isDefault) {
+        const f = await this.findComponent(ref2);
+        if (!("ok" in f)) return f;
+        const c = f.ok;
+        const inSet = c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
+        const owner = inSet || c;
+        const planned = owner.remote ? void 0 : plannedComponent(owner.name);
+        if (planned === void 0) return f;
+        if (!inSet && !(isDefault && c.type === "COMPONENT_SET")) return f;
+        return { error: "component '" + ref2 + "' is " + (inSet ? "a variant of '" + owner.name + "'" : "a set") + " that ops[" + planned + "] of this batch updates, and a batch resolves every name before it runs \u2014 " + (isDefault ? "default to it in a later call" : "suggest the set, or use it in a later call") };
       },
       async findComponent(ref2) {
         let byId = null;
@@ -8418,6 +8442,12 @@
       }
       return p;
     };
+    const planned = /* @__PURE__ */ new Map();
+    for (const [index, op] of ops.entries()) {
+      const c = op.op === "createTree" ? componentRootOf(op.tree) : null;
+      if (c && !planned.has(c.name)) planned.set(c.name, index);
+    }
+    setPlannedComponents(planned);
     for (const [index, op] of ops.entries()) {
       if (op.op !== "createTree") continue;
       const bad = (message) => {
@@ -8444,12 +8474,6 @@
       await page.ok.loadAsync();
       targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs() });
     }
-    const planned = /* @__PURE__ */ new Map();
-    for (const [index, { spec }] of specs) {
-      const c = componentRootOf(spec);
-      if (c && !planned.has(c.name)) planned.set(c.name, index);
-    }
-    setPlannedComponents(planned);
     const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
     problems.push(...r.problems);
     for (const t of targets.values()) t.refs = r.refs;
