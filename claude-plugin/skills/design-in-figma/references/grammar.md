@@ -221,9 +221,9 @@ in place (below). It lands like a frame: on `page`, beside the existing frames, 
   `name` (the read writes it so).
 
 **Undo.** A batch is one Cmd-Z step, except that Figma ends an undo step at each component property a write declares,
-edits or deletes (the call included; a plugin cannot merge steps), so each is an extra step. The batch still runs in op
-order; each press takes back the part of it after the previous property call, and a new component an early press
-leaves is hidden. A batch split like that says so in its reply: `undoSteps` (how many presses: the property calls, plus
+edits or deletes (the call included; a plugin cannot merge steps). The batch still runs in op order; each press takes
+back the part of it after the previous property call, and a new component still being built when a step ended is left
+hidden (one finished earlier in the batch stays as it was). A batch split like that says so in its reply: `undoSteps` (how many presses: the property calls, plus
 one if the batch changed the file after the last) and `undoNote` (a sentence to pass on to the designer).
 
 ```json

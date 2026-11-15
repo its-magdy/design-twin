@@ -11336,7 +11336,7 @@
     return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {} };
   }
   function undoNote(steps2) {
-    return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component an early Undo leaves is hidden).";
+    return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
   }
   function reviewRefusal(o) {
     if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...o.reason !== void 0 ? { reason: o.reason } : {} };

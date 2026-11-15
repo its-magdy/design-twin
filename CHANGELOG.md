@@ -44,7 +44,7 @@ list of merged PRs.
   property or a variant column. All or nothing, like every write; one made by hand, or a component
   the same batch makes, is refused. A batch is one undo step, except that Figma ends a step at each component property
   declared, edited or deleted, so each is an extra Undo; the reply's `undoSteps` and `undoNote` say how many presses
-  take a batch back (a new component an early press leaves is hidden). The dry run's target for a component root says "new component" or "new component set". The write-cost suite records a blank-file job: tokens, a small kit, then one
+  take a batch back (a new component still being built when a step ended is left hidden). The dry run's target for a component root says "new component" or "new component set". The write-cost suite records a blank-file job: tokens, a small kit, then one
   screen.
 - `figma_write` can seed those tables from the project's code tokens: `seedTokens {file, collection?}` names a
   `tokens.dtcg.json` or a `tokens.resolver.json` (with its set and context files), and the MCP server reads it into

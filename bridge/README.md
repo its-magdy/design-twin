@@ -980,10 +980,10 @@ also stop partway), a value that cannot be restored is named in the error, and a
 stays. Deletes run last, once everything else has landed, because a deleted node cannot be brought back. `applied`
 lists what stays — the changes not put back and the deletes already run — but not imported library items; a batch
 that fails while importing has an empty `applied`. The batch is one Cmd-Z step for the designer, except that Figma
-ends an undo step at each component property a write declares, edits or deletes (the call included), so each is an
-extra step: each press takes back the part of the batch after the previous property call. The reply then carries
+ends an undo step at each component property a write declares, edits or deletes (the call included): each press takes
+back the part of the batch after the previous property call. The reply then carries
 `undoSteps` (how many presses: the property calls, plus one if the batch changed the file after the last) and
-`undoNote` (a sentence to pass on). A new component an early press leaves is hidden.
+`undoNote` (a sentence to pass on). A new component still being built when a step ended is left hidden.
 A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
 sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
 runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's

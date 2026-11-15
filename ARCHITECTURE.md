@@ -410,7 +410,7 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    items (a batch that fails while importing has an empty `applied`). One batch is one
    Cmd-Z step (`commitUndo` before and after), except that Figma ends a step at each component property declared,
    edited or deleted (the call included); the batch still runs in op order, and the reply's `undoSteps` / `undoNote`
-   say how many presses take it back (a new component an early press leaves is hidden).
+   say how many presses take it back (a new component still being built when a step ended is left hidden).
    The op table (`bridge/src/commands.ts` `WRITE_OPS`, 14 ops) is read by all three places a write is checked —
    the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
    bundle imports too: `createTree`'s tree spec (`tree-spec.ts`, with `tree-check.ts`; rows and fragments expanded

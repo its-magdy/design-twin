@@ -542,7 +542,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */
 function undoNote(steps: number): string {
   return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps +
-    " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component an early Undo leaves is hidden).";
+    " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
 }
 
 /** A batch the review did not apply, refused whole: nothing in the file changed. */
