@@ -4,7 +4,7 @@
 //     children), so the spec sent last time can be read back off the nodes (keyed.ts) whatever the designer did since;
 //   * on the document: the root's id under the key (one entry per key), so the result is found without a search.
 // Figma caps one entry at 100 kB; a node's own fields are far below it (the children are not in it).
-import { ownSpec } from "../../bridge/src/tree-diff.ts";
+import { ownSpec, type OldNode } from "../../bridge/src/tree-diff.ts";
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 
 export const KEY_DATA = "dtwin.key";
@@ -24,3 +24,24 @@ export function readIndex(key: string): string {
 export function writeIndex(key: string, id: string): void {
   figma.root.setPluginData(indexEntry(key), id);
 }
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** The node types whose children a keyed spec builds (a frame's layers, a component's, a set's variants). */
+const holds = (n: SceneNode): n is FrameNode | ComponentNode | ComponentSetNode => n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
+
+/** The earlier spec, read back off the nodes `key` built (null when `n`'s stored spec is unreadable). */
+export function readOld(n: SceneNode, key: string): OldNode<SceneNode> | null {
+  let spec: unknown;
+  try { spec = JSON.parse(n.getPluginData(SPEC_DATA)) as unknown; } catch { return null; }
+  if (!isObj(spec)) return null;
+  const children: Array<OldNode<SceneNode>> = [];
+  if (holds(n)) {
+    for (const c of n.children) {
+      if (c.getPluginData(KEY_DATA) !== key) continue; // a layer the designer added: not part of the spec
+      const o = readOld(c, key);
+      if (o) children.push(o);
+    }
+  }
+  return { ref: n, spec, children };
+}
+

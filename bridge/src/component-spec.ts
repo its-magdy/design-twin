@@ -49,7 +49,7 @@ export function componentRootOf(spec: unknown): { type: ComponentRootType; name:
 }
 
 /** A component root's property definitions, in the order the spec gives them (own keys only: a property may be called
- *  "__proto__"). Only for a spec the check accepted. */
+ *  "constructor"). Only for a spec the check accepted. */
 export function propDefsOf(spec: { props?: unknown }): Array<[string, TreePropDef]> {
   const p = spec.props;
   if (!isObj(p)) return [];
@@ -77,6 +77,9 @@ export function propDefComponents(spec: { props?: unknown }): string[] {
 }
 
 const DEF_FIELDS = ["type", "default", "preferredValues"];
+/** Why "__proto__" cannot name a property or a variant column: Figma's own main-thread → UI message copy drops a key of
+ *  that name (seen live, as for a `handle`), so the reply would lose it. */
+export const PROTO_NAME = "'__proto__' cannot be a property name (Figma's message passing drops that key); pick another name";
 
 /** Every problem with a component root's `props` (its definitions), each starting with `path`. `columns` are the set's
  *  VARIANT properties (a definition may not take one's name). */
@@ -88,6 +91,7 @@ export function propDefsProblems(v: unknown, path: string, columns: readonly str
     if (d === undefined) continue;
     const p = at(path, name);
     if (!name.trim()) { out.push(path + ": has an empty property name"); continue; }
+    if (name === "__proto__") { out.push(p + ": " + PROTO_NAME); continue; }
     if (name.indexOf("#") >= 0) { out.push(p + ": a property's name cannot hold '#' (Figma keeps it for the property's id)"); continue; }
     if (columns.indexOf(name) >= 0) { out.push(p + ": '" + name + "' is a column of the variant table (a VARIANT property) already; give this property another name"); continue; }
     if (!isObj(d)) { out.push(p + ": must be a definition {type, default} (TEXT, BOOLEAN or INSTANCE_SWAP)"); continue; }

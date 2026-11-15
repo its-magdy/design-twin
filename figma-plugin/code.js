@@ -876,8 +876,129 @@
     return names.map((n) => "'" + n + "'").join(", ");
   }
 
-  // ../bridge/src/tree-expand.ts
+  // ../bridge/src/component-spec.ts
+  var PROP_REF_TYPES = {
+    characters: "TEXT",
+    visible: "BOOLEAN",
+    mainComponent: "INSTANCE_SWAP"
+  };
+  var PROP_REF_FIELDS = ["characters", "visible", "mainComponent"];
+  var RESERVED_KEY_PREFIX = "dtwin/";
+  var componentKey = (name) => RESERVED_KEY_PREFIX + "component:" + name;
   var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var at = (path, name) => path + "[" + JSON.stringify(name) + "]";
+  function componentRootOf(spec) {
+    if (!isObj(spec) || spec.type !== "COMPONENT" && spec.type !== "COMPONENT_SET") return null;
+    return { type: spec.type, name: typeof spec.name === "string" ? spec.name : "" };
+  }
+  function propDefsOf(spec) {
+    const p = spec.props;
+    if (!isObj(p)) return [];
+    const out = [];
+    for (const k of Object.keys(p)) {
+      const d = p[k];
+      if (!isObj(d) || d.type !== "TEXT" && d.type !== "BOOLEAN" && d.type !== "INSTANCE_SWAP") continue;
+      const def = { type: d.type, default: typeof d.default === "boolean" ? d.default : String(d.default) };
+      if (Array.isArray(d.preferredValues)) def.preferredValues = d.preferredValues.filter((x) => typeof x === "string");
+      out.push([k, def]);
+    }
+    return out;
+  }
+  function propDefComponents(spec) {
+    const out = [];
+    const add = (n) => {
+      if (out.indexOf(n) < 0) out.push(n);
+    };
+    for (const [, d] of propDefsOf(spec)) {
+      if (d.type !== "INSTANCE_SWAP") continue;
+      if (typeof d.default === "string") add(d.default);
+      for (const p of d.preferredValues || []) add(p);
+    }
+    return out;
+  }
+  var DEF_FIELDS = ["type", "default", "preferredValues"];
+  var PROTO_NAME = "'__proto__' cannot be a property name (Figma's message passing drops that key); pick another name";
+  function propDefsProblems(v, path, columns) {
+    const out = [];
+    if (!isObj(v)) return [path + ": on a component, `props` declares its properties \u2014 an object of property name \u2192 {type, default}"];
+    for (const name of Object.keys(v)) {
+      const d = v[name];
+      if (d === void 0) continue;
+      const p = at(path, name);
+      if (!name.trim()) {
+        out.push(path + ": has an empty property name");
+        continue;
+      }
+      if (name === "__proto__") {
+        out.push(p + ": " + PROTO_NAME);
+        continue;
+      }
+      if (name.indexOf("#") >= 0) {
+        out.push(p + ": a property's name cannot hold '#' (Figma keeps it for the property's id)");
+        continue;
+      }
+      if (columns.indexOf(name) >= 0) {
+        out.push(p + ": '" + name + "' is a column of the variant table (a VARIANT property) already; give this property another name");
+        continue;
+      }
+      if (!isObj(d)) {
+        out.push(p + ": must be a definition {type, default} (TEXT, BOOLEAN or INSTANCE_SWAP)");
+        continue;
+      }
+      for (const k of Object.keys(d)) {
+        if (d[k] === void 0 || DEF_FIELDS.indexOf(k) >= 0) continue;
+        const near = nearestNames(k, DEF_FIELDS);
+        out.push(p + "." + k + ": not a field of a property definition" + (near.length ? "; closest: " + quoteList(near) : "") + " (it takes type, default, preferredValues)");
+      }
+      const t = d.type;
+      if (t === "VARIANT") {
+        out.push(p + ".type: a VARIANT property comes from the variant table (a COMPONENT_SET root's `columns` and `rows`), never from `props`");
+        continue;
+      }
+      if (t === "SLOT") {
+        out.push(p + ".type: a SLOT property cannot be written yet (TEXT, BOOLEAN and INSTANCE_SWAP can)");
+        continue;
+      }
+      if (t !== "TEXT" && t !== "BOOLEAN" && t !== "INSTANCE_SWAP") {
+        out.push(p + ".type: must be one of TEXT | BOOLEAN | INSTANCE_SWAP");
+        continue;
+      }
+      const def = d.default;
+      if (def === void 0) out.push(p + ": is missing default (" + (t === "TEXT" ? "the text an instance shows unless it sets its own" : t === "BOOLEAN" ? "true or false" : "the component an instance shows: its name, key or id") + ")");
+      else if (t === "TEXT" && typeof def !== "string") out.push(p + ".default: a TEXT property's default is a string");
+      else if (t === "BOOLEAN" && typeof def !== "boolean") out.push(p + ".default: a BOOLEAN property's default is true or false");
+      else if (t === "INSTANCE_SWAP" && (typeof def !== "string" || !def.trim())) out.push(p + ".default: an INSTANCE_SWAP property's default is a component (its exact name, key or id)");
+      const pv = d.preferredValues;
+      if (pv !== void 0) {
+        if (t !== "INSTANCE_SWAP") out.push(p + ".preferredValues: only an INSTANCE_SWAP property suggests components");
+        else if (!Array.isArray(pv) || !pv.length || !pv.every((x) => typeof x === "string" && x.trim().length > 0)) out.push(p + ".preferredValues: must be a non-empty list of components (each its exact name, key or id)");
+      }
+    }
+    return out;
+  }
+  function propRefsShape(v) {
+    if (!isObj(v)) return "must be an object {characters?, visible?, mainComponent?} of the property each field follows";
+    const fields = PROP_REF_FIELDS;
+    for (const k of Object.keys(v)) {
+      const x = v[k];
+      if (x === void 0) continue;
+      if (fields.indexOf(k) < 0) {
+        const near = nearestNames(k, fields);
+        return "." + k + ": not a field a property drives" + (near.length ? "; closest: " + quoteList(near) : "") + " (characters, visible, mainComponent)";
+      }
+      if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
+    }
+    return null;
+  }
+  function variantColumns(name) {
+    return name.split(", ").map((part) => {
+      const i = part.indexOf("=");
+      return i > 0 ? part.slice(0, i) : part;
+    });
+  }
+
+  // ../bridge/src/tree-expand.ts
+  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   var REPEAT_FIELDS = ["use", "fragments", "rows", "columns", "variant"];
   var NOT_EDITED = ["use", "fragments", "edits", "key"];
@@ -899,7 +1020,7 @@
   }
   function copy(v) {
     if (Array.isArray(v)) return v.map(copy);
-    if (!isObj(v)) return v;
+    if (!isObj2(v)) return v;
     const out = {};
     for (const k of Object.keys(v)) put(out, k, copy(v[k]));
     return out;
@@ -907,12 +1028,12 @@
   function repeats(v, depth) {
     if (depth > 200) return true;
     if (Array.isArray(v)) return v.some((x) => repeats(x, depth + 1));
-    if (!isObj(v)) return false;
+    if (!isObj2(v)) return false;
     for (const k of REPEAT_FIELDS) if (v[k] !== void 0) return true;
     return Array.isArray(v.children) && v.children.some((c) => repeats(c, depth + 1));
   }
   function layersOf(n, out) {
-    if (!isObj(n)) return out;
+    if (!isObj2(n)) return out;
     out.push(n);
     if (Array.isArray(n.children)) for (const c of n.children) layersOf(c, out);
     return out;
@@ -922,19 +1043,19 @@
     const labels = /* @__PURE__ */ new Map();
     const problems = [];
     const warnings = [];
-    if (!isObj(spec) || !repeats(spec, 0)) return { tree: spec, problems, warnings, labels };
+    if (!isObj2(spec) || !repeats(spec, 0)) return { tree: spec, problems, warnings, labels };
     const say = (m) => {
       problems.push(m);
     };
     const fragments = {};
     const defs = spec.fragments;
     if (defs !== void 0) {
-      if (!isObj(defs)) say("tree.fragments: must be an object of fragment name \u2192 node spec");
+      if (!isObj2(defs)) say("tree.fragments: must be an object of fragment name \u2192 node spec");
       else for (const name of Object.keys(defs)) {
         const f = defs[name];
         const at3 = "tree.fragments[" + JSON.stringify(name) + "]";
         if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
-        else if (!isObj(f)) say(at3 + ": must be a node spec");
+        else if (!isObj2(f)) say(at3 + ": must be a node spec");
         else if (f.key !== void 0) say(at3 + ".key: a key names a whole result, so only the spec's root carries it");
         else put(fragments, name, f);
       }
@@ -943,14 +1064,14 @@
     let count2 = 0;
     let tooMany = false;
     const applyEdits = (layers, edits, path, of, inWhat) => {
-      if (!isObj(edits)) {
+      if (!isObj2(edits)) {
         say(path + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
         return;
       }
       for (const layer of Object.keys(edits)) {
         const fields = edits[layer];
         const at3 = path + "[" + JSON.stringify(layer) + "]";
-        if (!isObj(fields)) {
+        if (!isObj2(fields)) {
           say(at3 + ": must be an object of the fields to change");
           continue;
         }
@@ -975,7 +1096,7 @@
     };
     const expand = (n, path, stack, isRoot) => {
       if (tooMany) return [];
-      if (!isObj(n)) return [n];
+      if (!isObj2(n)) return [n];
       if (!isRoot && n.fragments !== void 0) say(path + ".fragments: fragments are defined once, on the spec's root");
       if (isRoot && n.type === "COMPONENT_SET") return variants(n, path, stack);
       if (isRoot && n.type === "COMPONENT" && (n.variant !== void 0 || n.rows !== void 0 || n.columns !== void 0)) {
@@ -1021,7 +1142,7 @@
       if (n.children !== void 0) say(path + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
       if (n.rows !== void 0 || n.columns !== void 0) say(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
       const body = copy(fragments[name]);
-      if (!isObj(body)) return [];
+      if (!isObj2(body)) return [];
       if (n.edits !== void 0) applyEdits(layersOf(body, []), n.edits, path + ".edits", "fragment '" + name + "'", "in the fragment");
       for (const k of Object.keys(n)) {
         if (k === "use" || k === "edits" || k === "children" || k === "fragments" && isRoot) continue;
@@ -1036,10 +1157,11 @@
       const rows = n.rows;
       if (n.children !== void 0) say(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
       if (n.use !== void 0) say(path + ".use: a component set is not a fragment");
-      if (!isObj(base)) say(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
+      if (!isObj2(base)) say(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
       else {
         if (base.type !== void 0 && base.type !== "COMPONENT") say(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
         if (base.name !== void 0) say(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+        if (base.handle !== void 0) say(path + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
         for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
           const why = VARIANT_FIXED[k];
           if (base[k] !== void 0 && why !== void 0) say(path + ".variant." + k + ": not on a variant \u2014 " + why);
@@ -1048,11 +1170,13 @@
       if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
       else {
         if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+        const proto = cols.indexOf("__proto__");
+        if (proto >= 0) say(path + ".columns[" + proto + "]: " + PROTO_NAME);
         const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
         if (odd >= 0) say(path + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
       }
       if (!Array.isArray(rows) || !rows.length) say(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
-      if (problems.length !== before || !isObj(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
+      if (problems.length !== before || !isObj2(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
       const names = cols.map(String);
       const seen = /* @__PURE__ */ new Map();
       const kids = [];
@@ -1066,7 +1190,7 @@
         }
         const cells = row;
         const last2 = cells[names.length];
-        const over = cells.length === names.length + 1 && isObj(last2) ? last2 : null;
+        const over = cells.length === names.length + 1 && isObj2(last2) ? last2 : null;
         if (cells.length !== names.length && !over) {
           say(r + ": must be " + shape);
           return;
@@ -1086,7 +1210,7 @@
         }
         seen.set(name, i);
         const v = copy(base);
-        if (!isObj(v)) return;
+        if (!isObj2(v)) return;
         put(v, "type", "COMPONENT");
         put(v, "name", name);
         if (over) {
@@ -1137,11 +1261,11 @@
         say(at3 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
         return [];
       }
-      if (n.props !== void 0 && !isObj(n.props)) {
+      if (n.props !== void 0 && !isObj2(n.props)) {
         say(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
         return [];
       }
-      const base = isObj(n.props) ? n.props : {};
+      const base = isObj2(n.props) ? n.props : {};
       const out = [];
       rows.forEach((row, i) => {
         const r = at3 + "[" + i + "]";
@@ -1159,7 +1283,7 @@
           props = {};
           for (const [j, c] of cols.entries()) put(props, String(c), row[j]);
         } else {
-          if (!isObj(row)) {
+          if (!isObj2(row)) {
             say(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
             return;
           }
@@ -1188,122 +1312,6 @@
     if (tooMany) say("tree: more than " + maxNodes + " nodes once its fragments and rows are expanded \u2014 send a large screen as several trees");
     for (const name of Object.keys(fragments)) if (!used.has(name)) warnings.push("tree.fragments[" + JSON.stringify(name) + "]: no node uses it, so it is not built");
     return { tree: root === void 0 ? {} : root, problems, warnings, labels };
-  }
-
-  // ../bridge/src/component-spec.ts
-  var PROP_REF_TYPES = {
-    characters: "TEXT",
-    visible: "BOOLEAN",
-    mainComponent: "INSTANCE_SWAP"
-  };
-  var PROP_REF_FIELDS = ["characters", "visible", "mainComponent"];
-  var RESERVED_KEY_PREFIX = "dtwin/";
-  var componentKey = (name) => RESERVED_KEY_PREFIX + "component:" + name;
-  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  var at = (path, name) => path + "[" + JSON.stringify(name) + "]";
-  function componentRootOf(spec) {
-    if (!isObj2(spec) || spec.type !== "COMPONENT" && spec.type !== "COMPONENT_SET") return null;
-    return { type: spec.type, name: typeof spec.name === "string" ? spec.name : "" };
-  }
-  function propDefsOf(spec) {
-    const p = spec.props;
-    if (!isObj2(p)) return [];
-    const out = [];
-    for (const k of Object.keys(p)) {
-      const d = p[k];
-      if (!isObj2(d) || d.type !== "TEXT" && d.type !== "BOOLEAN" && d.type !== "INSTANCE_SWAP") continue;
-      const def = { type: d.type, default: typeof d.default === "boolean" ? d.default : String(d.default) };
-      if (Array.isArray(d.preferredValues)) def.preferredValues = d.preferredValues.filter((x) => typeof x === "string");
-      out.push([k, def]);
-    }
-    return out;
-  }
-  function propDefComponents(spec) {
-    const out = [];
-    const add = (n) => {
-      if (out.indexOf(n) < 0) out.push(n);
-    };
-    for (const [, d] of propDefsOf(spec)) {
-      if (d.type !== "INSTANCE_SWAP") continue;
-      if (typeof d.default === "string") add(d.default);
-      for (const p of d.preferredValues || []) add(p);
-    }
-    return out;
-  }
-  var DEF_FIELDS = ["type", "default", "preferredValues"];
-  function propDefsProblems(v, path, columns) {
-    const out = [];
-    if (!isObj2(v)) return [path + ": on a component, `props` declares its properties \u2014 an object of property name \u2192 {type, default}"];
-    for (const name of Object.keys(v)) {
-      const d = v[name];
-      if (d === void 0) continue;
-      const p = at(path, name);
-      if (!name.trim()) {
-        out.push(path + ": has an empty property name");
-        continue;
-      }
-      if (name.indexOf("#") >= 0) {
-        out.push(p + ": a property's name cannot hold '#' (Figma keeps it for the property's id)");
-        continue;
-      }
-      if (columns.indexOf(name) >= 0) {
-        out.push(p + ": '" + name + "' is a column of the variant table (a VARIANT property) already; give this property another name");
-        continue;
-      }
-      if (!isObj2(d)) {
-        out.push(p + ": must be a definition {type, default} (TEXT, BOOLEAN or INSTANCE_SWAP)");
-        continue;
-      }
-      for (const k of Object.keys(d)) {
-        if (d[k] === void 0 || DEF_FIELDS.indexOf(k) >= 0) continue;
-        const near = nearestNames(k, DEF_FIELDS);
-        out.push(p + "." + k + ": not a field of a property definition" + (near.length ? "; closest: " + quoteList(near) : "") + " (it takes type, default, preferredValues)");
-      }
-      const t = d.type;
-      if (t === "VARIANT") {
-        out.push(p + ".type: a VARIANT property comes from the variant table (a COMPONENT_SET root's `columns` and `rows`), never from `props`");
-        continue;
-      }
-      if (t === "SLOT") {
-        out.push(p + ".type: a SLOT property cannot be written yet (TEXT, BOOLEAN and INSTANCE_SWAP can)");
-        continue;
-      }
-      if (t !== "TEXT" && t !== "BOOLEAN" && t !== "INSTANCE_SWAP") {
-        out.push(p + ".type: must be one of TEXT | BOOLEAN | INSTANCE_SWAP");
-        continue;
-      }
-      const def = d.default;
-      if (def === void 0) out.push(p + ": is missing default (" + (t === "TEXT" ? "the text an instance shows unless it sets its own" : t === "BOOLEAN" ? "true or false" : "the component an instance shows: its name, key or id") + ")");
-      else if (t === "TEXT" && typeof def !== "string") out.push(p + ".default: a TEXT property's default is a string");
-      else if (t === "BOOLEAN" && typeof def !== "boolean") out.push(p + ".default: a BOOLEAN property's default is true or false");
-      else if (t === "INSTANCE_SWAP" && (typeof def !== "string" || !def.trim())) out.push(p + ".default: an INSTANCE_SWAP property's default is a component (its exact name, key or id)");
-      const pv = d.preferredValues;
-      if (pv !== void 0) {
-        if (t !== "INSTANCE_SWAP") out.push(p + ".preferredValues: only an INSTANCE_SWAP property suggests components");
-        else if (!Array.isArray(pv) || !pv.length || !pv.every((x) => typeof x === "string" && x.trim().length > 0)) out.push(p + ".preferredValues: must be a non-empty list of components (each its exact name, key or id)");
-      }
-    }
-    return out;
-  }
-  function propRefsShape(v) {
-    if (!isObj2(v)) return "must be an object {characters?, visible?, mainComponent?} of the property each field follows";
-    const fields = PROP_REF_FIELDS;
-    for (const k of Object.keys(v)) {
-      const x = v[k];
-      if (x === void 0) continue;
-      if (fields.indexOf(k) < 0) {
-        const near = nearestNames(k, fields);
-        return "." + k + ": not a field a property drives" + (near.length ? "; closest: " + quoteList(near) : "") + " (characters, visible, mainComponent)";
-      }
-      if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
-    }
-    return null;
-  }
-  function variantColumns(name) {
-    return name.split(", ").map((part) => {
-      const i = part.indexOf("=");
-      return i > 0 ? part.slice(0, i) : part;
-    });
   }
 
   // ../bridge/src/tree-spec.ts
@@ -1771,7 +1779,8 @@
     const variantList = root && root.type === "COMPONENT_SET" && isObj3(tree) && Array.isArray(tree.children) ? tree.children : [];
     const firstVariant = variantList[0];
     const columns = isObj3(firstVariant) && typeof firstVariant.name === "string" ? variantColumns(firstVariant.name) : [];
-    const comp = root && isObj3(tree) ? { ...root, defs: new Map(propDefsOf(tree).map(([k, d]) => [k, d.type])), used: /* @__PURE__ */ new Set() } : null;
+    const declared = isObj3(tree) ? propDefsOf(tree) : [];
+    const comp = root && isObj3(tree) ? { ...root, defs: new Map(declared.map(([k, d]) => [k, d.type])), defaults: new Map(declared.map(([k, d]) => [k, d.default])), used: /* @__PURE__ */ new Set() } : null;
     const seenHandles = /* @__PURE__ */ new Set();
     const seenFonts = /* @__PURE__ */ new Set();
     const addRef = (list, name) => {
@@ -1789,15 +1798,15 @@
       const say = (msg) => {
         problems.push(path + ": " + msg);
       };
-      const own3 = {};
+      const own4 = {};
       const set = {};
       for (const k of Object.keys(n)) {
         const v = n[k];
         if (v === void 0) continue;
         if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path + "." + k + ": not on a copy \u2014 " + NOT_ON_CLONE[k]);
-        else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own3 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
+        else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own4 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
       }
-      problems.push(...objectProblems(own3, CLONE_RULES, path));
+      problems.push(...objectProblems(own4, CLONE_RULES, path));
       const self = Object.keys(set).length ? patch(set, path) : null;
       if (self) problems.push(...self.problems);
       if (parentFlex !== null && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
@@ -1896,6 +1905,9 @@
             comp.used.add(prop);
             if (has2 !== want) say(at4 + " names '" + prop + "', a " + has2 + " property; `" + f + "` follows a " + want + " property");
             if (f === "characters" && kind !== "TEXT") say(at4 + ": only a TEXT layer's text follows a property");
+            const def = comp.defaults.get(prop);
+            if (has2 === want && f === "characters" && n.text !== void 0 && n.text !== def) say("`text` " + JSON.stringify(n.text) + " differs from the default of '" + prop + "' (" + JSON.stringify(def) + "), which the text follows (`propRefs.characters`); change the property's default instead");
+            if (has2 === want && f === "visible" && n.hidden !== void 0 && typeof def === "boolean" && n.hidden !== !def) say("`hidden: " + String(n.hidden) + "` differs from the default of '" + prop + "' (" + String(def) + "), which the layer's visibility follows (`propRefs.visible`); change the property's default instead");
             if (f === "mainComponent" && kind !== "INSTANCE") say(at4 + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
           }
         }
@@ -6410,7 +6422,7 @@
     }
     return out;
   }
-  function match(olds, news) {
+  function match(olds, news, variants) {
     const out = news.map(() => null);
     const used = /* @__PURE__ */ new Set();
     news.forEach((n, i) => {
@@ -6421,6 +6433,27 @@
         used.add(j);
       }
     });
+    if (variants) {
+      news.forEach((n, i) => {
+        if (out[i] || n.name === void 0) return;
+        const j = olds.findIndex((o, k2) => !used.has(k2) && o.spec.name === n.name);
+        if (j >= 0) {
+          out[i] = olds[j] || null;
+          used.add(j);
+        }
+      });
+      let k = 0;
+      for (let i = 0; i < news.length; i++) {
+        if (out[i]) continue;
+        while (k < olds.length && used.has(k)) k++;
+        const o = olds[k];
+        if (!o) break;
+        out[i] = o;
+        used.add(k);
+        k++;
+      }
+      return out;
+    }
     const count2 = (list, name, of) => list.filter((x) => of(x) === name).length;
     news.forEach((n, i) => {
       if (out[i] || n.name === void 0) return;
@@ -6463,7 +6496,7 @@
     if (spec.handle !== void 0 && spec.handle !== old.spec.handle) plan.handles.push({ handle: spec.handle, ref: old.ref });
     if (kind !== "FRAME") return;
     const news = spec.children || [];
-    const pairs = match(old.children, news);
+    const pairs = match(old.children, news, path === "tree" && spec.type === "COMPONENT_SET");
     const order = [];
     let built = false;
     news.forEach((n, i) => {
@@ -6507,6 +6540,26 @@
   }
   function writeIndex(key, id) {
     figma.root.setPluginData(indexEntry(key), id);
+  }
+  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var holds = (n) => n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
+  function readOld(n, key) {
+    let spec;
+    try {
+      spec = JSON.parse(n.getPluginData(SPEC_DATA));
+    } catch {
+      return null;
+    }
+    if (!isObj6(spec)) return null;
+    const children = [];
+    if (holds(n)) {
+      for (const c of n.children) {
+        if (c.getPluginData(KEY_DATA) !== key) continue;
+        const o = readOld(c, key);
+        if (o) children.push(o);
+      }
+    }
+    return { ref: n, spec, children };
   }
 
   // src/batch-plan.ts
@@ -6735,19 +6788,24 @@
     Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
   }
   function variantFor(set, start, props, defs) {
+    const has2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
     const want = {};
     const from = start.variantProperties || {};
+    const givenAt = (k) => {
+      const g = has2(props, k) ? props[k] : void 0;
+      return typeof g === "string" ? g : void 0;
+    };
     for (const k of Object.keys(defs)) {
       const d = defs[k];
       if (!d || d.type !== "VARIANT") continue;
-      const given2 = props[k];
-      const v = typeof given2 === "string" ? given2 : from[k];
-      if (v !== void 0) putOwn(want, k, v);
+      const given2 = givenAt(k);
+      const v = given2 !== void 0 ? given2 : has2(from, k) ? from[k] : void 0;
+      if (typeof v === "string") putOwn(want, k, v);
     }
-    const given = Object.keys(want).some((k) => typeof props[k] === "string");
+    const given = Object.keys(want).some((k) => givenAt(k) !== void 0);
     const matches = (c) => {
       const vp = c.variantProperties || {};
-      return Object.keys(want).every((k) => vp[k] === want[k]);
+      return Object.keys(want).every((k) => has2(vp, k) && vp[k] === want[k]);
     };
     if (!given || matches(start)) return start;
     for (const c of set.children) if (c.type === "COMPONENT" && matches(c)) return c;
@@ -8043,7 +8101,7 @@
       const name = bareName(key);
       if (!have.has(name)) have.set(name, { key, type: d.type, defaultValue: d.defaultValue, ...d.preferredValues ? { preferredValues: d.preferredValues } : {} });
     }
-    const plan = { owner, defs, keys: /* @__PURE__ */ new Map(), add: [], edit: [], remove: [] };
+    const plan = { owner, defs, keys: /* @__PURE__ */ new Map(), add: [], edit: [], remove: [], wiring: [] };
     const wanted = /* @__PURE__ */ new Set();
     let ok = true;
     for (const d of defs) {
@@ -8066,7 +8124,88 @@
     for (const [name, h] of have) if (!wanted.has(name)) plan.remove.push({ key: h.key, name });
     return ok ? plan : null;
   }
-  function syncComponent(p, kept, built, consent2, changes) {
+  var own2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  function refsNow(n) {
+    let r;
+    try {
+      r = "componentPropertyReferences" in n ? n.componentPropertyReferences : null;
+    } catch {
+      r = null;
+    }
+    const out = {};
+    if (typeof r !== "object" || r === null) return out;
+    for (const f of PROP_REF_FIELDS) {
+      const v = own2(r, f) ? Reflect.get(r, f) : void 0;
+      if (typeof v === "string") out[f] = v;
+    }
+    return out;
+  }
+  function liveRefs(owner, refs2) {
+    let defs;
+    try {
+      defs = owner.componentPropertyDefinitions;
+    } catch {
+      return refs2;
+    }
+    const out = {};
+    for (const f of PROP_REF_FIELDS) {
+      const k = refs2[f];
+      if (k !== void 0 && own2(defs, k)) out[f] = k;
+    }
+    return out;
+  }
+  var sameRefs = (a, b) => PROP_REF_FIELDS.every((f) => a[f] === b[f]);
+  function planWiring(p, kept) {
+    const dropped = new Set(p.remove.map((r) => r.key));
+    const out = [];
+    for (const k of kept) {
+      if (!("componentPropertyReferences" in k.ref)) continue;
+      const cur = refsNow(k.ref);
+      const step = { ref: k.ref, spec: k.spec, unwire: [], wire: [], stays: [] };
+      for (const f of PROP_REF_FIELDS) {
+        const was = k.old.propRefs ? k.old.propRefs[f] : void 0;
+        const now = k.spec.propRefs ? k.spec.propRefs[f] : void 0;
+        const changed = was !== now || now !== void 0 && !p.keys.has(now);
+        const has2 = cur[f];
+        if (has2 !== void 0 && (changed || dropped.has(has2))) step.unwire.push(f);
+        else if (has2 !== void 0) step.stays.push(f);
+        if (now !== void 0 && changed) step.wire.push(f);
+      }
+      if (step.unwire.length || step.wire.length || step.stays.length) out.push(step);
+    }
+    return out;
+  }
+  function textsFollowing(p) {
+    const edited = new Set(p.edit.filter((e) => e.def.type === "TEXT").map((e) => e.key));
+    const out = [];
+    for (const w of p.wiring) {
+      const k = refsNow(w.ref).characters;
+      if (w.ref.type === "TEXT" && w.stays.indexOf("characters") >= 0 && k !== void 0 && edited.has(k)) out.push(w.ref);
+    }
+    return out;
+  }
+  function unwireGoing(p, consent2, changes) {
+    const out = [];
+    for (const w of p.wiring) {
+      if (!w.unwire.length) continue;
+      const n = w.ref;
+      const was = refsNow(n);
+      const next = {};
+      for (const f of PROP_REF_FIELDS) {
+        const v = was[f];
+        if (v !== void 0 && w.unwire.indexOf(f) < 0) next[f] = v;
+      }
+      if (sameRefs(was, next)) continue;
+      consent2();
+      changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label2(n), restore() {
+        if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was);
+      } });
+      if ("componentPropertyReferences" in n) n.componentPropertyReferences = next;
+      out.push(n);
+    }
+    return out;
+  }
+  function syncComponent(p, unwired, built, consent2, changes) {
     const owner = p.owner;
     const changed = /* @__PURE__ */ new Map();
     const keys = new Map(p.keys);
@@ -8084,33 +8223,40 @@
       const next = { defaultValue: e.def.defaultValue };
       if (e.def.type === "INSTANCE_SWAP") next.preferredValues = e.def.preferredValues || [];
       const key = owner.editComponentProperty(e.key, next);
+      const back = { defaultValue: e.was.defaultValue };
+      if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
       changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), restore() {
-        owner.editComponentProperty(key, e.was.preferredValues ? { defaultValue: e.was.defaultValue, preferredValues: e.was.preferredValues } : { defaultValue: e.was.defaultValue });
+        owner.editComponentProperty(key, back);
       } });
       keys.set(e.def.name, key);
       changed.set(e.def.name, key);
     }
-    let rewired = 0;
-    const fresh = new Set(p.add.map((d) => d.name));
-    const wire = (n, s, force) => {
+    const touched = new Set(unwired);
+    const wire = (n, r) => {
       if (!("componentPropertyReferences" in n)) return;
-      const r = refsFor(s, keys) || {};
-      const names = s.propRefs ? PROP_REF_FIELDS.map((f) => s.propRefs ? s.propRefs[f] : void 0).filter((x) => x !== void 0) : [];
-      if (!force && !names.some((x) => fresh.has(x))) return;
-      const was = n.componentPropertyReferences;
-      if (sameJson(was || {}, r)) return;
+      const was = refsNow(n);
+      if (sameRefs(was, r)) return;
       consent2();
       changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label2(n), restore() {
-        n.componentPropertyReferences = was || {};
+        n.componentPropertyReferences = liveRefs(owner, was);
       } });
       n.componentPropertyReferences = r;
-      rewired++;
+      touched.add(n);
     };
-    for (const k of kept) wire(k.ref, k.spec, !sameJson(k.old.propRefs, k.spec.propRefs));
-    for (const [n, s] of built) if (s.propRefs) wire(n, s, true);
-    return { props: changed, rewired };
+    for (const w of p.wiring) {
+      if (!w.wire.length) continue;
+      const r = refsNow(w.ref);
+      const all = refsFor(w.spec, keys) || {};
+      for (const f of w.wire) {
+        const k = all[f];
+        if (k !== void 0) r[f] = k;
+      }
+      wire(w.ref, r);
+    }
+    for (const [n, s] of built) if (s.propRefs) wire(n, refsFor(s, keys) || {});
+    return { props: changed, rewired: touched.size };
   }
-  function removeDefs(p, consent2) {
+  function removeDefs(p, consent2, gone) {
     const out = [];
     let current3;
     try {
@@ -8119,10 +8265,25 @@
       current3 = {};
     }
     for (const r of p.remove) {
-      if (!Object.prototype.hasOwnProperty.call(current3, r.key)) continue;
+      if (!own2(current3, r.key)) continue;
       consent2();
       p.owner.deleteComponentProperty(r.key);
       out.push(r.name);
+      gone(r.name);
+    }
+    return out;
+  }
+  async function orphanWarnings(removed) {
+    const out = [];
+    for (const n of removed) {
+      if (n.removed || n.type !== "COMPONENT" || !n.parent || n.parent.type !== "COMPONENT_SET") continue;
+      let count2 = 0;
+      try {
+        count2 = (await n.getInstancesAsync()).length;
+      } catch {
+        continue;
+      }
+      if (count2) out.push("removing variant '" + n.name + "' of '" + n.parent.name + "' leaves " + count2 + " instance" + (count2 === 1 ? "" : "s") + " without a main component");
     }
     return out;
   }
@@ -8169,7 +8330,8 @@
     for (const [index, op] of ops.entries()) {
       if (op.op !== "createTree") continue;
       const c = componentRootOf(op.tree);
-      if (!c || checkTree(op.tree).problems.length) continue;
+      const checked = c ? checkTree(op.tree) : null;
+      if (!c || !checked || checked.problems.length || !checked.expanded) continue;
       const found = await existingComponent(c.type, c.name);
       const what = (c.type === "COMPONENT_SET" ? "component set '" : "component '") + c.name + "'";
       if ("problem" in found) {
@@ -8188,7 +8350,9 @@
         } catch {
         }
       }
-      steps.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" });
+      const old = readOld(found.ours, componentKey(c.name));
+      const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];
+      steps.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
     }
     return steps;
   }
@@ -8715,7 +8879,7 @@
   }
 
   // src/keyed.ts
-  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj7 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
@@ -8730,25 +8894,6 @@
     if (!p || p.type !== "PAGE") return false;
     await p.loadAsync();
     return true;
-  }
-  var holds = (n) => n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
-  function readOld(n, key) {
-    let spec;
-    try {
-      spec = JSON.parse(n.getPluginData(SPEC_DATA));
-    } catch {
-      return null;
-    }
-    if (!isObj6(spec)) return null;
-    const children = [];
-    if (holds(n)) {
-      for (const c of n.children) {
-        if (c.getPluginData(KEY_DATA) !== key) continue;
-        const o = readOld(c, key);
-        if (o) children.push(o);
-      }
-    }
-    return { ref: n, spec, children };
   }
   var MAX_STAMP_BYTES = 99e3;
   function utf8Bytes(s) {
@@ -8794,7 +8939,7 @@
     };
     for (const [index, op] of ops.entries()) {
       const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
-      if (op.op !== "createTree" || !isObj6(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
+      if (op.op !== "createTree" || !isObj7(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
       const key = comp ? componentKey(comp.name) : String(op.tree.key);
       const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
       const bad = (message) => {
@@ -8843,6 +8988,26 @@
         const f = foreignIn(r, key);
         if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
       }
+      const owner = root;
+      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
+      if (defs) {
+        defs.wiring = planWiring(defs, plan.kept);
+        const bound = new Map(defs.wiring.map((w) => [w.ref, w.stays]));
+        for (const u of plan.updates) {
+          const stays = bound.get(u.ref);
+          if (!u.set || !stays) continue;
+          if (stays.indexOf("characters") >= 0) delete u.set.text;
+          if (stays.indexOf("visible") >= 0) delete u.set.hidden;
+          if (!Object.keys(u.set).length) u.set = null;
+        }
+        for (const n of textsFollowing(defs)) {
+          const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
+          for (const f of fonts) {
+            const m = await loadFont(f);
+            if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
+          }
+        }
+      }
       const patches = /* @__PURE__ */ new Map();
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
@@ -8857,8 +9022,6 @@
         p.refs = t.refs;
         patches.set(i, p);
       }
-      const owner = root;
-      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
       if (problems.length === before) t.update = { key, root, plan, patches, ...comp && defs ? { component: { name: comp.name, defs } } : {} };
     }
     return { problems };
@@ -8898,8 +9061,8 @@
   var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
   function boundTo(n, k) {
     const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj6(bv) ? bv[k] : void 0;
-    return isObj6(a) && typeof a.id === "string" ? a.id : null;
+    const a = isObj7(bv) ? bv[k] : void 0;
+    return isObj7(a) && typeof a.id === "string" ? a.id : null;
   }
   function applyExtras(n, s, fields, only, variables, changes) {
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
@@ -9000,6 +9163,7 @@
   async function applyUpdate(t, u, consent2, allowed2, changes) {
     const { plan, key } = u;
     const changed = [];
+    const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
     for (const [i, up] of plan.updates.entries()) {
       const p = u.patches.get(i);
       if (up.extras.length) {
@@ -9059,7 +9223,7 @@
         } });
         arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
       }
-      const synced = syncComponent(u.component.defs, plan.kept, made.pairs, consent2, changes);
+      const synced = syncComponent(u.component.defs, unwired, made.pairs, consent2, changes);
       props = synced.props;
       rewired = synced.rewired;
     }
@@ -10018,10 +10182,10 @@
     const uses = [];
     const existingRows = /* @__PURE__ */ new Set();
     for (const r2 of allRows) if (r2.existing) existingRows.add(r2.existing.id);
-    const lookup = (ref2, own3, use, bad) => {
-      const mine = own3 === null ? void 0 : allRows.filter((r2) => r2.op === own3 && r2.name === ref2)[0];
+    const lookup = (ref2, own4, use, bad) => {
+      const mine = own4 === null ? void 0 : allRows.filter((r2) => r2.op === own4 && r2.name === ref2)[0];
       if (mine) return { row: mine };
-      const rows = allRows.filter((r2) => r2.name === ref2 && r2.op !== own3);
+      const rows = allRows.filter((r2) => r2.name === ref2 && r2.op !== own4);
       const inFile = locals.filter((v) => v.name === ref2 && !existingRows.has(v.id)).length;
       if (rows.length + inFile > 1) {
         bad(use.path + ": variable '" + ref2 + "' matches " + (rows.length + inFile) + " variables (" + rows.map((r2) => "a row of ops[" + r2.op + "]").concat(inFile ? [inFile + " in the file"] : []).join(", ") + ") \u2014 pass the one meant by key or id, or rename one");
@@ -10397,7 +10561,7 @@
     return applied;
   }
   var isRecord2 = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
-  var own2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  var own3 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   function comparableStyle(st) {
     const parsed = JSON.parse(styleSnapshot(st));
     if (!Array.isArray(parsed)) return JSON.stringify(parsed);
@@ -10416,7 +10580,7 @@
           if (isRecord2(f)) delete f[k === "fontFamily" ? "family" : "style"];
           continue;
         }
-        if (own2(o, k)) delete o[k];
+        if (own3(o, k)) delete o[k];
       }
     };
     if (isRecord2(kept)) {
@@ -11019,10 +11183,18 @@
         rows[i] = applyDelete(t);
       } catch (e) {
         const r = await fail(i, op, e);
-        const gone = rows.filter((a) => a !== void 0 && a.deleted === true).length;
-        return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
+        const gone2 = rows.filter((a) => a !== void 0 && a.deleted === true).length;
+        return gone2 ? { ...r, error: r.error + "; " + gone2 + " node(s) deleted before it cannot be brought back" } : r;
       }
     }
+    const gone = [];
+    const goneRows = [];
+    const lostWith = async (i, op, e) => {
+      const r = await fail(i, op, e);
+      const deleted = rows.filter((a) => a !== void 0 && a.deleted === true).length;
+      const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
+      return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
+    };
     for (const [i, t] of trees.targets) {
       const op = list[i];
       if (!op || !t.update) continue;
@@ -11033,21 +11205,37 @@
         else delete row.removed;
       }
       try {
+        for (const m of await orphanWarnings(removalsOf(t.update))) warnings.push("ops[" + i + "]: " + m);
         for (const n of removalsOf(t.update)) {
           if (n.removed) continue;
           consent();
+          const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
+          const id = n.id;
           n.remove();
-        }
-        const comp = t.update.component;
-        if (comp && comp.defs.remove.length) {
-          const gone = removeDefs(comp.defs, consent);
-          if (row) {
-            if (gone.length) row.propsRemoved = gone;
-            else delete row.propsRemoved;
-          }
+          gone.push(what);
+          goneRows.push({ id, deleted: true });
         }
       } catch (e) {
-        return fail(i, op, e);
+        return lostWith(i, op, e);
+      }
+    }
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      const comp = t.update ? t.update.component : void 0;
+      if (!op || !comp || !comp.defs.remove.length) continue;
+      const row = rows[i];
+      const owner = comp.defs.owner;
+      try {
+        const names = removeDefs(comp.defs, consent, (name) => {
+          gone.push("the property '" + name + "' of '" + owner.name + "'");
+          goneRows.push({ id: owner.id, propsRemoved: [name] });
+        });
+        if (row) {
+          if (names.length) row.propsRemoved = names;
+          else delete row.propsRemoved;
+        }
+      } catch (e) {
+        return lostWith(i, op, e);
       }
     }
     const done = rows.filter((a) => a !== void 0);

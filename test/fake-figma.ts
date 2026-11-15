@@ -615,12 +615,17 @@ export interface FakePropDef { type: string; defaultValue: unknown; preferredVal
 /**
  * Figma's component property API on a fake main component or component set (`node`, its own fields): addComponentProperty
  * returns a new `name#id` key (`nextId` makes the id), editComponentProperty changes a definition's default or suggestions
- * (a new name gives a new key), deleteComponentProperty removes one and every reference to it among `layers()`, and
+ * (a new name gives a new key; a layer bound to it takes a new TEXT or BOOLEAN default, through followsDefault),
+ * deleteComponentProperty removes one and every reference to it among `layers()`, and
  * componentPropertyDefinitions answers them all — a set's with its VARIANT properties first, read from its variants'
  * `variantProperties` (options in variant order, the first variant's value the default). A variant (a component inside a
  * set) throws on every one of them, as Figma's does. Definitions are kept in a Map and answered as own properties, so a
  * property may be called "__proto__", "constructor" or "toString".
  */
+let followingDefault = false;
+/** True while a layer bound to a property is given the property's new default (componentApi's editComponentProperty):
+ *  a fake that refuses a write to a bound field lets that one through. */
+export const followsDefault = (): boolean => followingDefault;
 export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], nextId: () => string): void {
   const defs = new Map<string, FakePropDef>();
   const parentType = (): unknown => { const p = node.parent; return typeof p === "object" && p !== null ? (p as FakeNode).type : undefined; };
@@ -651,7 +656,8 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     if (type === "BOOLEAN" && typeof defaultValue !== "boolean") throw new Error("in Figma: a BOOLEAN property's default is a boolean");
     if (type === "TEXT" && typeof defaultValue !== "string") throw new Error("in Figma: a TEXT property's default is a string");
     const key = name + "#" + nextId();
-    defs.set(key, { type, defaultValue, ...(options && options.preferredValues ? { preferredValues: options.preferredValues } : {}) });
+    // A swap without suggestions answers an empty list.
+    defs.set(key, { type, defaultValue, ...(options && options.preferredValues ? { preferredValues: options.preferredValues } : type === "INSTANCE_SWAP" ? { preferredValues: [] } : {}) });
     return key;
   };
   node.editComponentProperty = (key: string, value: { name?: string; defaultValue?: unknown; preferredValues?: unknown[] }) => {
@@ -661,6 +667,16 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     const next: FakePropDef = { ...d, ...(value.defaultValue !== undefined ? { defaultValue: value.defaultValue } : {}), ...(value.preferredValues !== undefined ? { preferredValues: value.preferredValues } : {}) };
     if (value.name !== undefined && value.name !== bare(key)) { defs.delete(key); const k2 = value.name + "#" + nextId(); defs.set(k2, next); return k2; }
     defs.set(key, next);
+    // A layer bound to the property shows its new default (its text, its visibility), as in Figma.
+    const field = d.type === "TEXT" ? "characters" : d.type === "BOOLEAN" ? "visible" : null;
+    if (field && value.defaultValue !== undefined && value.defaultValue !== d.defaultValue) {
+      for (const l of layers()) {
+        const r = l.componentPropertyReferences;
+        if (typeof r !== "object" || r === null || !Object.prototype.hasOwnProperty.call(r, field) || (r as Record<string, unknown>)[field] !== key) continue;
+        followingDefault = true;
+        try { Reflect.set(l, field, value.defaultValue); } finally { followingDefault = false; }
+      }
+    }
     return key;
   };
   node.deleteComponentProperty = (key: string) => {

@@ -590,7 +590,8 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
   const variantList: readonly unknown[] = root && root.type === "COMPONENT_SET" && isObj(tree) && Array.isArray(tree.children) ? tree.children : [];
   const firstVariant = variantList[0];
   const columns = isObj(firstVariant) && typeof firstVariant.name === "string" ? variantColumns(firstVariant.name) : [];
-  const comp = root && isObj(tree) ? { ...root, defs: new Map<string, PropDefType>(propDefsOf(tree).map(([k, d]) => [k, d.type] as const)), used: new Set<string>() } : null;
+  const declared = isObj(tree) ? propDefsOf(tree) : [];
+  const comp = root && isObj(tree) ? { ...root, defs: new Map<string, PropDefType>(declared.map(([k, d]) => [k, d.type] as const)), defaults: new Map<string, string | boolean>(declared.map(([k, d]) => [k, d.default] as const)), used: new Set<string>() } : null;
   const seenHandles = new Set<string>();
   const seenFonts = new Set<string>();
   const addRef = (list: string[], name: unknown): void => { if (typeof name === "string" && list.indexOf(name) < 0) list.push(name); };
@@ -696,6 +697,11 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
           comp.used.add(prop);
           if (has !== want) say(at + " names '" + prop + "', a " + has + " property; `" + f + "` follows a " + want + " property");
           if (f === "characters" && kind !== "TEXT") say(at + ": only a TEXT layer's text follows a property");
+          // A field a property drives shows the property's default (the set's, for a variant's layer): a different value
+          // here would be written to a field Figma keeps bound to the property.
+          const def = comp.defaults.get(prop);
+          if (has === want && f === "characters" && n.text !== undefined && n.text !== def) say("`text` " + JSON.stringify(n.text) + " differs from the default of '" + prop + "' (" + JSON.stringify(def) + "), which the text follows (`propRefs.characters`); change the property's default instead");
+          if (has === want && f === "visible" && n.hidden !== undefined && typeof def === "boolean" && n.hidden !== !def) say("`hidden: " + String(n.hidden) + "` differs from the default of '" + prop + "' (" + String(def) + "), which the layer's visibility follows (`propRefs.visible`); change the property's default instead");
           if (f === "mainComponent" && kind !== "INSTANCE") say(at + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
         }
       }

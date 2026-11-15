@@ -156,7 +156,10 @@ screens.
     path as the baseline. It is `test/write-cost.test.ts` (`bun test/write-cost.test.ts`); the recorded numbers are in
     `test/write-cost/baseline.json`, and a new route is added to `test/write-cost/routes.ts`. Its seventh job is a new
     screen and the fix round its check leads to; its eighth starts from nothing (a token table, then a screen bound to
-    it).
+    it); its ninth (`create-components` / `blank-file`) starts from a blank file: 7 colour tokens in light and dark, a
+    5-component kit (two icons, a 4-variant Button set with TEXT, BOOLEAN and INSTANCE_SWAP properties, an Input, a
+    Card), then a sign-up screen of their instances — recorded at 4 calls, 7 ops, about 2,009 tokens (1,023 out, 986
+    in).
 
 ## Build order
 

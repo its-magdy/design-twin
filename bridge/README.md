@@ -1300,8 +1300,12 @@ one with the read's own `propRefs` (`characters` on a TEXT, `visible` on any lay
 an undeclared or mistyped reference is refused with its path, a declared property no layer uses is a warning. A
 component's name is its key: a later spec uses it by name (an INSTANCE's `props` may now give a swap property a
 component by name, key or id), and sending the same name again updates the one component of that name a write made in
-place, through the keyed re-send (same ids, so its instances follow): rows added or dropped are variants added or
-removed, property definitions are added, edited or deleted to match, and layers whose wiring changed are wired again.
+place, through the keyed re-send (same ids, so its instances follow): variants pair with the old ones by a row's
+`handle`, then exact name, then order, so a changed value or a column added, renamed or dropped renames them in place;
+only a dropped row's variant is removed (the reply's `warnings` and the dry run say how many instances it leaves
+without a main component). Property definitions are added, edited or deleted to match, and layers whose wiring changed
+are wired again. A wired text's `text` (or a wired layer's `hidden`) must match its property's default, and
+`__proto__` names no property or column.
 One made by hand, two of a name, or a component sent as a set (or back) is refused before anything runs. A spec cannot
 use a component another op of the same batch makes (every name resolves before the batch runs): it is refused with
 "create it in an earlier call". The reply is `{id, component, created: {…, variants?}, props: {name: "name#id"}}`;

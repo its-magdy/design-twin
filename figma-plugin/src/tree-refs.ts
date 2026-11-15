@@ -292,19 +292,22 @@ function putOwn<T>(o: Record<string, T>, k: string, v: T): void {
  *  value, else at `start`'s. A combination the set does not have is `missing` (as "Size=Large, Tone=Off"): Figma would
  *  keep the instance on another variant, so it is refused rather than built wrong. */
 export function variantFor(set: ComponentSetNode, start: ComponentNode, props: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions): ComponentNode | { missing: string } {
+  // Own keys only, everywhere: a column may be called "toString", which every object answers from its prototype.
+  const has = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
   const want: Record<string, string> = {};
   const from = start.variantProperties || {};
+  const givenAt = (k: string): string | undefined => { const g = has(props, k) ? props[k] : undefined; return typeof g === "string" ? g : undefined; };
   for (const k of Object.keys(defs)) {
     const d = defs[k];
     if (!d || d.type !== "VARIANT") continue;
-    const given = props[k];
-    const v = typeof given === "string" ? given : from[k];
-    if (v !== undefined) putOwn(want, k, v);
+    const given = givenAt(k);
+    const v = given !== undefined ? given : has(from, k) ? from[k] : undefined;
+    if (typeof v === "string") putOwn(want, k, v);
   }
   // No variant value given, or the start already shows them: the instance stays on `start` (two variants can share
   // their values, so the first match need not be the one that is built).
-  const given = Object.keys(want).some((k) => typeof props[k] === "string");
-  const matches = (c: ComponentNode): boolean => { const vp = c.variantProperties || {}; return Object.keys(want).every((k) => vp[k] === want[k]); };
+  const given = Object.keys(want).some((k) => givenAt(k) !== undefined);
+  const matches = (c: ComponentNode): boolean => { const vp = c.variantProperties || {}; return Object.keys(want).every((k) => has(vp, k) && vp[k] === want[k]); };
   if (!given || matches(start)) return start;
   for (const c of set.children) if (c.type === "COMPONENT" && matches(c)) return c;
   return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };

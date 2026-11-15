@@ -198,9 +198,9 @@ export function canvas(): Canvas {
     f.setProperties = (given: Record<string, string | boolean>) => {
       const defs = (owner().componentPropertyDefinitions ?? {}) as Record<string, { type: string }>;
       for (const [key, value] of Object.entries(given)) {
-        const def = defs[key];
+        const def = Object.prototype.hasOwnProperty.call(defs, key) ? defs[key] : undefined;
         if (!def) throw new Error(`in Figma: ${main.name} has no property ${key}`);
-        props[key] = { type: def.type, value };
+        Object.defineProperty(props, key, { value: { type: def.type, value }, enumerable: true, writable: true, configurable: true }); // any name, "__proto__" too
         if (def.type === "VARIANT") {
           // The variant with this value (the others as they are) becomes the instance's main component.
           const want = { ...(main.variantProperties as Record<string, string> | null), [key]: String(value) };

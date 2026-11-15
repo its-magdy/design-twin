@@ -4,7 +4,7 @@ import { checkPatch } from "../../bridge/src/patch-spec.ts";
 import { MAX_TREE_NODES, NUMBER_TOKEN_FIELDS } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import { componentApi, MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, variantValues, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
+import { componentApi, followsDefault, MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, variantValues, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -235,7 +235,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
         const p: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(given)) {
           const value = isNode(v) && v.type === "VARIABLE_ALIAS" ? "(" + String(v.id) + ")" : v;
-          if (isNode(v) && v.type === "VARIABLE_ALIAS") bound[k] = v; else delete bound[k];
+          if (isNode(v) && v.type === "VARIABLE_ALIAS") Object.defineProperty(bound, k, { value: v, enumerable: true, writable: true, configurable: true }); else delete bound[k];
           Object.defineProperty(p, k, { value, enumerable: true, writable: true, configurable: true }); // any name, "__proto__" too
         }
         fields.propBound = bound;
@@ -272,6 +272,11 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       set(t, k, v) {
         const key = String(k);
         if (trap.has(key)) throw new Error("in Figma: cannot set " + key + " to " + JSON.stringify(v));
+        // A field bound to a component property follows the property: Figma refuses writing it (change the default).
+        const bound = t.componentPropertyReferences;
+        if ((key === "characters" || key === "visible") && !followsDefault() && isNode(bound) && Object.prototype.hasOwnProperty.call(bound, key) && typeof bound[key] === "string") {
+          throw new Error("in Figma: " + key + " of " + String(t.name) + " is bound to the component property " + String(bound[key]) + "; edit the property instead");
+        }
         // Every corner follows cornerRadius (as Figma's do).
         if (key === "cornerRadius" && typeof v === "number") for (const c of ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"]) t[c] = v;
         // A raw value unbinds the variable bound to the field (as Figma's does).

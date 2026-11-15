@@ -36,10 +36,14 @@ list of merged PRs.
   `type: "COMPONENT_SET"` a set of variants from a table (`variant`, `columns`, one row of values per variant with
   optional per-variant fields and `edits`). The root's `props` declares TEXT, BOOLEAN and INSTANCE_SWAP properties and
   `propRefs` wires the layers inside to them. A later spec uses the component by name (and can swap an instance's
-  nested icon by name); sending the same name again updates it in place, so its instances follow — variants added or
-  removed with the rows, properties added, edited or deleted to match. All or nothing and one undo step, like every
-  write; one made by hand, or a component the same batch makes, is refused. The write-cost suite records a blank-file
-  job: tokens, a small kit, then one screen.
+  nested icon by name); sending the same name again updates it in place, so its instances follow — properties added,
+  edited or deleted to match, and variants paired with the old ones by a row's `handle`, then exact name, then order,
+  so a changed value or a column added, renamed or dropped renames them in place; only a dropped row's variant is
+  removed, and the reply and the dry run warn how many instances it leaves without a main component. A wired layer's
+  `text` or `hidden` must match its property's default (change the default instead), and `__proto__` cannot name a
+  property or a variant column. All or nothing and one undo step, like every write; one made by hand, or a component
+  the same batch makes, is refused. The write-cost suite records a blank-file job: tokens, a small kit, then one
+  screen.
 - `figma_write` can seed those tables from the project's code tokens: `seedTokens {file, collection?}` names a
   `tokens.dtcg.json` or a `tokens.resolver.json` (with its set and context files), and the MCP server reads it into
   `createVariables` and `createStyles` ops in its place, so no token value passes through the model and the dry run,

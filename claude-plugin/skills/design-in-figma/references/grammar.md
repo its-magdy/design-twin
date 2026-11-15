@@ -177,26 +177,37 @@ in place (below). It lands like a frame: on `page`, beside the existing frames, 
 - **Properties:** on a component root, `props` declares its properties (on an INSTANCE it stays values):
   `{"<name>": {type: "TEXT" | "BOOLEAN" | "INSTANCE_SWAP", default, preferredValues?}}`. A TEXT's `default` is a string,
   a BOOLEAN's `true`/`false`, an INSTANCE_SWAP's a component (name, key or id; a set means its default variant), and
-  only a swap takes `preferredValues` (a list of components). A name holds no `#`. VARIANT properties come from the
-  table, never from `props`; SLOT cannot be written yet.
+  only a swap takes `preferredValues` (a list of components). A name holds no `#` and is never `__proto__` (Figma's
+  message passing drops that key; nor is a column). VARIANT properties come from the table, never from `props`; SLOT
+  cannot be written yet.
 - **Wiring:** a layer inside takes `propRefs` (the read's own field): `{characters: "Label"}` on a TEXT,
   `{visible: "Show icon"}` on any layer, `{mainComponent: "Icon"}` on an INSTANCE, each naming a declared property of
   the matching type. A ref to an undeclared property or of the wrong type is refused with its path; a declared
   property no layer uses is a warning. The component itself is not wired, and `propRefs` outside a component is refused.
+  A wired field shows its property's default (Figma keeps it bound): a wired text's `text`, if given, equals its TEXT
+  property's `default`, and a wired layer's `hidden`, if given, equals `!default` of its BOOLEAN property (the set's, in
+  a set) — anything else is refused at its path. To change what it shows, change the property's `default`.
 - **Variants as a table:** a `COMPONENT_SET` root takes `variant` (the spec every variant starts from: a component's
   fields and its `children`, no `name`), `columns` (its VARIANT properties) and `rows`, each the values of one variant
   in column order and, last, an optional object of what that variant changes: its own fields, and
-  `edits: {"<layer name unique in the base>": {...fields}}` (`null` drops a field). Each row is one COMPONENT named as
+  `edits: {"<layer name unique in the base>": {...fields}}` (`null` drops a field), and `handle` (unique, as any
+  handle; a re-send pairs by it first, below — the base `variant` takes none). Each row is one COMPONENT named as
   Figma names a variant (`"Size=md, State=default"`); the options come from the rows in order and the first row is the
   default variant. A duplicate combination, a missing or extra cell, and a value or column holding `=` or `,` are
   refused. The set's own fields (`layout`, `fills`, …) and its `props` (TEXT, BOOLEAN, INSTANCE_SWAP, wired in every
   variant) go on the set. A set without auto-layout lays its variants out in a column; one with it hugs them unless it
   has a size.
 - **Sent again:** the one local component (or set) of that name a write made is updated in place, as a
-  [keyed re-send](#keyed-re-send) is: same ids, so its instances follow. Variants match by their name: a new row adds a
-  variant, a dropped row removes one. Property definitions are added, edited (`default`, `preferredValues`) or deleted
-  so they equal the spec (a deleted one goes with the batch's removals, last), and each layer whose `propRefs` changed
-  is wired again. A component of that name made by hand, two of that name, or a single component sent as a set (or
+  [keyed re-send](#keyed-re-send) is: same ids, so its instances follow. Variants pair with the old ones by the row's
+  `handle`, then by exact name, then the rest in order (the old in the set's order, the new in row order): a paired
+  variant keeps its node and is renamed in place, so a changed value or a column added, renamed or dropped keeps every
+  instance on it. Only old variants left over (rows dropped) are removed — their instances lose their main component,
+  and the reply's `warnings` and the dry run's `change` say how many ("removing variant 'Size=sm, State=default' of
+  'Button' leaves 3 instances without a main component"); rows left over are built. Property definitions are added,
+  edited (`default`, `preferredValues`) or deleted so they equal the spec; a layer's references to a property that goes
+  are removed first, and the definition itself is deleted last of all. A wired field follows an edited default, and
+  each layer whose `propRefs` changed is wired again. A variant or a property deleted cannot be brought back: a failure
+  after one names it in the error and in `applied`. A component of that name made by hand, two of that name, or a single component sent as a set (or
   back) is refused before anything runs — change one made by hand with a [patch](#patch) of its id. A property's type
   cannot change in place (give it a new name). The root takes no `key`; `component` on it is accepted only equal to
   `name` (the read writes it so).

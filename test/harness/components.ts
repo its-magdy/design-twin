@@ -178,10 +178,12 @@ export const cases: Case[] = [
       props.Hint = { type: "TEXT", default: "Optional" };
       const base = spec.variant as { children: Array<Record<string, unknown>> };
       base.children = [{ component: "Icon/Plus", name: "Icon", propRefs: { mainComponent: "Icon" } }, { name: "Label", text: "Button", font: { color: "#ffffff" }, propRefs: { characters: "Label" } }, { name: "Hint", text: "Optional", propRefs: { characters: "Hint" } }];
+      const ids = kids(set).map((k) => k.id);
       const r = await write(w, [button(spec)]);
       const row = rowOf(r);
-      ok("[COMPONENTS] the reply: built, removed, the new property's key, the dropped one", r.ok && isObj(row.props) && typeof row.props.Hint === "string" && same(row.propsRemoved, ["Show icon"]) && row.removed === 3 && same(row.created, { frames: 0, texts: 4, instances: 1 }));
-      ok("[COMPONENTS] the set now holds md/default, md/hover and the new lg/default (sm/default gone)", same(kids(set).map((k) => k.name), ["Size=md, State=default", "Size=md, State=hover", "Size=lg, State=default"]));
+      ok("[COMPONENTS] the reply: built (a Hint per variant, and sm's Label anew: its font edit is gone), the renamed variant, the new property's key, the dropped one", r.ok && isObj(row.props) && typeof row.props.Hint === "string" && same(row.propsRemoved, ["Show icon"]) && row.removed === 1 && same(row.created, { frames: 0, texts: 4 }) &&
+        Array.isArray(row.changed) && same((row.changed as Array<{ id: string; fields: string[] }>).map((c) => c.fields), [["name"]]));
+      ok("[COMPONENTS] the set holds md/default, md/hover and lg/default: sm/default, its value changed, renamed in place (same ids)", same(kids(set).map((k) => k.name), ["Size=md, State=default", "Size=md, State=hover", "Size=lg, State=default"]) && same(kids(set).map((k) => k.id), ids));
       const defs = defsOf(set);
       ok("[COMPONENTS] Show icon is deleted, Hint declared; the options follow the variants", keyOf(defs, "Show icon") === undefined && keyOf(defs, "Hint") !== undefined && same(defs.Size?.variantOptions, ["md", "lg"]));
       const hintKey = keyOf(defs, "Hint");
@@ -201,8 +203,15 @@ export const cases: Case[] = [
       const props = spec.props as Record<string, Record<string, unknown>>;
       if (props.Label) props.Label.default = "Click";
       if (props.Icon) { props.Icon.default = "Icon/Minus"; props.Icon.preferredValues = ["Icon/Minus"]; }
+      const label = (spec.variant as { children: Array<Record<string, unknown>> }).children[1];
+      if (label) label.text = "Click"; // a wired text shows its property's default
       const r = await write(w, [button(spec)]);
       const defs = defsOf(set);
+      ok("[COMPONENTS] the wired Label text of every variant follows the new default (the patch never writes the bound field: Figma refuses it)", r.ok && kids(set).every((v) => child(v, "Label")?.characters === "Click" && refsOf(child(v, "Label")).characters === keyOf(defs, "Label")));
+      const stale = buttonSpec();
+      (stale.props as Record<string, Record<string, unknown>>).Label = { type: "TEXT", default: "Go" };
+      const refused = await write(w, [button(stale)]);
+      ok("[COMPONENTS] a wired text that differs from its property's default is refused at its path", !refused.ok && refusal(refused).includes(".children[1]: `text` \"Button\" differs from the default of 'Label' (\"Go\")") && refusal(refused).includes("change the property's default instead"));
       ok("[COMPONENTS] both definitions are edited in place (same keys)", r.ok && isObj(rowOf(r).props) && Object.keys(rowOf(r).props as object).length === 2 &&
         defs[String(keyOf(defs, "Label"))]?.defaultValue === "Click" && defs[String(keyOf(defs, "Icon"))]?.defaultValue === one(w, "COMPONENT", "Icon/Minus")?.id &&
         same(defs[String(keyOf(defs, "Icon"))]?.preferredValues, [{ type: "COMPONENT", key: one(w, "COMPONENT", "Icon/Minus")?.key }]));
@@ -250,19 +259,28 @@ export const cases: Case[] = [
       const r = await write(w, [{ op: "createTree", tree: { name: "Earlier", box: { w: 10, h: 10 } } }, button()]);
       ok("[COMPONENTS] the build fails while wiring, and nothing it or the earlier op made stays", !r.ok && r.failedAt === 1 && w.alive().length === before && named(w, "COMPONENT_SET", "Button").length === 0 && named(w, "FRAME", "Earlier").length === 0);
       w.trap.delete("componentPropertyReferences");
-      const made = await write(w, [button()]);
+      // A swap property with no suggestions (Glyph): a re-send that adds some and fails must leave it with none.
+      const first = buttonSpec();
+      (first.props as Record<string, unknown>).Glyph = { type: "INSTANCE_SWAP", default: "Icon/Plus" };
+      const made = await write(w, [button(first)]);
       const set = one(w, "COMPONENT_SET", "Button");
       const defsBefore = JSON.stringify(defsOf(set));
       const wiredBefore = JSON.stringify(kids(set).map((v) => kids(v).map(refsOf)));
+      const textsBefore = JSON.stringify(kids(set).map((v) => child(v, "Label")?.characters));
       const spec = buttonSpec();
       (spec.props as Record<string, unknown>).Hint = { type: "TEXT", default: "Optional" };
+      (spec.props as Record<string, unknown>).Glyph = { type: "INSTANCE_SWAP", default: "Icon/Plus", preferredValues: ["Icon/Minus"] };
       (spec.props as Record<string, Record<string, unknown>>).Label = { type: "TEXT", default: "Changed" };
-      (spec.variant as { children: Array<Record<string, unknown>> }).children.push({ name: "Hint", text: "Optional", propRefs: { characters: "Hint" } });
+      const base = (spec.variant as { children: Array<Record<string, unknown>> }).children;
+      if (base[1]) base[1].text = "Changed";
+      base.push({ name: "Hint", text: "Optional", propRefs: { characters: "Hint" } });
       w.trap.add("componentPropertyReferences");
       const bad = await write(w, [button(spec)]);
       w.trap.delete("componentPropertyReferences");
       ok("[COMPONENTS] a re-send that fails is put back: the definitions, the wiring and the layers as they were", made.ok && !bad.ok && JSON.stringify(defsOf(set)) === defsBefore &&
         JSON.stringify(kids(set).map((v) => kids(v).map(refsOf))) === wiredBefore && kids(set).every((v) => kids(v).length === 2) && Array.isArray(bad.restored) && bad.restored.length > 0);
+      const glyph = defsOf(set)[String(keyOf(defsOf(set), "Glyph"))];
+      ok("[COMPONENTS] …a swap that had no suggestions has none again (the restore clears the ones the edit added); the bound texts show the old default", same(glyph?.preferredValues, []) && JSON.stringify(kids(set).map((v) => child(v, "Label")?.characters)) === textsBefore);
     },
   },
   {
@@ -284,18 +302,19 @@ export const cases: Case[] = [
     },
   },
   {
-    name: "property, variant, column and layer names that are Object.prototype's own are ordinary names",
+    name: "property, variant, column and layer names that are Object.prototype's own are ordinary names; '__proto__' names no property or column",
     async run() {
       const w = await treeWorld();
-      // Columns, variant values and layer names __proto__ / constructor / toString; properties toString, hasOwnProperty, valueOf.
-      const odd = ["toString", "hasOwnProperty", "valueOf"];
+      // Columns constructor / valueOf, variant values toString / hasOwnProperty / valueOf, layers __proto__ / constructor /
+      // toString; properties toString, hasOwnProperty, isPrototypeOf.
+      const odd = ["toString", "hasOwnProperty", "isPrototypeOf"];
       // From JSON text: in an object literal `__proto__` would set the prototype, not a key.
       const spec = JSON.parse(`{
         "type": "COMPONENT_SET", "name": "Odd",
-        "props": { "toString": { "type": "TEXT", "default": "t" }, "hasOwnProperty": { "type": "TEXT", "default": "h" }, "valueOf": { "type": "BOOLEAN", "default": true } },
-        "variant": { "children": [{ "name": "__proto__", "text": "a", "propRefs": { "characters": "toString" } }, { "name": "constructor", "text": "b", "propRefs": { "characters": "hasOwnProperty", "visible": "valueOf" } }, { "name": "toString", "text": "c" }] },
-        "columns": ["__proto__", "constructor"],
-        "rows": [["toString", "hasOwnProperty"], ["valueOf", "hasOwnProperty", { "edits": { "__proto__": { "text": "edited" }, "constructor": { "opacity": 0.5 } } }]]
+        "props": { "toString": { "type": "TEXT", "default": "t" }, "hasOwnProperty": { "type": "TEXT", "default": "h" }, "isPrototypeOf": { "type": "BOOLEAN", "default": true } },
+        "variant": { "children": [{ "name": "__proto__", "text": "t", "propRefs": { "characters": "toString" } }, { "name": "constructor", "text": "h", "propRefs": { "characters": "hasOwnProperty", "visible": "isPrototypeOf" } }, { "name": "toString", "text": "c" }] },
+        "columns": ["constructor", "valueOf"],
+        "rows": [["toString", "hasOwnProperty"], ["valueOf", "hasOwnProperty", { "edits": { "__proto__": { "opacity": 0.4 }, "constructor": { "opacity": 0.5 }, "toString": { "text": "edited" } } }]]
       }`) as Record<string, unknown>;
       const checked = checkTree(spec);
       ok("[COMPONENTS] the check accepts them", checked.problems.length === 0);
@@ -303,18 +322,31 @@ export const cases: Case[] = [
       const set = one(w, "COMPONENT_SET", "Odd");
       const props = rowOf(r).props;
       ok("[COMPONENTS] the properties come back by their own names", r.ok && isObj(props) && Object.keys(props).length === 3 && odd.every((n) => Object.prototype.hasOwnProperty.call(props, n) && typeof props[n] === "string" && String(props[n]).startsWith(n + "#")));
-      ok("[COMPONENTS] the variants are named by the columns, and their options read back", same(kids(set).map((k) => k.name), ["__proto__=toString, constructor=hasOwnProperty", "__proto__=valueOf, constructor=hasOwnProperty"]) &&
-        Object.prototype.hasOwnProperty.call(defsOf(set), "__proto__") && same(defsOf(set)["constructor"]?.variantOptions, ["hasOwnProperty"]));
+      ok("[COMPONENTS] the variants are named by the columns, and their options read back", same(kids(set).map((k) => k.name), ["constructor=toString, valueOf=hasOwnProperty", "constructor=valueOf, valueOf=hasOwnProperty"]) &&
+        Object.prototype.hasOwnProperty.call(defsOf(set), "constructor") && same(defsOf(set)["valueOf"]?.variantOptions, ["hasOwnProperty"]));
       const second = kids(set)[1];
-      ok("[COMPONENTS] the row's edits reached the layers named __proto__ and constructor", child(second, "__proto__")?.characters === "edited" && child(second, "constructor")?.opacity === 0.5 && child(kids(set)[0], "__proto__")?.characters === "a");
+      ok("[COMPONENTS] the row's edits reached the layers named __proto__, constructor and toString", child(second, "__proto__")?.opacity === 0.4 && child(second, "constructor")?.opacity === 0.5 && child(second, "toString")?.characters === "edited" && child(kids(set)[0], "toString")?.characters === "c");
       const key = (n: string): unknown => (isObj(props) ? props[n] : undefined);
-      ok("[COMPONENTS] each layer is wired to the property it names", refsOf(child(second, "__proto__")).characters === key("toString") && refsOf(child(second, "constructor")).visible === key("valueOf") && refsOf(child(second, "constructor")).characters === key("hasOwnProperty"));
+      ok("[COMPONENTS] each layer is wired to the property it names", refsOf(child(second, "__proto__")).characters === key("toString") && refsOf(child(second, "constructor")).visible === key("isPrototypeOf") && refsOf(child(second, "constructor")).characters === key("hasOwnProperty"));
       const again = await write(w, [{ op: "createTree", tree: spec }]);
       ok("[COMPONENTS] sent again: unchanged", again.ok && rowOf(again).unchanged === true);
-      const use = await write(w, [{ op: "createTree", tree: JSON.parse('{"name":"S","children":[{"component":"Odd","handle":"i","props":{"__proto__":"valueOf","toString":"x","valueOf":false}}]}') as Record<string, unknown> }]);
+      const use = await write(w, [{ op: "createTree", tree: JSON.parse('{"name":"S","children":[{"component":"Odd","handle":"i","props":{"constructor":"valueOf","toString":"x","isPrototypeOf":false}}]}') as Record<string, unknown> }]);
       const inst = w.scene.nodes[String(isObj(rowOf(use).handles) ? (rowOf(use).handles as Record<string, unknown>).i : "")];
-      ok("[COMPONENTS] an instance sets them by name, its variant picked by the __proto__ column", use.ok && isObj(inst?.mainComponent) && inst.mainComponent.name === "__proto__=valueOf, constructor=hasOwnProperty" &&
-        isObj(inst.props) && inst.props[String(key("toString"))] === "x" && inst.props[String(key("valueOf"))] === false);
+      ok("[COMPONENTS] an instance sets them by name, its variant picked by the constructor column", use.ok && isObj(inst?.mainComponent) && inst.mainComponent.name === "constructor=valueOf, valueOf=hasOwnProperty" &&
+        isObj(inst.props) && inst.props[String(key("toString"))] === "x" && inst.props[String(key("isPrototypeOf"))] === false);
+      // "__proto__" is dropped by Figma's own main-thread → UI message copy, so it names no property and no column.
+      const proto = checkTree(JSON.parse('{"type":"COMPONENT_SET","name":"P","props":{"__proto__":{"type":"TEXT","default":"x"}},"variant":{},"columns":["Size","__proto__"],"rows":[["a","b"]]}') as unknown).problems.join("\n");
+      ok("[COMPONENTS] '__proto__' as a variant column is refused, with the reason", proto.includes("tree.columns[1]: '__proto__' cannot be a property name (Figma's message passing drops that key)"));
+      const protoProp = checkTree(JSON.parse('{"type":"COMPONENT","name":"P","props":{"__proto__":{"type":"TEXT","default":"x"}}}') as unknown).problems.join("\n");
+      ok("[COMPONENTS] '__proto__' as a property name is refused, with the reason", protoProp.includes("tree.props[\"__proto__\"]: '__proto__' cannot be a property name (Figma's message passing drops that key); pick another name"));
+      // A column called "toString" that a variant's values do not hold as their own key (the designer renamed the
+      // default variant to drop it): read as missing, never off the prototype, so the instance finds its variant.
+      const sparse = await write(w, [{ op: "createTree", tree: { type: "COMPONENT_SET", name: "Sparse", variant: {}, columns: ["Size", "toString"], rows: [["a", "x"], ["b", "x"]] } }]);
+      const first = kids(one(w, "COMPONENT_SET", "Sparse"))[0];
+      if (first) first.name = "Size=a";
+      const pick = await write(w, [{ op: "createTree", tree: { name: "S2", children: [{ component: "Sparse", handle: "p", props: { Size: "b" } }] } }]);
+      const picked = w.scene.nodes[String(isObj(rowOf(pick).handles) ? (rowOf(pick).handles as Record<string, unknown>).p : "")];
+      ok("[COMPONENTS] a column `toString` that is not a variant's own key is not read off the prototype", sparse.ok && pick.ok && isObj(picked?.mainComponent) && picked.mainComponent.name === "Size=b, toString=x");
     },
   },
   {
@@ -354,6 +386,140 @@ export const cases: Case[] = [
       const w = await treeWorld();
       const r = await write(w, [{ op: "createTree", tree: { type: "COMPONENT", name: "C", props: { S: { type: "INSTANCE_SWAP", default: "Nowhere" } }, children: [{ component: "Nowhere", propRefs: { mainComponent: "S" } }] } }]);
       ok("[COMPONENTS] a swap default the file does not have is refused by the plugin, with its path", !r.ok && refusal(r).includes("tree.props: component 'Nowhere' matches no component"));
+    },
+  },
+  {
+    name: "a re-send pairs the variants (handle, exact name, then order): a value change, a column added, renamed or dropped renames them in place and instances follow",
+    async run() {
+      // Each scenario: the Button set, an instance of each variant, then the re-send.
+      const setUp = async (): Promise<{ w: W; set: FakeNode | undefined; ids: string[]; insts: FakeNode[] }> => {
+        const { w } = await kitWorld([button()]);
+        await write(w, [{ op: "createTree", tree: { name: "Screen", children: [{ component: "Button", handle: "a" }, { component: "Button", handle: "b", props: { State: "hover" } }, { component: "Button", handle: "c", props: { Size: "sm" } }] } }]);
+        const set = one(w, "COMPONENT_SET", "Button");
+        const insts = w.alive().filter((n) => n.type === "INSTANCE" && isObj(n.parent) && n.parent.name === "Screen");
+        return { w, set, ids: kids(set).map((k) => String(k.id)), insts };
+      };
+      const mains = (insts: readonly FakeNode[]): unknown[] => insts.map((i) => (isObj(i.mainComponent) ? i.mainComponent.id : null));
+      const rowsWith = (f: (row: unknown[]) => unknown[]): Record<string, unknown> => { const s = buttonSpec(); s.rows = (s.rows as unknown[][]).map(f); return s; };
+
+      const v = await setUp();
+      const before = mains(v.insts);
+      const valued = await write(v.w, [button(rowsWith((r) => (r[0] === "sm" ? ["lg", ...r.slice(1)] : r)))]);
+      ok("[COMPONENTS] a value change (sm → lg) renames that variant in place: same id, and its instance follows", valued.ok && same(kids(v.set).map((k) => k.id), v.ids) && child(v.set, "Size=lg, State=default")?.id === v.ids[2] && same(mains(v.insts), before) &&
+        (v.insts[2]?.mainComponent as FakeNode | undefined)?.name === "Size=lg, State=default");
+
+      const c = await setUp();
+      const added = buttonSpec();
+      added.columns = ["Size", "State", "Tone"];
+      added.rows = (added.rows as unknown[][]).map((r) => [r[0], r[1], "solid", ...r.slice(2)]);
+      const addCol = await write(c.w, [button(added)]);
+      ok("[COMPONENTS] a column added: no throw, every variant renamed in place (ids kept), the instances follow", addCol.ok && same(kids(c.set).map((k) => k.id), c.ids) &&
+        same(kids(c.set).map((k) => k.name), ["Size=md, State=default, Tone=solid", "Size=md, State=hover, Tone=solid", "Size=sm, State=default, Tone=solid"]) && same(mains(c.insts), c.ids) &&
+        same(defsOf(c.set).Tone?.variantOptions, ["solid"]) && rowOf(addCol).removed === undefined);
+
+      const n = await setUp();
+      const renamed = buttonSpec();
+      renamed.columns = ["Scale", "State"];
+      const renameCol = await write(n.w, [button(renamed)]);
+      ok("[COMPONENTS] a column renamed: the variants keep their ids, the set's VARIANT property is the new name", renameCol.ok && same(kids(n.set).map((k) => k.id), n.ids) && kids(n.set)[0]?.name === "Scale=md, State=default" &&
+        defsOf(n.set).Scale !== undefined && defsOf(n.set).Size === undefined && same(mains(n.insts), n.ids));
+
+      const d = await setUp();
+      const dropped = buttonSpec();
+      dropped.columns = ["Size"];
+      dropped.rows = [["md"], ["md-hover", { fills: [{ type: "solid", color: "#2244ee" }] }], ["sm", { edits: { Label: { font: { size: 11, color: "#ffffff" } } } }]];
+      const dropCol = await write(d.w, [button(dropped)]);
+      ok("[COMPONENTS] a column dropped (the combinations left unique): renamed in place, ids kept, the instances follow", dropCol.ok && same(kids(d.set).map((k) => k.id), d.ids) &&
+        same(kids(d.set).map((k) => k.name), ["Size=md", "Size=md-hover", "Size=sm"]) && same(mains(d.insts), d.ids) && defsOf(d.set).State === undefined);
+
+      const r = await setUp();
+      const fewer = buttonSpec();
+      fewer.rows = (fewer.rows as unknown[][]).slice(0, 2);
+      const preview = await impact(r.w, [button(fewer)]);
+      const warn = "removing variant 'Size=sm, State=default' of 'Button' leaves 1 instance without a main component";
+      ok("[COMPONENTS] the dry run names the instances a dropped row leaves without a main", preview?.steps[0]?.change?.includes(warn) === true);
+      const dropRow = await write(r.w, [button(fewer)]);
+      ok("[COMPONENTS] a row dropped: its variant is removed (the others kept), and the reply warns how many instances lose their main", dropRow.ok && same(kids(r.set).map((k) => k.id), r.ids.slice(0, 2)) &&
+        Array.isArray(dropRow.warnings) && dropRow.warnings.includes("ops[0]: " + warn));
+
+      const h = await setUp();
+      const handled = buttonSpec();
+      handled.rows = [["md", "default", { handle: "primary" }], ["md", "hover"], ["sm", "default"]];
+      const first = await write(h.w, [button(handled)]);
+      ok("[COMPONENTS] a row's handle comes back with its variant's id", first.ok && isObj(rowOf(first).handles) && (rowOf(first).handles as Record<string, unknown>).primary === h.ids[0]);
+      // The handle keeps md/default's node as it becomes lg/default, though a new md/default row now names it exactly.
+      handled.rows = [["lg", "default", { handle: "primary" }], ["md", "hover"], ["sm", "default"], ["md", "default"]];
+      const moved = await write(h.w, [button(handled)]);
+      const lg = child(h.set, "Size=lg, State=default");
+      const md = child(h.set, "Size=md, State=default");
+      ok("[COMPONENTS] a handle pairs before the name: the handled variant is renamed in place, the new row is built beside it", moved.ok && lg?.id === h.ids[0] && md !== undefined && !h.ids.includes(String(md.id)) &&
+        (h.insts[0]?.mainComponent as FakeNode | undefined)?.id === h.ids[0]);
+      const twice = buttonSpec();
+      twice.rows = [["md", "default", { handle: "x" }], ["md", "hover", { handle: "x" }]];
+      ok("[COMPONENTS] a row's handle is checked like every handle: unique, never '__proto__'", checkTree(twice).problems.some((m) => m.includes("handle 'x' is used twice")) &&
+        checkTree(JSON.parse('{"type":"COMPONENT_SET","name":"B","variant":{},"columns":["A"],"rows":[["a",{"handle":"__proto__"}]]}') as unknown).problems.some((m) => m.includes("'__proto__' cannot be a handle")));
+      const baseHandle = buttonSpec();
+      (baseHandle.variant as Record<string, unknown>).handle = "v";
+      ok("[COMPONENTS] a handle on the base `variant` is refused (it would name every variant)", checkTree(baseHandle).problems.some((m) => m.includes("tree.variant.handle: a handle names one variant")));
+    },
+  },
+  {
+    name: "a wired field stays bound: text and hidden must equal the property's default; a re-send unwires, patches, then wires",
+    async run() {
+      const problems = (tree: unknown): string => checkTree(tree).problems.join("\n");
+      const comp = (layer: Record<string, unknown>): Record<string, unknown> => ({ type: "COMPONENT", name: "C", props: { T: { type: "TEXT", default: "Hi" }, On: { type: "BOOLEAN", default: false } }, children: [layer] });
+      ok("[COMPONENTS] a wired text other than its TEXT property's default is refused at its path", problems(comp({ name: "L", text: "Bye", propRefs: { characters: "T" } })).includes("tree.children[0]: `text` \"Bye\" differs from the default of 'T' (\"Hi\")") &&
+        problems(comp({ name: "L", text: "Hi", propRefs: { characters: "T" } })) === "");
+      ok("[COMPONENTS] a wired `hidden` other than !default is refused (and left out is fine)", problems(comp({ name: "L", text: "Hi", hidden: false, propRefs: { visible: "On" } })).includes("`hidden: false` differs from the default of 'On' (false)") &&
+        problems(comp({ name: "L", text: "Hi", hidden: true, propRefs: { visible: "On" } })) === "" && problems(comp({ name: "L", text: "Hi", propRefs: { visible: "On" } })) === "");
+      const setSpec = buttonSpec();
+      setSpec.rows = [["md", "default", { edits: { Label: { text: "Other" } } }]];
+      ok("[COMPONENTS] in a set the set's default is the one: a row's edit of a wired text is refused at its row", problems(setSpec).includes("tree.rows[0] (variant 'Size=md, State=default').children[1]: `text` \"Other\" differs from the default of 'Label'"));
+
+      // A re-send that moves Label's text to a new property: unwired before the patch writes the text, wired after.
+      const { w } = await kitWorld([button()]);
+      const set = one(w, "COMPONENT_SET", "Button");
+      const spec = buttonSpec();
+      (spec.props as Record<string, unknown>).Caption = { type: "TEXT", default: "Caption" };
+      const base = (spec.variant as { children: Array<Record<string, unknown>> }).children;
+      if (base[1]) { base[1].text = "Caption"; base[1].propRefs = { characters: "Caption" }; }
+      const r = await write(w, [button(spec)]);
+      const caption = keyOf(defsOf(set), "Caption");
+      ok("[COMPONENTS] rewired to a new property: the text is written while unwired, then bound to it", r.ok && caption !== undefined && kids(set).every((v) => child(v, "Label")?.characters === "Caption" && refsOf(child(v, "Label")).characters === caption));
+      // The fake refuses a write to a bound field, as Figma does.
+      const label = child(kids(set)[0], "Label");
+      let threw = false;
+      try { if (label) label.characters = "Direct"; } catch { threw = true; }
+      ok("[COMPONENTS] (the fake, like Figma, refuses writing a bound text)", threw && label?.characters === "Caption");
+    },
+  },
+  {
+    name: "a failure while the dropped variants and properties are deleted: the reply names each already gone; rollback never points at a deleted property",
+    async run() {
+      const { w } = await kitWorld([button()]);
+      const set = one(w, "COMPONENT_SET", "Button");
+      const spec = buttonSpec();
+      // Drop the sm row, and the Label and Show icon properties (deleted in that order: the second one fails).
+      spec.rows = (spec.rows as unknown[][]).slice(0, 2);
+      const props = spec.props as Record<string, unknown>;
+      delete props.Label;
+      delete props["Show icon"];
+      (spec.variant as { children: Array<Record<string, unknown>> }).children = [{ component: "Icon/Plus", name: "Icon", propRefs: { mainComponent: "Icon" } }, { name: "Label", text: "Button", font: { color: "#ffffff" } }];
+      const showKey = keyOf(defsOf(set), "Show icon");
+      const real = set?.deleteComponentProperty;
+      if (set && typeof real === "function") {
+        set.deleteComponentProperty = (k: string) => { if (k === showKey) throw new Error("in Figma: cannot delete " + k); return (real as (k: string) => void)(k); };
+      }
+      const r = await write(w, [button(spec)]);
+      if (set) set.deleteComponentProperty = real;
+      const err = refusal(r);
+      ok("[COMPONENTS] the batch fails at the second delete; the error names the variant and the property already gone", !r.ok && err.includes("cannot delete") && err.includes("cannot be brought back") &&
+        err.includes("variant 'Size=sm, State=default'") && err.includes("the property 'Label' of 'Button'"));
+      ok("[COMPONENTS] `applied` lists them too", r.applied.some((a) => isObj(a) && a.deleted === true) && r.applied.some((a) => isObj(a) && same(a.propsRemoved, ["Label"])));
+      const defs = defsOf(set);
+      const dangling = kids(set).flatMap((v) => kids(v)).flatMap((l) => Object.values(refsOf(l))).filter((k) => !Object.prototype.hasOwnProperty.call(defs, String(k)));
+      ok("[COMPONENTS] rolled back: no layer references a deleted property; Show icon (not deleted) is wired again", dangling.length === 0 && keyOf(defs, "Label") === undefined && showKey !== undefined &&
+        kids(set).every((v) => refsOf(child(v, "Icon")).visible === showKey));
     },
   },
 ];

@@ -11,6 +11,8 @@
 //     `columns` (its VARIANT properties) and `rows`, each the values of one variant in column order and, last, an
 //     optional object of the fields that variant changes (its own fields, and `edits`: a layer name unique in the base →
 //     fields). It is the set with one COMPONENT child per row, named as Figma names a variant ("Size=md, State=default").
+//     A row's object may give its variant a `handle`: a re-send pairs variants by it first (tree-diff.ts), so a variant
+//     can be renamed in place.
 //
 // The expanded tree is what checkTree (tree-spec.ts) checks, the dry run describes and the plugin builds, so a spec
 // using either is held to every rule a spelled-out one is, the all-or-nothing rule included: a problem anywhere refuses
@@ -19,6 +21,7 @@
 //
 // Pure and dependency-free (bar a pure sibling): the plugin bundle imports it, so it must type-check under
 // figma-plugin/tsconfig.json (ES2019 lib, no Node types), and use no `??` or `?.`.
+import { PROTO_NAME } from "./component-spec.ts";
 import { nearestNames, quoteList } from "./name-match.ts";
 
 /** A row of an instance's table: property name → value, or (with `columns`) the values in column order. */
@@ -197,6 +200,7 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
     else {
       if (base.type !== undefined && base.type !== "COMPONENT") say(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
       if (base.name !== undefined) say(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+      if (base.handle !== undefined) say(path + ".variant.handle: a handle names one variant, and every variant starts from the base; give it in that row's object (`[\"md\", \"default\", {\"handle\": \"primary\"}]`)");
       for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
         const why = VARIANT_FIXED[k];
         if (base[k] !== undefined && why !== undefined) say(path + ".variant." + k + ": not on a variant — " + why);
@@ -205,6 +209,8 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
     if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + ".columns: must be a non-empty list of the variant properties, e.g. [\"Size\", \"State\"]");
     else {
       if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+      const proto = cols.indexOf("__proto__");
+      if (proto >= 0) say(path + ".columns[" + proto + "]: " + PROTO_NAME);
       const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
       if (odd >= 0) say(path + ".columns[" + odd + "]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as \"Size=md, State=default\")");
     }

@@ -12,7 +12,8 @@
 // the meantime stays unless the new spec changes that field too. A field the new spec drops goes back to what a fresh
 // build leaves it at (no fills on a frame, opacity 1, no auto-layout, …).
 //
-// Children are matched by `handle`, then by a name that is unique among the old and the new children, then in order.
+// Children are matched by `handle`, then by a name that is unique among the old and the new children, then in order; a
+// set's variants by `handle`, exact name, then in order whatever their names (a variant's name is its values: match).
 // A copy of an existing node (`clone`) is kept while its spec is the same, and made again when anything in it changes.
 //
 // A component root's property definitions (`props`) and every layer's `propRefs` are not fields a patch sets: they are
@@ -300,8 +301,12 @@ function layoutOf(b: TreeNodeSpec): PatchLayout {
 }
 
 /** Pair the new children with the old: by handle, then by a name unique on both sides, then in order. An old child with
- *  a handle pairs only by it (a new spec that gives a node a handle pairs it with an old one that had none). */
-function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[]): Array<OldNode<T> | null> {
+ *  a handle pairs only by it (a new spec that gives a node a handle pairs it with an old one that had none).
+ *  `variants`: the children are a set's variants, whose name is their values, so a changed value (or a column added,
+ *  renamed or dropped) renames them: by handle, then by exact name, then every variant left on both sides in order
+ *  (the old ones in the file's order, the new ones in row order) whatever their names. A variant kept is renamed in
+ *  place, so its id stays and its instances follow; only old variants left over (rows dropped) are removed. */
+function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[], variants: boolean): Array<OldNode<T> | null> {
   const out: Array<OldNode<T> | null> = news.map(() => null);
   const used = new Set<number>();
   news.forEach((n, i) => {
@@ -309,6 +314,22 @@ function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[]
     const j = olds.findIndex((o, k) => !used.has(k) && o.spec.handle === n.handle);
     if (j >= 0) { out[i] = olds[j] || null; used.add(j); }
   });
+  if (variants) {
+    news.forEach((n, i) => {
+      if (out[i] || n.name === undefined) return;
+      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.name === n.name);
+      if (j >= 0) { out[i] = olds[j] || null; used.add(j); }
+    });
+    let k = 0;
+    for (let i = 0; i < news.length; i++) {
+      if (out[i]) continue;
+      while (k < olds.length && used.has(k)) k++;
+      const o = olds[k];
+      if (!o) break;
+      out[i] = o; used.add(k); k++;
+    }
+    return out;
+  }
   const count = <X>(list: readonly X[], name: string | undefined, of: (x: X) => string | undefined): number => list.filter((x) => of(x) === name).length;
   news.forEach((n, i) => {
     if (out[i] || n.name === undefined) return;
@@ -351,7 +372,8 @@ function visit<T>(old: OldNode<T>, spec: TreeNodeSpec, path: string, plan: Plan<
   if (spec.handle !== undefined && spec.handle !== old.spec.handle) plan.handles.push({ handle: spec.handle, ref: old.ref });
   if (kind !== "FRAME") return;
   const news = spec.children || [];
-  const pairs = match(old.children, news);
+  // A set's variants (the root's children) pair by handle, name, then order whatever their names: see match.
+  const pairs = match(old.children, news, path === "tree" && spec.type === "COMPONENT_SET");
   const order: Array<{ ref: T } | { build: number }> = [];
   let built = false;
   news.forEach((n, i) => {
