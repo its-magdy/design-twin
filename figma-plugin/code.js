@@ -1152,6 +1152,10 @@
         if (k === "use" || k === "edits" || k === "children" || k === "fragments" && isRoot) continue;
         if (n[k] !== void 0) put(body, k, copy(n[k]));
       }
+      if (isRoot && (body.type === "COMPONENT" || body.type === "COMPONENT_SET")) {
+        say(path + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
+        return [];
+      }
       return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
     };
     const variants = (n, path, stack) => {
@@ -8366,6 +8370,25 @@
   }
   async function componentImpact(ops) {
     const steps = [];
+    const planned = /* @__PURE__ */ new Map();
+    const specs = /* @__PURE__ */ new Map();
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree") continue;
+      const c = componentRootOf(op.tree);
+      if (c && !planned.has(c.name)) planned.set(c.name, index);
+      const checked = checkTree(op.tree);
+      if (!checked.problems.length && checked.expanded) specs.set(index, { spec: checked.expanded, labels: checked.labels });
+    }
+    if (planned.size) {
+      setPlannedComponents(planned);
+      try {
+        const uses = treeUses(specs).filter((u) => u.kind === "component");
+        const r = await resolveRefs(uses, async () => null);
+        for (const p of r.problems) steps.push({ index: p.index, op: "createTree", problem: p.message });
+      } finally {
+        setPlannedComponents(/* @__PURE__ */ new Map());
+      }
+    }
     for (const [index, op] of ops.entries()) {
       if (op.op !== "createTree") continue;
       const c = componentRootOf(op.tree);

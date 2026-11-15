@@ -184,6 +184,12 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
       if (k === "use" || k === "edits" || k === "children" || (k === "fragments" && isRoot)) continue;
       if (n[k] !== undefined) put(body, k, copy(n[k]));
     }
+    // A component's name is its identity, read off the root as written (the batch's plan, a re-send's lookup): a root
+    // that becomes a component only through a fragment would hide it.
+    if (isRoot && (body.type === "COMPONENT" || body.type === "COMPONENT_SET")) {
+      say(path + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
+      return [];
+    }
     return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
   };
 

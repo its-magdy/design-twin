@@ -770,7 +770,7 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
       const step = steps[s.index];
       if (!step || step.invalid !== undefined) continue;
       if (s.affects) step.affects = s.affects;
-      if (s.problem) step.refusedByFile = s.problem;
+      if (s.problem) step.refusedByFile = step.refusedByFile ? step.refusedByFile + "; " + s.problem : s.problem;
       if (s.plan) step.plan = s.plan;
       // A component spec: the file says whether it is made or updated in place (with how many instances follow).
       if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");

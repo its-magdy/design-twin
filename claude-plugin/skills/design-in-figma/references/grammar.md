@@ -76,7 +76,9 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   `createTree` dry run reads nothing from the file: a keyed one is a `creates` step whose `change` says an existing
   result of that key would be updated in place, without listing what would change or be removed. A component spec
   asks the plugin: its step's `change` starts with "would create component 'X'" or "would update component 'X' in
-  place (N instances follow)", with `plan` and `affects.instances` (or `refusedByFile`, for one made by hand).
+  place (N instances follow)", with `plan` and `affects.instances` (or `refusedByFile`, for one made by hand). In a
+  batch with a component spec, the component names every spec uses are resolved too, so one the same batch makes or
+  updates is in `refusedByFile` (not a copy's or a patch's swap values).
 
 ## Tree spec (`createTree`)
 
@@ -164,7 +166,8 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
 - **Fragments:** the root's `fragments: {name: node spec}` defines parts that are not components; `{use: "name",
   ...fields, edits?: {"<layer name>": {...fields}}}` places one anywhere: its own fields over the fragment's root,
   each edit over the layer of that name (unique in the fragment; `null` drops a field). A fragment may use another,
-  never itself. An unused fragment is a warning.
+  never itself. An unused fragment is a warning. A component root is written as the root itself, never placed from
+  a fragment.
 
 Rows and fragments are expanded before the spec is checked; a problem is named at the path you wrote
 (`tree.children[2].rows[1]`).

@@ -317,6 +317,9 @@ export const cases: Case[] = [
       const s1 = again?.steps[0];
       ok("[COMPONENTS] its own name again: would update in place, two instances follow", s1 !== undefined && s1.change === "would update component set 'Button' in place (2 instances follow)" && isObj(s1.affects) && s1.affects.instances === 2);
       const hand = await impact(w, [{ op: "createTree", tree: { type: "COMPONENT", name: "Icon/Plus", children: [] } }, { op: "createTree", tree: { type: "COMPONENT_SET", name: "Icon/Plus", variant: {}, columns: ["A"], rows: [["b"]] } }]);
+      const same2 = await impact(w, [button(), { op: "createTree", tree: { type: "COMPONENT", name: "Host", props: { Pick: { type: "INSTANCE_SWAP", default: "Button" } }, children: [{ component: "Button", name: "Slot", propRefs: { mainComponent: "Pick" } }] } }]);
+      const p1 = (same2 ? same2.steps : []).filter((x) => x.index === 1 && x.problem).map((x) => String(x.problem)).join(" | ");
+      ok("[COMPONENTS] the dry run refuses a spec naming a component the same batch updates (an instance, a set as a swap default), as the write does", p1.includes("ops[0] of this batch updates") && p1.includes("default to it in a later call"));
       ok("[COMPONENTS] a kind change is the file's refusal", hand?.steps[1]?.problem?.includes("cannot turn one into the other") === true && hand.steps[0]?.change?.startsWith("would update") === true);
     },
   },
@@ -373,6 +376,8 @@ export const cases: Case[] = [
     async run() {
       const problems = (tree: unknown): string => checkTree(tree).problems.join("\n");
       const base = { children: [{ name: "Label", text: "x" }] };
+      ok("[COMPONENTS] a component root placed from a fragment is refused (its name is its identity)", problems({ use: "kit", fragments: { kit: { type: "COMPONENT", name: "Icon", children: [] } } }).includes("a component is written at the root itself") &&
+        problems({ use: "kit", type: "COMPONENT", name: "Icon", fragments: { kit: { children: [] } } }).includes("a component is written at the root itself"));
       ok("[COMPONENTS] COMPONENT below the root", problems({ name: "F", children: [{ type: "COMPONENT", name: "C" }] }).includes("tree.children[0]: `type: \"COMPONENT\"` is only on the spec's root"));
       ok("[COMPONENTS] a component needs a name", problems({ type: "COMPONENT" }).includes("a component needs a `name`"));
       ok("[COMPONENTS] a key on a component root", problems({ type: "COMPONENT", name: "C", key: "k" }).includes("a component's name is its key"));

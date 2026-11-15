@@ -27,7 +27,8 @@ import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { checkTree } from "../../bridge/src/tree-check.ts";
 import { KEY_DATA, readOld } from "./keyed-store";
 import { planUpdate } from "../../bridge/src/tree-diff.ts";
-import type { ResolvedRefs } from "./tree-refs";
+import { resolveRefs, treeUses, type ResolvedRefs } from "./tree-refs";
+import { setPlannedComponents } from "./batch-plan";
 import type { Change } from "./write-batch";
 
 export type Owner = ComponentNode | ComponentSetNode;
@@ -372,6 +373,28 @@ export function componentReply(applied: AppliedWrite, name: string, props: Reado
  *  how many instances follow), or why the file refuses it. */
 export async function componentImpact(ops: readonly WriteOp[]): Promise<WriteImpactStep[]> {
   const steps: WriteImpactStep[] = [];
+  // A batch that makes or updates a component: the component names its specs use are resolved as the write would
+  // resolve them, so a name the same batch makes or updates is refused here too (a copy's and a patch's swap values
+  // are not: they need their nodes resolved).
+  const planned = new Map<string, number>();
+  const specs = new Map<number, { spec: TreeNodeSpec; labels: ReadonlyMap<object, string> }>();
+  for (const [index, op] of ops.entries()) {
+    if (op.op !== "createTree") continue;
+    const c = componentRootOf(op.tree);
+    if (c && !planned.has(c.name)) planned.set(c.name, index);
+    const checked = checkTree(op.tree);
+    if (!checked.problems.length && checked.expanded) specs.set(index, { spec: checked.expanded, labels: checked.labels });
+  }
+  if (planned.size) {
+    setPlannedComponents(planned);
+    try {
+      const uses = treeUses(specs).filter((u) => u.kind === "component");
+      const r = await resolveRefs(uses, async () => null);
+      for (const p of r.problems) steps.push({ index: p.index, op: "createTree", problem: p.message });
+    } finally {
+      setPlannedComponents(new Map());
+    }
+  }
   for (const [index, op] of ops.entries()) {
     if (op.op !== "createTree") continue;
     const c = componentRootOf(op.tree);
