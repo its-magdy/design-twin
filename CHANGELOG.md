@@ -43,7 +43,7 @@ list of merged PRs.
   `text` or `hidden` must match its property's default (change the default instead), and `__proto__` cannot name a
   property or a variant column. All or nothing, like every write; one made by hand, or a component
   the same batch makes, is refused. A batch is one undo step, except that Figma ends a step at each component property
-  declared, edited or deleted, so each is an extra Undo; the reply's `undoSteps` and `undoNote` say how many presses
+  declared, edited or deleted (the call included); the reply's `undoSteps` and `undoNote` say how many presses
   take a batch back (a new component still being built when a step ended is left hidden). The dry run's target for a component root says "new component" or "new component set". The write-cost suite records a blank-file job: tokens, a small kit, then one
   screen.
 - `figma_write` can seed those tables from the project's code tokens: `seedTokens {file, collection?}` names a
