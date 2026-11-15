@@ -209,6 +209,10 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
     if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + ".columns: must be a non-empty list of the variant properties, e.g. [\"Size\", \"State\"]");
     else {
       if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+      // Figma trims a variant property's name and value, so " State " is "State": a padded name would slip past the
+      // checks below (" __proto__ ", or two rows that become one combination).
+      const padded = cols.findIndex((c) => String(c).trim() !== c);
+      if (padded >= 0) say(path + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
       const proto = cols.indexOf("__proto__");
       if (proto >= 0) say(path + ".columns[" + proto + "]: " + PROTO_NAME);
       const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
@@ -229,10 +233,10 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
       const over = cells.length === names.length + 1 && isObj(last) ? last : null;
       if (cells.length !== names.length && !over) { say(r + ": must be " + shape); return; }
       const values = cells.slice(0, names.length);
-      const bad = values.findIndex((v) => typeof v !== "string" || !v.trim() || /[=,]/.test(v));
+      const bad = values.findIndex((v) => typeof v !== "string" || !v.trim() || v.trim() !== v || /[=,]/.test(v));
       if (bad >= 0) {
         const v = values[bad];
-        say(r + "[" + bad + "]: " + (typeof v !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v.trim() ? "must be a non-empty value" : "cannot hold '=' or ',' (Figma writes a variant's name as \"Size=md, State=default\")"));
+        say(r + "[" + bad + "]: " + (typeof v !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v.trim() ? "must be a non-empty value" : v.trim() !== v ? "cannot start or end with a space (Figma trims a variant's values)" : "cannot hold '=' or ',' (Figma writes a variant's name as \"Size=md, State=default\")"));
         return;
       }
       const name = names.map((c, j) => c + "=" + String(values[j])).join(", ");

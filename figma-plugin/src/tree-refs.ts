@@ -413,6 +413,17 @@ function fileLookups() {
   return {
     libraryType: (ref: string): VariableResolvedDataType | undefined => libraryTypes.get(ref),
     async component(ref: string): Promise<Found<ComponentNode | ComponentSetNode>> {
+      const f = await this.findComponent(ref);
+      if (!("ok" in f)) return f;
+      // A local component an op of this batch updates (by its name, id or key): that op may drop or rename what this
+      // reference resolved to, so it is refused like one the batch makes.
+      const c = f.ok;
+      const owner = c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : c;
+      const planned = owner.remote ? undefined : plannedComponent(owner.name);
+      if (planned !== undefined) return { error: "component '" + ref + "' is one ops[" + planned + "] of this batch updates, and a batch resolves every name before it runs — use it in a later call" };
+      return f;
+    },
+    async findComponent(ref: string): Promise<Found<ComponentNode | ComponentSetNode>> {
       let byId: BaseNode | null = null;
       try { byId = /^[I\d][\d:;I-]*$/.test(ref) ? await figma.getNodeByIdAsync(ref) : null; } catch { byId = null; }
       if (byId && (byId.type === "COMPONENT" || byId.type === "COMPONENT_SET")) return { ok: byId };

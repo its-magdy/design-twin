@@ -248,6 +248,10 @@ export const cases: Case[] = [
       ok("[COMPONENTS] refused with the hint, nothing made", !r.ok && refusal(r).includes("create it in an earlier call") && refusal(r).includes("ops[0]") && w.alive().length === before);
       const swap = await write(w, [icon("Icon/Plus"), button()]);
       ok("[COMPONENTS] the same for a swap default naming it", !swap.ok && refusal(swap).includes("create it in an earlier call"));
+      const made = await write(w, [icon("Icon/Plus")]);
+      const kept = w.alive().length;
+      const upd = await write(w, [icon("Icon/Plus"), { op: "createTree", tree: { name: "Screen", children: [{ component: "Icon/Plus" }] } }]);
+      ok("[COMPONENTS] a component the same batch updates is refused too, nothing made", made.ok && !upd.ok && refusal(upd).includes("ops[0] of this batch updates") && refusal(upd).includes("use it in a later call") && w.alive().length === kept);
     },
   },
   {
@@ -381,6 +385,8 @@ export const cases: Case[] = [
         set({ variant: { name: "V" } }).includes("tree.variant.name: a variant's name is its row's values"));
       ok("[COMPONENTS] a row's edit naming no layer of the base", set({ rows: [["sm", { edits: { Lable: { text: "y" } } }]] }).includes("tree.rows[0].edits[\"Lable\"]: no layer of the base `variant` has that name; closest: 'Label'"));
       ok("[COMPONENTS] a property named like a column", set({ props: { Size: { type: "TEXT", default: "" } } }).includes("is a column of the variant table"));
+      ok("[COMPONENTS] a padded column, value or property name is refused (Figma trims them)", set({ columns: [" __proto__ "] }).includes("tree.columns[0]: a variant property's name cannot start or end with a space") &&
+        set({ rows: [["sm"], [" sm "]] }).includes("tree.rows[1][0]: cannot start or end with a space") && problems({ type: "COMPONENT", name: "C", props: { " Label ": { type: "TEXT", default: "" } } }).includes("cannot be empty or start or end with a space"));
       ok("[COMPONENTS] a table on a COMPONENT root", problems({ type: "COMPONENT", name: "C", variant: {}, columns: ["A"], rows: [["b"]] }).includes("makes a COMPONENT_SET"));
       ok("[COMPONENTS] a problem inside a variant is named by its row", set({ rows: [["sm", { opacity: 3 }]] }).includes("tree.rows[0] (variant 'Size=sm').opacity must be a number from 0 to 1"));
       const w = await treeWorld();

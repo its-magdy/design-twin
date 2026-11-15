@@ -933,6 +933,10 @@
         out.push(p + ": " + PROTO_NAME);
         continue;
       }
+      if (name.trim() !== name || !name) {
+        out.push(p + ": a property's name cannot be empty or start or end with a space");
+        continue;
+      }
       if (name.indexOf("#") >= 0) {
         out.push(p + ": a property's name cannot hold '#' (Figma keeps it for the property's id)");
         continue;
@@ -1170,6 +1174,8 @@
       if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
       else {
         if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+        const padded = cols.findIndex((c) => String(c).trim() !== c);
+        if (padded >= 0) say(path + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
         const proto = cols.indexOf("__proto__");
         if (proto >= 0) say(path + ".columns[" + proto + "]: " + PROTO_NAME);
         const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
@@ -1196,10 +1202,10 @@
           return;
         }
         const values = cells.slice(0, names.length);
-        const bad = values.findIndex((v2) => typeof v2 !== "string" || !v2.trim() || /[=,]/.test(v2));
+        const bad = values.findIndex((v2) => typeof v2 !== "string" || !v2.trim() || v2.trim() !== v2 || /[=,]/.test(v2));
         if (bad >= 0) {
           const v2 = values[bad];
-          say(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
+          say(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : v2.trim() !== v2 ? "cannot start or end with a space (Figma trims a variant's values)" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
           return;
         }
         const name = names.map((c, j) => c + "=" + String(values[j])).join(", ");
@@ -6920,6 +6926,15 @@
     return {
       libraryType: (ref2) => libraryTypes.get(ref2),
       async component(ref2) {
+        const f = await this.findComponent(ref2);
+        if (!("ok" in f)) return f;
+        const c = f.ok;
+        const owner = c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : c;
+        const planned = owner.remote ? void 0 : plannedComponent(owner.name);
+        if (planned !== void 0) return { error: "component '" + ref2 + "' is one ops[" + planned + "] of this batch updates, and a batch resolves every name before it runs \u2014 use it in a later call" };
+        return f;
+      },
+      async findComponent(ref2) {
         let byId = null;
         try {
           byId = /^[I\d][\d:;I-]*$/.test(ref2) ? await figma.getNodeByIdAsync(ref2) : null;

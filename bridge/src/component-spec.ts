@@ -92,6 +92,7 @@ export function propDefsProblems(v: unknown, path: string, columns: readonly str
     const p = at(path, name);
     if (!name.trim()) { out.push(path + ": has an empty property name"); continue; }
     if (name === "__proto__") { out.push(p + ": " + PROTO_NAME); continue; }
+    if (name.trim() !== name || !name) { out.push(p + ": a property's name cannot be empty or start or end with a space"); continue; }
     if (name.indexOf("#") >= 0) { out.push(p + ": a property's name cannot hold '#' (Figma keeps it for the property's id)"); continue; }
     if (columns.indexOf(name) >= 0) { out.push(p + ": '" + name + "' is a column of the variant table (a VARIANT property) already; give this property another name"); continue; }
     if (!isObj(d)) { out.push(p + ": must be a definition {type, default} (TEXT, BOOLEAN or INSTANCE_SWAP)"); continue; }

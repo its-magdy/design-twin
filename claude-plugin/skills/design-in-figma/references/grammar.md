@@ -142,8 +142,9 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
   `fills`, `strokes`; an INSTANCE `width`, `height`, `opacity`.
 - An INSTANCE takes only `component`, `props`, `name`, `handle`, `hidden`, `box`, `x`/`y`, `absolute`, `grow`,
   `alignSelf`, `widthMode`/`heightMode`, `opacity`, `tokens` and (inside a component) `propRefs` (and the compatibility-only `renderBox`, `reference`): its content comes from its component.
-- A component another op of the same batch makes is not there yet: every name resolves before the batch runs, so the
-  spec is refused ("create it in an earlier call"). Make the kit in one call, use it in the next. A wrong
+- A component another op of the same batch makes or updates is not there yet: every name resolves before the batch
+  runs, so the spec is refused ("create it in an earlier call" / "use it in a later call"). Make the kit in one call,
+  use it in the next. A wrong
   variable type, a property the component lacks, a variant value it does not have, or a hugging instance whose
   component has no auto-layout refuses the batch.
 
@@ -178,7 +179,8 @@ in place (below). It lands like a frame: on `page`, beside the existing frames, 
   `{"<name>": {type: "TEXT" | "BOOLEAN" | "INSTANCE_SWAP", default, preferredValues?}}`. A TEXT's `default` is a string,
   a BOOLEAN's `true`/`false`, an INSTANCE_SWAP's a component (name, key or id; a set means its default variant), and
   only a swap takes `preferredValues` (a list of components). A name holds no `#` and is never `__proto__` (Figma's
-  message passing drops that key; nor is a column). VARIANT properties come from the table, never from `props`; SLOT
+  message passing drops that key; nor is a column). A property name, a column and a variant value never start or end
+  with a space (Figma trims them). VARIANT properties come from the table, never from `props`; SLOT
   cannot be written yet.
 - **Wiring:** a layer inside takes `propRefs` (the read's own field): `{characters: "Label"}` on a TEXT,
   `{visible: "Show icon"}` on any layer, `{mainComponent: "Icon"}` on an INSTANCE, each naming a declared property of
