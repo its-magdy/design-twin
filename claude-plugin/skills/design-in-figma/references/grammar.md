@@ -12,7 +12,7 @@ file or the spec instead. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbb
 
 - [The call](#the-call) · [The ops](#the-ops) · [Replies](#replies)
 - [Tree spec (`createTree`)](#tree-spec-createtree) · [Design-system references](#design-system-references)
-- [Copies, rows, fragments](#copies-rows-fragments) · [Keyed re-send](#keyed-re-send) · [Spec from disk](#spec-from-disk)
+- [Copies, rows, fragments](#copies-rows-fragments) · [Components](#components) · [Keyed re-send](#keyed-re-send) · [Spec from disk](#spec-from-disk)
 - [Patch](#patch) · [Source edits](#source-edits) · [Starting from nothing](#starting-from-nothing) · [Variable modes](#variable-modes) · [Move and delete](#move-and-delete)
 - [What a write cannot set yet](#what-a-write-cannot-set-yet) · [Limits](#limits)
 
@@ -46,12 +46,17 @@ calls and can bind variables. A create with no `parentId` lands on the current p
 
 ## Replies
 
-- A batch that landed: `{ok: true, applied: [...], warnings?}`, one entry per op.
+- A batch that landed: `{ok: true, applied: [...], warnings?, undoSteps?, undoNote?}`, one entry per op; `undoSteps`
+  and `undoNote` only when Figma split it into several undo steps ([Components](#components), Undo).
   - `createTree`: `{id, created: {frames, texts, instances?, clones?}, handles?, unbound?}`; `handles` maps each
     `handle` to its node's id, and `unbound` counts raw colours, spacing, radii and stroke weights where a variable
     could stand, and texts with no text style.
   - a keyed re-send: `{id, key, changed?: [{id, handle?, fields}], created?, removed?, reordered?, handles?}`, or
     `{id, key, unchanged: true}`.
+  - a component: `{id, component, created: {frames, texts, instances?, clones?, variants?}, props?, handles?, unbound?}`;
+    `props` maps each declared property's name to the key Figma gave it (`"Label#12:0"`). Sent again: the keyed
+    re-send's reply with `component` in place of `key`, plus `props?` (the properties added or changed),
+    `propsRemoved?` and `rewired?` (layers wired anew), or `{id, component, unchanged: true}`.
   - `createVariables` `{id, result, modesAdded?, rows}` (the collection, `created` / `updated` / `unchanged`, then per
     row `[id, "created" | "updated" | "unchanged"]` in table order) · `createStyles` `{rows}` (per row `[id, …]`).
   - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?, partly?}`
@@ -70,17 +75,22 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   patch or a style), `warnings`, `invalid` (every problem), for a source edit `affects` and `refusedByFile`, and for a
   create table `plan: {create, update}` (the names it would make, and the ones the file has, updated in place). A
   `createTree` dry run reads nothing from the file: a keyed one is a `creates` step whose `change` says an existing
-  result of that key would be updated in place, without listing what would change or be removed.
+  result of that key would be updated in place, without listing what would change or be removed. A component spec
+  asks the plugin: its step's `change` starts with "would create component 'X'" or "would update component 'X' in
+  place (N instances follow)", with `plan` and `affects.instances` (or `refusedByFile`, for one made by hand). In a
+  batch with a component spec, the component names every spec uses are resolved too, so one the same batch makes or
+  updates is in `refusedByFile` (not a copy's or a patch's swap values).
 
 ## Tree spec (`createTree`)
 
 A spec is the root frame of a screen, written the way the read export writes a node: the same field names and values,
 defaults left out, no ids, no parent references. A read node can be fed back in. A node is an `INSTANCE` when it names
-a `component`, a `TEXT` when it has `text`, else a `FRAME`; the root is a frame (or a copy, below).
+a `component`, a `TEXT` when it has `text`, else a `FRAME`; the root is a frame (or a copy, below), or a
+[component](#components).
 
 | Field | Value |
 |---|---|
-| `type` | `FRAME` \| `TEXT` \| `INSTANCE` (optional: inferred as above) |
+| `type` | `FRAME` \| `TEXT` \| `INSTANCE` (optional: inferred as above); on the root also `COMPONENT` \| `COMPONENT_SET` ([Components](#components)) |
 | `name`, `hidden` | the layer name; `hidden: true` builds it hidden |
 | `handle` | your own name for the node; the reply returns its id. Unique in the spec; not `__proto__` |
 | `key` | the root only: a stable name for the result (≤ 200 characters) — see [Keyed re-send](#keyed-re-send) |
@@ -120,7 +130,9 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
 
 | Where | What it names |
 |---|---|
-| `component`, `props` on an INSTANCE | a component set or component by exact name, or a component's key or id; `props` by property name: a variant's value, a text, a boolean (a property's full `name#id` key works too) |
+| `component`, `props` on an INSTANCE | a component set or component by exact name, or a component's key or id; `props` by property name: a variant's value, a text, a boolean, or for an instance-swap property a component (exact name, key or id; a set swaps to its default variant; a library one must be in the file already) (a property's full `name#id` key works too) |
+| `propRefs` on a layer inside a component root | `{characters: "<TEXT property>"}` on a TEXT, `{visible: "<BOOLEAN property>"}` on any layer, `{mainComponent: "<INSTANCE_SWAP property>"}` on an INSTANCE: the property's name as the root's `props` declares it ([Components](#components)) |
+| an INSTANCE_SWAP property's `default`, `preferredValues` | a component by exact name, key or id |
 | `fills[].tokens.color` | a colour variable for that paint (the raw `color` may then be left out) |
 | `tokens` | a number variable per field: `itemSpacing`, `counterAxisSpacing`, `paddingTop`/`Right`/`Bottom`/`Left`, `topLeftRadius`/`topRightRadius`/`bottomRightRadius`/`bottomLeftRadius`, `width`, `height`, `minWidth`/`maxWidth`/`minHeight`/`maxHeight`, `strokeWeight`, `strokeTopWeight`/`Right`/`Bottom`/`Left`, `opacity`; and `fills` / `strokes` (colour variables, one per paint) |
 | `styles.text` on a TEXT | a text style; the `font` fields it sets are then accepted and not set (a warning) |
@@ -132,7 +144,12 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
   token cannot sit beside `widthMode`/`heightMode`. A TEXT binds `width`, `height`, `opacity`, `strokeWeight`,
   `fills`, `strokes`; an INSTANCE `width`, `height`, `opacity`.
 - An INSTANCE takes only `component`, `props`, `name`, `handle`, `hidden`, `box`, `x`/`y`, `absolute`, `grow`,
-  `alignSelf`, `widthMode`/`heightMode`, `opacity` and `tokens` (and the compatibility-only `renderBox`, `reference`): its content comes from its component. A wrong
+  `alignSelf`, `widthMode`/`heightMode`, `opacity`, `tokens` and (inside a component) `propRefs` (and the compatibility-only `renderBox`, `reference`): its content comes from its component.
+- A component another op of the same batch makes or updates is not there yet: every name resolves before the batch
+  runs, so the spec is refused ("create it in an earlier call" / "use it in a later call"), a copy's swap values
+  included. Make the kit in one call, use it in the next. A swap property's suggestions may name a set or component the
+  batch updates (itself too), and its default a standalone component the batch updates; a variant of a set the batch
+  updates may not be named. A wrong
   variable type, a property the component lacks, a variant value it does not have, or a hugging instance whose
   component has no auto-layout refuses the batch.
 
@@ -150,10 +167,81 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
 - **Fragments:** the root's `fragments: {name: node spec}` defines parts that are not components; `{use: "name",
   ...fields, edits?: {"<layer name>": {...fields}}}` places one anywhere: its own fields over the fragment's root,
   each edit over the layer of that name (unique in the fragment; `null` drops a field). A fragment may use another,
-  never itself. An unused fragment is a warning.
+  never itself. An unused fragment is a warning. A component root is written as the root itself, never placed from
+  a fragment.
 
 Rows and fragments are expanded before the spec is checked; a problem is named at the path you wrote
 (`tree.children[2].rows[1]`).
+
+## Components
+
+A root with `type: "COMPONENT"` makes a local main component instead of a frame; every frame field of a root applies
+(`box`, `layout`, `fills`, `radius`, `strokes`, `x`/`y`, …), and its children are its layers. `type: "COMPONENT_SET"`
+makes a set of variants from a table. Either type is on the root only. A component's `name` is required and is its
+key: a later spec uses it by that name (`component: "Button"`), and sending a spec with the same name again updates it
+in place (below). It lands like a frame: on `page`, beside the existing frames, built hidden and shown once complete.
+
+- **Properties:** on a component root, `props` declares its properties (on an INSTANCE it stays values):
+  `{"<name>": {type: "TEXT" | "BOOLEAN" | "INSTANCE_SWAP", default, preferredValues?}}`. A TEXT's `default` is a string,
+  a BOOLEAN's `true`/`false`, an INSTANCE_SWAP's a component (name, key or id; a set means its default variant), and
+  only a swap takes `preferredValues` (a list of components). A name holds no `#` and is never `__proto__` (Figma's
+  message passing drops that key; nor is a column). A property name, a column and a variant value never start or end
+  with a space (Figma trims them). VARIANT properties come from the table, never from `props`; SLOT
+  cannot be written yet.
+- **Wiring:** a layer inside takes `propRefs` (the read's own field): `{characters: "Label"}` on a TEXT,
+  `{visible: "Show icon"}` on any layer, `{mainComponent: "Icon"}` on an INSTANCE, each naming a declared property of
+  the matching type. A ref to an undeclared property or of the wrong type is refused with its path; a declared
+  property no layer uses is a warning. The component itself is not wired, and `propRefs` outside a component is refused.
+  A wired field shows its property's default (Figma keeps it bound): a wired text's `text`, if given, equals its TEXT
+  property's `default`, and a wired layer's `hidden`, if given, equals `!default` of its BOOLEAN property (the set's, in
+  a set) — anything else is refused at its path. To change what it shows, change the property's `default`.
+- **Variants as a table:** a `COMPONENT_SET` root takes `variant` (the spec every variant starts from: a component's
+  fields and its `children`, no `name`), `columns` (its VARIANT properties) and `rows`, each the values of one variant
+  in column order and, last, an optional object of what that variant changes: its own fields, and
+  `edits: {"<layer name unique in the base>": {...fields}}` (`null` drops a field), and `handle` (unique, as any
+  handle; a re-send pairs by it first, below — the base `variant` takes none). Each row is one COMPONENT named as
+  Figma names a variant (`"Size=md, State=default"`); the options come from the rows in order and the first row is the
+  default variant. A duplicate combination, a missing or extra cell, and a value or column holding `=` or `,` are
+  refused. The set's own fields (`layout`, `fills`, …) and its `props` (TEXT, BOOLEAN, INSTANCE_SWAP, wired in every
+  variant) go on the set. A set without auto-layout lays its variants out in a column; one with it hugs them unless it
+  has a size.
+- **Sent again:** the one local component (or set) of that name a write made is updated in place, as a
+  [keyed re-send](#keyed-re-send) is: same ids, so its instances follow. Variants pair with the old ones by the row's
+  `handle`, then by exact name, then the rest in order (the old in the set's order, the new in row order): a paired
+  variant keeps its node and is renamed in place, so a changed value or a column added, renamed or dropped keeps every
+  instance on it. Only old variants left over (rows dropped) are removed — their instances lose their main component,
+  and the reply's `warnings` and the dry run's `change` say how many ("removing variant 'Size=sm, State=default' of
+  'Button' leaves 3 instances without a main component"); rows left over are built. Property definitions are added,
+  edited (`default`, `preferredValues`) or deleted so they equal the spec; a layer's references to a property that goes
+  are removed first, and the definition itself is deleted last of all. A wired field follows an edited default, and
+  each layer whose `propRefs` changed is wired again. A variant or a property deleted cannot be brought back: a failure
+  after one names it in the error and in `applied`. A component of that name made by hand, two of that name, or a single component sent as a set (or
+  back) is refused before anything runs — change one made by hand with a [patch](#patch) of its id. A property's type
+  cannot change in place (give it a new name). The root takes no `key`; `component` on it is accepted only equal to
+  `name` (the read writes it so).
+
+**Undo.** A batch is one Cmd-Z step, except that Figma ends an undo step at each component property a write declares,
+edits or deletes (the call included; a plugin cannot merge steps). The batch still runs in op order; each press takes
+back the part of it after the previous property call, and a new component still being built when a step ended is left
+hidden (one finished earlier in the batch stays as it was). A batch split like that says so in its reply: `undoSteps` (how many presses: the property calls, plus
+one if the batch changed the file after the last) and `undoNote` (a sentence to pass on to the designer).
+
+```json
+{"op": "createTree", "tree": {
+  "type": "COMPONENT_SET", "name": "Button",
+  "props": {"Label": {"type": "TEXT", "default": "Button"}, "Show icon": {"type": "BOOLEAN", "default": false},
+            "Icon": {"type": "INSTANCE_SWAP", "default": "Icon/Plus", "preferredValues": ["Icon/Plus", "Icon/Arrow"]}},
+  "variant": {"layout": {"display": "flex", "alignItems": "center", "gap": 8, "padding": [10, 16, 10, 16]},
+              "widthMode": "hug", "heightMode": "hug", "radius": 8, "fills": [{"type": "solid", "tokens": {"color": "color/brand"}}],
+              "children": [
+                {"component": "Icon/Plus", "name": "Icon", "propRefs": {"visible": "Show icon", "mainComponent": "Icon"}},
+                {"name": "Label", "text": "Button", "fills": [{"type": "solid", "tokens": {"color": "color/on-brand"}}], "propRefs": {"characters": "Label"}}]},
+  "columns": ["Size", "State"],
+  "rows": [["md", "default"], ["md", "hover", {"fills": [{"type": "solid", "tokens": {"color": "color/brand-hover"}}]}],
+           ["sm", "default", {"edits": {"Label": {"font": {"size": 14}}}}]]}}
+```
+
+Then, in a later call: `{"component": "Button", "props": {"Size": "sm", "Label": "Save", "Show icon": true, "Icon": "Icon/Arrow"}}`.
 
 ## Keyed re-send
 
@@ -192,7 +280,7 @@ rule for that field.
 | `box` | `{w, h}` or either: a fixed size |
 | `widthMode`, `heightMode` | `fill` \| `hug` \| `fixed` |
 | `tokens` | as in a tree spec; `null` unbinds the field and keeps its value |
-| `props` | an INSTANCE's property values |
+| `props` | an INSTANCE's property values (an instance-swap property takes a component, as in a tree spec) |
 
 A patch does not move a node (`x`/`y` → `move`), change its `type`, `children` or `font` (name a text style instead), or
 swap an instance's component. Whether the node exists and has each field is checked before anything runs.
@@ -293,7 +381,7 @@ is refused into the node itself, into an instance, or past the end of the new pa
 
 Refused by name, each with the reason: grid layout, effects on a node, mixed-format text (`runs`), images (`asset`),
 a text bound to a variable (`textTokens`), a property bound to a variable (`propTokens`), rotation, blend modes,
-masks, vector geometry, prototype reactions, annotations, creating components, and a variable's scopes or code
+masks, vector geometry, prototype reactions, annotations, SLOT component properties, and a variable's scopes or code
 syntax. A frame's
 mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree lands.
 
@@ -304,5 +392,6 @@ mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree la
   trees.
 - `treeFile` at most 2 MB; `key` at most 200 characters.
 - A review card waits 5 minutes; a rejection reason is cut at 500 characters.
-- Names resolve against the file as it was before the batch, except what the batch's create tables make.
+- Names resolve against the file as it was before the batch, except what the batch's create tables make (a component
+  the batch makes is used in a later call).
 - A create table takes at most 1,000 rows.

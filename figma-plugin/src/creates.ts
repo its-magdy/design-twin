@@ -28,6 +28,7 @@ import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import type { SourceValue } from "../../bridge/src/source-spec.ts";
 import type { BatchPlan, Planned } from "./batch-plan";
 import { applyStyle, fontAfter, styleSnapshot, styleUses, writeImpact, type StyleTarget } from "./sources";
+import { componentImpact } from "./component-build";
 import { resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
@@ -125,7 +126,7 @@ export async function resolveCreateOps(ops: readonly WriteOp[]): Promise<CreateR
   const targets = new Map<number, CreateTarget>();
   const problems: OpProblem[] = [];
   const plan: BatchPlan = { variables: [], styles: [] };
-  const empty: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
+  const empty: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map(), components: new Map() };
   const none = { targets, problems, plan, imports: async () => ({ problems: [], revoked: false }), importCount: 0, refs: empty };
   if (!ops.some(isCreateOp)) return none;
 
@@ -564,7 +565,7 @@ async function applyStyles(t: StylesTarget, refs: ResolvedRefs, consent: () => v
       variables.set(ref, v);
     }
     const before = s.existing ? comparableStyle(st) : "";
-    const target: StyleTarget = { style: st, set: s.row.set, refs: { instances: new Map(), variables, textStyles: new Map() }, font: null, bound: s.bound };
+    const target: StyleTarget = { style: st, set: s.row.set, refs: { instances: new Map(), variables, textStyles: new Map(), components: new Map() }, font: null, bound: s.bound };
     edits.push(await applyStyle(target, consent));
     outcome.push([st.id, !s.existing ? "created" : comparableStyle(st) === before ? "unchanged" : "updated"]);
   }
@@ -663,6 +664,8 @@ export async function designImpact(ops: readonly WriteOp[]): Promise<WriteImpact
   // writeImpact counts only the source edits; the create ops are answered here.
   const sources = await writeImpact(ops);
   const creates = await createImpact(ops);
-  const steps = [...sources.steps, ...creates.steps].sort((a, b) => a.index - b.index);
+  // A component spec: made, or updated in place (with its instances), or refused by the file (component-build.ts).
+  const components = await componentImpact(ops);
+  const steps = [...sources.steps, ...creates.steps, ...components].sort((a, b) => a.index - b.index);
   return sources.warnings ? { steps, warnings: sources.warnings } : { steps };
 }

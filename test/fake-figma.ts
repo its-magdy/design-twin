@@ -120,6 +120,8 @@ export interface FakeFigma {
   skipInvisibleInstanceChildren?: boolean;
   createFrame?: () => FakeNode;
   createText?: () => FakeNode;
+  createComponent?: () => FakeNode;
+  combineAsVariants?: (nodes: FakeNode[], parent: FakeNode) => FakeNode;
   loadFontAsync?: (font: { family: string; style: string }) => Promise<void>;
   listAvailableFontsAsync?: () => Promise<Array<{ fontName: { family: string; style: string } }>>;
   getFontFamilyVariationAxes?: (family: string) => string[] | null;
@@ -264,9 +266,12 @@ export interface World {
   send(msg: unknown): Promise<PostedMessage[]>;
   /** every figma.notify message, in order */
   notified: string[];
-  /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each). A box, not a number or a
-   *  getter, so it stays live through the `{ ...world }` spreads the harness helpers make. */
-  undo: { commits: number };
+  /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each), and how many steps Figma ended
+   *  on its own: it ends the open step at each addComponentProperty, editComponentProperty and deleteComponentProperty
+   *  call, the call included (seen live). A fake component counts those when its componentApi is given the world's `undo`
+   *  (below); `onImplicit` runs at each one, to see the file as that step leaves it. A box, not a number or a getter, so
+   *  it stays live through the `{ ...world }` spreads the harness helpers make. */
+  undo: { commits: number; implicit: number; onImplicit: ((call: string) => void) | null };
   /** what clientStorage holds (seed it with Scene.clientStorage) */
   storage: Map<string, unknown>;
   /** Tick "Allow edits" the way the plugin window does (a set-allow-edits message) — what a write case needs. */
@@ -354,7 +359,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   if (selection) currentPage.selection = selection;
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
-  const undo = { commits: 0 };
+  const undo: World["undo"] = { commits: 0, implicit: 0, onImplicit: null };
   const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
   // The document's own plugin data: what the plugin sets reads back; anything else is what the scene says (or "").
@@ -606,4 +611,102 @@ export function textRuns<T extends FakeNode>(node: T): T {
   });
   if (n.textStyleId === undefined) n.textStyleId = "";
   return node;
+}
+
+/** A fake property definition, as componentPropertyDefinitions answers one. */
+export interface FakePropDef { type: string; defaultValue: unknown; preferredValues?: unknown[]; variantOptions?: string[] }
+/**
+ * Figma's component property API on a fake main component or component set (`node`, its own fields): addComponentProperty
+ * returns a new `name#id` key (`nextId` makes the id), editComponentProperty changes a definition's default or suggestions
+ * (a new name gives a new key; a layer bound to it takes a new TEXT or BOOLEAN default, through followsDefault),
+ * deleteComponentProperty removes one and every reference to it among `layers()`, and
+ * componentPropertyDefinitions answers them all — a set's with its VARIANT properties first, read from its variants'
+ * `variantProperties` (options in variant order, the first variant's value the default). A variant (a component inside a
+ * set) throws on every one of them, as Figma's does. Definitions are kept in a Map and answered as own properties, so a
+ * property may be called "__proto__", "constructor" or "toString". With `undo` (the world's box), each successful add,
+ * edit and delete ends an undo step, as Figma's does (World.undo).
+ */
+let followingDefault = false;
+/** True while a layer bound to a property is given the property's new default (componentApi's editComponentProperty):
+ *  a fake that refuses a write to a bound field lets that one through. */
+export const followsDefault = (): boolean => followingDefault;
+export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], nextId: () => string, undo?: () => World["undo"]): void {
+  const defs = new Map<string, FakePropDef>();
+  // Figma ends the open undo step after each of the three calls that change a definition (World.undo).
+  const ended = (call: string): void => { const u = undo ? undo() : null; if (!u) return; u.implicit++; if (u.onImplicit) u.onImplicit(call); };
+  const parentType = (): unknown => { const p = node.parent; return typeof p === "object" && p !== null ? (p as FakeNode).type : undefined; };
+  const guard = (what: string): void => { if (node.type === "COMPONENT" && parentType() === "COMPONENT_SET") throw new Error("in Figma: " + what + " can only be used on a component set or a non-variant component"); };
+  const own = (o: Record<string, unknown>, k: string, v: unknown): void => { Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true }); };
+  const bare = (key: string): string => { const i = key.lastIndexOf("#"); return i > 0 ? key.slice(0, i) : key; };
+  Object.defineProperty(node, "componentPropertyDefinitions", {
+    enumerable: true, configurable: true,
+    get() {
+      guard("componentPropertyDefinitions");
+      const out: Record<string, unknown> = {};
+      if (node.type === "COMPONENT_SET") {
+        const options = new Map<string, string[]>();
+        for (const v of node.children ?? []) {
+          const vp = v.variantProperties;
+          if (typeof vp !== "object" || vp === null) continue;
+          for (const [k, x] of Object.entries(vp as Record<string, string>)) { const list = options.get(k) ?? []; if (!list.includes(x)) list.push(x); options.set(k, list); }
+        }
+        for (const [k, list] of options) own(out, k, { type: "VARIANT", defaultValue: list[0], variantOptions: list });
+      }
+      for (const [k, d] of defs) own(out, k, { ...d });
+      return out;
+    },
+  });
+  node.addComponentProperty = (name: string, type: string, defaultValue: unknown, options?: { preferredValues?: unknown[] }) => {
+    guard("addComponentProperty");
+    if (type === "VARIANT" && node.type === "COMPONENT_SET") throw new Error("in Figma: a set's variant properties come from its variants");
+    if (type === "BOOLEAN" && typeof defaultValue !== "boolean") throw new Error("in Figma: a BOOLEAN property's default is a boolean");
+    if (type === "TEXT" && typeof defaultValue !== "string") throw new Error("in Figma: a TEXT property's default is a string");
+    const key = name + "#" + nextId();
+    // A swap without suggestions answers an empty list.
+    defs.set(key, { type, defaultValue, ...(options && options.preferredValues ? { preferredValues: options.preferredValues } : type === "INSTANCE_SWAP" ? { preferredValues: [] } : {}) });
+    ended("addComponentProperty");
+    return key;
+  };
+  node.editComponentProperty = (key: string, value: { name?: string; defaultValue?: unknown; preferredValues?: unknown[] }) => {
+    guard("editComponentProperty");
+    const d = defs.get(key);
+    if (!d) throw new Error("in Figma: no property " + key);
+    const next: FakePropDef = { ...d, ...(value.defaultValue !== undefined ? { defaultValue: value.defaultValue } : {}), ...(value.preferredValues !== undefined ? { preferredValues: value.preferredValues } : {}) };
+    if (value.name !== undefined && value.name !== bare(key)) { defs.delete(key); const k2 = value.name + "#" + nextId(); defs.set(k2, next); ended("editComponentProperty"); return k2; }
+    defs.set(key, next);
+    // A layer bound to the property shows its new default (its text, its visibility), as in Figma.
+    const field = d.type === "TEXT" ? "characters" : d.type === "BOOLEAN" ? "visible" : null;
+    if (field && value.defaultValue !== undefined && value.defaultValue !== d.defaultValue) {
+      for (const l of layers()) {
+        const r = l.componentPropertyReferences;
+        if (typeof r !== "object" || r === null || !Object.prototype.hasOwnProperty.call(r, field) || (r as Record<string, unknown>)[field] !== key) continue;
+        followingDefault = true;
+        try { Reflect.set(l, field, value.defaultValue); } finally { followingDefault = false; }
+      }
+    }
+    ended("editComponentProperty");
+    return key;
+  };
+  node.deleteComponentProperty = (key: string) => {
+    guard("deleteComponentProperty");
+    if (!defs.delete(key)) throw new Error("in Figma: no property " + key);
+    for (const l of layers()) {
+      const r = l.componentPropertyReferences;
+      if (typeof r !== "object" || r === null) continue;
+      const left: Record<string, unknown> = {};
+      for (const [f, k] of Object.entries(r as Record<string, unknown>)) if (k !== key) own(left, f, k);
+      l.componentPropertyReferences = left;
+    }
+    ended("deleteComponentProperty");
+  };
+}
+
+/** A variant's VARIANT property values, from its name as Figma reads it ("Size=md, State=default"). */
+export function variantValues(name: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of name.split(",")) {
+    const i = part.indexOf("=");
+    if (i > 0) Object.defineProperty(out, part.slice(0, i).trim(), { value: part.slice(i + 1).trim(), enumerable: true, writable: true, configurable: true });
+  }
+  return out;
 }

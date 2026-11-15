@@ -386,7 +386,10 @@ void (async () => {
       whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn }),
       write: (a): WriteResult | typeof HANG => { lastWrite = a; return holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }); },
       // The dry run's count of what a source edit carries to (figma-plugin/src/sources.ts writeImpact).
-      writeImpact: (a): WriteImpactReply => (a.ops[0]?.op === "createVariables"
+      writeImpact: (a): WriteImpactReply => (a.ops[0]?.op === "createTree"
+        // A component spec: whether the file makes it or updates its own (figma-plugin/src/component-build.ts componentImpact).
+        ? { steps: [{ index: 0, op: "createTree", plan: { create: [], update: ["component set 'Button'"] }, affects: { instances: 3 }, change: "would update component set 'Button' in place (3 instances follow)" }] }
+        : a.ops[0]?.op === "createVariables"
         // A create table's plan: which names it would make and which the file has (figma-plugin/src/creates.ts createImpact).
         ? { steps: [{ index: 0, op: "createVariables", plan: { create: ["collection 'Tokens'", "color/bg"], update: [] } }, { index: 1, op: "createStyles", plan: { create: [], update: ["Card"] } }] }
         : { steps: [{ index: 0, op: "setVariable", affects: { nodes: 24, styles: 0, variables: 1 } }, { index: 1, op: "setStyle", problem: "paint style 'Core' lives in another library file" }], warnings: ["page 'Old' could not be read"] }),
@@ -420,6 +423,13 @@ void (async () => {
       && /a create table's `plan` lists the names/.test(dryCreate.note) && editsPlugin.commands("write").length === writesBeforeDry);
     const dryBadTable = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createVariables", collection: "T", modes: ["A", "B"], variables: [["x", "color", "#fff"]] }] } }))) as WritePreview;
     ok("[CREATE] a table short of a mode's value is invalid in the dry run, naming the row", dryBadTable.invalid === 1 && /variables\[0\]: 'x' has 1 value, and `modes` lists 2/.test(dryBadTable.steps[0]?.invalid ?? ""));
+    const componentOps = [{ op: "createTree", tree: { type: "COMPONENT_SET", name: "Button", props: { Label: { type: "TEXT", default: "Button" } },
+      variant: { children: [{ name: "Label", text: "Button", propRefs: { characters: "Label" } }] }, columns: ["Size"], rows: [["md"], ["sm"]] } }];
+    const dryComponent = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: componentOps } }))) as WritePreview;
+    ok("[COMPONENT] a component spec's dry run asks the file: would update in place with its instances, then what the spec makes",
+      dryComponent.invalid === 0 && /^would update component set 'Button' in place \(3 instances follow\); creates component set 'Button' of 2 variants/.test(dryComponent.steps[0]?.change ?? "")
+      && JSON.stringify(dryComponent.steps[0]?.plan) === JSON.stringify({ create: [], update: ["component set 'Button'"] }) && dryComponent.steps[0]?.affects?.instances === 3
+      && JSON.stringify(editsPlugin.commands("writeImpact").at(-1)?.args).includes('"COMPONENT_SET"') && editsPlugin.commands("write").length === writesBeforeDry);
     const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
     ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
     // A spec by path (spec-file.ts): the server reads it, so the plugin gets the spec itself, exactly as if sent inline;

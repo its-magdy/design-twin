@@ -9,6 +9,7 @@ import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
+import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
@@ -374,6 +375,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     commitUndo();
   }
   const changes: Change[] = [];
+  countPropertySteps(changes);
   // In op order: each op's applied row, filled as it lands (the deletes last).
   const rows: Array<AppliedWrite | undefined> = list.map(() => undefined);
   const fail = async (i: number, op: WriteOp, e: unknown): Promise<WriteResult> => {
@@ -478,13 +480,24 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     try {
       consent();
       rows[i] = applyDelete(t);
+      fileChanged();
     } catch (e) {
       const r = await fail(i, op, e);
       const gone = rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true).length;
       return gone ? { ...r, error: r.error + "; " + gone + " node(s) deleted before it cannot be brought back" } : r;
     }
   }
-  // The nodes a keyed re-send no longer has (or built anew) go last, with the deletes: a removed node cannot be brought back.
+  // The nodes a keyed re-send no longer has (or built anew) go last, with the deletes, and the property definitions a
+  // component re-send dropped last of all (their references were unwired in the batch): neither can be brought back, so
+  // a failure here names every one already gone, as the delete loop does.
+  const gone: string[] = [];
+  const goneRows: AppliedWrite[] = [];
+  const lostWith = async (i: number, op: WriteOp, e: unknown): Promise<WriteResult> => {
+    const r = await fail(i, op, e);
+    const deleted = rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true).length;
+    const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
+    return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
+  };
   for (const [i, t] of trees.targets) {
     const op = list[i];
     if (!op || !t.update) continue;
@@ -492,17 +505,44 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     const row = rows[i];
     if (row) { const n = removalCount(t.update); if (n) row.removed = n; else delete row.removed; }
     try {
+      // A variant dropped from a set's table: its instances lose their main component (said, not refused).
+      for (const m of await orphanWarnings(removalsOf(t.update))) warnings.push("ops[" + i + "]: " + m);
       for (const n of removalsOf(t.update)) {
         if (n.removed) continue;
         consent();
+        const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
+        const id = n.id;
         n.remove();
+        fileChanged();
+        gone.push(what);
+        goneRows.push({ id, deleted: true });
       }
     } catch (e) {
-      return fail(i, op, e);
+      return lostWith(i, op, e);
+    }
+  }
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    const comp = t.update ? t.update.component : undefined;
+    if (!op || !comp || !comp.defs.remove.length) continue;
+    const row = rows[i];
+    const owner = comp.defs.owner;
+    try {
+      const names = removeDefs(comp.defs, consent, (name) => { gone.push("the property '" + name + "' of '" + owner.name + "'"); goneRows.push({ id: owner.id, propsRemoved: [name] }); });
+      if (row) { if (names.length) row.propsRemoved = names; else delete row.propsRemoved; }
+    } catch (e) {
+      return lostWith(i, op, e);
     }
   }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
-  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}) };
+  const undo = propertyUndoSteps();
+  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}) };
+}
+
+/** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */
+function undoNote(steps: number): string {
+  return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps +
+    " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
 }
 
 /** A batch the review did not apply, refused whole: nothing in the file changed. */

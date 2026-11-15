@@ -28,6 +28,7 @@ import { checkCreateStyles, checkCreateVariables, describeCreateStyles, describe
 import { checkStyleSet, checkVariableEdit, describeStyleEdit, describeVariableEdit, isStyleSet, sourceRefusal, styleRows, type SourceValue, type StyleField, type StyleSet } from "./source-spec.ts";
 import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
+import { componentRootOf } from "./component-spec.ts";
 
 // ---------------------------------------------------------------- arguments
 
@@ -234,7 +235,9 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
 /** A createTree op's preview: where the frame lands, what it makes in one sentence, and — for a spec the plugin would
  *  refuse — every problem (the same list writeOpError refuses with). */
 function treePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
-  const base = { index, op: o.op, effect: "creates" as const, target: o.page ? `new frame on page '${o.page}'` : "new frame on the current page" };
+  const comp = componentRootOf(o.tree);
+  const what = comp ? (comp.type === "COMPONENT_SET" ? "component set" : "component") : "frame";
+  const base = { index, op: o.op, effect: "creates" as const, target: o.page ? `new ${what} on page '${o.page}'` : `new ${what} on the current page` };
   if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
   const { problems, summary, expanded } = checkTree(o.tree);
   if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
@@ -445,8 +448,18 @@ export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | Sc
  *  names the collection and the mode before and after (by name; "inherited" when no mode was set on the node). */
 export interface AppliedWrite {
   id?: string;
-  /** createTree: how many nodes the tree made (`instances` and `clones`, the copies of existing nodes, only when it made any) */
-  created?: { frames: number; texts: number; instances?: number; clones?: number };
+  /** createTree: how many nodes the tree made (`instances` and `clones`, the copies of existing nodes, only when it made any;
+   *  `variants`, a component set's, only for a set). A component and its variants are not counted as frames. */
+  created?: { frames: number; texts: number; instances?: number; clones?: number; variants?: number };
+  /** createTree with a COMPONENT or COMPONENT_SET root: the component's name (its key: the same name sent again updates it) */
+  component?: string;
+  /** createTree with a component root: each property it declared, bare name → the key Figma gave it ("Label#12:0"); a
+   *  re-send lists only the ones it added or changed */
+  props?: Record<string, string>;
+  /** a component re-send: the properties it deleted (the spec no longer declares them), by name */
+  propsRemoved?: string[];
+  /** a component re-send: how many layers were wired to a property again */
+  rewired?: number;
   /** createTree / patch: the raw values where a variable or text style could stand (colours, spacing, radii, stroke
    *  weights, a tree's texts without a style); absent when none */
   unbound?: number;
@@ -567,6 +580,12 @@ export interface WriteResult {
   restored?: AppliedWrite[];
   /** What the batch accepted but had no effect (a createTree spec's x/y inside auto-layout, …). Absent when none. */
   warnings?: string[];
+  /** On success, when Figma split the batch into several undo steps: how many Cmd-Z presses take it back. Figma ends a
+   *  step at each component property declared, edited or deleted (the call included), so the count is those calls, plus
+   *  one when the batch changed the file after the last of them. Absent when the batch is one step. */
+  undoSteps?: number;
+  /** With `undoSteps`: what each press takes back, in a sentence to pass on to the designer. */
+  undoNote?: string;
 }
 
 /** What follows a source edit (writeImpact): the layers that use the variable or style (directly, or through an alias
@@ -586,8 +605,11 @@ export interface WriteImpactStep {
   affects?: WriteImpactCounts;
   /** the file refuses the op as it is now: a library-owned item (naming its file when Figma says which), no such name */
   problem?: string;
-  /** createVariables / createStyles: what it would create and what it would update in place */
+  /** createVariables / createStyles: what it would create and what it would update in place; a component spec: the
+   *  component, under create or update */
   plan?: CreatePlan;
+  /** a component spec: what the write would do, in a sentence ("would update component 'Button' in place (3 instances follow)") */
+  change?: string;
 }
 /** writeImpact's reply: the dry run's file-side half. `warnings`: pages that could not be read, so a count may be low. */
 export interface WriteImpactReply {

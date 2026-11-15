@@ -18,21 +18,33 @@
 // batch's deletes (writes.ts): a removed node cannot be brought back. Before anything runs, a node to be removed that
 // holds a layer this key did not build (the designer's own) refuses the batch: a re-send removes only what it built.
 //
+// A component spec (a COMPONENT or COMPONENT_SET root) is keyed by its name (component-build.ts): the one local component
+// of that name a write made is its earlier result. A set's variants pair by handle, name, then order (tree-diff.ts), so a
+// renamed variant keeps its node; every rename is a patch, so it lands before a new variant is built. Its property
+// definitions and its layers' wiring are brought to the new spec too: each reference that goes is unwired before the
+// patches (unwireGoing), a field that stays bound is never patched (it follows the property's default), definitions are
+// added and edited and new references wired after the builds (syncComponent), and a definition the spec drops is
+// deleted after the batch's removals, last of all (writes.ts).
+//
 // The reply is the root id and the key, and only what changed: the nodes updated (id, handle, fields), how many nodes
 // were built and removed, the ids of new handles — `unchanged: true` when the spec is the one sent last time.
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { checkPatch } from "../../bridge/src/patch-spec.ts";
-import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type OldNode, type Plan } from "../../bridge/src/tree-diff.ts";
+import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type Plan } from "../../bridge/src/tree-diff.ts";
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
-import { KEY_DATA, readIndex, SPEC_DATA, stampNode } from "./keyed-store";
+import { KEY_DATA, readIndex, readOld, SPEC_DATA, stampNode } from "./keyed-store";
 import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
 import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "./tree";
+import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
+import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
   key: string;
-  root: FrameNode;
+  root: FrameNode | ComponentNode | ComponentSetNode;
+  /** a component spec: its name, and what its property definitions need to equal the spec's */
+  component?: { name: string; defs: DefsPlan } | undefined;
   plan: Plan<SceneNode>;
   /** the resolved patch of each update that has one, by its index in `plan.updates` */
   patches: Map<number, PatchTarget>;
@@ -47,29 +59,16 @@ async function findResult(key: string): Promise<FrameNode | null> {
   if (!id) return null;
   const n = await figma.getNodeByIdAsync(id);
   if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
+  return (await loadPageOf(n)) ? n : null;
+}
+/** Load the page `n` is on (dynamic-page: before its children are read); false when it is on none. */
+async function loadPageOf(n: BaseNode): Promise<boolean> {
   let p: BaseNode | null = n.parent;
   while (p && p.type !== "PAGE") p = p.parent;
-  if (!p || p.type !== "PAGE") return null;
-  await p.loadAsync(); // dynamic-page: before its children are read
-  return n;
+  if (!p || p.type !== "PAGE") return false;
+  await p.loadAsync();
+  return true;
 }
-
-/** The earlier spec, read back off the nodes `key` built (null when `n`'s stored spec is unreadable). */
-function readOld(n: SceneNode, key: string): OldNode<SceneNode> | null {
-  let spec: unknown;
-  try { spec = JSON.parse(n.getPluginData(SPEC_DATA)) as unknown; } catch { return null; }
-  if (!isObj(spec)) return null;
-  const children: Array<OldNode<SceneNode>> = [];
-  if (n.type === "FRAME") {
-    for (const c of n.children) {
-      if (c.getPluginData(KEY_DATA) !== key) continue; // a layer the designer added: not part of the spec
-      const o = readOld(c, key);
-      if (o) children.push(o);
-    }
-  }
-  return { ref: n, spec, children };
-}
-
 /** Figma's cap on one plugin data entry (100 kB), less room for the key. */
 const MAX_STAMP_BYTES = 99000;
 /** `s`'s size in UTF-8 bytes. */
@@ -123,25 +122,33 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     return p;
   };
   for (const [index, op] of ops.entries()) {
-    if (op.op !== "createTree" || !isObj(op.tree) || typeof op.tree.key !== "string") continue;
-    const key = op.tree.key;
+    // A component spec is keyed by its name (component-build.ts).
+    const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
+    if (op.op !== "createTree" || !isObj(op.tree) || (typeof op.tree.key !== "string" && !comp)) continue;
+    const key = comp ? componentKey(comp.name) : String(op.tree.key);
+    const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
     const first = seen.get(key);
-    if (first !== undefined) { bad("tree.key '" + key + "' is also the key of ops[" + first + "]; one batch updates a result once"); continue; }
+    if (first !== undefined) { bad(comp ? "component '" + comp.name + "' is also made by ops[" + first + "]; one batch makes or updates a component once" : "tree.key '" + key + "' is also the key of ops[" + first + "]; one batch updates a result once"); continue; }
     seen.set(key, index);
     const t = targets.get(index);
     if (!t) continue; // refused for its page or fonts already
     // Checked before anything is built: a stamp that cannot be stored would fail the batch partway.
     const big = oversized(t.spec, "tree", []);
     if (big.length) { for (const m of big) bad(m); continue; }
-    const root = await findResult(key);
+    let root: FrameNode | ComponentNode | ComponentSetNode | null = null;
+    if (comp) {
+      const found = await existingComponent(comp.type, comp.name);
+      if ("problem" in found) { bad(found.problem); continue; }
+      if ("ours" in found && (await loadPageOf(found.ours))) root = found.ours;
+    } else root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
     if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
-      bad("tree.key '" + key + "': its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is — leave `page` out");
+      bad(what + ": its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is — leave `page` out");
       continue;
     }
     const old = readOld(root, key);
-    if (!old) { bad("tree.key '" + key + "': the spec stored on its result " + label(root) + " cannot be read; give the spec another key to build it again"); continue; }
+    if (!old) { bad(what + ": the spec stored on its result " + label(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again")); continue; }
     const plan = planUpdate(old, t.spec);
     const before = problems.length;
     for (const b of plan.builds) {
@@ -151,7 +158,26 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     }
     for (const r of plan.removals) {
       const f = foreignIn(r, key);
-      if (f) bad("tree.key '" + key + "': " + label(r) + " is no longer in the spec, but it holds " + label(f) + ", which this key did not build; move that layer out, or keep the node in the spec");
+      if (f) bad(what + ": " + label(r) + " is no longer in the spec, but it holds " + label(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
+    }
+    // A component: its definitions and its layers' wiring planned first, so a patch never writes a field that stays bound
+    // to a property (its text or visibility follows the property's default instead; Figma refuses the write).
+    const owner = root;
+    const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
+    if (defs) {
+      defs.wiring = planWiring(defs, plan.kept);
+      const bound = new Map(defs.wiring.map((w) => [w.ref, w.stays] as const));
+      for (const u of plan.updates) {
+        const stays = bound.get(u.ref);
+        if (!u.set || !stays) continue;
+        if (stays.indexOf("characters") >= 0) delete u.set.text;
+        if (stays.indexOf("visible") >= 0) delete u.set.hidden;
+        if (!Object.keys(u.set).length) u.set = null;
+      }
+      for (const n of textsFollowing(defs)) {
+        const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
+        for (const f of fonts) { const m = await loadFont(f); if (m) bad(what + ": " + label(n) + " follows a property whose default changes, and its " + m); }
+      }
     }
     const patches = new Map<number, PatchTarget>();
     for (const [i, u] of plan.updates.entries()) {
@@ -166,7 +192,7 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       p.refs = t.refs; // every name the update uses is in the new spec, which resolveTreeOps resolved
       patches.set(i, p);
     }
-    if (problems.length === before) t.update = { key, root, plan, patches };
+    if (problems.length === before) t.update = { key, root, plan, patches, ...(comp && defs ? { component: { name: comp.name, defs } } : {}) };
   }
   return { problems };
 }
@@ -340,6 +366,8 @@ function restamp(stamps: Plan<SceneNode>["stamps"], key: string, changes: Change
 export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<AppliedWrite> {
   const { plan, key } = u;
   const changed: NonNullable<AppliedWrite["changed"]> = [];
+  // A component: every reference that goes away is unwired before the patches (so they can write those fields).
+  const unwired = u.component ? unwireGoing(u.component.defs, consent, changes) : [];
   for (const [i, up] of plan.updates.entries()) {
     const p = u.patches.get(i);
     if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes); }
@@ -352,7 +380,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   for (const b of plan.builds) {
     consent();
     const from = made.pairs.length;
-    const n = await buildSubtree(b.spec, b.parent as FrameNode, made, consent);
+    const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent);
     // On the list before it is stamped: a stamp that throws removes it with the batch.
     changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
     stampAll(made, key, from);
@@ -361,6 +389,28 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const replaced = plan.builds.map((b) => b.replaces);
   for (const o of plan.orders) { consent(); changes.push(applyOrder(o, built, replaced)); }
   if (plan.stamps.length) { consent(); restamp(plan.stamps, key, changes); }
+  // A component: its new variants laid out in the set, its definitions and its layers' wiring brought to the spec.
+  let props = new Map<string, string>();
+  let rewired = 0;
+  if (u.component) {
+    const root = u.root;
+    if (root.type === "COMPONENT_SET" && built.length) {
+      consent();
+      const size = { w: root.width, h: root.height };
+      const at = root.children.map((c) => [c, c.x, c.y] as const);
+      const sizing = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
+      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), restore() {
+        for (const [c, x, y] of at) if (!c.removed) { c.x = x; c.y = y; }
+        // resize first: it makes both axes fixed, so the sizing modes are put back after it
+        if (root.width !== size.w || root.height !== size.h) root.resize(size.w, size.h);
+        if (sizing) { root.layoutSizingHorizontal = sizing.h; root.layoutSizingVertical = sizing.v; }
+      } });
+      arrangeVariants(root, t.spec, built.filter((n): n is ComponentNode => n.type === "COMPONENT" && n.parent === root));
+    }
+    const synced = syncComponent(u.component.defs, unwired, made.pairs, consent, changes);
+    props = synced.props;
+    rewired = synced.rewired;
+  }
 
   const applied: AppliedWrite = { id: u.root.id, key };
   if (changed.length) applied.changed = changed;
@@ -374,6 +424,9 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
   for (const [h, id] of made.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
   if (Object.keys(handles).length) applied.handles = handles;
-  if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles) applied.unchanged = true;
+  const dropped = u.component ? u.component.defs.remove.length : 0;
+  if (u.component) componentReply(applied, u.component.name, props, rewired);
+  if (dropped && u.component) applied.propsRemoved = u.component.defs.remove.map((r) => r.name);
+  if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles && !props.size && !rewired && !dropped) applied.unchanged = true;
   return applied;
 }

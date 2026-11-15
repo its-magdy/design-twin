@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments; or a component, or a set of variants from a table, used by name later and updated in place when sent again) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a keyed re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, and what a create table would make or update: `plan`) |
+| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`; with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, and what a create table would make or update: `plan`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -979,7 +979,11 @@ designer turns "Allow edits" off the plugin changes nothing more, not even to un
 also stop partway), a value that cannot be restored is named in the error, and a library item imported for the batch
 stays. Deletes run last, once everything else has landed, because a deleted node cannot be brought back. `applied`
 lists what stays — the changes not put back and the deletes already run — but not imported library items; a batch
-that fails while importing has an empty `applied`. The batch is one Cmd-Z step for the designer.
+that fails while importing has an empty `applied`. The batch is one Cmd-Z step for the designer, except that Figma
+ends an undo step at each component property a write declares, edits or deletes (the call included): each press takes
+back the part of the batch after the previous property call. The reply then carries
+`undoSteps` (how many presses: the property calls, plus one if the batch changed the file after the last) and
+`undoNote` (a sentence to pass on). A new component still being built when a step ended is left hidden.
 A check that reads the file's current state (a node's or its parent's auto-layout, its variant, its paints, where a node
 sits and what a parent holds) runs up front for an op no earlier op of the batch could affect; after such an op it
 runs right before the op applies, against the file as the earlier ops left it, so a batch that turns a parent's
@@ -1288,6 +1292,29 @@ tables' own. It goes first in a batch, like them; the 50-op limit counts the tab
   the seed became); `failedAt` is still the index of the agent's op. The dry run gives one `seedTokens` step with its
   tables' steps (and their `plan`) under `tables`, and the `unmapped` and `partly` lists. Its `change` counts them
   apart, e.g. "1 style; 1 token is seeded in part; 2 tokens are not seeded", each with the list it is in.
+
+**Components** are tree specs too. A `createTree` root with `type: "COMPONENT"` makes a local main component instead of
+a frame (every frame field of a root applies); `type: "COMPONENT_SET"` makes a set of variants from a table: `variant`
+(the spec every variant starts from), `columns` (its VARIANT properties) and `rows` (each the values of one variant,
+then optionally an object of what that variant changes, with `edits` by layer name), expanded before the spec is checked
+into one COMPONENT per row named `"Size=md, State=default"`, the first row the default variant. On a component root
+`props` declares its properties — `{"Label": {type: "TEXT", default: "Button"}, "Show icon": {type: "BOOLEAN", default:
+false}, "Icon": {type: "INSTANCE_SWAP", default: "Icon/Plus", preferredValues: [...]}}` — and a layer inside is wired to
+one with the read's own `propRefs` (`characters` on a TEXT, `visible` on any layer, `mainComponent` on an INSTANCE);
+an undeclared or mistyped reference is refused with its path, a declared property no layer uses is a warning. A
+component's name is its key: a later spec uses it by name (an INSTANCE's `props` may now give a swap property a
+component by name, key or id), and sending the same name again updates the one component of that name a write made in
+place, through the keyed re-send (same ids, so its instances follow): variants pair with the old ones by a row's
+`handle`, then exact name, then order, so a changed value or a column added, renamed or dropped renames them in place;
+only a dropped row's variant is removed (the reply's `warnings` and the dry run say how many instances it leaves
+without a main component). Property definitions are added, edited or deleted to match, and layers whose wiring changed
+are wired again. A wired text's `text` (or a wired layer's `hidden`) must match its property's default, and
+`__proto__` names no property or column.
+One made by hand, two of a name, or a component sent as a set (or back) is refused before anything runs. A spec cannot
+use a component another op of the same batch makes (every name resolves before the batch runs): it is refused with
+"create it in an earlier call". The reply is `{id, component, created: {…, variants?}, props: {name: "name#id"}}`;
+the dry run asks the plugin whether it would create the component or update it in place (and how many instances
+follow).
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

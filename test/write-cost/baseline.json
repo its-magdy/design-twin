@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 1137,
+  "toolDefinition": 1206,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -58,6 +58,13 @@
         "out": 710,
         "in": 790,
         "total": 1500
+      },
+      "blank-file": {
+        "calls": 4,
+        "ops": 13,
+        "out": 436,
+        "in": 509,
+        "total": 945
       }
     },
     "tree-spec": {
@@ -158,6 +165,15 @@
         "out": 803,
         "in": 886,
         "total": 1689
+      }
+    },
+    "create-components": {
+      "blank-file": {
+        "calls": 4,
+        "ops": 7,
+        "out": 1023,
+        "in": 1148,
+        "total": 2171
       }
     }
   }

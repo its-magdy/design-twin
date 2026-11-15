@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Phase } from "./meter.ts";
-import { isFrame, type Briefs, type JobId, type Kit, type Token, type Want, type WantFill } from "./jobs.ts";
+import { isFrame, type Briefs, type JobId, type Kit, type KitScreen, type StarterKit, type Token, type Want, type WantFill } from "./jobs.ts";
 import { BRAND } from "./jobs.ts";
 
 export interface Reply { text: string; isError: boolean }
@@ -152,6 +152,20 @@ function rawTokens(w: Want, tokens: readonly Token[]): Want {
   return { ...w, ...fill, ...(w.children ? { children: w.children.map((k) => rawTokens(k, tokens)) } : {}) };
 }
 
+/** The blank file's screen as plain frames and texts, its colours the tokens' (what the four ops can build). */
+function screenWant(sc: KitScreen): Want {
+  const label = (text: string, size: number, token: string): Want => ({ text, size, fill: { variable: token } });
+  return {
+    frame: sc.frame, layout: "VERTICAL", w: 390, h: 844, gap: 16, padding: [48, 24, 48, 24], fill: { variable: "color/bg" },
+    children: [
+      label(sc.title, 28, "color/text"),
+      { frame: "Card", layout: "VERTICAL", w: 342, h: 96, gap: 4, padding: [16, 16, 16, 16], fill: { variable: "color/bg" }, children: [label(sc.card.title, 18, "color/text"), label(sc.card.body, 14, "color/muted")] },
+      ...sc.inputs.map((p): Want => ({ frame: "Input", layout: "HORIZONTAL", w: 342, h: 44, padding: [0, 12, 0, 12], fill: { variable: "color/bg" }, children: [label(p, 16, "color/muted")] })),
+      { frame: "Button", layout: "HORIZONTAL", w: 180, h: 44, gap: 8, padding: [10, 16, 10, 16], fill: { variable: "color/brand" }, children: [label(sc.button.label, 16, "color/on-brand")] },
+    ],
+  };
+}
+
 export const fourOp: Route = {
   name: "four-op",
   ticket: "baseline",
@@ -159,6 +173,11 @@ export const fourOp: Route = {
     // No variables can be made: the screen is built level by level in the colours the tokens would have shown.
     "start-from-nothing": async (s, b) => {
       const [root] = await buildLevels(s, [{ want: rawTokens(b.want, b.tokens) }]);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+    // No variables or components can be made: the screen is built level by level, each part spelled out, in raw colours.
+    "blank-file": async (s, b) => {
+      const [root] = await buildLevels(s, [{ want: rawTokens(screenWant(b.screen), b.tokens) }]);
       if (root !== undefined) await readOutline(s, root, "verify");
     },
     "new-screen": async (s, b) => {
@@ -441,6 +460,73 @@ export const seedTokens: Route = {
   },
 };
 
+// ---- a blank file's starter kit (#176): the tokens and every component that names no other in the first figma_write
+// (a spec may bind a variable a table of the same batch makes), the Button set — whose icon is an instance of a kit icon,
+// so it is made in a later call — in the second, and the screen, composed of the kit's instances by name, in the third.
+// Then the outline read of the screen.
+const fill = (token: string): Record<string, unknown> => ({ fills: [{ type: "solid", tokens: { color: token } }] });
+function kitOps(k: StarterKit): { first: Array<Record<string, unknown>>; button: Record<string, unknown> } {
+  const icon = (name: string): Record<string, unknown> => ({ op: "createTree", tree: { type: "COMPONENT", name, box: { w: 24, h: 24 }, children: [{ name: "Glyph", box: { w: 16, h: 16 }, x: 4, y: 4, radius: 2, ...fill("color/text") }] } });
+  const input = { op: "createTree", tree: {
+    type: "COMPONENT", name: k.input.name, box: { w: 342, h: 44 }, radius: 8, ...fill("color/bg"), strokes: { colors: ["#d4d4d8"], weight: 1 }, tokens: { strokes: "color/border" },
+    layout: { display: "flex", alignItems: "center", padding: [0, 12, 0, 12] }, props: { Placeholder: { type: "TEXT", default: k.input.placeholder } },
+    children: [{ name: "Placeholder", text: k.input.placeholder, font: { size: 16 }, ...fill("color/muted"), propRefs: { characters: "Placeholder" } }],
+  } };
+  const card = { op: "createTree", tree: {
+    type: "COMPONENT", name: k.card.name, box: { w: 342, h: 96 }, radius: 12, ...fill("color/bg"), layout: { display: "flex", flexDirection: "column", gap: 4, padding: [16, 16, 16, 16] },
+    props: { Title: { type: "TEXT", default: k.card.title }, Body: { type: "TEXT", default: k.card.body } },
+    children: [
+      { name: "Title", text: k.card.title, font: { size: 18 }, ...fill("color/text"), propRefs: { characters: "Title" } },
+      { name: "Body", text: k.card.body, font: { size: 14 }, ...fill("color/muted"), propRefs: { characters: "Body" } },
+    ],
+  } };
+  // One row per size × state: a small button is tighter, a hovered one darker.
+  const rows = k.button.sizes.flatMap((size, i) => k.button.states.map((state, j) => {
+    const over: Record<string, unknown> = {};
+    if (i > 0) { over.layout = { display: "flex", alignItems: "center", gap: 6, padding: [6, 12, 6, 12] }; over.edits = { Label: { font: { size: 14 } } }; }
+    if (j > 0) Object.assign(over, fill("color/brand-hover"));
+    return Object.keys(over).length ? [size, state, over] : [size, state];
+  }));
+  const button = { op: "createTree", tree: {
+    type: "COMPONENT_SET", name: k.button.name,
+    props: { Label: { type: "TEXT", default: k.button.label }, "Show icon": { type: "BOOLEAN", default: false }, Icon: { type: "INSTANCE_SWAP", default: k.icons[0], preferredValues: k.icons } },
+    variant: {
+      layout: { display: "flex", alignItems: "center", gap: 8, padding: [10, 16, 10, 16] }, widthMode: "hug", heightMode: "hug", radius: 8, ...fill("color/brand"),
+      children: [
+        { component: k.icons[0], name: "Icon", propRefs: { visible: "Show icon", mainComponent: "Icon" } },
+        { name: "Label", text: k.button.label, font: { size: 16 }, ...fill("color/on-brand"), propRefs: { characters: "Label" } },
+      ],
+    },
+    columns: ["Size", "State"], rows,
+  } };
+  return { first: [...k.icons.map(icon), input, card], button };
+}
+function kitScreen(k: StarterKit, s: KitScreen): Record<string, unknown> {
+  return {
+    name: s.frame, box: { w: 390, h: 844 }, ...fill("color/bg"), layout: { display: "flex", flexDirection: "column", gap: 16, padding: [48, 24, 48, 24] },
+    children: [
+      { name: "Title", text: s.title, font: { size: 28 }, ...fill("color/text") },
+      { component: k.card.name, props: { Title: s.card.title, Body: s.card.body } },
+      { component: k.input.name, columns: ["Placeholder"], rows: s.inputs.map((p) => [p]) },
+      { component: k.button.name, props: { Size: s.button.size, State: s.button.state, Label: s.button.label, "Show icon": true, Icon: s.button.icon } },
+    ],
+  };
+}
+export const createComponents: Route = {
+  name: "create-components",
+  ticket: "#176",
+  jobs: {
+    "blank-file": async (s, b) => {
+      const table = { op: "createVariables", collection: b.collection, modes: b.modes, variables: b.tokens.map((t) => [t.name, t.type, ...t.values]) };
+      const { first, button } = kitOps(b.kit);
+      appliedIds(must(await s.call("figma_write", { ops: [table, ...first] }, "write"), "figma_write"));
+      appliedIds(must(await s.call("figma_write", { ops: [button] }, "write"), "figma_write"));
+      const [root] = appliedIds(must(await s.call("figma_write", { ops: [{ op: "createTree", tree: kitScreen(b.kit, b.screen) }] }, "write"), "figma_write"));
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -456,5 +542,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents];
 export const BASELINE = fourOp.name;

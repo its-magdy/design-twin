@@ -16,7 +16,9 @@ are built; starting from nothing — `createVariables` (a collection, its modes 
 included) and `createStyles` (paint, text and effect styles whose values name variables), a name the file has updated
 in place, both first in a batch so the specs and patches after them name what they make — is built; seeding them from
 code tokens — `seedTokens`, a project's `tokens.dtcg.json` or `tokens.resolver.json` read by the MCP server into those
-tables, modes included, the tokens it cannot map listed — is built; creating components is not)
+tables, modes included, the tokens it cannot map listed — is built; creating components — a `createTree` root of type
+`COMPONENT`, or `COMPONENT_SET` from a variant table, its TEXT, BOOLEAN and INSTANCE_SWAP properties declared and its
+layers wired to them, named by later specs and updated in place when its name is sent again — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -127,7 +129,12 @@ screens.
     that fails while importing has an empty `applied`).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
-16. **One undo per batch.**
+16. **One undo per batch.** Figma ends an undo step at each addComponentProperty, editComponentProperty and
+    deleteComponentProperty call, the call included (seen live), and a plugin cannot merge steps. A batch that declares,
+    edits or deletes component properties is therefore split: it still runs in op order (reordering it to make the
+    first Undo take back all it shows changed what the batch does), each press takes back the part after the previous
+    property call, and a new component still being built when a step ended is left hidden. The reply says so: `undoSteps` (the property
+    calls, plus one if the batch changed the file after the last) and `undoNote`.
 17. **Limited destruction.** Create anywhere; overwrite properties of existing nodes; delete and reparent
     only nodes created in the same session.
 18. **Consent.** "Allow edits" stays the master switch. A designer review step (approve or reject each
@@ -154,7 +161,10 @@ screens.
     path as the baseline. It is `test/write-cost.test.ts` (`bun test/write-cost.test.ts`); the recorded numbers are in
     `test/write-cost/baseline.json`, and a new route is added to `test/write-cost/routes.ts`. Its seventh job is a new
     screen and the fix round its check leads to; its eighth starts from nothing (a token table, then a screen bound to
-    it).
+    it); its ninth (`create-components` / `blank-file`) starts from a blank file: 7 colour tokens in light and dark, a
+    5-component kit (two icons, a 4-variant Button set with TEXT, BOOLEAN and INSTANCE_SWAP properties, an Input, a
+    Card), then a sign-up screen of their instances — recorded at 4 calls, 7 ops, about 2,171 tokens (1,023 out, 1,148
+    in; the replies' `undoSteps` / `undoNote` count toward the input).
 
 ## Build order
 

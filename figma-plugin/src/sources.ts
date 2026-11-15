@@ -300,7 +300,7 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
   const styles = new Map<number, StyleTarget>();
   const problems: OpProblem[] = [];
   const uses: Use[] = [];
-  const empty = (): ResolvedRefs => ({ instances: new Map(), variables: new Map(), textStyles: new Map() });
+  const empty = (): ResolvedRefs => ({ instances: new Map(), variables: new Map(), textStyles: new Map(), components: new Map() });
   const loaded = new Map<string, Promise<string | null>>();
   const loadFont = (f: FontName): Promise<string | null> => {
     const key = f.family + "|" + f.style;

@@ -408,7 +408,9 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    work), a restore can stop partway or fail for one change, a library item imported for the batch stays, and deletes
    run last since a deleted node cannot be restored. `applied` lists the changes not put back and the deletes already run, not the imported library
    items (a batch that fails while importing has an empty `applied`). One batch is one
-   Cmd-Z step (`commitUndo` before and after).
+   Cmd-Z step (`commitUndo` before and after), except that Figma ends a step at each component property declared,
+   edited or deleted (the call included); the batch still runs in op order, and the reply's `undoSteps` / `undoNote`
+   say how many presses take it back (a new component still being built when a step ended is left hidden).
    The op table (`bridge/src/commands.ts` `WRITE_OPS`, 14 ops) is read by all three places a write is checked —
    the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
    bundle imports too: `createTree`'s tree spec (`tree-spec.ts`, with `tree-check.ts`; rows and fragments expanded
@@ -417,7 +419,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    kind) is resolved by the plugin before the first op runs (`tree-refs.ts`, `patch.ts`, `sources.ts`, `creates.ts`).
    The create tables come first in a batch and run first: what they will make is the batch's plan
    (`figma-plugin/src/batch-plan.ts`), so a later op's name for a new variable or text style resolves, like an import,
-   once they have run. A spec given as `treeFile` is read by the MCP server
+   once they have run. A `createTree` root of type COMPONENT or COMPONENT_SET makes a local component
+   (`component-spec.ts`; a set's variant table expanded by `tree-expand.ts`), built and updated by
+   `figma-plugin/src/component-build.ts`: its name is its key, so the one local component of that name a write made is
+   updated in place through the keyed re-send (`keyed.ts`), its property definitions and layer wiring brought to the
+   spec; a spec cannot use a component the same batch makes. A spec given as `treeFile` is read by the MCP server
    (`spec-file.ts`) and never reaches the plugin as a path; so is a `seedTokens` op's token file (`seed-file.ts`,
    mapped by `token-seed.ts`), which becomes the create tables in its place, so the plugin sees only those. The design record is `docs/write-plane-spec.md`; the
    token cost of each route is measured by `test/write-cost.test.ts`.

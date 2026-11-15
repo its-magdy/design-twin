@@ -12,8 +12,13 @@
 // the meantime stays unless the new spec changes that field too. A field the new spec drops goes back to what a fresh
 // build leaves it at (no fills on a frame, opacity 1, no auto-layout, …).
 //
-// Children are matched by `handle`, then by a name that is unique among the old and the new children, then in order.
+// Children are matched by `handle`, then by a name that is unique among the old and the new children, then in order; a
+// set's variants by `handle`, exact name, then in order whatever their names (a variant's name is its values: match).
 // A copy of an existing node (`clone`) is kept while its spec is the same, and made again when anything in it changes.
+//
+// A component root's property definitions (`props`) and every layer's `propRefs` are not fields a patch sets: they are
+// left out here, and the plugin brings them to the new spec itself (figma-plugin/src/component-build.ts), reading
+// `kept` for which node each spec node is.
 //
 // Pure and dependency-free (bar pure siblings): the plugin bundle imports it, so it must type-check under
 // figma-plugin/tsconfig.json (ES2019 lib, no Node types).
@@ -66,6 +71,18 @@ export interface Plan<T> {
   stamps: Array<{ ref: T; spec: TreeNodeSpec }>;
   /** handles the new spec gives to kept nodes that did not have them (their ids come back) */
   handles: Array<{ handle: string; ref: T }>;
+  /** every kept node (the root first), with its new spec and the own spec it was last built or updated from */
+  kept: Array<{ ref: T; spec: TreeNodeSpec; old: TreeNodeSpec }>;
+}
+
+/** An instance's property values (a component root's `props` are definitions, which no patch sets). */
+export function valueProps(p: Readonly<Record<string, unknown>>): Record<string, string | boolean> {
+  const out: Record<string, string | boolean> = {};
+  for (const k of Object.keys(p)) {
+    const v = p[k];
+    if (typeof v === "string" || typeof v === "boolean") Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
+  return out;
 }
 
 /** A spec node's own fields: without `children`. */
@@ -103,7 +120,9 @@ function compared(s: TreeNodeSpec, kind: NodeKind): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(s)) {
     const v = (s as Record<string, unknown>)[k];
-    if (v === undefined || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key") continue;
+    if (v === undefined || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key" || k === "propRefs") continue;
+    // A component's property definitions: brought to the new spec by the plugin, not by a patch.
+    if (k === "props" && (s.type === "COMPONENT" || s.type === "COMPONENT_SET")) continue;
     if (k === "box") { out.box = without(v, ["x", "y"]); continue; }
     if (k === "font") { out.font = without(v, ["weightValue"]); continue; }
     if (k === "layout") { out.layout = without(v, ["width", "height"]); continue; }
@@ -164,7 +183,7 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
   if (has("opacity")) { set.opacity = b.opacity !== undefined ? b.opacity : 1; touch("opacity"); }
   if (has("text") && b.text !== undefined) { set.text = b.text; touch("text"); }
   if (has("styles") && b.styles && b.styles.text !== undefined) { set.styles = { text: b.styles.text }; touch("styles"); }
-  if (has("props") && b.props) { set.props = b.props; touch("props"); }
+  if (has("props") && b.props) { set.props = valueProps(b.props); touch("props"); }
   if (has("layout") && kind === "FRAME") { set.layout = layoutOf(b); touch("layout"); }
   if (has("radius")) {
     const r = b.radius;
@@ -282,8 +301,12 @@ function layoutOf(b: TreeNodeSpec): PatchLayout {
 }
 
 /** Pair the new children with the old: by handle, then by a name unique on both sides, then in order. An old child with
- *  a handle pairs only by it (a new spec that gives a node a handle pairs it with an old one that had none). */
-function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[]): Array<OldNode<T> | null> {
+ *  a handle pairs only by it (a new spec that gives a node a handle pairs it with an old one that had none).
+ *  `variants`: the children are a set's variants, whose name is their values, so a changed value (or a column added,
+ *  renamed or dropped) renames them: by handle, then by exact name, then every variant left on both sides in order
+ *  (the old ones in the file's order, the new ones in row order) whatever their names. A variant kept is renamed in
+ *  place, so its id stays and its instances follow; only old variants left over (rows dropped) are removed. */
+function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[], variants: boolean): Array<OldNode<T> | null> {
   const out: Array<OldNode<T> | null> = news.map(() => null);
   const used = new Set<number>();
   news.forEach((n, i) => {
@@ -291,6 +314,22 @@ function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[]
     const j = olds.findIndex((o, k) => !used.has(k) && o.spec.handle === n.handle);
     if (j >= 0) { out[i] = olds[j] || null; used.add(j); }
   });
+  if (variants) {
+    news.forEach((n, i) => {
+      if (out[i] || n.name === undefined) return;
+      const j = olds.findIndex((o, k) => !used.has(k) && o.spec.name === n.name);
+      if (j >= 0) { out[i] = olds[j] || null; used.add(j); }
+    });
+    let k = 0;
+    for (let i = 0; i < news.length; i++) {
+      if (out[i]) continue;
+      while (k < olds.length && used.has(k)) k++;
+      const o = olds[k];
+      if (!o) break;
+      out[i] = o; used.add(k); k++;
+    }
+    return out;
+  }
   const count = <X>(list: readonly X[], name: string | undefined, of: (x: X) => string | undefined): number => list.filter((x) => of(x) === name).length;
   news.forEach((n, i) => {
     if (out[i] || n.name === undefined) return;
@@ -314,13 +353,14 @@ function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[]
 
 /** Plan the update of the result `old` (the root of the earlier spec) to the new spec `spec`. */
 export function planUpdate<T>(old: OldNode<T>, spec: TreeNodeSpec): Plan<T> {
-  const plan: Plan<T> = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [] };
+  const plan: Plan<T> = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [], kept: [] };
   visit(old, spec, "tree", plan);
   return plan;
 }
 
 function visit<T>(old: OldNode<T>, spec: TreeNodeSpec, path: string, plan: Plan<T>): void {
   const kind = nodeKind(spec) || "FRAME";
+  plan.kept.push({ ref: old.ref, spec, old: old.spec });
   const a = compared(old.spec, kind);
   const b = compared(spec, kind);
   const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
@@ -332,7 +372,8 @@ function visit<T>(old: OldNode<T>, spec: TreeNodeSpec, path: string, plan: Plan<
   if (spec.handle !== undefined && spec.handle !== old.spec.handle) plan.handles.push({ handle: spec.handle, ref: old.ref });
   if (kind !== "FRAME") return;
   const news = spec.children || [];
-  const pairs = match(old.children, news);
+  // A set's variants (the root's children) pair by handle, name, then order whatever their names: see match.
+  const pairs = match(old.children, news, path === "tree" && spec.type === "COMPONENT_SET");
   const order: Array<{ ref: T } | { build: number }> = [];
   let built = false;
   news.forEach((n, i) => {
