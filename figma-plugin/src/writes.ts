@@ -18,6 +18,8 @@ import { setBatchPlan } from "./batch-plan";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
 import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
+import { resolveImages, setBatchImages } from "./images";
+import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -256,14 +258,14 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
 // last, once everything else has landed, since a deleted node cannot be brought back. `applied` lists only what stays:
 // all of it on success; on a failure, whatever could not be put back (the designer turned "Allow edits" off, or a
 // restore failed), so the caller can always find what is in the file.
-export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
+export async function applyWrites(ops: WriteOp[], images?: ImageTable): Promise<WriteResult> {
   const list = Array.isArray(ops) ? ops : [];
   // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
   // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
   // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
   // the next one never joins it. Committing with nothing pending is a no-op.
   if (list.length) commitUndo();
-  const r = await gatedWrites(list);
+  const r = await gatedWrites(list, images);
   if (list.length) commitUndo();
   announce(r);
   return r;
@@ -295,11 +297,12 @@ function announce(r: WriteResult): void {
 }
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
-async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
-  try { return await batchWrites(list); } finally { setBatchPlan(null); }
+// So do the images it made (images.ts).
+async function gatedWrites(list: WriteOp[], images: ImageTable | undefined): Promise<WriteResult> {
+  try { return await batchWrites(list, images); } finally { setBatchPlan(null); setBatchImages(null); }
 }
 
-async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
+async function batchWrites(list: WriteOp[], images: ImageTable | undefined): Promise<WriteResult> {
   const applied: AppliedWrite[] = [];
   // The designer's consent (edits.ts): with "Allow edits" off the whole batch is refused before any op is
   // checked or run, with the refusal named so figma_write can tell the agent to ask the person at the window.
@@ -329,6 +332,12 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     const bad = writeOpError(op, i);
     if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
   }
+  const badTable = imageTableError(images);
+  if (badTable !== null) return { ok: false, applied, error: badTable + ". Nothing was changed." };
+  // The images first, once (images.ts): each one the paints read from disk made from its bytes, each `hash` checked
+  // against the file. Making an image adds no node; one Figma cannot open refuses the batch with the rest of its problems.
+  const imgs = await resolveImages(list, images);
+  setBatchImages(imgs.made);
   // Every name an op carries is resolved against the file before the first op runs (spec decisions 14, 15): a
   // collection, mode, page, component, variable or style that matches nothing or several things, a missing node, a node
   // that cannot take a field, a font that does not load, a node this session did not create — the batch is refused
@@ -346,7 +355,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
     // A variable or style edit, and a patch's library check (a library's component cannot be changed here).
     const sources = await resolveSourceOps(list);
-    const problems = [...creates.problems, ...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+    const problems = [...imgs.problems, ...creates.problems, ...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
       ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     return { creates, modes, trees, patches, structure, sources, problems };
   };
@@ -536,7 +545,7 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
   }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
   const undo = propertyUndoSteps();
-  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}) };
+  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}), ...(imgs.images.length ? { images: imgs.images } : {}) };
 }
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */

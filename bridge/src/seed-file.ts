@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AppliedWrite, CreateOutcome, WritePreviewStep, WriteResult } from "./commands.ts";
 import { MAX_SPEC_FILE_BYTES } from "./spec-file.ts";
+import { nodeProjectIo, readProjectFile, type ProjectIo } from "./project-file.ts";
 import { isResolverDoc, resolverRefs, SEED_FORMATS, seedFromDtcg, seedFromResolver, type SeedOp, type SeedUnmapped } from "./token-seed.ts";
 
 /** The most files one resolver may name (its sets' and contexts' `$ref`s). */
@@ -41,41 +42,10 @@ type InOp = { op: string; file?: unknown; collection?: unknown } & Record<string
 /** The extensions of the formats this does not read: CSS, Tailwind's theme.css and the native token files. */
 const NOT_READ = /\.(css|scss|sass|less|swift|kt|kts|dart|js|jsx|ts|tsx|mjs|cjs)$/i;
 
-/** The file system calls readSeedJson makes: Node's, or a test's (to swap a file between two of them). */
-export interface SeedIo {
-  realpath(file: string): string;
-  /** opens a file to read without following a final symbolic link (where the platform can) and without blocking on a
-   *  pipe; returns its descriptor */
-  open(file: string): number;
-  fstat(fd: number): fs.Stats;
-  stat(file: string): fs.Stats;
-  /** reads the open file from its start, at most `max` bytes: null when there are more */
-  read(fd: number, max: number): Buffer | null;
-  close(fd: number): void;
-}
-/** The flags a token file is opened with: O_NOFOLLOW (a final component swapped for a link after the check is refused)
- *  and O_NONBLOCK (a named pipe is opened without waiting for a writer, then refused as not a file), each where the
- *  platform has it (Windows has neither). */
-const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
-export const nodeSeedIo: SeedIo = {
-  realpath: (file) => fs.realpathSync(file),
-  open: (file) => fs.openSync(file, OPEN_FLAGS),
-  fstat: (fd) => fs.fstatSync(fd),
-  stat: (file) => fs.statSync(file),
-  read: (fd, max) => {
-    const buf = Buffer.alloc(max + 1);
-    let n = 0;
-    for (let got = 1; got > 0 && n <= max;) { got = fs.readSync(fd, buf, n, buf.length - n, n); n += got; }
-    return n > max ? null : buf.subarray(0, n);
-  },
-  close: (fd) => fs.closeSync(fd),
-};
-
-/** Is `p` inside directory `root` (or `root` itself), by path segments? */
-function insideDir(root: string, p: string): boolean {
-  const rel = path.relative(root, p);
-  return !(rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel));
-}
+/** The file system calls readSeedJson makes (project-file.ts, shared with the image reader). */
+export type SeedIo = ProjectIo;
+export const nodeSeedIo: SeedIo = nodeProjectIo;
+const SEED_WORDS = { noun: "a token file", inside: "a token file and every $ref it names", retry: "seed again" };
 
 /** A JSON file read whole, or why it is not: missing, outside `realRoot` once its links are followed, not a file, too
  *  big, not JSON. `resolve` checks a path by name only, so a symbolic link inside the directory could lead out of it:
@@ -83,33 +53,10 @@ function insideDir(root: string, p: string): boolean {
  *  O_NOFOLLOW where the platform has it, so a final component swapped for a link in between is refused). The threat
  *  is a link (or `..`) in the project leading out of it; a process rewriting the directory while it is read is not. */
 export function readSeedJson(file: string, at: string, realRoot: string, io: SeedIo = nodeSeedIo): { json: unknown } | { error: string } {
-  let real: string;
-  try { real = io.realpath(file); } catch { return { error: `${at}: no file at ${file}` }; }
-  if (!insideDir(realRoot, real)) {
-    return { error: `${at}: ${file} leads, through a symbolic link, to ${real}, outside the directory this server was started in (${realRoot}); a token file and every $ref it names must be inside it` };
-  }
-  let fd: number;
-  try { fd = io.open(real); } catch (e) {
-    const code = e instanceof Error && "code" in e ? (e as NodeJS.ErrnoException).code : undefined;
-    if (code === "ELOOP") return { error: `${at}: ${file} changed while it was read (${real} is now a symbolic link); seed again` };
-    // Windows opens no directory: say what is there. Nothing is read from this path.
-    let there: fs.Stats | null = null;
-    try { there = io.stat(real); } catch { /* nothing there */ }
-    return { error: there === null ? `${at}: no file at ${file}` : !there.isFile() ? `${at}: ${file} is not a file` : `${at}: ${file} could not be opened` };
-  }
-  try {
-    let opened: fs.Stats;
-    try { opened = io.fstat(fd); } catch { return { error: `${at}: no file at ${file}` }; }
-    if (!opened.isFile()) return { error: `${at}: ${file} is not a file` };
-    if (opened.size > MAX_SPEC_FILE_BYTES) return { error: `${at}: ${file} is ${opened.size} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
-    let bytes: Buffer | null;
-    try { bytes = io.read(fd, MAX_SPEC_FILE_BYTES); } catch (e) { return { error: `${at}: ${file} could not be read (${e instanceof Error ? e.message : String(e)})` }; }
-    if (bytes === null) return { error: `${at}: ${file} is more than ${MAX_SPEC_FILE_BYTES} bytes; a token file is at most ${MAX_SPEC_FILE_BYTES}` };
-    try { return { json: JSON.parse(bytes.toString("utf8")) as unknown }; } catch (e) {
-      return { error: `${at}: ${file} is not valid JSON (${e instanceof Error ? e.message : String(e)}); seedTokens reads ${SEED_FORMATS}` };
-    }
-  } finally {
-    try { io.close(fd); } catch { /* already closed: nothing to give back */ }
+  const r = readProjectFile(file, at, realRoot, MAX_SPEC_FILE_BYTES, SEED_WORDS, io);
+  if ("error" in r) return r;
+  try { return { json: JSON.parse(r.bytes.toString("utf8")) as unknown }; } catch (e) {
+    return { error: `${at}: ${file} is not valid JSON (${e instanceof Error ? e.message : String(e)}); seedTokens reads ${SEED_FORMATS}` };
   }
 }
 

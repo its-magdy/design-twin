@@ -159,8 +159,8 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
     // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
     // here, so no caller of it can skip it.
     case "write": {
-      const ops = req.args.ops;
-      return () => applyWrites(ops);
+      const { ops, images } = req.args;
+      return () => applyWrites(ops, images);
     }
     // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts), and what
     // a create table would make or update (creates.ts). Reads only, so it needs no "Allow edits"; a scene run, so it

@@ -56,7 +56,8 @@ Not available yet — say so to the user instead of improvising one:
   outline reads and send one `patch` per node, or, when they share a variable or style, change that source once.
 - **Components from code**: `figma_write` makes components from a spec you write (above), not from a project's
   component code. A library can be enabled only by the designer, in Figma's own UI.
-- **Capturing a running app as a Figma screen**, and **images** in a spec.
+- **Capturing a running app as a Figma screen**. (An image in a spec is a fill: `{type: "image", file}` names a PNG,
+  JPEG or GIF in the project, `{type: "image", hash}` one the file has; references/grammar.md.)
 
 ## The dry-run rule
 

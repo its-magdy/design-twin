@@ -101,7 +101,7 @@ a `component`, a `TEXT` when it has `text`, else a `FRAME`; the root is a frame 
 | `grow` (0 \| 1), `alignSelf` (`min` \| `center` \| `max` \| `stretch`), `absolute: true` | a child's role in its auto-layout parent; an `absolute` child is out of the flow, so it cannot `fill`, `grow: 1` or stretch |
 | `x`, `y` | the root: page coordinates; a child: its place in a parent without auto-layout, or an `absolute` one (inside auto-layout they are a warning) |
 | `sizeLimits` | `{minWidth, maxWidth, minHeight, maxHeight}`, each above 0; needs auto-layout on the node or its parent |
-| `fills` | `[{type: "solid", color, opacity? (0–1), tokens?: {color: variable}}]` (solid paints only); a frame without `fills` has none |
+| `fills` | `[{type: "solid", color, opacity? (0–1), tokens?: {color: variable}}]`, or an image: `{type: "image", file: "<path>"}` (a PNG, JPEG or GIF in the project, at most 8 MB and 4096 px a side, read by the server) or `{type: "image", hash}` (an image the file has: a read's `hash`, or one a write's reply listed in `images`), each with `scaleMode` (`fill` \| `fit` \| `tile`), `scale` (a tile's), `opacity`; never the bytes, a `data:` URI or a URL; a frame without `fills` has none |
 | `strokes` | `{colors: [hex], weight, weights: {top, right, bottom, left}, align: "inside" \| "outside" \| "center"}` (`weights` not on a TEXT); `variableWidth: {profile: "uniform"}` is read-export compatibility only (the default; accepted, sets nothing; a taper is refused); `strokesInLayout: true` counts them toward the auto-layout size |
 | `radius` | a number, or `{tl, tr, br, bl}` |
 | `opacity` (0–1), `clip: true` | as read; a frame without `clip` does not clip |
@@ -379,7 +379,7 @@ is refused into the node itself, into an instance, or past the end of the new pa
 
 ## What a write cannot set yet
 
-Refused by name, each with the reason: grid layout, effects on a node, mixed-format text (`runs`), images (`asset`),
+Refused by name, each with the reason: grid layout, effects on a node, mixed-format text (`runs`), an image's crop, rotation or filters (an image is a fill, above),
 a text bound to a variable (`textTokens`), a property bound to a variable (`propTokens`), rotation, blend modes,
 masks, vector geometry, prototype reactions, annotations, SLOT component properties, and a variable's scopes or code
 syntax. A frame's
@@ -391,6 +391,7 @@ mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree la
 - 500 nodes per spec once its rows and fragments are expanded, nested at most 40 deep; a bigger screen is several
   trees.
 - `treeFile` at most 2 MB; `key` at most 200 characters.
+- An image file at most 8 MB and 4096 px a side (PNG, JPEG or GIF); a batch's images at most 32 MB together.
 - A review card waits 5 minutes; a rejection reason is cut at 500 characters.
 - Names resolve against the file as it was before the batch, except what the batch's create tables make (a component
   the batch makes is used in a later call).

@@ -89,7 +89,7 @@ function usesOf(index: number, s: TreeNodeSpec, at: string, out: Use[], labels: 
     }
   }
   if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
-  (s.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
+  (s.fills || []).forEach((f, i) => { if (f.type !== "image" && f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
   const t = s.tokens || {};
   for (const k of Object.keys(t) as Array<keyof typeof t>) {
     const v = t[k];
@@ -116,7 +116,7 @@ export function treeUses(specs: ReadonlyMap<number, { spec: TreeNodeSpec; labels
 export function patchUses(index: number, set: PatchSet): Use[] {
   const out: Use[] = [];
   const op = "patch";
-  (set.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, op, path: "set.fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
+  (set.fills || []).forEach((f, i) => { if (f.type !== "image" && f.tokens) out.push({ index, op, path: "set.fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
   const t = set.tokens || {};
   for (const k of Object.keys(t) as Array<keyof typeof t>) {
     const v = t[k];

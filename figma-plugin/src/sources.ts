@@ -27,6 +27,7 @@ import { checkStyleSet, checkVariableEdit, isStyleSet, TEXT_STYLE_TOKEN_TYPES, t
 import { plannedStyles, plannedVariables, plannedWhere } from "./batch-plan";
 import { registeredLibrary } from "./libraries";
 import { solid } from "./tree";
+import { imagePaint } from "./images";
 import { remoteVariableByKey, resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
@@ -269,7 +270,7 @@ async function stringValues(v: Variable, depth = 0): Promise<string[]> {
  *  Paths start with `at` (`set`, `styles[2].set`). */
 export function styleUses(index: number, op: string, set: StyleSet, at: string): Use[] {
   const out: Use[] = [];
-  (set.paints || []).forEach((p, i) => { if (p.tokens) out.push({ index, op, path: at + ".paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" }); });
+  (set.paints || []).forEach((p, i) => { if (p.type !== "image" && p.tokens) out.push({ index, op, path: at + ".paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" }); });
   const tok = set.tokens || {};
   for (const k of Object.keys(tok) as TextStyleTokenField[]) {
     const ref = tok[k];
@@ -551,7 +552,8 @@ export async function applyStyle(t: StyleTarget, consent: () => void): Promise<C
     if (set.name !== undefined) st.name = set.name;
     if (set.description !== undefined) st.description = set.description;
     if (st.type === "PAINT" && set.paints) {
-      st.paints = set.paints.map((p) => {
+      st.paints = set.paints.map((p): Paint => {
+        if (p.type === "image") return imagePaint(p);
         const paint = solid(p.color === undefined ? "#000000" : p.color, p.opacity);
         const ref = p.tokens && p.tokens.color;
         if (ref === undefined) return paint;
