@@ -275,9 +275,9 @@
     const d = ds || {};
     const join = (name) => DIR + (sep || "/") + name;
     const stamp = { ...ifDefined("exportedAt", d.exportedAt), ...ifDefined("file", d.file), ...ifDefined("colorProfile", d.colorProfile) };
-    const components = Array.isArray(d.components) ? d.components : [];
-    const rawLocal = components.filter((c) => !isLibraryEntry(c));
-    const library = components.filter(isLibraryEntry);
+    const components2 = Array.isArray(d.components) ? d.components : [];
+    const rawLocal = components2.filter((c) => !isLibraryEntry(c));
+    const library = components2.filter(isLibraryEntry);
     const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
     const usedNames = /* @__PURE__ */ new Set();
     const uniqueDetailName = (name, id) => {
@@ -879,8 +879,21 @@
   // ../bridge/src/tree-expand.ts
   var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-  var REPEAT_FIELDS = ["use", "fragments", "rows", "columns"];
+  var REPEAT_FIELDS = ["use", "fragments", "rows", "columns", "variant"];
   var NOT_EDITED = ["use", "fragments", "edits", "key"];
+  var VARIANT_FIXED = {
+    type: "every variant is a COMPONENT",
+    name: "a variant's name is its row's values",
+    children: "a variant's layers come from `variant`; change one with `edits` (its layer name \u2192 fields)",
+    variant: "it is the set's",
+    rows: "it is the set's",
+    columns: "it is the set's",
+    fragments: "fragments are defined once, on the spec's root",
+    use: "a variant is not a fragment",
+    key: "a component's name is its key",
+    props: "the set declares the properties (the root's `props`)",
+    component: "a variant is not an instance"
+  };
   function put(o, k, v) {
     Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
   }
@@ -919,20 +932,57 @@
       if (!isObj(defs)) say("tree.fragments: must be an object of fragment name \u2192 node spec");
       else for (const name of Object.keys(defs)) {
         const f = defs[name];
-        const at2 = "tree.fragments[" + JSON.stringify(name) + "]";
+        const at3 = "tree.fragments[" + JSON.stringify(name) + "]";
         if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
-        else if (!isObj(f)) say(at2 + ": must be a node spec");
-        else if (f.key !== void 0) say(at2 + ".key: a key names a whole result, so only the spec's root carries it");
+        else if (!isObj(f)) say(at3 + ": must be a node spec");
+        else if (f.key !== void 0) say(at3 + ".key: a key names a whole result, so only the spec's root carries it");
         else put(fragments, name, f);
       }
     }
     const used = /* @__PURE__ */ new Set();
     let count2 = 0;
     let tooMany = false;
+    const applyEdits = (layers, edits, path, of, inWhat) => {
+      if (!isObj(edits)) {
+        say(path + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
+        return;
+      }
+      for (const layer of Object.keys(edits)) {
+        const fields = edits[layer];
+        const at3 = path + "[" + JSON.stringify(layer) + "]";
+        if (!isObj(fields)) {
+          say(at3 + ": must be an object of the fields to change");
+          continue;
+        }
+        const hits = layers.filter((l) => l.name === layer);
+        if (hits.length !== 1) {
+          const names = layers.map((l) => l.name).filter((x) => typeof x === "string");
+          say(at3 + ": " + (hits.length ? "matches " + hits.length + " layers of " + of + "; give them different names" : "no layer of " + of + " has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
+          continue;
+        }
+        const target = hits[0];
+        if (!target) continue;
+        for (const k of Object.keys(fields)) {
+          if (NOT_EDITED.indexOf(k) >= 0) {
+            say(at3 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
+            continue;
+          }
+          const v = fields[k];
+          if (v === null) delete target[k];
+          else if (v !== void 0) put(target, k, copy(v));
+        }
+      }
+    };
     const expand = (n, path, stack, isRoot) => {
       if (tooMany) return [];
       if (!isObj(n)) return [n];
       if (!isRoot && n.fragments !== void 0) say(path + ".fragments: fragments are defined once, on the spec's root");
+      if (isRoot && n.type === "COMPONENT_SET") return variants(n, path, stack);
+      if (isRoot && n.type === "COMPONENT" && (n.variant !== void 0 || n.rows !== void 0 || n.columns !== void 0)) {
+        say(path + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
+        return [];
+      }
+      if (n.variant !== void 0) say(path + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
       if (n.use !== void 0) return place2(n, path, stack, isRoot);
       if (n.rows !== void 0) return spread(n, path);
       if (n.columns !== void 0) say(path + ".columns: names the values of each row in `rows`, which this node does not have");
@@ -972,47 +1022,103 @@
       if (n.rows !== void 0 || n.columns !== void 0) say(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
       const body = copy(fragments[name]);
       if (!isObj(body)) return [];
-      if (n.edits !== void 0) {
-        if (!isObj(n.edits)) say(path + ".edits: must be an object of a layer name in the fragment \u2192 the fields it changes");
-        else {
-          const layers = layersOf(body, []);
-          for (const layer of Object.keys(n.edits)) {
-            const fields = n.edits[layer];
-            const at2 = path + ".edits[" + JSON.stringify(layer) + "]";
-            if (!isObj(fields)) {
-              say(at2 + ": must be an object of the fields to change");
-              continue;
-            }
-            const hits = layers.filter((l) => l.name === layer);
-            if (hits.length !== 1) {
-              const names = layers.map((l) => l.name).filter((x) => typeof x === "string");
-              say(at2 + ": " + (hits.length ? "matches " + hits.length + " layers of fragment '" + name + "'; give them different names" : "no layer of fragment '" + name + "' has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
-              continue;
-            }
-            const target = hits[0];
-            if (!target) continue;
-            for (const k of Object.keys(fields)) {
-              if (NOT_EDITED.indexOf(k) >= 0) {
-                say(at2 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
-                continue;
-              }
-              const v = fields[k];
-              if (v === null) delete target[k];
-              else if (v !== void 0) put(target, k, copy(v));
-            }
-          }
-        }
-      }
+      if (n.edits !== void 0) applyEdits(layersOf(body, []), n.edits, path + ".edits", "fragment '" + name + "'", "in the fragment");
       for (const k of Object.keys(n)) {
         if (k === "use" || k === "edits" || k === "children" || k === "fragments" && isRoot) continue;
         if (n[k] !== void 0) put(body, k, copy(n[k]));
       }
       return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
     };
+    const variants = (n, path, stack) => {
+      const before = problems.length;
+      const base = n.variant;
+      const cols = n.columns;
+      const rows = n.rows;
+      if (n.children !== void 0) say(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
+      if (n.use !== void 0) say(path + ".use: a component set is not a fragment");
+      if (!isObj(base)) say(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
+      else {
+        if (base.type !== void 0 && base.type !== "COMPONENT") say(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
+        if (base.name !== void 0) say(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+        for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
+          const why = VARIANT_FIXED[k];
+          if (base[k] !== void 0 && why !== void 0) say(path + ".variant." + k + ": not on a variant \u2014 " + why);
+        }
+      }
+      if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
+      else {
+        if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+        const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
+        if (odd >= 0) say(path + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
+      }
+      if (!Array.isArray(rows) || !rows.length) say(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
+      if (problems.length !== before || !isObj(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
+      const names = cols.map(String);
+      const seen = /* @__PURE__ */ new Map();
+      const kids = [];
+      const table = rows;
+      table.forEach((row, i) => {
+        const r = path + ".rows[" + i + "]";
+        const shape = "a list of " + names.length + " value" + (names.length === 1 ? "" : "s") + ", one per column (" + quoteList(names) + "), then optionally an object of the fields this variant changes";
+        if (!Array.isArray(row)) {
+          say(r + ": must be " + shape);
+          return;
+        }
+        const cells = row;
+        const last2 = cells[names.length];
+        const over = cells.length === names.length + 1 && isObj(last2) ? last2 : null;
+        if (cells.length !== names.length && !over) {
+          say(r + ": must be " + shape);
+          return;
+        }
+        const values = cells.slice(0, names.length);
+        const bad = values.findIndex((v2) => typeof v2 !== "string" || !v2.trim() || /[=,]/.test(v2));
+        if (bad >= 0) {
+          const v2 = values[bad];
+          say(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
+          return;
+        }
+        const name = names.map((c, j) => c + "=" + String(values[j])).join(", ");
+        const dup = seen.get(name);
+        if (dup !== void 0) {
+          say(r + ": " + name + " is rows[" + dup + "]'s combination too; each variant needs its own");
+          return;
+        }
+        seen.set(name, i);
+        const v = copy(base);
+        if (!isObj(v)) return;
+        put(v, "type", "COMPONENT");
+        put(v, "name", name);
+        if (over) {
+          for (const k of Object.keys(over)) {
+            const x = over[k];
+            if (k === "edits" || x === void 0) continue;
+            const why = own(VARIANT_FIXED, k) ? VARIANT_FIXED[k] : void 0;
+            if (why !== void 0) {
+              say(r + "." + k + ": a row cannot change it \u2014 " + why);
+              continue;
+            }
+            if (x === null) delete v[k];
+            else put(v, k, copy(x));
+          }
+          if (over.edits !== void 0) applyEdits(layersOf(v, []).slice(1), over.edits, r + ".edits", "the base `variant`", "in the base `variant`");
+        }
+        for (const x of expand(v, r + " (variant '" + name + "')", stack, false)) kids.push(x);
+      });
+      if (++count2 > maxNodes) {
+        tooMany = true;
+        return [];
+      }
+      const out = {};
+      for (const k of Object.keys(n)) if (k !== "variant" && k !== "rows" && k !== "columns" && k !== "children" && k !== "fragments") put(out, k, copy(n[k]));
+      out.children = kids;
+      labels.set(out, path);
+      return [out];
+    };
     const spread = (n, path) => {
-      const at2 = path + ".rows";
+      const at3 = path + ".rows";
       if (n.component === void 0 || n.type !== void 0 && n.type !== "INSTANCE") {
-        say(at2 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
+        say(at3 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
         return [];
       }
       if (n.handle !== void 0) say(path + ".handle: a handle names one node, and a row table makes several; leave it out");
@@ -1028,7 +1134,7 @@
       }
       const rows = n.rows;
       if (!Array.isArray(rows) || !rows.length) {
-        say(at2 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
+        say(at3 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
         return [];
       }
       if (n.props !== void 0 && !isObj(n.props)) {
@@ -1038,7 +1144,7 @@
       const base = isObj(n.props) ? n.props : {};
       const out = [];
       rows.forEach((row, i) => {
-        const r = at2 + "[" + i + "]";
+        const r = at3 + "[" + i + "]";
         let props = null;
         if (Array.isArray(cols)) {
           if (!Array.isArray(row) || row.length !== cols.length) {
@@ -1084,6 +1190,122 @@
     return { tree: root === void 0 ? {} : root, problems, warnings, labels };
   }
 
+  // ../bridge/src/component-spec.ts
+  var PROP_REF_TYPES = {
+    characters: "TEXT",
+    visible: "BOOLEAN",
+    mainComponent: "INSTANCE_SWAP"
+  };
+  var PROP_REF_FIELDS = ["characters", "visible", "mainComponent"];
+  var RESERVED_KEY_PREFIX = "dtwin/";
+  var componentKey = (name) => RESERVED_KEY_PREFIX + "component:" + name;
+  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var at = (path, name) => path + "[" + JSON.stringify(name) + "]";
+  function componentRootOf(spec) {
+    if (!isObj2(spec) || spec.type !== "COMPONENT" && spec.type !== "COMPONENT_SET") return null;
+    return { type: spec.type, name: typeof spec.name === "string" ? spec.name : "" };
+  }
+  function propDefsOf(spec) {
+    const p = spec.props;
+    if (!isObj2(p)) return [];
+    const out = [];
+    for (const k of Object.keys(p)) {
+      const d = p[k];
+      if (!isObj2(d) || d.type !== "TEXT" && d.type !== "BOOLEAN" && d.type !== "INSTANCE_SWAP") continue;
+      const def = { type: d.type, default: typeof d.default === "boolean" ? d.default : String(d.default) };
+      if (Array.isArray(d.preferredValues)) def.preferredValues = d.preferredValues.filter((x) => typeof x === "string");
+      out.push([k, def]);
+    }
+    return out;
+  }
+  function propDefComponents(spec) {
+    const out = [];
+    const add = (n) => {
+      if (out.indexOf(n) < 0) out.push(n);
+    };
+    for (const [, d] of propDefsOf(spec)) {
+      if (d.type !== "INSTANCE_SWAP") continue;
+      if (typeof d.default === "string") add(d.default);
+      for (const p of d.preferredValues || []) add(p);
+    }
+    return out;
+  }
+  var DEF_FIELDS = ["type", "default", "preferredValues"];
+  function propDefsProblems(v, path, columns) {
+    const out = [];
+    if (!isObj2(v)) return [path + ": on a component, `props` declares its properties \u2014 an object of property name \u2192 {type, default}"];
+    for (const name of Object.keys(v)) {
+      const d = v[name];
+      if (d === void 0) continue;
+      const p = at(path, name);
+      if (!name.trim()) {
+        out.push(path + ": has an empty property name");
+        continue;
+      }
+      if (name.indexOf("#") >= 0) {
+        out.push(p + ": a property's name cannot hold '#' (Figma keeps it for the property's id)");
+        continue;
+      }
+      if (columns.indexOf(name) >= 0) {
+        out.push(p + ": '" + name + "' is a column of the variant table (a VARIANT property) already; give this property another name");
+        continue;
+      }
+      if (!isObj2(d)) {
+        out.push(p + ": must be a definition {type, default} (TEXT, BOOLEAN or INSTANCE_SWAP)");
+        continue;
+      }
+      for (const k of Object.keys(d)) {
+        if (d[k] === void 0 || DEF_FIELDS.indexOf(k) >= 0) continue;
+        const near = nearestNames(k, DEF_FIELDS);
+        out.push(p + "." + k + ": not a field of a property definition" + (near.length ? "; closest: " + quoteList(near) : "") + " (it takes type, default, preferredValues)");
+      }
+      const t = d.type;
+      if (t === "VARIANT") {
+        out.push(p + ".type: a VARIANT property comes from the variant table (a COMPONENT_SET root's `columns` and `rows`), never from `props`");
+        continue;
+      }
+      if (t === "SLOT") {
+        out.push(p + ".type: a SLOT property cannot be written yet (TEXT, BOOLEAN and INSTANCE_SWAP can)");
+        continue;
+      }
+      if (t !== "TEXT" && t !== "BOOLEAN" && t !== "INSTANCE_SWAP") {
+        out.push(p + ".type: must be one of TEXT | BOOLEAN | INSTANCE_SWAP");
+        continue;
+      }
+      const def = d.default;
+      if (def === void 0) out.push(p + ": is missing default (" + (t === "TEXT" ? "the text an instance shows unless it sets its own" : t === "BOOLEAN" ? "true or false" : "the component an instance shows: its name, key or id") + ")");
+      else if (t === "TEXT" && typeof def !== "string") out.push(p + ".default: a TEXT property's default is a string");
+      else if (t === "BOOLEAN" && typeof def !== "boolean") out.push(p + ".default: a BOOLEAN property's default is true or false");
+      else if (t === "INSTANCE_SWAP" && (typeof def !== "string" || !def.trim())) out.push(p + ".default: an INSTANCE_SWAP property's default is a component (its exact name, key or id)");
+      const pv = d.preferredValues;
+      if (pv !== void 0) {
+        if (t !== "INSTANCE_SWAP") out.push(p + ".preferredValues: only an INSTANCE_SWAP property suggests components");
+        else if (!Array.isArray(pv) || !pv.length || !pv.every((x) => typeof x === "string" && x.trim().length > 0)) out.push(p + ".preferredValues: must be a non-empty list of components (each its exact name, key or id)");
+      }
+    }
+    return out;
+  }
+  function propRefsShape(v) {
+    if (!isObj2(v)) return "must be an object {characters?, visible?, mainComponent?} of the property each field follows";
+    const fields = PROP_REF_FIELDS;
+    for (const k of Object.keys(v)) {
+      const x = v[k];
+      if (x === void 0) continue;
+      if (fields.indexOf(k) < 0) {
+        const near = nearestNames(k, fields);
+        return "." + k + ": not a field a property drives" + (near.length ? "; closest: " + quoteList(near) : "") + " (characters, visible, mainComponent)";
+      }
+      if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
+    }
+    return null;
+  }
+  function variantColumns(name) {
+    return name.split(", ").map((part) => {
+      const i = part.indexOf("=");
+      return i > 0 ? part.slice(0, i) : part;
+    });
+  }
+
   // ../bridge/src/tree-spec.ts
   var NUMBER_TOKEN_FIELDS = [
     "itemSpacing",
@@ -1116,7 +1338,7 @@
   var NOT_YET = { refuse: "" };
   var refuse = (why) => ({ refuse: why });
   var isRefuse = (r) => typeof r !== "function";
-  var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var isNum = (v) => typeof v === "number" && Number.isFinite(v);
   var str = (v) => typeof v === "string" ? null : "must be a string";
   var num = (v) => isNum(v) ? null : "must be a number";
@@ -1135,7 +1357,7 @@
     for (const e of list) if (e !== null) return e;
     return null;
   };
-  var objOf = (rules) => (v) => isObj2(v) ? firstOr(objectProblems(v, rules, "")) : "must be an object";
+  var objOf = (rules) => (v) => isObj3(v) ? firstOr(objectProblems(v, rules, "")) : "must be an object";
   var LAYOUT_RULES = {
     display: (v) => v === "flex" ? null : v === "grid" ? "'grid' cannot be written yet (flex can)" : 'must be "flex"',
     mode: oneOf("absolute"),
@@ -1160,7 +1382,7 @@
     autoTracks: refuse("grid layout cannot be written yet")
   };
   var LENGTH = (units, value = num) => (v) => {
-    if (!isObj2(v)) return "must be an object {unit, value}";
+    if (!isObj3(v)) return "must be an object {unit, value}";
     const bad = objOf({ unit: oneOf(...units), value })(v);
     if (bad !== null) return bad;
     return v.unit === void 0 ? "is missing unit" : v.value === void 0 ? "is missing value" : null;
@@ -1173,7 +1395,7 @@
     align: oneOf("left", "center", "right", "justified"),
     valign: oneOf("center", "bottom"),
     lineHeight: (v) => {
-      if (!isObj2(v) || v.unit !== "auto") return LENGTH(["px", "percent"], nonNeg)(v);
+      if (!isObj3(v) || v.unit !== "auto") return LENGTH(["px", "percent"], nonNeg)(v);
       const extra = Object.keys(v).filter((k) => k !== "unit" && v[k] !== void 0);
       return extra.length ? "." + extra[0] + ': not a field of an `auto` line height (it is `{unit:"auto"}` alone)' : null;
     },
@@ -1184,7 +1406,7 @@
     // No upper bound: Figma takes a `wght` axis past 1000 (seen live: 5000) and the read then writes that weight.
     weightValue: (v) => isNum(v) && v > 0 ? null : "must be a number > 0 (it follows `weight`, and sets nothing)",
     variationSettings: (v) => {
-      if (!isObj2(v)) return 'must be an object of axis tag \u2192 number, e.g. {"wght": 560}';
+      if (!isObj3(v)) return 'must be an object of axis tag \u2192 number, e.g. {"wght": 560}';
       for (const [k, x] of Object.entries(v)) if (!isNum(x)) return "." + k + " must be a number";
       return null;
     },
@@ -1212,7 +1434,7 @@
     align: oneOf("inside", "outside", "center"),
     paints: refuse("only solid stroke `colors` can be written yet"),
     // The read writes `{profile:"uniform"}` on an ordinary stroke: that default is accepted (it sets nothing); a taper is not yet.
-    variableWidth: (v) => isObj2(v) && v.profile === "uniform" && Object.keys(v).every((k) => k === "profile") ? null : 'only the default {profile:"uniform"} can be written yet (a tapered or custom-width stroke cannot)',
+    variableWidth: (v) => isObj3(v) && v.profile === "uniform" && Object.keys(v).every((k) => k === "profile") ? null : 'only the default {profile:"uniform"} can be written yet (a tapered or custom-width stroke cannot)',
     dash: NOT_YET,
     cap: NOT_YET,
     join: NOT_YET,
@@ -1234,7 +1456,7 @@
     color: hex,
     opacity: unit,
     tokens: (v) => {
-      if (!isObj2(v)) return "must be an object {color: variable}";
+      if (!isObj3(v)) return "must be an object {color: variable}";
       const bad = firstOr(objectProblems(v, PAINT_TOKEN_RULES, ""));
       return bad !== null ? bad : v.color === void 0 ? "is missing color (the colour variable's name, key or id)" : null;
     },
@@ -1244,7 +1466,7 @@
   var fillsCheck = (v) => {
     if (!Array.isArray(v)) return 'must be a list of paints ({type:"solid", color})';
     for (const [i, p] of v.entries()) {
-      if (!isObj2(p)) return "[" + i + "] must be a paint object";
+      if (!isObj3(p)) return "[" + i + "] must be a paint object";
       const bad = objectProblems(p, FILL_RULES, "")[0];
       if (bad) return "[" + i + "]" + (bad.startsWith(".") ? "" : " ") + bad;
       if (p.color === void 0 && p.tokens === void 0) return "[" + i + "] is missing color (a hex colour, or a colour variable in `tokens.color`)";
@@ -1276,10 +1498,10 @@
     grid: refuse("layout grids cannot be written yet")
   };
   var propsCheck = (v) => {
-    if (!isObj2(v)) return "must be an object of property name \u2192 value";
+    if (!isObj3(v)) return "must be an object of property name \u2192 value";
     for (const [k, x] of Object.entries(v)) {
       if (!k.trim()) return "has an empty property name";
-      if (x !== void 0 && typeof x !== "string" && typeof x !== "boolean") return "." + k + " must be a string (a variant's value, a text) or a boolean";
+      if (x !== void 0 && typeof x !== "string" && typeof x !== "boolean") return "." + k + " must be a string (a variant's value, a text, a swap's component) or a boolean";
     }
     return null;
   };
@@ -1292,7 +1514,7 @@
     // reply could not carry it back however the plugin builds it.
     handle: (v) => typeof v !== "string" || v.length === 0 ? "must be a non-empty string" : v === "__proto__" ? "'__proto__' cannot be a handle (Figma's message passing drops that key); pick another name" : null,
     // Stored on the node as plugin data (an entry is capped at 100 kB by Figma; a key is far below it).
-    key: (v) => typeof v !== "string" || !v.trim() ? "must be a non-empty string" : v.length > MAX_KEY_LENGTH ? "must be at most " + MAX_KEY_LENGTH + " characters" : null,
+    key: (v) => typeof v !== "string" || !v.trim() ? "must be a non-empty string" : v.length > MAX_KEY_LENGTH ? "must be at most " + MAX_KEY_LENGTH + " characters" : v.indexOf(RESERVED_KEY_PREFIX) === 0 ? "cannot start with '" + RESERVED_KEY_PREFIX + "' (the plugin keeps it for the components it builds)" : null,
     id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
     hidden: trueOnly,
     x: num,
@@ -1322,7 +1544,7 @@
     // Read fields a write does not set (yet). Each is refused by name.
     propTokens: refuse("a property bound to a variable cannot be written yet; give its value in `props`"),
     mainComponent: refuse("name the component in `component` (its name, key or id)"),
-    propRefs: NOT_YET,
+    propRefs: propRefsShape,
     overrides: NOT_YET,
     exposedInstances: NOT_YET,
     detachedFrom: NOT_YET,
@@ -1390,19 +1612,19 @@
     const out = [];
     for (const [k, v] of Object.entries(o)) {
       if (v === void 0) continue;
-      const at2 = path + "." + k;
+      const at3 = path + "." + k;
       const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
       if (rule === void 0) {
         const near = nearestNames(k, Object.keys(rules).filter((r) => {
           const x = rules[r];
           return x !== void 0 && !isRefuse(x);
         }));
-        out.push(at2 + ": not a field the write accepts" + (near.length ? "; closest: " + quoteList(near) : ""));
+        out.push(at3 + ": not a field the write accepts" + (near.length ? "; closest: " + quoteList(near) : ""));
       } else if (isRefuse(rule)) {
-        out.push(at2 + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
+        out.push(at3 + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
       } else {
         const bad = rule(v);
-        if (bad !== null) out.push(at2 + (bad.startsWith(".") || bad.startsWith("[") ? "" : " ") + bad);
+        if (bad !== null) out.push(at3 + (bad.startsWith(".") || bad.startsWith("[") ? "" : " ") + bad);
       }
     }
     return out;
@@ -1410,6 +1632,7 @@
   function nodeKind(n) {
     if (n.clone !== void 0) return n.type === void 0 ? "CLONE" : null;
     if (n.type === void 0) return n.component !== void 0 ? "INSTANCE" : n.text !== void 0 ? "TEXT" : "FRAME";
+    if (n.type === "COMPONENT" || n.type === "COMPONENT_SET") return "FRAME";
     return n.type === "FRAME" || n.type === "TEXT" || n.type === "INSTANCE" ? n.type : null;
   }
   var INSTANCE_FIELDS = /* @__PURE__ */ new Set([
@@ -1430,7 +1653,8 @@
     "widthMode",
     "heightMode",
     "opacity",
-    "tokens"
+    "tokens",
+    "propRefs"
   ]);
   var STYLE_FONT_FIELDS = ["family", "weight", "size", "lineHeight", "letterSpacing", "case", "decoration", "variationSettings"];
   var SIDE_PAD = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
@@ -1438,26 +1662,26 @@
   var STROKE_SIDES = [["top", "strokeTopWeight"], ["right", "strokeRightWeight"], ["bottom", "strokeBottomWeight"], ["left", "strokeLeftWeight"]];
   var nameList = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   function unboundOf(n, kind) {
-    const t = isObj2(n.tokens) ? n.tokens : {};
+    const t = isObj3(n.tokens) ? n.tokens : {};
     const has2 = (k) => t[k] !== void 0;
     let c = 0;
     if (Array.isArray(n.fills)) {
-      for (const p of n.fills) if (isObj2(p) && p.tokens === void 0) c++;
+      for (const p of n.fills) if (isObj3(p) && p.tokens === void 0) c++;
     }
     if (kind === "TEXT") {
-      const styled = isObj2(n.styles) && n.styles.text !== void 0;
+      const styled = isObj3(n.styles) && n.styles.text !== void 0;
       if (!styled) c++;
-      if (n.fills === void 0 && !has2("fills") && isObj2(n.font) && n.font.color !== void 0) c++;
+      if (n.fills === void 0 && !has2("fills") && isObj3(n.font) && n.font.color !== void 0) c++;
     }
-    const st = isObj2(n.strokes) ? n.strokes : null;
+    const st = isObj3(n.strokes) ? n.strokes : null;
     if (st) {
       if (Array.isArray(st.colors) && !has2("strokes")) c += st.colors.length;
       if (st.weight !== void 0 && !has2("strokeWeight")) c++;
-      if (isObj2(st.weights)) {
+      if (isObj3(st.weights)) {
         for (const [side, field] of STROKE_SIDES) if (st.weights[side] !== void 0 && !has2(field)) c++;
       }
     }
-    const l = isObj2(n.layout) ? n.layout : null;
+    const l = isObj3(n.layout) ? n.layout : null;
     if (l && l.display === "flex") {
       if (l.gap !== void 0 && !has2("itemSpacing")) c++;
       if (Array.isArray(l.padding)) SIDE_PAD.forEach((f) => {
@@ -1468,45 +1692,45 @@
     }
     if (typeof n.radius === "number") {
       if (!CORNERS.every(([, f]) => has2(f))) c++;
-    } else if (isObj2(n.radius)) {
+    } else if (isObj3(n.radius)) {
       for (const [k, f] of CORNERS) if (n.radius[k] !== void 0 && !has2(f)) c++;
     }
     return c;
   }
-  var isFlex = (n) => isObj2(n.layout) && n.layout.display === "flex";
+  var isFlex = (n) => isObj3(n.layout) && n.layout.display === "flex";
   function fontOf(font) {
     return { family: font && font.family !== void 0 ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== void 0 ? font.weight : DEFAULT_FONT.weight };
   }
   function tokenProblems(n, t, kind, flex, inFlex, say) {
     const fits = kind === "FRAME" ? FRAME_TOKENS : kind === "TEXT" ? TEXT_TOKENS : INSTANCE_TOKENS;
-    const l = isObj2(n.layout) ? n.layout : {};
+    const l = isObj3(n.layout) ? n.layout : {};
     for (const k of Object.keys(t)) {
       if (t[k] === void 0 || !settable(TOKEN_RULES, k)) continue;
-      const at2 = "`tokens." + k + "`";
+      const at3 = "`tokens." + k + "`";
       if (fits.indexOf(k) < 0) {
-        say(at2 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
+        say(at3 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
         continue;
       }
-      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at2 + ' needs auto-layout on the node (layout.display "flex")');
-      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say(at2 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
-      if (k === "width" && n.widthMode !== void 0) say(at2 + " sizes the node, which `widthMode` already does; leave one out");
-      if (k === "height" && n.heightMode !== void 0) say(at2 + " sizes the node, which `heightMode` already does; leave one out");
-      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at2 + " needs auto-layout on the node or its parent");
+      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at3 + ' needs auto-layout on the node (layout.display "flex")');
+      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say(at3 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
+      if (k === "width" && n.widthMode !== void 0) say(at3 + " sizes the node, which `widthMode` already does; leave one out");
+      if (k === "height" && n.heightMode !== void 0) say(at3 + " sizes the node, which `heightMode` already does; leave one out");
+      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at3 + " needs auto-layout on the node or its parent");
     }
     const fills = nameList(t.fills);
     if (t.fills !== void 0 && Array.isArray(n.fills)) {
-      const onPaints = n.fills.map((p) => isObj2(p) && isObj2(p.tokens) ? p.tokens.color : void 0);
+      const onPaints = n.fills.map((p) => isObj3(p) && isObj3(p.tokens) ? p.tokens.color : void 0);
       for (const name of fills) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
     const strokes = nameList(t.strokes);
-    const colors = isObj2(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
+    const colors = isObj3(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
     if (t.strokes !== void 0 && colors && colors.length !== strokes.length) say("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
   }
   var NODE_ID = /^[^\s:;]+:[^\s:;]+$/;
   var INSTANCE_LAYER = /^I[^\s]*;/;
   var CLONE_RULES = {
     clone: (v) => typeof v !== "string" ? 'must be the id of the node to copy (e.g. "12:34")' : INSTANCE_LAYER.test(v) ? "'" + v + "' is a layer inside an instance, which is not copied on its own; copy the instance or a frame that holds it" : NODE_ID.test(v) ? null : 'must be a node id (e.g. "12:34", as the read gives it); a copy names its source by id, never by name',
-    edits: (v) => isObj2(v) ? null : "must be an object of a layer of the source (its exact name, or its id) \u2192 the fields it changes",
+    edits: (v) => isObj3(v) ? null : "must be an object of a layer of the source (its exact name, or its id) \u2192 the fields it changes",
     handle: NODE_RULES.handle,
     key: NODE_RULES.key,
     x: num,
@@ -1543,6 +1767,11 @@
     if (ex.problems.length) return { problems: ex.problems, summary, expanded: null, labels: ex.labels };
     summary.warnings.push(...ex.warnings);
     const tree = ex.tree;
+    const root = componentRootOf(tree);
+    const variantList = root && root.type === "COMPONENT_SET" && isObj3(tree) && Array.isArray(tree.children) ? tree.children : [];
+    const firstVariant = variantList[0];
+    const columns = isObj3(firstVariant) && typeof firstVariant.name === "string" ? variantColumns(firstVariant.name) : [];
+    const comp = root && isObj3(tree) ? { ...root, defs: new Map(propDefsOf(tree).map(([k, d]) => [k, d.type])), used: /* @__PURE__ */ new Set() } : null;
     const seenHandles = /* @__PURE__ */ new Set();
     const seenFonts = /* @__PURE__ */ new Set();
     const addRef = (list, name) => {
@@ -1576,8 +1805,8 @@
       if (parentFlex === null && n.hidden !== void 0) say("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
       placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
       const edits = [];
-      if (isObj2(n.edits)) {
-        const keys = Object.keys(n.edits).filter((k) => isObj2(n.edits) && n.edits[k] !== void 0);
+      if (isObj3(n.edits)) {
+        const keys = Object.keys(n.edits).filter((k) => isObj3(n.edits) && n.edits[k] !== void 0);
         if (!keys.length) say("`edits` is empty; leave it out for an exact copy");
         for (const k of keys) {
           if (!k.trim()) {
@@ -1604,14 +1833,14 @@
         summary.unbound += r.summary.unbound;
       }
     };
-    const walk = (n, at2, depth, parentFlex) => {
+    const walk = (n, at3, depth, parentFlex) => {
       if (++count2 > MAX_TREE_NODES) {
         tooMany = true;
         return;
       }
-      const label4 = isObj2(n) ? ex.labels.get(n) : void 0;
-      const path = label4 !== void 0 ? label4 : at2;
-      if (!isObj2(n)) {
+      const label5 = isObj3(n) ? ex.labels.get(n) : void 0;
+      const path = label5 !== void 0 ? label5 : at3;
+      if (!isObj3(n)) {
         problems.push(path + ": must be a node object");
         return;
       }
@@ -1624,14 +1853,53 @@
         return;
       }
       const before = problems.length;
-      problems.push(...objectProblems(n, NODE_RULES, path));
-      const kind = nodeKind(n);
-      if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can)");
       const isRoot = parentFlex === null;
+      const compType = n.type === "COMPONENT" || n.type === "COMPONENT_SET" ? n.type : null;
+      const isCompRoot = isRoot && compType !== null;
+      const isVariant = depth === 1 && comp !== null && comp.type === "COMPONENT_SET";
+      const fields = {};
+      for (const k of Object.keys(n)) if (!(isCompRoot && k === "props")) Object.defineProperty(fields, k, { value: n[k], enumerable: true, writable: true, configurable: true });
+      problems.push(...objectProblems(fields, NODE_RULES, path));
+      const kind = nodeKind(n);
+      if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
       const flex = isFlex(n);
       const say = (msg) => {
         problems.push(path + ": " + msg);
       };
+      if (compType !== null && !isRoot && !(isVariant && compType === "COMPONENT")) {
+        say('`type: "' + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
+      }
+      if (isVariant && compType !== "COMPONENT") say("a component set holds only its variants (each a COMPONENT)");
+      if (isCompRoot) {
+        if (typeof n.name !== "string" || !n.name.trim()) say("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
+        if (n.key !== void 0) say("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
+        if (n.component !== void 0 && n.component !== n.name) say("`component` on a component root is only the read's echo of its own `name`; leave it out");
+        if (n.props !== void 0) problems.push(...propDefsProblems(n.props, path + ".props", columns));
+      }
+      if (isVariant && n.props !== void 0) say("a variant's properties are the set's: declare them in the root's `props`");
+      if (isVariant && n.key !== void 0) say("a component's name is its key: leave `key` out");
+      if (n.propRefs !== void 0 && isObj3(n.propRefs) && propRefsShape(n.propRefs) === null) {
+        if (!comp) say("`propRefs` wires a layer to a property of the component it is in, so it is only inside a COMPONENT or COMPONENT_SET root");
+        else if (isCompRoot || isVariant) say("`propRefs` wires a layer inside the component to one of its properties; the component itself cannot be wired");
+        else {
+          for (const f of PROP_REF_FIELDS) {
+            const prop = n.propRefs[f];
+            if (typeof prop !== "string") continue;
+            const at4 = "`propRefs." + f + "`";
+            const want = PROP_REF_TYPES[f];
+            const has2 = comp.defs.get(prop);
+            if (has2 === void 0) {
+              const near = nearestNames(prop, [...comp.defs.keys()]);
+              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near.length ? "; closest: " + quoteList(near) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+              continue;
+            }
+            comp.used.add(prop);
+            if (has2 !== want) say(at4 + " names '" + prop + "', a " + has2 + " property; `" + f + "` follows a " + want + " property");
+            if (f === "characters" && kind !== "TEXT") say(at4 + ": only a TEXT layer's text follows a property");
+            if (f === "mainComponent" && kind !== "INSTANCE") say(at4 + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
+          }
+        }
+      }
       if (!isRoot && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
       if (kind === "TEXT") {
         if (typeof n.text !== "string") say("a TEXT node needs `text`");
@@ -1644,17 +1912,17 @@
         for (const k of Object.keys(n)) if (n[k] !== void 0 && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
       }
       if (kind !== "INSTANCE") {
-        for (const k of ["component", "props"]) if (n[k] !== void 0) say("`" + k + "` is only on an INSTANCE node");
+        for (const k of ["component", "props"]) if (n[k] !== void 0 && !isCompRoot && !(isVariant && k === "props")) say("`" + k + "` is only on an INSTANCE node");
       }
-      if (isObj2(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
+      if (isObj3(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
       for (const axis of ["widthMode", "heightMode"]) {
         if (n[axis] === "hug" && !flex && kind === "FRAME") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
       }
-      if (isObj2(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
+      if (isObj3(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
       placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
       if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
       if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
-      if (isObj2(n.layout) && n.layout.display === "flex") {
+      if (isObj3(n.layout) && n.layout.display === "flex") {
         const l = n.layout;
         const column = l.flexDirection === "column";
         if (l.alignItems === "baseline" && column) say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
@@ -1665,28 +1933,28 @@
           say("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
         }
       }
-      if (kind === "TEXT" && isObj2(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
-      if (isObj2(n.sizeLimits)) {
+      if (kind === "TEXT" && isObj3(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
+      if (isObj3(n.sizeLimits)) {
         const m = n.sizeLimits;
         if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
         if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
       }
-      if (isObj2(n.layout) && n.layout.mode === "absolute") {
+      if (isObj3(n.layout) && n.layout.mode === "absolute") {
         const l = n.layout;
         if (l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
         else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
       }
-      if (isObj2(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
+      if (isObj3(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
       handleOf(n, say);
       if (problems.length === before && kind !== null && kind !== "CLONE") {
-        const styled = isObj2(n.styles) && typeof n.styles.text === "string";
+        const styled = isObj3(n.styles) && typeof n.styles.text === "string";
         if (kind === "TEXT") {
           summary.texts++;
           if (styled) {
-            const set = isObj2(n.font) ? STYLE_FONT_FIELDS.filter((k) => isObj2(n.font) && n.font[k] !== void 0) : [];
+            const set = isObj3(n.font) ? STYLE_FONT_FIELDS.filter((k) => isObj3(n.font) && n.font[k] !== void 0) : [];
             if (set.length) summary.warnings.push(path + ": " + set.map((k) => "`font." + k + "`").join(", ") + " " + (set.length === 1 ? "is" : "are") + " set by the text style, so " + (set.length === 1 ? "it is" : "they are") + " not set");
           } else {
-            const f = fontOf(isObj2(n.font) ? n.font : void 0);
+            const f = fontOf(isObj3(n.font) ? n.font : void 0);
             const key = f.family + "|" + f.weight;
             if (!seenFonts.has(key)) {
               seenFonts.add(key);
@@ -1694,26 +1962,31 @@
             }
           }
         } else if (kind === "INSTANCE") summary.instances++;
-        else summary.frames++;
+        else if (compType === null) summary.frames++;
         if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
         if (kind === "INSTANCE") addRef(summary.refs.components, n.component);
-        if (styled && isObj2(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
+        if (isCompRoot) for (const c of propDefComponents(n)) addRef(summary.refs.components, c);
+        if (styled && isObj3(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
         if (Array.isArray(n.fills)) {
-          for (const p of n.fills) if (isObj2(p) && isObj2(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
+          for (const p of n.fills) if (isObj3(p) && isObj3(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
         }
-        if (isObj2(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
+        if (isObj3(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
         summary.unbound += unboundOf(n, kind);
       }
       if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path + ".children[" + i + "]", depth + 1, flex));
     };
-    if (!isObj2(tree)) problems.push("tree: must be a node object (the root frame)");
+    if (!isObj3(tree)) problems.push("tree: must be a node object (the root frame)");
     else {
       walk(tree, "tree", 0, null);
+      if (comp && isObj3(tree)) {
+        for (const name of comp.defs.keys()) if (!comp.used.has(name)) summary.warnings.push("tree.props[" + JSON.stringify(name) + "]: no layer uses it (wire one with `propRefs`), so an instance can set it but nothing shows it");
+        summary.component = { type: comp.type, name: comp.name, variants: comp.type === "COMPONENT_SET" && Array.isArray(tree.children) ? tree.children.length : 0, props: [...comp.defs.keys()] };
+      }
       const k = nodeKind(tree);
       if (k !== "FRAME" && k !== "CLONE") problems.push("tree: the root must be a FRAME (a screen)" + (k === "INSTANCE" || k === "TEXT" ? "; put the " + (k === "INSTANCE" ? "instance" : "text") + " inside one" : ""));
       if (tooMany) problems.push("tree: more than " + MAX_TREE_NODES + " nodes \u2014 send a large screen as several trees");
     }
-    return { problems, summary, expanded: problems.length || !isObj2(tree) ? null : tree, labels: ex.labels };
+    return { problems, summary, expanded: problems.length || !isObj3(tree) ? null : tree, labels: ex.labels };
   }
   function treeRefusal(problems) {
     const first2 = problems[0];
@@ -1730,19 +2003,23 @@
       const e = n.edits ? Object.keys(n.edits).length : 0;
       return e ? " with " + plural(e, "layer") + " changed" : "";
     };
+    const c = s.component;
+    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
     const parts = [
-      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates frame '" + (spec.name || "Frame") + "'" + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
+      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
     ];
     if (s.clones > (spec.clone !== void 0 ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
+    if (c && c.props.length) parts.push("properties " + quoteList(c.props));
+    if (c) parts.push("a component's name is its key: when the file has a component named '" + c.name + "' that a write made, it is updated in place instead (same ids, so its instances follow) and the reply lists only what changed; one made by hand is refused");
     if (spec.key !== void 0) parts.push("key '" + spec.key + "': when the file already holds this key's earlier result, that result is updated in place instead (same ids, only the fields that differ from the spec sent last time) and the reply lists only what changed");
     if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
     if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
-    const { components, variables, textStyles } = s.refs;
-    if (components.length) parts.push("components " + quoteList(components));
+    const { components: components2, variables, textStyles } = s.refs;
+    if (components2.length) parts.push("components " + quoteList(components2));
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
     if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
-    const checked = (components.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
+    const checked = (components2.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
 
@@ -1798,7 +2075,7 @@
     opacity: unit,
     layout: objOf(PATCH_LAYOUT_RULES),
     box: (v) => {
-      if (!isObj2(v)) return "must be an object {w, h}";
+      if (!isObj3(v)) return "must be an object {w, h}";
       const bad = objOf(BOX_RULES2)(v);
       return bad !== null ? bad : v.w === void 0 && v.h === void 0 ? "needs `w`, `h` or both" : null;
     },
@@ -1807,7 +2084,7 @@
     radius: NODE_RULES.radius,
     fills: fillsCheck,
     strokes: (v) => {
-      if (!isObj2(v)) return "must be an object";
+      if (!isObj3(v)) return "must be an object";
       const bad = objOf(PATCH_STROKE_RULES)(v);
       return bad !== null ? bad : Object.keys(v).every((k) => v[k] === void 0) ? "is empty" : null;
     },
@@ -1834,29 +2111,29 @@
   });
   function checkPatch(set, path = "set") {
     const summary = { fields: [], refs: { variables: [], textStyles: [] }, unbound: 0 };
-    if (!isObj2(set)) return { problems: [path + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
+    if (!isObj3(set)) return { problems: [path + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
     const problems = [];
     const say = (m) => {
       problems.push(path + ": " + m);
     };
     for (const [k, v] of Object.entries(set)) {
       if (v === void 0) continue;
-      const at2 = path + "." + k;
+      const at3 = path + "." + k;
       if (Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k)) continue;
       const why = Object.prototype.hasOwnProperty.call(NOT_PATCHED, k) ? NOT_PATCHED[k] : void 0;
       const tree = Object.prototype.hasOwnProperty.call(NODE_RULES, k) ? NODE_RULES[k] : void 0;
-      if (why !== void 0) problems.push(at2 + ": a patch cannot set it \u2014 " + why);
-      else if (tree !== void 0) problems.push(at2 + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
+      if (why !== void 0) problems.push(at3 + ": a patch cannot set it \u2014 " + why);
+      else if (tree !== void 0) problems.push(at3 + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
       else {
         const near = nearestNames(k, PATCH_FIELD_NAMES);
-        problems.push(at2 + ": not a field a patch sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+        problems.push(at3 + ": not a field a patch sets" + (near.length ? "; closest: " + quoteList(near) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
     const fields = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
     if (!fields.length && !problems.length) say("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
     if (problems.length) return { problems, summary };
-    const l = isObj2(set.layout) ? set.layout : null;
+    const l = isObj3(set.layout) ? set.layout : null;
     if (l) {
       if (l.mode !== void 0 && l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
       else if (l.mode !== void 0) {
@@ -1867,18 +2144,18 @@
         for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs wrapping; `flexWrap: "nowrap"` turns it off');
       }
     }
-    const box = isObj2(set.box) ? set.box : null;
+    const box = isObj3(set.box) ? set.box : null;
     if (box && box.w !== void 0 && set.widthMode !== void 0 && set.widthMode !== "fixed") say('`box.w` gives a fixed width, which `widthMode: "' + String(set.widthMode) + '"` contradicts; leave one out');
     if (box && box.h !== void 0 && set.heightMode !== void 0 && set.heightMode !== "fixed") say('`box.h` gives a fixed height, which `heightMode: "' + String(set.heightMode) + '"` contradicts; leave one out');
-    const t = isObj2(set.tokens) ? set.tokens : {};
+    const t = isObj3(set.tokens) ? set.tokens : {};
     if (t.width !== void 0 && t.width !== null && set.widthMode !== void 0 && set.widthMode !== "fixed") say("`tokens.width` sizes the node, which `widthMode` already does; leave one out");
     if (t.height !== void 0 && t.height !== null && set.heightMode !== void 0 && set.heightMode !== "fixed") say("`tokens.height` sizes the node, which `heightMode` already does; leave one out");
     if (Array.isArray(set.fills) && t.fills !== void 0) {
-      const onPaints = set.fills.map((p) => isObj2(p) && isObj2(p.tokens) ? p.tokens.color : void 0);
+      const onPaints = set.fills.map((p) => isObj3(p) && isObj3(p.tokens) ? p.tokens.color : void 0);
       if (t.fills === null) say("`tokens.fills: null` unbinds the node's paints, and `fills` replaces them; give one");
       else for (const name of typeof t.fills === "string" ? [t.fills] : Array.isArray(t.fills) ? t.fills : []) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + String(name) + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
-    const st = isObj2(set.strokes) ? set.strokes : null;
+    const st = isObj3(set.strokes) ? set.strokes : null;
     if (st && Array.isArray(st.colors) && t.strokes !== void 0 && t.strokes !== null) {
       const n = typeof t.strokes === "string" ? 1 : Array.isArray(t.strokes) ? t.strokes.length : 0;
       if (n !== st.colors.length) say("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
@@ -1889,10 +2166,10 @@
       if (typeof name === "string" && list.indexOf(name) < 0) list.push(name);
     };
     if (Array.isArray(set.fills)) {
-      for (const p of set.fills) if (isObj2(p) && isObj2(p.tokens)) add(summary.refs.variables, p.tokens.color);
+      for (const p of set.fills) if (isObj3(p) && isObj3(p.tokens)) add(summary.refs.variables, p.tokens.color);
     }
     for (const v of Object.values(t)) for (const name of typeof v === "string" ? [v] : Array.isArray(v) ? v : []) add(summary.refs.variables, name);
-    if (isObj2(set.styles)) add(summary.refs.textStyles, set.styles.text);
+    if (isObj3(set.styles)) add(summary.refs.textStyles, set.styles.text);
     summary.unbound = unboundOf2(set, t);
     return { problems, summary };
   }
@@ -1900,17 +2177,17 @@
     const has2 = (k) => t[k] !== void 0 && t[k] !== null;
     let c = 0;
     if (Array.isArray(set.fills)) {
-      for (const p of set.fills) if (isObj2(p) && p.tokens === void 0) c++;
+      for (const p of set.fills) if (isObj3(p) && p.tokens === void 0) c++;
     }
-    const st = isObj2(set.strokes) ? set.strokes : null;
+    const st = isObj3(set.strokes) ? set.strokes : null;
     if (st) {
       if (Array.isArray(st.colors) && !has2("strokes")) c += st.colors.length;
       if (st.weight !== void 0 && !has2("strokeWeight")) c++;
-      if (isObj2(st.weights)) {
+      if (isObj3(st.weights)) {
         for (const [side, f] of [["top", "strokeTopWeight"], ["right", "strokeRightWeight"], ["bottom", "strokeBottomWeight"], ["left", "strokeLeftWeight"]]) if (st.weights[side] !== void 0 && !has2(f)) c++;
       }
     }
-    const l = isObj2(set.layout) ? set.layout : null;
+    const l = isObj3(set.layout) ? set.layout : null;
     if (l) {
       if (l.gap !== void 0 && !has2("itemSpacing")) c++;
       if (Array.isArray(l.padding)) {
@@ -1920,7 +2197,7 @@
     const corners = [["tl", "topLeftRadius"], ["tr", "topRightRadius"], ["br", "bottomRightRadius"], ["bl", "bottomLeftRadius"]];
     if (typeof set.radius === "number") {
       if (!corners.every(([, f]) => has2(f))) c++;
-    } else if (isObj2(set.radius)) {
+    } else if (isObj3(set.radius)) {
       for (const [k, f] of corners) if (set.radius[k] !== void 0 && !has2(f)) c++;
     }
     return c;
@@ -1960,9 +2237,9 @@
   };
   var isNum2 = (v) => typeof v === "number" && Number.isFinite(v);
   var num2 = (v) => isNum2(v) ? null : "must be a number";
-  var xy2 = (v) => isObj2(v) && isNum2(v.x) && isNum2(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}";
+  var xy2 = (v) => isObj3(v) && isNum2(v.x) && isNum2(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}";
   var length = (units, auto) => (v) => {
-    if (!isObj2(v)) return "must be an object {unit, value}";
+    if (!isObj3(v)) return "must be an object {unit, value}";
     if (auto && v.unit === "auto") return Object.keys(v).some((k) => k !== "unit" && v[k] !== void 0) ? '`{unit:"auto"}` takes no value' : null;
     if (typeof v.unit !== "string" || units.indexOf(v.unit) < 0) return "unit must be one of " + (auto ? [...units, "auto"] : units).join(" | ");
     const extra = Object.keys(v).filter((k) => k !== "unit" && k !== "value" && v[k] !== void 0);
@@ -1971,7 +2248,7 @@
     return auto && v.value < 0 ? "value must be \u2265 0" : null;
   };
   var effectTokens = (fields) => (v) => {
-    if (!isObj2(v)) return "must be an object of field \u2192 variable (" + fields.join(", ") + ")";
+    if (!isObj3(v)) return "must be an object of field \u2192 variable (" + fields.join(", ") + ")";
     const keys = Object.keys(v).filter((k) => v[k] !== void 0);
     if (!keys.length) return "is empty";
     for (const k of keys) {
@@ -2005,16 +2282,16 @@
   var effectsCheck = (v) => {
     if (!Array.isArray(v)) return "must be a list of effects ([] removes them)";
     for (const [i, e] of v.entries()) {
-      const at2 = "[" + i + "]";
-      if (!isObj2(e)) return at2 + " must be an effect object";
+      const at3 = "[" + i + "]";
+      if (!isObj3(e)) return at3 + " must be an effect object";
       const shadow = e.type === "drop_shadow" || e.type === "inner_shadow";
       const blur = e.type === "layer_blur" || e.type === "background_blur";
-      if (!shadow && !blur) return at2 + ".type: " + (typeof e.type === "string" ? "'" + e.type + "' cannot be written yet (drop_shadow, inner_shadow, layer_blur and background_blur can)" : "must be drop_shadow | inner_shadow | layer_blur | background_blur");
+      if (!shadow && !blur) return at3 + ".type: " + (typeof e.type === "string" ? "'" + e.type + "' cannot be written yet (drop_shadow, inner_shadow, layer_blur and background_blur can)" : "must be drop_shadow | inner_shadow | layer_blur | background_blur");
       const bad = objectProblems(e, shadow ? SHADOW_RULES : BLUR_RULES, "")[0];
-      if (bad) return at2 + (bad.startsWith(".") ? "" : " ") + bad;
+      if (bad) return at3 + (bad.startsWith(".") ? "" : " ") + bad;
       const need = shadow ? ["color", "offset", "radius"] : ["radius"];
-      for (const k of need) if (e[k] === void 0) return at2 + " is missing " + k;
-      if (e.behindNode !== void 0 && e.type !== "drop_shadow") return at2 + ".behindNode: only a drop_shadow shows behind its node";
+      for (const k of need) if (e[k] === void 0) return at3 + " is missing " + k;
+      if (e.behindNode !== void 0 && e.type !== "drop_shadow") return at3 + ".behindNode: only a drop_shadow shows behind its node";
     }
     return null;
   };
@@ -2035,7 +2312,7 @@
     // Bound after the raw values above (setting a raw value unbinds the field).
     tokens: {
       rule: (v) => {
-        if (!isObj2(v)) return "must be an object of text style field \u2192 variable (or null to unbind)";
+        if (!isObj3(v)) return "must be an object of text style field \u2192 variable (or null to unbind)";
         const keys = Object.keys(v).filter((k) => v[k] !== void 0);
         if (!keys.length) return "is empty";
         for (const k of keys) {
@@ -2067,16 +2344,16 @@
   };
   function checkStyleSet(set, path = "set") {
     const summary = { fields: [], kind: null, variables: [] };
-    if (!isObj2(set)) return { problems: [path + `: must be an object of the style's fields to change, e.g. {paints: [{type: "solid", color: "#2563eb"}]}`], summary };
+    if (!isObj3(set)) return { problems: [path + `: must be an object of the style's fields to change, e.g. {paints: [{type: "solid", color: "#2563eb"}]}`], summary };
     const problems = [];
     for (const [k, v] of Object.entries(set)) {
       if (v === void 0 || Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k)) continue;
-      const at2 = path + "." + k;
+      const at3 = path + "." + k;
       const why = Object.prototype.hasOwnProperty.call(NOT_STYLED, k) ? NOT_STYLED[k] : void 0;
-      if (why !== void 0) problems.push(at2 + ": a style edit cannot set it \u2014 " + why);
+      if (why !== void 0) problems.push(at3 + ": a style edit cannot set it \u2014 " + why);
       else {
         const near = nearestNames(k, STYLE_FIELD_NAMES);
-        problems.push(at2 + ": not a field a style edit sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+        problems.push(at3 + ": not a field a style edit sets" + (near.length ? "; closest: " + quoteList(near) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
@@ -2097,11 +2374,11 @@
       if (typeof name === "string" && summary.variables.indexOf(name) < 0) summary.variables.push(name);
     };
     if (Array.isArray(set.paints)) {
-      for (const p of set.paints) if (isObj2(p) && isObj2(p.tokens)) add(p.tokens.color);
+      for (const p of set.paints) if (isObj3(p) && isObj3(p.tokens)) add(p.tokens.color);
     }
-    if (isObj2(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
+    if (isObj3(set.tokens)) for (const k of Object.keys(set.tokens)) add(set.tokens[k]);
     if (Array.isArray(set.effects)) {
-      for (const e of set.effects) if (isObj2(e) && isObj2(e.tokens)) for (const k of Object.keys(e.tokens)) add(e.tokens[k]);
+      for (const e of set.effects) if (isObj3(e) && isObj3(e.tokens)) for (const k of Object.keys(e.tokens)) add(e.tokens[k]);
     }
     return { problems, summary };
   }
@@ -2110,7 +2387,7 @@
   }
   var checkSourceValue = (v) => {
     if (typeof v === "string" || typeof v === "boolean" || isNum2(v)) return null;
-    if (isObj2(v)) {
+    if (isObj3(v)) {
       if (v.composed !== void 0) return "a composed colour (a colour and a separate opacity) cannot be written yet";
       const extra = Object.keys(v).filter((k) => k !== "aliasOf" && v[k] !== void 0);
       if (extra.length) return "." + extra[0] + ": an alias is {aliasOf: <variable name, key or id>}";
@@ -2121,29 +2398,29 @@
   };
   function checkVariableEdit(o, path = "") {
     const summary = { modes: [], aliases: [] };
-    const at2 = (k) => (path ? path + "." : "") + k;
+    const at3 = (k) => (path ? path + "." : "") + k;
     const problems = [];
     const add = (v) => {
-      if (isObj2(v) && typeof v.aliasOf === "string" && summary.aliases.indexOf(v.aliasOf) < 0) summary.aliases.push(v.aliasOf);
+      if (isObj3(v) && typeof v.aliasOf === "string" && summary.aliases.indexOf(v.aliasOf) < 0) summary.aliases.push(v.aliasOf);
     };
-    if (o.values !== void 0 && o.value !== void 0) return { problems: [at2("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
+    if (o.values !== void 0 && o.value !== void 0) return { problems: [at3("value") + ": give `values` (by mode) or `value` (a collection with one mode), not both"], summary };
     if (o.values === void 0 && o.value === void 0) return { problems: [(path || "setVariable") + ": missing values \u2014 `values: {<mode>: value}`, or `value` for a collection with one mode"], summary };
     if (o.value !== void 0) {
       const bad = checkSourceValue(o.value);
-      if (bad !== null) problems.push(at2("value") + (bad.startsWith(".") ? "" : ": ") + bad);
+      if (bad !== null) problems.push(at3("value") + (bad.startsWith(".") ? "" : ": ") + bad);
       else add(o.value);
       return { problems, summary };
     }
-    if (!isObj2(o.values) || !Object.keys(o.values).some((k) => isObj2(o.values) && o.values[k] !== void 0)) return { problems: [at2("values") + ": must be an object of mode name (or modeId) \u2192 value, with at least one mode"], summary };
+    if (!isObj3(o.values) || !Object.keys(o.values).some((k) => isObj3(o.values) && o.values[k] !== void 0)) return { problems: [at3("values") + ": must be an object of mode name (or modeId) \u2192 value, with at least one mode"], summary };
     for (const [mode, v] of Object.entries(o.values)) {
       if (v === void 0) continue;
       if (!mode.trim()) {
-        problems.push(at2("values") + ": a mode name must not be empty");
+        problems.push(at3("values") + ": a mode name must not be empty");
         continue;
       }
       const bad = checkSourceValue(v);
       if (bad !== null) {
-        problems.push(at2("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad);
+        problems.push(at3("values") + "[" + JSON.stringify(mode) + "]" + (bad.startsWith(".") ? "" : ": ") + bad);
         continue;
       }
       summary.modes.push(mode);
@@ -2178,7 +2455,7 @@
     return t === "color" ? "COLOR" : t === "number" ? "FLOAT" : t === "string" ? "STRING" : "BOOLEAN";
   }
   var MAX_TABLE_ROWS = 1e3;
-  var isObj3 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var nonEmpty3 = (v) => typeof v === "string" && v.trim().length > 0;
   var isNum3 = (v) => typeof v === "number" && Number.isFinite(v);
   var isTypeName = (v) => typeof v === "string" && VARIABLE_TYPE_NAMES.indexOf(v) >= 0;
@@ -2190,22 +2467,22 @@
     return typeof v === "boolean" ? null : "a boolean row takes true, false or {aliasOf}";
   }
   function checkCreateVariables(o, path = "") {
-    const at2 = (k) => (path ? path + "." : "") + k;
+    const at3 = (k) => (path ? path + "." : "") + k;
     const summary = { collection: typeof o.collection === "string" ? o.collection : "", modes: [], rows: [], outside: [] };
     const problems = [];
-    if (!nonEmpty3(o.collection)) problems.push(at2("collection") + ": must be the collection's name (a non-empty string)");
+    if (!nonEmpty3(o.collection)) problems.push(at3("collection") + ": must be the collection's name (a non-empty string)");
     let width = 1;
     if (o.modes !== void 0) {
-      if (!Array.isArray(o.modes) || !o.modes.length) problems.push(at2("modes") + ': must be a list of mode names, e.g. ["Light", "Dark"] (leave it out for a collection with one mode)');
+      if (!Array.isArray(o.modes) || !o.modes.length) problems.push(at3("modes") + ': must be a list of mode names, e.g. ["Light", "Dark"] (leave it out for a collection with one mode)');
       else {
         const seen = /* @__PURE__ */ new Set();
         for (const [i, m] of o.modes.entries()) {
           if (!nonEmpty3(m)) {
-            problems.push(at2("modes") + "[" + i + "]: must be a mode name (a non-empty string)");
+            problems.push(at3("modes") + "[" + i + "]: must be a mode name (a non-empty string)");
             continue;
           }
           if (seen.has(m)) {
-            problems.push(at2("modes") + "[" + i + "]: '" + m + "' is listed twice");
+            problems.push(at3("modes") + "[" + i + "]: '" + m + "' is listed twice");
             continue;
           }
           seen.add(m);
@@ -2215,13 +2492,13 @@
       }
     }
     if (!Array.isArray(o.variables) || !o.variables.length) {
-      problems.push(at2("variables") + ': must be a list of rows [name, type, value per mode\u2026], e.g. [["color/brand", "color", "#4f46e5"]]');
+      problems.push(at3("variables") + ': must be a list of rows [name, type, value per mode\u2026], e.g. [["color/brand", "color", "#4f46e5"]]');
       return { problems, summary };
     }
-    if (o.variables.length > MAX_TABLE_ROWS) problems.push(at2("variables") + ": " + o.variables.length + " rows; one op takes at most " + MAX_TABLE_ROWS + " (send the rest in another op)");
+    if (o.variables.length > MAX_TABLE_ROWS) problems.push(at3("variables") + ": " + o.variables.length + " rows; one op takes at most " + MAX_TABLE_ROWS + " (send the rest in another op)");
     const names = /* @__PURE__ */ new Map();
     for (const [i, row] of o.variables.entries()) {
-      const rp = at2("variables") + "[" + i + "]";
+      const rp = at3("variables") + "[" + i + "]";
       if (!Array.isArray(row)) {
         problems.push(rp + ": must be a row [name, type, value per mode\u2026]");
         continue;
@@ -2274,7 +2551,7 @@
       for (const [j, v] of r.values.entries()) {
         if (typeof v !== "object") continue;
         const target = byName.get(v.aliasOf);
-        const cp = at2("variables") + "[" + i + "][" + (j + 2) + "].aliasOf";
+        const cp = at3("variables") + "[" + i + "][" + (j + 2) + "].aliasOf";
         if (!target) {
           if (summary.outside.indexOf(v.aliasOf) < 0) summary.outside.push(v.aliasOf);
           continue;
@@ -2287,7 +2564,7 @@
       }
     }
     const loop = tableLoop(summary.rows, byName, summary.modes.length || 1);
-    if (loop) problems.push(at2("variables") + ": " + loop);
+    if (loop) problems.push(at3("variables") + ": " + loop);
     return { problems, summary };
   }
   function tableLoop(rows, byName, width) {
@@ -2310,17 +2587,17 @@
     return null;
   }
   function checkCreateStyles(o, path = "") {
-    const at2 = (k) => (path ? path + "." : "") + k;
+    const at3 = (k) => (path ? path + "." : "") + k;
     const rows = [];
     const problems = [];
     if (!Array.isArray(o.styles) || !o.styles.length) {
-      return { problems: [at2("styles") + ': must be a list of styles {name, kind: paint | text | effect, set}, e.g. [{name: "Brand", kind: "paint", set: {paints: [{type: "solid", tokens: {color: "color/brand"}}]}}]'], rows };
+      return { problems: [at3("styles") + ': must be a list of styles {name, kind: paint | text | effect, set}, e.g. [{name: "Brand", kind: "paint", set: {paints: [{type: "solid", tokens: {color: "color/brand"}}]}}]'], rows };
     }
-    if (o.styles.length > MAX_TABLE_ROWS) problems.push(at2("styles") + ": " + o.styles.length + " styles; one op takes at most " + MAX_TABLE_ROWS);
+    if (o.styles.length > MAX_TABLE_ROWS) problems.push(at3("styles") + ": " + o.styles.length + " styles; one op takes at most " + MAX_TABLE_ROWS);
     const seen = /* @__PURE__ */ new Map();
     for (const [i, s] of o.styles.entries()) {
-      const sp = at2("styles") + "[" + i + "]";
-      if (!isObj3(s)) {
+      const sp = at3("styles") + "[" + i + "]";
+      if (!isObj4(s)) {
         problems.push(sp + ": must be a style {name, kind, set}");
         continue;
       }
@@ -2338,7 +2615,7 @@
         problems.push(sp + ".kind: must be paint | text | effect");
         continue;
       }
-      if (isObj3(s.set) && s.set.name !== void 0) {
+      if (isObj4(s.set) && s.set.name !== void 0) {
         problems.push(sp + ".set.name: a new style is named by the row's `name` (rename an existing one with setStyle)");
         continue;
       }
@@ -2553,9 +2830,9 @@
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
   var isNum4 = (v) => typeof v === "number";
-  function opt(a, key, ok, what, label4 = key) {
+  function opt(a, key, ok, what, label5 = key) {
     const v = a[key];
-    return v === void 0 || ok(v) ? null : `\`${label4}\` is not ${what}`;
+    return v === void 0 || ok(v) ? null : `\`${label5}\` is not ${what}`;
   }
   function first(errs) {
     for (const e of errs) if (e !== null) return e;
@@ -2572,43 +2849,43 @@
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   var isIndex = (v) => isNum4(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
-    const at2 = `ops[${i}]`;
-    if (!isRecord(o)) return `\`${at2}\` is not an object`;
+    const at3 = `ops[${i}]`;
+    if (!isRecord(o)) return `\`${at3}\` is not an object`;
     const op = o.op;
-    if (!isWriteOpName(op)) return `\`${at2}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
+    if (!isWriteOpName(op)) return `\`${at3}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
-      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at2}.${k}`)),
-      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum4, "a number", `${at2}.${k}`)),
-      opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at2}.layoutMode`),
-      opt(o, "padding", isPadding, "four numbers", `${at2}.padding`),
-      opt(o, "index", isIndex, "a whole number \u2265 0", `${at2}.index`)
+      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at3}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum4, "a number", `${at3}.${k}`)),
+      opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at3}.layoutMode`),
+      opt(o, "padding", isPadding, "four numbers", `${at3}.padding`),
+      opt(o, "index", isIndex, "a whole number \u2265 0", `${at3}.index`)
     ]);
     if (typeErr !== null) return typeErr;
-    if (o.treeFile !== void 0) return `\`${at2}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
+    if (o.treeFile !== void 0) return `\`${at3}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
     const missing = missingWriteFields(op, o);
-    if (missing.length) return `\`${at2}\` (${op}): missing ${missing.join(", ")}`;
+    if (missing.length) return `\`${at3}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {
       const { problems } = checkTree(o.tree);
-      if (problems.length) return treeRefusal(problems.map((p) => p.replace(/^tree/, `${at2}.tree`)));
+      if (problems.length) return treeRefusal(problems.map((p) => p.replace(/^tree/, `${at3}.tree`)));
     }
     if (op === "patch") {
-      const { problems } = checkPatch(o.set, `${at2}.set`);
+      const { problems } = checkPatch(o.set, `${at3}.set`);
       if (problems.length) return patchRefusal(problems);
     }
     if (op === "setVariable") {
-      const { problems } = checkVariableEdit(o, at2);
+      const { problems } = checkVariableEdit(o, at3);
       if (problems.length) return sourceRefusal(problems);
     }
     if (op === "setStyle") {
-      const { problems } = checkStyleSet(o.set, `${at2}.set`);
+      const { problems } = checkStyleSet(o.set, `${at3}.set`);
       if (problems.length) return sourceRefusal(problems);
     }
     if (op === "createVariables") {
-      const { problems } = checkCreateVariables(o, at2);
+      const { problems } = checkCreateVariables(o, at3);
       if (problems.length) return sourceRefusal(problems);
     }
     if (op === "createStyles") {
-      const { problems } = checkCreateStyles(o, at2);
+      const { problems } = checkCreateStyles(o, at3);
       if (problems.length) return sourceRefusal(problems);
     }
     return null;
@@ -4727,7 +5004,7 @@
   async function listLibraries() {
     const warnings = [];
     const sink = (m) => warnings.push(m);
-    const [varsByLibrary, components] = await Promise.all([
+    const [varsByLibrary, components2] = await Promise.all([
       libraryVariableCollections(sink),
       collectLibraryComponents(sink).catch((e) => {
         sink("library component scan failed (" + errMsg(e) + ") \u2014 component counts are missing, variable collections below are unaffected");
@@ -4735,7 +5012,7 @@
       })
     ]);
     const compBySource = /* @__PURE__ */ new Map();
-    for (const c of components) {
+    for (const c of components2) {
       const src = c.source || UNKNOWN_LIBRARY;
       compBySource.set(src, (compBySource.get(src) || 0) + 1);
     }
@@ -4815,7 +5092,7 @@
   }
   async function collectComponentCatalog(hygiene, asLibrary) {
     const variantVisuals = run().reads.variantVisuals;
-    const components = [];
+    const components2 = [];
     const pendingPublish = [];
     const seenNames = /* @__PURE__ */ new Set();
     const variantsBySet = /* @__PURE__ */ new Map();
@@ -4831,7 +5108,7 @@
       let catalogIndex = 0;
       for (const page of catalogPages) {
         checkCancelled();
-        enterPage("design-system", ++catalogIndex, catalogPages.length, page.name, page.id, { components: components.length });
+        enterPage("design-system", ++catalogIndex, catalogPages.length, page.name, page.id, { components: components2.length });
         let nodes = [];
         try {
           nodes = page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
@@ -4903,7 +5180,7 @@
           if (asLibrary) pendingPublish.push({ entry, node: n });
           if (variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
           if (variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
-          components.push(entry);
+          components2.push(entry);
         }
       }
     } finally {
@@ -4948,7 +5225,7 @@
         if (s) p.entry.publish = s;
       }
     }
-    return components;
+    return components2;
   }
   async function publishOf(o) {
     try {
@@ -4977,19 +5254,19 @@
     ]);
     const hygiene = [];
     await loadAllPages("component catalog may be incomplete", (m) => run().warn(m));
-    const components = await collectComponentCatalog(hygiene, asLibrary);
+    const components2 = await collectComponentCatalog(hygiene, asLibrary);
     if (asLibrary) {
       hygiene.push(
         "library mode: this catalog is the COMPLETE set of components defined in this library file. Publish status is per-object (publish: current | changed | unpublished); Figma exposes no way to list what the last PUBLISHED snapshot contained, so a component deleted here but still live in the library is not visible."
       );
     } else try {
-      const seenKeys = new Set(components.map((c) => c.key).filter(Boolean));
+      const seenKeys = new Set(components2.map((c) => c.key).filter(Boolean));
       const remote = await collectLibraryComponents((m) => run().warn(m));
       let added = 0;
       for (const entry of remote) {
         if (seenKeys.has(entry.key)) continue;
         seenKeys.add(entry.key);
-        components.push(entry);
+        components2.push(entry);
         added++;
       }
       if (added) {
@@ -5114,7 +5391,7 @@
       collections: vars.collections,
       variables: vars.variables,
       styles,
-      components,
+      components: components2,
       hygiene: vars.hygiene.concat(hygiene)
       // variable hygiene first, then component hygiene
     };
@@ -5910,6 +6187,14 @@
 
   // ../bridge/src/tree-diff.ts
   var EXTRA_FIELDS = ["x", "y", "absolute", "grow", "alignSelf", "clip", "sizeLimits", "strokesInLayout"];
+  function valueProps(p) {
+    const out = {};
+    for (const k of Object.keys(p)) {
+      const v = p[k];
+      if (typeof v === "string" || typeof v === "boolean") Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    }
+    return out;
+  }
   function ownSpec(s) {
     const out = {};
     for (const k of Object.keys(s)) {
@@ -5918,7 +6203,7 @@
     }
     return out;
   }
-  var isObj4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj5 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   function canonical(v) {
     if (v === void 0) return "undefined";
     if (v === null || typeof v !== "object") return JSON.stringify(v);
@@ -5928,7 +6213,7 @@
   }
   var same = (a, b) => canonical(a) === canonical(b);
   function without(o, keys) {
-    if (!isObj4(o)) return void 0;
+    if (!isObj5(o)) return void 0;
     const out = {};
     for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
     return Object.keys(out).length ? out : void 0;
@@ -5937,7 +6222,8 @@
     const out = {};
     for (const k of Object.keys(s)) {
       const v = s[k];
-      if (v === void 0 || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key") continue;
+      if (v === void 0 || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key" || k === "propRefs") continue;
+      if (k === "props" && (s.type === "COMPONENT" || s.type === "COMPONENT_SET")) continue;
       if (k === "box") {
         out.box = without(v, ["x", "y"]);
         continue;
@@ -5993,7 +6279,7 @@
       if (fields.indexOf(f) < 0) fields.push(f);
     };
     const bt = b.tokens || {};
-    const at2 = a.tokens || {};
+    const at3 = a.tokens || {};
     if (has2("name")) {
       set.name = b.name !== void 0 ? b.name : kind === "TEXT" ? b.text || "" : "Frame";
       touch("name");
@@ -6015,7 +6301,7 @@
       touch("styles");
     }
     if (has2("props") && b.props) {
-      set.props = b.props;
+      set.props = valueProps(b.props);
       touch("props");
     }
     if (has2("layout") && kind === "FRAME") {
@@ -6057,13 +6343,13 @@
       set[axis] = m !== void 0 ? m : "fixed";
       touch(axis);
     }
-    if (kind !== "INSTANCE" && (has2("fills") || !same(at2.fills, bt.fills))) {
+    if (kind !== "INSTANCE" && (has2("fills") || !same(at3.fills, bt.fills))) {
       if (b.fills) set.fills = b.fills;
       else if (bt.fills !== void 0) tokens.fills = bt.fills;
       else set.fills = kind === "TEXT" ? [{ type: "solid", color: b.font && b.font.color !== void 0 ? b.font.color : "#000000" }] : [];
       touch("fills");
     }
-    if (kind !== "INSTANCE" && (has2("strokes") || !same(at2.strokes, bt.strokes))) {
+    if (kind !== "INSTANCE" && (has2("strokes") || !same(at3.strokes, bt.strokes))) {
       const sa = a.strokes || {};
       const sb = b.strokes || {};
       const st = {};
@@ -6087,7 +6373,7 @@
       if (Object.keys(st).length) set.strokes = st;
       touch("strokes");
     }
-    const numberChanged = NUMBER_TOKEN_FIELDS.filter((k) => at2[k] !== bt[k]);
+    const numberChanged = NUMBER_TOKEN_FIELDS.filter((k) => at3[k] !== bt[k]);
     if (numberChanged.length) touch("tokens");
     for (const k of numberChanged) tokens[k] = bt[k] !== void 0 ? bt[k] : null;
     if (Object.keys(set).length || numberChanged.length) {
@@ -6159,12 +6445,13 @@
     return out;
   }
   function planUpdate(old, spec) {
-    const plan = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [] };
+    const plan = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [], kept: [] };
     visit(old, spec, "tree", plan);
     return plan;
   }
   function visit(old, spec, path, plan) {
     const kind = nodeKind(spec) || "FRAME";
+    plan.kept.push({ ref: old.ref, spec, old: old.spec });
     const a = compared(old.spec, kind);
     const b = compared(spec, kind);
     const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));
@@ -6180,16 +6467,16 @@
     const order = [];
     let built = false;
     news.forEach((n, i) => {
-      const at2 = path + ".children[" + i + "]";
+      const at3 = path + ".children[" + i + "]";
       const o = pairs[i];
       const why = o ? replaceReason(o, n) : null;
       if (o && why === null) {
-        visit(o, n, at2, plan);
+        visit(o, n, at3, plan);
         order.push({ ref: o.ref });
         return;
       }
       order.push({ build: plan.builds.length });
-      plan.builds.push({ parent: old.ref, spec: n, replaces: o ? o.ref : null, path: at2 });
+      plan.builds.push({ parent: old.ref, spec: n, replaces: o ? o.ref : null, path: at3 });
       built = true;
     });
     const kept = new Set(pairs.filter((p) => p !== null).map((p) => p.ref));
@@ -6224,8 +6511,16 @@
 
   // src/batch-plan.ts
   var current2 = null;
+  var components = /* @__PURE__ */ new Map();
   function setBatchPlan(plan) {
     current2 = plan;
+    if (plan === null) components = /* @__PURE__ */ new Map();
+  }
+  function setPlannedComponents(planned) {
+    components = planned;
+  }
+  function plannedComponent(name) {
+    return components.get(name);
   }
   function plannedVariables(name) {
     return current2 ? current2.variables.filter((v) => v.name === name) : [];
@@ -6238,14 +6533,16 @@
   }
 
   // src/tree-refs.ts
+  var noRefs = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() });
   var isKey = (ref2) => /^[0-9a-f]{40}$/i.test(ref2);
-  function usesOf(index, s, at2, out, labels) {
+  function usesOf(index, s, at3, out, labels) {
     const kind = nodeKind(s);
     const lab = labels.get(s);
-    const path = lab !== void 0 ? lab : at2;
+    const path = lab !== void 0 ? lab : at3;
     if (kind === "CLONE") return out;
     const op = "createTree";
     if (kind === "INSTANCE" && s.component !== void 0) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
+    if (at3 === "tree" && componentRootOf(s)) for (const ref2 of propDefComponents(s)) out.push({ index, op, path: path + ".props", kind: "component", ref: ref2 });
     if (kind === "TEXT" && s.styles && s.styles.text !== void 0) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
     (s.fills || []).forEach((f, i) => {
       if (f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" });
@@ -6288,10 +6585,17 @@
   var ImportsRevoked = class extends Error {
   };
   async function resolveRefs(uses, loadFont) {
-    const refs2 = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
+    const refs2 = noRefs();
     const problems = [];
     if (!uses.length) return { refs: refs2, problems, imports: async () => ({ problems: [], revoked: false }), importCount: 0 };
     const file = fileLookups();
+    const swapOf = async (ref2) => {
+      const f = await lookup("component", ref2, () => file.component(ref2));
+      if ("error" in f) return f;
+      if ("later" in f) return { error: "component '" + ref2 + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
+      const c = f.ok;
+      return { ok: c.type === "COMPONENT_SET" ? c.defaultVariant : c };
+    };
     const found = /* @__PURE__ */ new Map();
     const lookup = (kind, ref2, run2) => {
       const k = kind + "\0" + ref2;
@@ -6320,7 +6624,7 @@
         imported.push({ use: u, get: f.later });
         continue;
       }
-      const err = await accept(u, f.ok, refs2, loadFont);
+      const err = await accept(u, f.ok, refs2, loadFont, swapOf);
       if (err) bad(u, err);
     }
     report.finish();
@@ -6350,7 +6654,7 @@
             lateReport.bad(use, importFailed(use, got.error));
             continue;
           }
-          const err = await accept(use, got.item, refs2, loadFont);
+          const err = await accept(use, got.item, refs2, loadFont, swapOf);
           if (err) lateReport.bad(use, err);
         }
         lateReport.finish();
@@ -6382,7 +6686,7 @@
     return "no " + what + " in this file or an enabled library has the key '" + u.ref + "'" + (e instanceof Error && e.message ? " (" + e.message + ")" : "");
   }
   var typeMismatch = (u, actual) => "variable '" + u.ref + "' holds a " + actual.toLowerCase() + ", and this field takes a " + (u.type || "").toLowerCase() + " variable";
-  async function accept(u, item, refs2, loadFont) {
+  async function accept(u, item, refs2, loadFont, swapOf) {
     if (u.kind === "variable") {
       const v = item;
       if (u.type && v.resolvedType !== u.type) return typeMismatch(u, v.resolvedType);
@@ -6400,7 +6704,10 @@
     }
     const c = item;
     const node = u.node;
-    if (!node) return "no node";
+    if (!node) {
+      refs2.components.set(u.ref, c);
+      return null;
+    }
     const set = c.type === "COMPONENT_SET" ? c : c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
     const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
     let defs;
@@ -6409,8 +6716,10 @@
     } catch {
       defs = {};
     }
-    const mapped = mapProps(node.props || {}, defs, (set || c).name);
+    const mapped = mapProps(valueProps(node.props || {}), defs, (set || c).name, true);
     if ("errors" in mapped) return mapped.errors.join("; ");
+    const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
+    if (swapErr) return swapErr;
     const shown4 = set ? variantFor(set, main, mapped.ok, defs) : main;
     if ("missing" in shown4) {
       const have = set ? set.children.filter((k) => k.type === "COMPONENT").map((k) => k.name) : [];
@@ -6444,7 +6753,18 @@
     for (const c of set.children) if (c.type === "COMPONENT" && matches(c)) return c;
     return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };
   }
-  function mapProps(given, defs, component) {
+  async function swapIds(props, defs, component, swapOf) {
+    for (const key of Object.keys(props)) {
+      const d = Object.prototype.hasOwnProperty.call(defs, key) ? defs[key] : void 0;
+      const v = props[key];
+      if (!d || d.type !== "INSTANCE_SWAP" || typeof v !== "string") continue;
+      const got = await swapOf(v);
+      if ("error" in got) return "property '" + key + "' of '" + component + "' swaps to a component: " + got.error;
+      putOwn(props, key, got.ok.id);
+    }
+    return null;
+  }
+  function mapProps(given, defs, component, swaps = false) {
     const keys = Object.keys(defs);
     const bare = (k) => {
       const i = k.lastIndexOf("#");
@@ -6485,6 +6805,11 @@
           errors.push("property '" + name + "' of '" + component + "' is a text: give a string");
           continue;
         }
+      } else if (def.type === "INSTANCE_SWAP" && swaps) {
+        if (typeof value !== "string" || !value.trim()) {
+          errors.push("property '" + name + "' of '" + component + "' swaps the nested instance: give a component (its exact name, key or id)");
+          continue;
+        }
       } else {
         errors.push("property '" + name + "' of '" + component + "' swaps a nested instance, which a write cannot set yet");
         continue;
@@ -6494,13 +6819,13 @@
     return errors.length ? { errors } : { ok };
   }
   function fileLookups() {
-    let components = null;
+    let components2 = null;
     let variables = null;
     let styles = null;
     let library = null;
     const libraryTypes = /* @__PURE__ */ new Map();
     const allComponents = () => {
-      if (!components) components = (async () => {
+      if (!components2) components2 = (async () => {
         const out = [];
         for (const page of figma.root.children) {
           try {
@@ -6511,7 +6836,7 @@
         }
         return out;
       })();
-      return components;
+      return components2;
     };
     const libraryVariables = () => {
       if (!library) library = (async () => {
@@ -6553,6 +6878,8 @@
         const m = matchByName(ref2, named, (c) => c.name);
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return ambiguous("component", ref2, m.matches);
+        const planned = plannedComponent(ref2);
+        if (planned !== void 0) return { error: "component '" + ref2 + "' matches no component in this file yet: ops[" + planned + "] of this batch makes it, and a batch resolves every name before it runs \u2014 create it in an earlier call, then use it" };
         return none("component", ref2, m.candidates, "in this file (a library component is named by its key)");
       },
       async variable(ref2) {
@@ -6612,6 +6939,12 @@
         return none("text style", ref2, m.candidates, "in this file (a library style is named by its key)");
       }
     };
+  }
+  async function swapTarget(ref2) {
+    const f = await fileLookups().component(ref2);
+    if ("error" in f) return f;
+    if ("later" in f) return { error: "component '" + ref2 + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
+    return { ok: f.ok.type === "COMPONENT_SET" ? f.ok.defaultVariant : f.ok };
   }
   function later(what, ref2, planned, inFile, types) {
     const one = planned[0];
@@ -6923,9 +7256,14 @@
       } catch {
         defs = {};
       }
-      const mapped = mapProps(set.props, defs, (owner || main).name);
+      const mapped = mapProps(set.props, defs, (owner || main).name, true);
       if ("errors" in mapped) {
         for (const e of mapped.errors) bad("set.props: " + e);
+        return null;
+      }
+      const swapErr = await swapIds(mapped.ok, defs, (owner || main).name, swapTarget);
+      if (swapErr) {
+        bad("set.props: " + swapErr);
         return null;
       }
       if (!later2) {
@@ -6950,7 +7288,7 @@
       if (v) bound.set(id, v);
     }
     if (misfits.length) return null;
-    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
+    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
   }
   function canonical2(v) {
     if (v === void 0) return "undefined";
@@ -7469,18 +7807,18 @@
     while (p && p.type !== "PAGE") p = p.parent;
     return p && p.type === "PAGE" ? p : null;
   }
-  var under = (at2, m) => m.indexOf("set.") === 0 ? at2 + m.slice(3) : at2 + ": " + m;
+  var under = (at3, m) => m.indexOf("set.") === 0 ? at3 + m.slice(3) : at3 + ": " + m;
   function copiesOf(s, path, labels, out, root = true) {
     const lab = labels.get(s);
-    const at2 = lab !== void 0 ? lab : path;
-    if (nodeKind(s) === "CLONE") out.push({ s, path: at2, root });
-    (s.children || []).forEach((c, i) => copiesOf(c, at2 + ".children[" + i + "]", labels, out, false));
+    const at3 = lab !== void 0 ? lab : path;
+    if (nodeKind(s) === "CLONE") out.push({ s, path: at3, root });
+    (s.children || []).forEach((c, i) => copiesOf(c, at3 + ".children[" + i + "]", labels, out, false));
     return out;
   }
   function cloneUses(index, s, path) {
     const out = [];
-    const add = (set, at2) => {
-      for (const u of patchUses(index, set)) out.push({ ...u, op: "createTree", path: at2 + u.path.slice(3) });
+    const add = (set, at3) => {
+      for (const u of patchUses(index, set)) out.push({ ...u, op: "createTree", path: at3 + u.path.slice(3) });
     };
     const self = clonePatch(s);
     if (self) add(self, path);
@@ -7492,22 +7830,22 @@
     for (const { s, path, root } of copies) {
       const id = s.clone;
       if (id === void 0) continue;
-      const at2 = path + ".clone";
+      const at3 = path + ".clone";
       const nd = await figma.getNodeByIdAsync(id);
       if (!nd) {
-        bad(at2 + ": no node with id '" + id + "' (invalid or removed)");
+        bad(at3 + ": no node with id '" + id + "' (invalid or removed)");
         continue;
       }
       if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad(at2 + ": " + label(nd) + " is a " + nd.type + "; a copy is of a layer on a page");
+        bad(at3 + ": " + label(nd) + " is a " + nd.type + "; a copy is of a layer on a page");
         continue;
       }
       if (nd.type === "COMPONENT" || nd.type === "COMPONENT_SET") {
-        bad(at2 + ": " + label(nd) + " is a main component; place an instance of it (`component`) instead of a copy of it");
+        bad(at3 + ": " + label(nd) + " is a main component; place an instance of it (`component`) instead of a copy of it");
         continue;
       }
       if (root && nd.type !== "FRAME") {
-        bad(at2 + ": the root copy is a screen, so its source must be a FRAME; " + label(nd) + " is a " + nd.type + " \u2014 put the copy in a frame");
+        bad(at3 + ": the root copy is a screen, so its source must be a FRAME; " + label(nd) + " is a " + nd.type + " \u2014 put the copy in a frame");
         continue;
       }
       const page = pageOf2(nd);
@@ -7560,7 +7898,7 @@
     }
     return path;
   }
-  function at(root, path) {
+  function at2(root, path) {
     let n = root;
     for (const i of path) {
       if (!("children" in n)) return null;
@@ -7593,7 +7931,7 @@
       restamp(copy2, null, true);
       if (r.self) patches.push({ target: r.self, node: copy2 });
       for (const { target, path } of places) {
-        const n = at(copy2, path);
+        const n = at2(copy2, path);
         if (!n) throw new Error("the copy of " + label(r.source) + " has no layer where " + label(target.node) + " is");
         patches.push({ target, node: n });
       }
@@ -7606,6 +7944,248 @@
       throw e;
     }
     return copy2;
+  }
+
+  // src/component-build.ts
+  var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var kindWord = (t) => t === "COMPONENT_SET" ? "a component set (variants)" : "a single component";
+  async function localComponentsNamed(name) {
+    const out = [];
+    for (const page of figma.root.children) {
+      try {
+        await page.loadAsync();
+        for (const c of page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] })) {
+          if (c.name !== name || c.remote) continue;
+          if (c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET") continue;
+          out.push(c);
+        }
+      } catch {
+      }
+    }
+    return out;
+  }
+  async function existingComponent(type, name) {
+    const found = await localComponentsNamed(name);
+    const one = found[0];
+    if (!one) return { none: true };
+    if (found.length > 1) return { problem: "component '" + name + "' matches " + found.length + " components in this file (" + found.slice(0, 3).map(label2).join(", ") + "); a spec names its component by name \u2014 rename all but one, or give this one another name" };
+    if (one.getPluginData(KEY_DATA) !== componentKey(name)) return { problem: "a component named '" + name + "' exists " + label2(one) + " that a write did not make; patch it (a source edit: `patch` with its id) or choose another name" };
+    if (one.type !== type) return { problem: "component '" + name + "' " + label2(one) + " is " + kindWord(one.type) + ", and this spec makes " + kindWord(type) + "; a re-send cannot turn one into the other \u2014 give the new one another name" };
+    return { ours: one };
+  }
+  function fileDefs(spec, refs2) {
+    return propDefsOf(spec).map(([name, d]) => {
+      if (d.type !== "INSTANCE_SWAP") return { name, type: d.type, defaultValue: d.default };
+      const main = refs2.components.get(String(d.default));
+      if (!main) throw new Error("component '" + String(d.default) + "' was not resolved before the batch ran");
+      const out = { name, type: d.type, defaultValue: main.type === "COMPONENT_SET" ? main.defaultVariant.id : main.id };
+      if (d.preferredValues) {
+        out.preferredValues = d.preferredValues.map((ref2) => {
+          const c = refs2.components.get(ref2);
+          if (!c) throw new Error("component '" + ref2 + "' was not resolved before the batch ran");
+          return { type: c.type, key: c.key };
+        });
+      }
+      return out;
+    });
+  }
+  function addDefs(owner, defs) {
+    const keys = /* @__PURE__ */ new Map();
+    for (const d of defs) keys.set(d.name, owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0));
+    return keys;
+  }
+  function refsFor(s, keys) {
+    const r = s.propRefs;
+    if (!r) return null;
+    const out = {};
+    for (const f of PROP_REF_FIELDS) {
+      const name = r[f];
+      if (name === void 0) continue;
+      const key = keys.get(name);
+      if (key === void 0) throw new Error("property '" + name + "' was not declared on the component");
+      out[f] = key;
+    }
+    return out;
+  }
+  function wireAll(pairs, keys) {
+    for (const [n, s] of pairs) {
+      const r = refsFor(s, keys);
+      if (r && "componentPropertyReferences" in n) n.componentPropertyReferences = r;
+    }
+  }
+  function propRecord(keys) {
+    const out = {};
+    for (const [k, v] of keys) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    return out;
+  }
+  var bareName = (key) => {
+    const i = key.lastIndexOf("#");
+    return i > 0 ? key.slice(0, i) : key;
+  };
+  var sameJson = (a, b) => JSON.stringify(a === void 0 ? null : a) === JSON.stringify(b === void 0 ? null : b);
+  function planDefs(owner, spec, refs2, bad) {
+    const defs = fileDefs(spec, refs2);
+    let current3;
+    try {
+      current3 = owner.componentPropertyDefinitions;
+    } catch {
+      current3 = {};
+    }
+    const have = /* @__PURE__ */ new Map();
+    for (const key of Object.keys(current3)) {
+      const d = current3[key];
+      if (!d || d.type === "VARIANT") continue;
+      const name = bareName(key);
+      if (!have.has(name)) have.set(name, { key, type: d.type, defaultValue: d.defaultValue, ...d.preferredValues ? { preferredValues: d.preferredValues } : {} });
+    }
+    const plan = { owner, defs, keys: /* @__PURE__ */ new Map(), add: [], edit: [], remove: [] };
+    const wanted = /* @__PURE__ */ new Set();
+    let ok = true;
+    for (const d of defs) {
+      wanted.add(d.name);
+      const h = have.get(d.name);
+      if (!h) {
+        plan.add.push(d);
+        continue;
+      }
+      if (h.type !== d.type) {
+        bad("tree.props[" + JSON.stringify(d.name) + "]: '" + d.name + "' is a " + h.type + " property on " + label2(owner) + "; its type cannot change in place \u2014 give it a new name (or drop it in one call and declare it again in the next)");
+        ok = false;
+        continue;
+      }
+      plan.keys.set(d.name, h.key);
+      const prefs = d.type === "INSTANCE_SWAP" ? d.preferredValues || [] : void 0;
+      const hadPrefs = d.type === "INSTANCE_SWAP" ? h.preferredValues || [] : void 0;
+      if (h.defaultValue !== d.defaultValue || !sameJson(prefs, hadPrefs)) plan.edit.push({ key: h.key, def: d, was: { defaultValue: h.defaultValue, ...h.preferredValues ? { preferredValues: h.preferredValues } : {} } });
+    }
+    for (const [name, h] of have) if (!wanted.has(name)) plan.remove.push({ key: h.key, name });
+    return ok ? plan : null;
+  }
+  function syncComponent(p, kept, built, consent2, changes) {
+    const owner = p.owner;
+    const changed = /* @__PURE__ */ new Map();
+    const keys = new Map(p.keys);
+    for (const d of p.add) {
+      consent2();
+      const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0);
+      changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label2(owner), restore() {
+        owner.deleteComponentProperty(key);
+      } });
+      keys.set(d.name, key);
+      changed.set(d.name, key);
+    }
+    for (const e of p.edit) {
+      consent2();
+      const next = { defaultValue: e.def.defaultValue };
+      if (e.def.type === "INSTANCE_SWAP") next.preferredValues = e.def.preferredValues || [];
+      const key = owner.editComponentProperty(e.key, next);
+      changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), restore() {
+        owner.editComponentProperty(key, e.was.preferredValues ? { defaultValue: e.was.defaultValue, preferredValues: e.was.preferredValues } : { defaultValue: e.was.defaultValue });
+      } });
+      keys.set(e.def.name, key);
+      changed.set(e.def.name, key);
+    }
+    let rewired = 0;
+    const fresh = new Set(p.add.map((d) => d.name));
+    const wire = (n, s, force) => {
+      if (!("componentPropertyReferences" in n)) return;
+      const r = refsFor(s, keys) || {};
+      const names = s.propRefs ? PROP_REF_FIELDS.map((f) => s.propRefs ? s.propRefs[f] : void 0).filter((x) => x !== void 0) : [];
+      if (!force && !names.some((x) => fresh.has(x))) return;
+      const was = n.componentPropertyReferences;
+      if (sameJson(was || {}, r)) return;
+      consent2();
+      changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label2(n), restore() {
+        n.componentPropertyReferences = was || {};
+      } });
+      n.componentPropertyReferences = r;
+      rewired++;
+    };
+    for (const k of kept) wire(k.ref, k.spec, !sameJson(k.old.propRefs, k.spec.propRefs));
+    for (const [n, s] of built) if (s.propRefs) wire(n, s, true);
+    return { props: changed, rewired };
+  }
+  function removeDefs(p, consent2) {
+    const out = [];
+    let current3;
+    try {
+      current3 = p.owner.componentPropertyDefinitions;
+    } catch {
+      current3 = {};
+    }
+    for (const r of p.remove) {
+      if (!Object.prototype.hasOwnProperty.call(current3, r.key)) continue;
+      consent2();
+      p.owner.deleteComponentProperty(r.key);
+      out.push(r.name);
+    }
+    return out;
+  }
+  var VARIANT_GAP = 20;
+  function arrangeVariants(set, spec, only) {
+    const sized = spec.box !== void 0 || spec.layout !== void 0 && (spec.layout.width !== void 0 || spec.layout.height !== void 0);
+    if (set.layoutMode !== "NONE") {
+      if (!sized && spec.widthMode === void 0) set.layoutSizingHorizontal = "HUG";
+      if (!sized && spec.heightMode === void 0) set.layoutSizingVertical = "HUG";
+      return;
+    }
+    const byNode = /* @__PURE__ */ new Map();
+    (spec.children || []).forEach((c) => {
+      const n = set.children.filter((k) => k.name === c.name)[0];
+      if (n) byNode.set(n, c);
+    });
+    let y = VARIANT_GAP;
+    for (const c of set.children) {
+      const s = byNode.get(c);
+      const placed = s !== void 0 && (s.x !== void 0 || s.y !== void 0);
+      if ((only === null || only.indexOf(c) >= 0) && !placed) {
+        c.x = VARIANT_GAP;
+        c.y = y;
+      }
+      y = Math.max(y, c.y + c.height + VARIANT_GAP);
+    }
+    if (sized) return;
+    let w = 0;
+    let h = 0;
+    for (const c of set.children) {
+      w = Math.max(w, c.x + c.width + VARIANT_GAP);
+      h = Math.max(h, c.y + c.height + VARIANT_GAP);
+    }
+    if (w > 0 && h > 0) set.resize(w, h);
+  }
+  function componentReply(applied, name, props, rewired) {
+    delete applied.key;
+    applied.component = name;
+    if (props.size) applied.props = propRecord(props);
+    if (rewired) applied.rewired = rewired;
+  }
+  async function componentImpact(ops) {
+    const steps = [];
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree") continue;
+      const c = componentRootOf(op.tree);
+      if (!c || checkTree(op.tree).problems.length) continue;
+      const found = await existingComponent(c.type, c.name);
+      const what = (c.type === "COMPONENT_SET" ? "component set '" : "component '") + c.name + "'";
+      if ("problem" in found) {
+        steps.push({ index, op: op.op, problem: found.problem });
+        continue;
+      }
+      if ("none" in found) {
+        steps.push({ index, op: op.op, plan: { create: [what], update: [] }, change: "would create " + what });
+        continue;
+      }
+      let instances = 0;
+      const mains = found.ours.type === "COMPONENT_SET" ? found.ours.children.filter((k) => k.type === "COMPONENT") : [found.ours];
+      for (const m of mains) {
+        try {
+          instances += (await m.getInstancesAsync()).length;
+        } catch {
+        }
+      }
+      steps.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" });
+    }
+    return steps;
   }
 
   // src/session.ts
@@ -7678,8 +8258,14 @@
       for (const c of clones.values()) cloneTargets.push(c);
       if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
       await page.ok.loadAsync();
-      targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() } });
+      targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs() });
     }
+    const planned = /* @__PURE__ */ new Map();
+    for (const [index, { spec }] of specs) {
+      const c = componentRootOf(spec);
+      if (c && !planned.has(c.name)) planned.set(c.name, index);
+    }
+    setPlannedComponents(planned);
     const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
     problems.push(...r.problems);
     for (const t of targets.values()) t.refs = r.refs;
@@ -7689,9 +8275,9 @@
     }
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
-  function textsOf(s, at2, labels, out) {
+  function textsOf(s, at3, labels, out) {
     const lab = labels.get(s);
-    const path = lab !== void 0 ? lab : at2;
+    const path = lab !== void 0 ? lab : at3;
     if (nodeKind(s) === "TEXT") out.push({ s, path });
     (s.children || []).forEach((c, i) => textsOf(c, path + ".children[" + i + "]", labels, out));
     return out;
@@ -7722,6 +8308,8 @@
     return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
   }
   async function buildTree(t, consent2) {
+    const comp = componentRootOf(t.spec);
+    if (comp) return buildComponent(t, comp.type, comp.name, consent2);
     const made = newMade(t.refs, t.clones);
     const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : void 0;
     const root = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
@@ -7763,6 +8351,68 @@
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
       }
     };
+  }
+  async function buildComponent(t, type, name, consent2) {
+    const made = newMade(t.refs, t.clones);
+    const key = componentKey(name);
+    const parts = [];
+    let root = null;
+    try {
+      if (type === "COMPONENT") {
+        const c = figma.createComponent();
+        parts.push(c);
+        root = c;
+        c.visible = false;
+        applyFrame(c, t.spec, null, made);
+      } else {
+        const variants = [];
+        for (const v of t.spec.children || []) {
+          const c = figma.createComponent();
+          parts.push(c);
+          c.visible = false;
+          applyFrame(c, v, null, made);
+          variants.push([c, v]);
+        }
+        const set = figma.combineAsVariants(variants.map(([c]) => c), figma.currentPage);
+        parts.push(set);
+        root = set;
+        set.visible = false;
+        applyFrame(set, t.spec, null, made, false);
+        for (const [c, v] of variants) {
+          c.visible = v.hidden !== true;
+          place(c, v, set);
+          sizing(c, v);
+        }
+        arrangeVariants(set, t.spec, null);
+      }
+      await finish(made, 0, 0, consent2);
+      const keys = addDefs(root, fileDefs(t.spec, t.refs));
+      wireAll(made.pairs, keys);
+      const { x, y } = placement(t.page, root, t.spec);
+      t.page.appendChild(root);
+      root.x = x;
+      root.y = y;
+      root.visible = t.spec.hidden !== true;
+      stampAll(made, key);
+      markCreated(root);
+      const applied = { id: root.id, component: name, created: createdCount(made) };
+      if (type === "COMPONENT_SET" && applied.created) applied.created.variants = (t.spec.children || []).length;
+      if (keys.size) applied.props = propRecord(keys);
+      if (made.handles.size) applied.handles = handleRecord(made.handles);
+      if (t.summary.unbound) applied.unbound = t.summary.unbound;
+      const built = root;
+      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
+        built.remove();
+      } };
+    } catch (e) {
+      for (const p of parts.slice().reverse()) {
+        try {
+          if (!p.removed) p.remove();
+        } catch {
+        }
+      }
+      throw e;
+    }
   }
   function createdCount(made) {
     const out = { frames: made.frames, texts: made.texts };
@@ -7825,7 +8475,11 @@
         applyText(t, spec, parent, made);
       } else if (kind === "INSTANCE") node = applyInstance(spec, parent, made);
       else if (kind === "CLONE") node = applyClone(spec, parent, made);
-      else {
+      else if (spec.type === "COMPONENT") {
+        const c = figma.createComponent();
+        node = c;
+        applyFrame(c, spec, parent, made);
+      } else {
         const f = figma.createFrame();
         node = f;
         applyFrame(f, spec, parent, made);
@@ -7913,7 +8567,7 @@
     if (s.strokes) {
       if (s.strokes.weight !== void 0) n.strokeWeight = s.strokes.weight;
       const w = s.strokes.weights;
-      if (w && n.type === "FRAME") {
+      if (w && (n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET")) {
         if (w.top !== void 0) n.strokeTopWeight = w.top;
         if (w.right !== void 0) n.strokeRightWeight = w.right;
         if (w.bottom !== void 0) n.strokeBottomWeight = w.bottom;
@@ -7938,11 +8592,13 @@
     }
   }
   function sizing(n, s) {
-    if (s.widthMode) n.layoutSizingHorizontal = SIZING2[s.widthMode];
-    if (s.heightMode) n.layoutSizingVertical = SIZING2[s.heightMode];
+    const p = n.parent;
+    const inFlex = !!p && "layoutMode" in p && p.layoutMode !== "NONE";
+    if (s.widthMode && (s.widthMode !== "fill" || inFlex)) n.layoutSizingHorizontal = SIZING2[s.widthMode];
+    if (s.heightMode && (s.heightMode !== "fill" || inFlex)) n.layoutSizingVertical = SIZING2[s.heightMode];
   }
-  function applyFrame(f, s, parent, made) {
-    made.frames++;
+  function applyFrame(f, s, parent, made, withChildren = true) {
+    if (f.type === "FRAME") made.frames++;
     made.pairs.push([f, s]);
     if (parent) parent.appendChild(f);
     f.fills = paints2(s.fills, s.tokens && s.tokens.fills, made);
@@ -7990,7 +8646,7 @@
       if (m.minHeight !== void 0) f.minHeight = m.minHeight;
       if (m.maxHeight !== void 0) f.maxHeight = m.maxHeight;
     }
-    for (const c of s.children || []) {
+    for (const c of withChildren ? s.children || [] : []) {
       const kind = nodeKind(c);
       if (kind === "TEXT") applyText(figma.createText(), c, f, made);
       else if (kind === "INSTANCE") applyInstance(c, f, made);
@@ -8054,19 +8710,23 @@
   }
 
   // src/keyed.ts
-  var isObj5 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  var label2 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
     if (!id) return null;
     const n = await figma.getNodeByIdAsync(id);
     if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
+    return await loadPageOf(n) ? n : null;
+  }
+  async function loadPageOf(n) {
     let p = n.parent;
     while (p && p.type !== "PAGE") p = p.parent;
-    if (!p || p.type !== "PAGE") return null;
+    if (!p || p.type !== "PAGE") return false;
     await p.loadAsync();
-    return n;
+    return true;
   }
+  var holds = (n) => n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
   function readOld(n, key) {
     let spec;
     try {
@@ -8074,9 +8734,9 @@
     } catch {
       return null;
     }
-    if (!isObj5(spec)) return null;
+    if (!isObj6(spec)) return null;
     const children = [];
-    if (n.type === "FRAME") {
+    if (holds(n)) {
       for (const c of n.children) {
         if (c.getPluginData(KEY_DATA) !== key) continue;
         const o = readOld(c, key);
@@ -8128,14 +8788,16 @@
       return p;
     };
     for (const [index, op] of ops.entries()) {
-      if (op.op !== "createTree" || !isObj5(op.tree) || typeof op.tree.key !== "string") continue;
-      const key = op.tree.key;
+      const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
+      if (op.op !== "createTree" || !isObj6(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
+      const key = comp ? componentKey(comp.name) : String(op.tree.key);
+      const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
       };
       const first2 = seen.get(key);
       if (first2 !== void 0) {
-        bad("tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
+        bad(comp ? "component '" + comp.name + "' is also made by ops[" + first2 + "]; one batch makes or updates a component once" : "tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
         continue;
       }
       seen.set(key, index);
@@ -8146,15 +8808,23 @@
         for (const m of big) bad(m);
         continue;
       }
-      const root = await findResult(key);
+      let root = null;
+      if (comp) {
+        const found = await existingComponent(comp.type, comp.name);
+        if ("problem" in found) {
+          bad(found.problem);
+          continue;
+        }
+        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+      } else root = await findResult(key);
       if (!root) continue;
       if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
-        bad("tree.key '" + key + "': its result " + label2(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+        bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
         continue;
       }
       const old = readOld(root, key);
       if (!old) {
-        bad("tree.key '" + key + "': the spec stored on its result " + label2(root) + " cannot be read; give the spec another key to build it again");
+        bad(what + ": the spec stored on its result " + label3(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
         continue;
       }
       const plan = planUpdate(old, t.spec);
@@ -8162,16 +8832,16 @@
       for (const b of plan.builds) {
         if (!b.replaces) continue;
         const f = foreignIn(b.replaces, key);
-        if (f) bad(b.path + ": " + label2(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label2(f) + ", which this key did not build; move that layer out first");
+        if (f) bad(b.path + ": " + label3(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label3(f) + ", which this key did not build; move that layer out first");
       }
       for (const r of plan.removals) {
         const f = foreignIn(r, key);
-        if (f) bad("tree.key '" + key + "': " + label2(r) + " is no longer in the spec, but it holds " + label2(f) + ", which this key did not build; move that layer out, or keep the node in the spec");
+        if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
       }
       const patches = /* @__PURE__ */ new Map();
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
-        const say = (m) => bad(u.path + " (" + label2(u.ref) + "): " + m);
+        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
         const checked = checkPatch(u.set);
         if (checked.problems.length) {
           for (const m of checked.problems) say(m);
@@ -8182,14 +8852,16 @@
         p.refs = t.refs;
         patches.set(i, p);
       }
-      if (problems.length === before) t.update = { key, root, plan, patches };
+      const owner = root;
+      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
+      if (problems.length === before) t.update = { key, root, plan, patches, ...comp && defs ? { component: { name: comp.name, defs } } : {} };
     }
     return { problems };
   }
   function checkRemoval(u, n) {
     if (n.removed) return;
     const f = foreignIn(n, u.key);
-    if (f) throw new Error(label2(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label2(f) + ", which that key did not build; nothing was removed");
+    if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
   }
   function touchedBy(u) {
     const out = /* @__PURE__ */ new Set([u.root.id]);
@@ -8221,8 +8893,8 @@
   var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
   function boundTo(n, k) {
     const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj5(bv) ? bv[k] : void 0;
-    return isObj5(a) && typeof a.id === "string" ? a.id : null;
+    const a = isObj6(bv) ? bv[k] : void 0;
+    return isObj6(a) && typeof a.id === "string" ? a.id : null;
   }
   function applyExtras(n, s, fields, only, variables, changes) {
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
@@ -8234,7 +8906,7 @@
     changes.push({
       applied: { id: n.id },
       kind: "updated node",
-      what: "the place, clipping or size limits of " + label2(n),
+      what: "the place, clipping or size limits of " + label3(n),
       async restore() {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
         if (size2) {
@@ -8302,7 +8974,7 @@
     return {
       applied: { id: parent.id },
       kind: "reordered frame",
-      what: "the order of the layers in " + label2(parent),
+      what: "the order of the layers in " + label3(parent),
       restore() {
         arrange(parent, was.filter((c) => c.parent === parent));
       }
@@ -8345,7 +9017,7 @@
       consent2();
       const from = made.pairs.length;
       const n = await buildSubtree(b.spec, b.parent, made, consent2);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label2(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
         n.remove();
       } });
       stampAll(made, key, from);
@@ -8360,6 +9032,27 @@
       consent2();
       restamp2(plan.stamps, key, changes);
     }
+    let props = /* @__PURE__ */ new Map();
+    let rewired = 0;
+    if (u.component) {
+      const root = u.root;
+      if (root.type === "COMPONENT_SET" && built.length) {
+        consent2();
+        const size2 = { w: root.width, h: root.height };
+        const at3 = root.children.map((c) => [c, c.x, c.y]);
+        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
+          for (const [c, x, y] of at3) if (!c.removed) {
+            c.x = x;
+            c.y = y;
+          }
+          if (root.width !== size2.w || root.height !== size2.h) root.resize(size2.w, size2.h);
+        } });
+        arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
+      }
+      const synced = syncComponent(u.component.defs, plan.kept, made.pairs, consent2, changes);
+      props = synced.props;
+      rewired = synced.rewired;
+    }
     const applied = { id: u.root.id, key };
     if (changed.length) applied.changed = changed;
     if (plan.builds.length) applied.created = createdCount(made);
@@ -8371,7 +9064,10 @@
     for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
     for (const [h, id] of made.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
     if (Object.keys(handles).length) applied.handles = handles;
-    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles) applied.unchanged = true;
+    const dropped = u.component ? u.component.defs.remove.length : 0;
+    if (u.component) componentReply(applied, u.component.name, props, rewired);
+    if (dropped && u.component) applied.propsRemoved = u.component.defs.remove.map((r) => r.name);
+    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles && !props.size && !rewired && !dropped) applied.unchanged = true;
     return applied;
   }
 
@@ -8600,21 +9296,21 @@
     }
     return out;
   }
-  function styleUses(index, op, set, at2) {
+  function styleUses(index, op, set, at3) {
     const out = [];
     (set.paints || []).forEach((p, i) => {
-      if (p.tokens) out.push({ index, op, path: at2 + ".paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" });
+      if (p.tokens) out.push({ index, op, path: at3 + ".paints[" + i + "].tokens.color", kind: "variable", ref: p.tokens.color, type: "COLOR" });
     });
     const tok = set.tokens || {};
     for (const k of Object.keys(tok)) {
       const ref2 = tok[k];
-      if (typeof ref2 === "string") out.push({ index, op, path: at2 + ".tokens." + k, kind: "variable", ref: ref2, type: TEXT_STYLE_TOKEN_TYPES[k] });
+      if (typeof ref2 === "string") out.push({ index, op, path: at3 + ".tokens." + k, kind: "variable", ref: ref2, type: TEXT_STYLE_TOKEN_TYPES[k] });
     }
     (set.effects || []).forEach((e, i) => {
       const et = e.tokens || {};
       for (const k of Object.keys(et)) {
         const ref2 = et[k];
-        if (typeof ref2 === "string") out.push({ index, op, path: at2 + ".effects[" + i + "].tokens." + k, kind: "variable", ref: ref2, type: k === "color" ? "COLOR" : "FLOAT" });
+        if (typeof ref2 === "string") out.push({ index, op, path: at3 + ".effects[" + i + "].tokens." + k, kind: "variable", ref: ref2, type: k === "color" ? "COLOR" : "FLOAT" });
       }
     });
     return out;
@@ -8627,7 +9323,7 @@
     const styles = /* @__PURE__ */ new Map();
     const problems = [];
     const uses = [];
-    const empty = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() });
+    const empty = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() });
     const loaded3 = /* @__PURE__ */ new Map();
     const loadFont = (f) => {
       const key = f.family + "|" + f.style;
@@ -9173,7 +9869,7 @@
     const targets = /* @__PURE__ */ new Map();
     const problems = [];
     const plan = { variables: [], styles: [] };
-    const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map() };
+    const empty = { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() };
     const none = { targets, problems, plan, imports: async () => ({ problems: [], revoked: false }), importCount: 0, refs: empty };
     if (!ops.some(isCreateOp)) return none;
     const firstOther = ops.findIndex((o) => !isCreateOp(o));
@@ -9470,7 +10166,7 @@
       if (found === null) continue;
       const chain = [from];
       for (let k = found; k !== void 0 && k !== from; k = back.get(k)) chain.splice(1, 0, k);
-      const label4 = async (k) => {
+      const label5 = async (k) => {
         const r = byKey.get(k);
         if (r) return "'" + r.name + "'";
         let v = null;
@@ -9482,7 +10178,7 @@
         return v ? "'" + v.name + "'" : k.slice(3);
       };
       const names = [];
-      for (const k of chain.concat([from])) names.push(await label4(k));
+      for (const k of chain.concat([from])) names.push(await label5(k));
       out.push({ index: start.op, op: "createVariables", message: "variables[" + start.index + "]: the aliases " + names.join(" \u2192 ") + " make a loop" });
       break;
     }
@@ -9683,7 +10379,7 @@
         variables.set(ref2, v);
       }
       const before = s.existing ? comparableStyle(st) : "";
-      const target = { style: st, set: s.row.set, refs: { instances: /* @__PURE__ */ new Map(), variables, textStyles: /* @__PURE__ */ new Map() }, font: null, bound: s.bound };
+      const target = { style: st, set: s.row.set, refs: { instances: /* @__PURE__ */ new Map(), variables, textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, font: null, bound: s.bound };
       edits.push(await applyStyle(target, consent2));
       outcome.push([st.id, !s.existing ? "created" : comparableStyle(st) === before ? "unchanged" : "updated"]);
     }
@@ -9769,14 +10465,15 @@
   async function designImpact(ops) {
     const sources = await writeImpact(ops);
     const creates = await createImpact(ops);
-    const steps = [...sources.steps, ...creates.steps].sort((a, b) => a.index - b.index);
+    const components2 = await componentImpact(ops);
+    const steps = [...sources.steps, ...creates.steps, ...components2].sort((a, b) => a.index - b.index);
     return sources.warnings ? { steps, warnings: sources.warnings } : { steps };
   }
 
   // src/structure.ts
-  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var label4 = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
-  var holds = (node, foreign) => "node " + label3(node) + " holds " + label3(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
+  var holds2 = (node, foreign) => "node " + label4(node) + " holds " + label4(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
   function instanceAround(n) {
     for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
     return null;
@@ -9787,10 +10484,10 @@
   }
   function placeProblem(node, parent, index) {
     const inst = instanceAround(parent);
-    if (inst) return "parent " + label3(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label3(inst)) + ", which cannot take new children";
-    if (within(parent, node)) return "parent " + label3(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+    if (inst) return "parent " + label4(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label4(inst)) + ", which cannot take new children";
+    if (within(parent, node)) return "parent " + label4(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
     const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
-    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label3(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label4(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
     return null;
   }
   async function resolveStructureOps(ops, changesBefore2) {
@@ -9809,18 +10506,18 @@
         continue;
       }
       if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad(label3(nd) + " is a " + nd.type + "; " + NOT_OURS);
+        bad(label4(nd) + " is a " + nd.type + "; " + NOT_OURS);
         continue;
       }
       const node = nd;
       if (!createdThisSession(node.id)) {
-        bad("node " + label3(node) + ": " + NOT_OURS);
+        bad("node " + label4(node) + ": " + NOT_OURS);
         continue;
       }
       if (op.op === "delete") {
         const foreign = others ? null : foreignBelow(node);
         if (foreign) {
-          bad(holds(node, foreign));
+          bad(holds2(node, foreign));
           continue;
         }
         deletes.set(index, { node });
@@ -9832,7 +10529,7 @@
         continue;
       }
       if (pd.type === "DOCUMENT" || !("insertChild" in pd)) {
-        bad("parent " + label3(pd) + " is a " + pd.type + ", which cannot have children");
+        bad("parent " + label4(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
@@ -9849,15 +10546,15 @@
   }
   function checkDelete(t) {
     const foreign = foreignBelow(t.node);
-    if (foreign) throw new Error(holds(t.node, foreign));
+    if (foreign) throw new Error(holds2(t.node, foreign));
   }
   function applyMove(t) {
     const { node, parent } = t;
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
-    if (!from || !("insertChild" in from)) throw new Error("node " + label3(node) + " has no parent to move it from");
-    const at2 = from.children.indexOf(node);
+    if (!from || !("insertChild" in from)) throw new Error("node " + label4(node) + " has no parent to move it from");
+    const at3 = from.children.indexOf(node);
     const x = node.x, y = node.y, w = node.width, h = node.height;
     const sizing2 = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
     if (t.index === void 0) parent.appendChild(node);
@@ -9866,9 +10563,9 @@
     return {
       applied,
       kind: "moved node",
-      what: "the move of " + label3(node),
+      what: "the move of " + label4(node),
       restore() {
-        from.insertChild(Math.min(at2, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
+        from.insertChild(Math.min(at3, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
         if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
         if (sizing2 && "layoutSizingHorizontal" in node) {
           const inFlex = !!node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE";
@@ -10257,9 +10954,9 @@
       try {
         for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;
       } catch (e) {
-        const at2 = e instanceof CreateFailed ? e.index : list.findIndex(isCreateOp);
-        const op = list[at2];
-        if (op) return fail(at2, op, e instanceof CreateFailed ? e.reason : e);
+        const at3 = e instanceof CreateFailed ? e.index : list.findIndex(isCreateOp);
+        const op = list[at3];
+        if (op) return fail(at3, op, e instanceof CreateFailed ? e.reason : e);
         throw e;
       }
     }
@@ -10330,6 +11027,14 @@
           if (n.removed) continue;
           consent();
           n.remove();
+        }
+        const comp = t.update.component;
+        if (comp && comp.defs.remove.length) {
+          const gone = removeDefs(comp.defs, consent);
+          if (row) {
+            if (gone.length) row.propsRemoved = gone;
+            else delete row.propsRemoved;
+          }
         }
       } catch (e) {
         return fail(i, op, e);
@@ -10553,10 +11258,10 @@
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post2 = (m) => figma.ui.postMessage(m);
-  async function runExport(label4, collect, toFiles) {
+  async function runExport(label5, collect, toFiles) {
     let r;
     try {
-      r = await serializeRun(collect, { source: "ui", label: label4 });
+      r = await serializeRun(collect, { source: "ui", label: label5 });
     } catch (e) {
       post2({ type: "error", message: errMsg(e) });
       return;

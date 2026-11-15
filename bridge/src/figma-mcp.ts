@@ -39,6 +39,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
+import { componentRootOf } from "./component-spec.ts";
 import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
@@ -771,6 +772,8 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
       if (s.affects) step.affects = s.affects;
       if (s.problem) step.refusedByFile = s.problem;
       if (s.plan) step.plan = s.plan;
+      // A component spec: the file says whether it is made or updated in place (with how many instances follow).
+      if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");
     }
   }
   const sourceNote = impact.asked
@@ -812,7 +815,8 @@ function counted(steps: ReadonlyArray<{ effect: WriteEffect }>, effect: "moves" 
 // one plugin is reachable, never waited for; `asked` false when the batch has none, `reply` null when nothing answered.
 interface ImpactRead { asked: boolean; reply: WriteImpactReply | null; why: string }
 async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | undefined, extra: ToolExtra): Promise<ImpactRead> {
-  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0)) return { asked: false, reply: null, why: "" };
+  // A component spec asks too: only the file knows whether it makes the component or updates the one it has.
+  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && componentRootOf(o.tree) !== null))) return { asked: false, reply: null, why: "" };
   // Only a patch that changes a main component is a source edit: the plugin says which, so every patch asks.
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
@@ -847,7 +851,7 @@ registerTool(
       // fields, the replies and the limits are the designtwin plugin's design-in-figma skill (references/grammar.md),
       // and a field this summary leaves out is still checked: the refusal names it by path.
       "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch; a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
-      "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place) | " +
+      "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
       "patch {nodeId, set}: change the given fields of an existing node | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
@@ -856,7 +860,7 @@ registerTool(
       "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
-      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree or a create table. " +
+      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
       "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed); with 'Review each write' on, a write waits (≤5 min) for their Apply/Reject.",
     inputSchema: {
       ...clientShape,

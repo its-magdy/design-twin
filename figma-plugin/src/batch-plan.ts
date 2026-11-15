@@ -27,10 +27,22 @@ export interface BatchPlan {
 }
 
 let current: BatchPlan | null = null;
+/** The components the batch's createTree ops make or update, by name → the op's index (component-build.ts). A spec of
+ *  the same batch cannot name one: every name resolves before the batch runs, so it is made in an earlier call. */
+let components = new Map<string, number>();
 
-/** Make `plan` the batch's (null: no batch is resolving). */
+/** Make `plan` the batch's (null: no batch is resolving, and no component is planned either). */
 export function setBatchPlan(plan: BatchPlan | null): void {
   current = plan;
+  if (plan === null) components = new Map();
+}
+/** Make `planned` the batch's components (name → op index). */
+export function setPlannedComponents(planned: Map<string, number>): void {
+  components = planned;
+}
+/** The op of the batch that makes or updates the component named exactly `name`, or undefined. */
+export function plannedComponent(name: string): number | undefined {
+  return components.get(name);
 }
 /** The new variables named exactly `name` that the batch's create ops will make. */
 export function plannedVariables(name: string): Array<Planned<Variable>> {

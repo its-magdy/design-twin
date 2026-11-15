@@ -417,7 +417,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    kind) is resolved by the plugin before the first op runs (`tree-refs.ts`, `patch.ts`, `sources.ts`, `creates.ts`).
    The create tables come first in a batch and run first: what they will make is the batch's plan
    (`figma-plugin/src/batch-plan.ts`), so a later op's name for a new variable or text style resolves, like an import,
-   once they have run. A spec given as `treeFile` is read by the MCP server
+   once they have run. A `createTree` root of type COMPONENT or COMPONENT_SET makes a local component
+   (`component-spec.ts`; a set's variant table expanded by `tree-expand.ts`), built and updated by
+   `figma-plugin/src/component-build.ts`: its name is its key, so the one local component of that name a write made is
+   updated in place through the keyed re-send (`keyed.ts`), its property definitions and layer wiring brought to the
+   spec; a spec cannot use a component the same batch makes. A spec given as `treeFile` is read by the MCP server
    (`spec-file.ts`) and never reaches the plugin as a path; so is a `seedTokens` op's token file (`seed-file.ts`,
    mapped by `token-seed.ts`), which becomes the create tables in its place, so the plugin sees only those. The design record is `docs/write-plane-spec.md`; the
    token cost of each route is measured by `test/write-cost.test.ts`.

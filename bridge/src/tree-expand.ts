@@ -7,6 +7,10 @@
 //     dropped. A fragment may use another; one that uses itself is refused.
 //   * An instance may take a table of rows: `{component, props?, rows: [{prop: value}, …]}`, or with `columns: [prop, …]`
 //     each row a list of values in that order. It is one instance per row, each with the node's `props` and its row's.
+//   * A COMPONENT_SET root is a variant table (component-spec.ts): `variant` (the spec every variant starts from),
+//     `columns` (its VARIANT properties) and `rows`, each the values of one variant in column order and, last, an
+//     optional object of the fields that variant changes (its own fields, and `edits`: a layer name unique in the base →
+//     fields). It is the set with one COMPONENT child per row, named as Figma names a variant ("Size=md, State=default").
 //
 // The expanded tree is what checkTree (tree-spec.ts) checks, the dry run describes and the plugin builds, so a spec
 // using either is held to every rule a spelled-out one is, the all-or-nothing rule included: a problem anywhere refuses
@@ -34,9 +38,15 @@ export interface Expansion {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** The fields only repetition reads: none survives expansion. */
-const REPEAT_FIELDS = ["use", "fragments", "rows", "columns"] as const;
+const REPEAT_FIELDS = ["use", "fragments", "rows", "columns", "variant"] as const;
 /** Fields an edit of a fragment's layer cannot set: they would change what the fragment is, not a value in it. */
 const NOT_EDITED = ["use", "fragments", "edits", "key"];
+/** Fields a row of a variant table cannot change: what makes it a variant of the set (its name is its values). */
+const VARIANT_FIXED: Readonly<Record<string, string>> = {
+  type: "every variant is a COMPONENT", name: "a variant's name is its row's values", children: "a variant's layers come from `variant`; change one with `edits` (its layer name → fields)",
+  variant: "it is the set's", rows: "it is the set's", columns: "it is the set's", fragments: "fragments are defined once, on the spec's root",
+  use: "a variant is not a fragment", key: "a component's name is its key", props: "the set declares the properties (the root's `props`)", component: "a variant is not an instance",
+};
 
 /** Set `o[k]` as an own property: a key the agent wrote may be "__proto__", which plain assignment would turn into a
  *  prototype instead of a field. */
@@ -99,12 +109,43 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
   let count = 0;
   let tooMany = false;
 
+  /** Lay `edits` (a layer name → fields; a null drops the field) over the one layer of `layers` each name matches. */
+  const applyEdits = (layers: ReadonlyArray<Record<string, unknown>>, edits: unknown, path: string, of: string, inWhat: string): void => {
+    if (!isObj(edits)) { say(path + ": must be an object of a layer name " + inWhat + " → the fields it changes"); return; }
+    for (const layer of Object.keys(edits)) {
+      const fields = edits[layer];
+      const at = path + "[" + JSON.stringify(layer) + "]";
+      if (!isObj(fields)) { say(at + ": must be an object of the fields to change"); continue; }
+      const hits = layers.filter((l) => l.name === layer);
+      if (hits.length !== 1) {
+        const names = layers.map((l) => l.name).filter((x): x is string => typeof x === "string");
+        say(at + ": " + (hits.length ? "matches " + hits.length + " layers of " + of + "; give them different names"
+          : "no layer of " + of + " has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
+        continue;
+      }
+      const target = hits[0];
+      if (!target) continue;
+      for (const k of Object.keys(fields)) {
+        if (NOT_EDITED.indexOf(k) >= 0) { say(at + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited"); continue; }
+        const v = fields[k];
+        if (v === null) delete target[k];
+        else if (v !== undefined) put(target, k, copy(v));
+      }
+    }
+  };
+
   /** `n` expanded: the nodes it stands for (a row table stands for several). `path` is where it is in the spec as
    *  written; `stack` the fragments being placed around it (a fragment met again inside itself is a loop). */
   const expand = (n: unknown, path: string, stack: readonly string[], isRoot: boolean): unknown[] => {
     if (tooMany) return [];
     if (!isObj(n)) return [n];
     if (!isRoot && n.fragments !== undefined) say(path + ".fragments: fragments are defined once, on the spec's root");
+    if (isRoot && n.type === "COMPONENT_SET") return variants(n, path, stack);
+    if (isRoot && n.type === "COMPONENT" && (n.variant !== undefined || n.rows !== undefined || n.columns !== undefined)) {
+      say(path + ": a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: \"COMPONENT_SET\"`, or leave the table out for one component");
+      return [];
+    }
+    if (n.variant !== undefined) say(path + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
     if (n.use !== undefined) return place(n, path, stack, isRoot);
     if (n.rows !== undefined) return spread(n, path);
     if (n.columns !== undefined) say(path + ".columns: names the values of each row in `rows`, which this node does not have");
@@ -135,37 +176,86 @@ export function expandTree(spec: unknown, maxNodes: number): Expansion {
     if (n.rows !== undefined || n.columns !== undefined) say(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
     const body = copy(fragments[name]);
     if (!isObj(body)) return [];
-    if (n.edits !== undefined) {
-      if (!isObj(n.edits)) say(path + ".edits: must be an object of a layer name in the fragment → the fields it changes");
-      else {
-        const layers = layersOf(body, []);
-        for (const layer of Object.keys(n.edits)) {
-          const fields = n.edits[layer];
-          const at = path + ".edits[" + JSON.stringify(layer) + "]";
-          if (!isObj(fields)) { say(at + ": must be an object of the fields to change"); continue; }
-          const hits = layers.filter((l) => l.name === layer);
-          if (hits.length !== 1) {
-            const names = layers.map((l) => l.name).filter((x): x is string => typeof x === "string");
-            say(at + ": " + (hits.length ? "matches " + hits.length + " layers of fragment '" + name + "'; give them different names"
-              : "no layer of fragment '" + name + "' has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
-            continue;
-          }
-          const target = hits[0];
-          if (!target) continue;
-          for (const k of Object.keys(fields)) {
-            if (NOT_EDITED.indexOf(k) >= 0) { say(at + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited"); continue; }
-            const v = fields[k];
-            if (v === null) delete target[k];
-            else if (v !== undefined) put(target, k, copy(v));
-          }
-        }
-      }
-    }
+    if (n.edits !== undefined) applyEdits(layersOf(body, []), n.edits, path + ".edits", "fragment '" + name + "'", "in the fragment");
     for (const k of Object.keys(n)) {
       if (k === "use" || k === "edits" || k === "children" || (k === "fragments" && isRoot)) continue;
       if (n[k] !== undefined) put(body, k, copy(n[k]));
     }
     return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
+  };
+
+  /** A COMPONENT_SET root: the set, with one COMPONENT child per row of its table, each the base `variant` with the
+   *  row's name and fields laid over it, then expanded in turn. */
+  const variants = (n: Record<string, unknown>, path: string, stack: readonly string[]): unknown[] => {
+    const before = problems.length;
+    const base = n.variant;
+    const cols = n.columns;
+    const rows = n.rows;
+    if (n.children !== undefined) say(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
+    if (n.use !== undefined) say(path + ".use: a component set is not a fragment");
+    if (!isObj(base)) say(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
+    else {
+      if (base.type !== undefined && base.type !== "COMPONENT") say(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
+      if (base.name !== undefined) say(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+      for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
+        const why = VARIANT_FIXED[k];
+        if (base[k] !== undefined && why !== undefined) say(path + ".variant." + k + ": not on a variant — " + why);
+      }
+    }
+    if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + ".columns: must be a non-empty list of the variant properties, e.g. [\"Size\", \"State\"]");
+    else {
+      if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+      const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
+      if (odd >= 0) say(path + ".columns[" + odd + "]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as \"Size=md, State=default\")");
+    }
+    if (!Array.isArray(rows) || !rows.length) say(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
+    if (problems.length !== before || !isObj(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
+    const names: readonly string[] = cols.map(String);
+    const seen = new Map<string, number>();
+    const kids: unknown[] = [];
+    const table: readonly unknown[] = rows;
+    table.forEach((row, i) => {
+      const r = path + ".rows[" + i + "]";
+      const shape = "a list of " + names.length + " value" + (names.length === 1 ? "" : "s") + ", one per column (" + quoteList(names) + "), then optionally an object of the fields this variant changes";
+      if (!Array.isArray(row)) { say(r + ": must be " + shape); return; }
+      const cells: readonly unknown[] = row;
+      const last = cells[names.length];
+      const over = cells.length === names.length + 1 && isObj(last) ? last : null;
+      if (cells.length !== names.length && !over) { say(r + ": must be " + shape); return; }
+      const values = cells.slice(0, names.length);
+      const bad = values.findIndex((v) => typeof v !== "string" || !v.trim() || /[=,]/.test(v));
+      if (bad >= 0) {
+        const v = values[bad];
+        say(r + "[" + bad + "]: " + (typeof v !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v.trim() ? "must be a non-empty value" : "cannot hold '=' or ',' (Figma writes a variant's name as \"Size=md, State=default\")"));
+        return;
+      }
+      const name = names.map((c, j) => c + "=" + String(values[j])).join(", ");
+      const dup = seen.get(name);
+      if (dup !== undefined) { say(r + ": " + name + " is rows[" + dup + "]'s combination too; each variant needs its own"); return; }
+      seen.set(name, i);
+      const v = copy(base);
+      if (!isObj(v)) return;
+      put(v, "type", "COMPONENT");
+      put(v, "name", name);
+      if (over) {
+        for (const k of Object.keys(over)) {
+          const x = over[k];
+          if (k === "edits" || x === undefined) continue;
+          const why = own(VARIANT_FIXED, k) ? VARIANT_FIXED[k] : undefined;
+          if (why !== undefined) { say(r + "." + k + ": a row cannot change it — " + why); continue; }
+          if (x === null) delete v[k];
+          else put(v, k, copy(x));
+        }
+        if (over.edits !== undefined) applyEdits(layersOf(v, []).slice(1), over.edits, r + ".edits", "the base `variant`", "in the base `variant`");
+      }
+      for (const x of expand(v, r + " (variant '" + name + "')", stack, false)) kids.push(x);
+    });
+    if (++count > maxNodes) { tooMany = true; return []; }
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(n)) if (k !== "variant" && k !== "rows" && k !== "columns" && k !== "children" && k !== "fragments") put(out, k, copy(n[k]));
+    out.children = kids;
+    labels.set(out, path);
+    return [out];
   };
 
   /** An instance with a row table: one instance per row, each with the node's props and the row's. */

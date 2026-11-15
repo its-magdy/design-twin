@@ -18,7 +18,10 @@
 // A component made with TEXT properties (`textProps`) drives its sublayers' text from them: the plugin's
 // main.createInstance() + setProperties sets the sublayer's characters on that instance only. A paint the plugin binds
 // (figma.variables.setBoundVariableForPaint) shows the variable's value, as one a fixture binds does.
-import { fakeWorld, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene, type World } from "../fake-figma.ts";
+// A component a write makes (figma.createComponent, figma.combineAsVariants) has Figma's property API (fake-figma.ts
+// componentApi): its instances' TEXT and BOOLEAN properties drive the sublayers wired to them, and a VARIANT value
+// switches the instance to that variant.
+import { componentApi, fakeWorld, textRuns, variantValues, type FakeCollection, type FakeNode, type FakeVariable, type Scene, type World } from "../fake-figma.ts";
 
 export interface Rgb { r: number; g: number; b: number }
 interface Alias { type: "VARIABLE_ALIAS"; id: string }
@@ -106,7 +109,7 @@ export function canvas(): Canvas {
   };
   const box = (n: CNode) => ({ x: Number(n.x), y: Number(n.y), width: Number(n.width), height: Number(n.height) });
   // What every node carries for the read: no dev resources, and a reference render that is one fixed tiny byte string.
-  const common = { visible: true, strokes: [], effects: [], opacity: 1, rotation: 0, blendMode: "NORMAL", isMask: false, x: 0, y: 0,
+  const common = { visible: true, strokes: [], effects: [], opacity: 1, rotation: 0, blendMode: "NORMAL", isMask: false, x: 0, y: 0, componentPropertyReferences: null,
     getDevResourcesAsync: async () => [], exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
   // A page's components, as findAllWithCriteria finds them (every level).
   const findAll = (root: CNode, types: readonly string[]): CNode[] =>
@@ -177,25 +180,39 @@ export function canvas(): Canvas {
 
   // An instance of `main`: its size, auto-layout and fills, and sublayers that read through to the main's. Its TEXT
   // properties set the text of the sublayer each drives, on this instance only (an override).
-  const makeInstance = (main: CNode, spec: { name?: string }): CNode => {
+  const makeInstance = (first: CNode, spec: { name?: string }): CNode => {
+    let main = first;
     const f = frameLike("INSTANCE", {
       name: spec.name ?? main.name, w: Number(main.width), h: Number(main.height), gap: Number(main.itemSpacing ?? 0),
       ...(main.layoutMode !== "NONE" ? { layoutMode: main.layoutMode as "HORIZONTAL" | "VERTICAL" } : {}),
     });
     f.fills = main.fills ?? [];
     f.getMainComponentAsync = async () => main;
+    f.mainOf = main;
     const props: Record<string, { type: string; value: string | boolean }> = {};
     f.componentProperties = props;
     f.overrides = [];
     f.children = (main.children ?? []).map((k) => sublayer(f.id, k, f));
+    // A variant's properties are its set's.
+    const owner = (): CNode => (main.parent?.type === "COMPONENT_SET" ? main.parent : main);
     f.setProperties = (given: Record<string, string | boolean>) => {
-      const defs = (main.componentPropertyDefinitions ?? {}) as Record<string, { type: string }>;
+      const defs = (owner().componentPropertyDefinitions ?? {}) as Record<string, { type: string }>;
       for (const [key, value] of Object.entries(given)) {
         const def = defs[key];
         if (!def) throw new Error(`in Figma: ${main.name} has no property ${key}`);
         props[key] = { type: def.type, value };
-        const sub = f.children?.find((k) => (k.componentPropertyReferences as { characters?: string } | undefined)?.characters === key);
-        if (sub && typeof value === "string") sub.characters = value;
+        if (def.type === "VARIANT") {
+          // The variant with this value (the others as they are) becomes the instance's main component.
+          const want = { ...(main.variantProperties as Record<string, string> | null), [key]: String(value) };
+          const v = owner().children?.find((k) => Object.entries(want).every(([p, x]) => (k.variantProperties as Record<string, string> | null)?.[p] === x));
+          if (v && v !== main) { main = v; f.mainOf = v; f.children = (v.children ?? []).map((k) => sublayer(f.id, k, f)); }
+          continue;
+        }
+        const refs = (k: CNode): { characters?: string; visible?: string } => (k.componentPropertyReferences as { characters?: string; visible?: string } | null) ?? {};
+        for (const sub of f.children ?? []) {
+          if (refs(sub).characters === key && typeof value === "string") sub.characters = value;
+          if (refs(sub).visible === key && typeof value === "boolean") sub.visible = value;
+        }
       }
     };
     return f;
@@ -279,10 +296,31 @@ export function canvas(): Canvas {
     },
     world() {
       const first = pages[0] ?? c.page("Page 1");
+      let propSeq = 0;
+      // A main component a write makes: Figma's property API, its instances, its values as a variant (from its name).
+      const writtenComponent = (type: "COMPONENT" | "COMPONENT_SET"): CNode => {
+        const n = frameLike(type, { name: type === "COMPONENT" ? "Component" : "Component set" });
+        n.key = `key-${n.id}`;
+        n.remote = false;
+        componentApi(n, () => Object.values(nodes), () => `${n.id.split(":")[1] ?? "0"}:${++propSeq}`);
+        if (type === "COMPONENT") {
+          n.createInstance = () => makeInstance(n, {});
+          n.getInstancesAsync = async () => Object.values(nodes).filter((k) => k.type === "INSTANCE" && k.mainOf === n);
+          Object.defineProperty(n, "variantProperties", { get: () => (n.parent?.type === "COMPONENT_SET" ? variantValues(n.name) : null) });
+        } else Object.defineProperty(n, "defaultVariant", { get: () => n.children?.find((k) => k.type === "COMPONENT") ?? null });
+        return n;
+      };
       const scene: Scene = { file: { name: "Sample App" }, pages, currentPage: first, nodes, variables, collections: { [COLLECTION.id]: COLLECTION } };
       current = fakeWorld(scene, {}, {
         createFrame: () => frameLike("FRAME", { name: "Frame" }),
         createText: () => textNode({ text: "" }),
+        createComponent: () => writtenComponent("COMPONENT"),
+        combineAsVariants: (list: FakeNode[], parent: FakeNode) => {
+          const set = writtenComponent("COMPONENT_SET");
+          for (const k of list) adopt(set, k as CNode);
+          adopt(parent as CNode, set);
+          return set;
+        },
         loadFontAsync: async () => {},
         // A bound paint shows the variable's value, as a fixture's does (paintOf).
         variables: {

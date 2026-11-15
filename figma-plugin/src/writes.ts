@@ -9,6 +9,7 @@ import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
+import { removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
@@ -496,6 +497,12 @@ async function batchWrites(list: WriteOp[]): Promise<WriteResult> {
         if (n.removed) continue;
         consent();
         n.remove();
+      }
+      // A component re-send: the property definitions its spec dropped (a deleted one takes its references along).
+      const comp = t.update.component;
+      if (comp && comp.defs.remove.length) {
+        const gone = removeDefs(comp.defs, consent);
+        if (row) { if (gone.length) row.propsRemoved = gone; else delete row.propsRemoved; }
       }
     } catch (e) {
       return fail(i, op, e);

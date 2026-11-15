@@ -120,6 +120,8 @@ export interface FakeFigma {
   skipInvisibleInstanceChildren?: boolean;
   createFrame?: () => FakeNode;
   createText?: () => FakeNode;
+  createComponent?: () => FakeNode;
+  combineAsVariants?: (nodes: FakeNode[], parent: FakeNode) => FakeNode;
   loadFontAsync?: (font: { family: string; style: string }) => Promise<void>;
   listAvailableFontsAsync?: () => Promise<Array<{ fontName: { family: string; style: string } }>>;
   getFontFamilyVariationAxes?: (family: string) => string[] | null;
@@ -606,4 +608,80 @@ export function textRuns<T extends FakeNode>(node: T): T {
   });
   if (n.textStyleId === undefined) n.textStyleId = "";
   return node;
+}
+
+/** A fake property definition, as componentPropertyDefinitions answers one. */
+export interface FakePropDef { type: string; defaultValue: unknown; preferredValues?: unknown[]; variantOptions?: string[] }
+/**
+ * Figma's component property API on a fake main component or component set (`node`, its own fields): addComponentProperty
+ * returns a new `name#id` key (`nextId` makes the id), editComponentProperty changes a definition's default or suggestions
+ * (a new name gives a new key), deleteComponentProperty removes one and every reference to it among `layers()`, and
+ * componentPropertyDefinitions answers them all — a set's with its VARIANT properties first, read from its variants'
+ * `variantProperties` (options in variant order, the first variant's value the default). A variant (a component inside a
+ * set) throws on every one of them, as Figma's does. Definitions are kept in a Map and answered as own properties, so a
+ * property may be called "__proto__", "constructor" or "toString".
+ */
+export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], nextId: () => string): void {
+  const defs = new Map<string, FakePropDef>();
+  const parentType = (): unknown => { const p = node.parent; return typeof p === "object" && p !== null ? (p as FakeNode).type : undefined; };
+  const guard = (what: string): void => { if (node.type === "COMPONENT" && parentType() === "COMPONENT_SET") throw new Error("in Figma: " + what + " can only be used on a component set or a non-variant component"); };
+  const own = (o: Record<string, unknown>, k: string, v: unknown): void => { Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true }); };
+  const bare = (key: string): string => { const i = key.lastIndexOf("#"); return i > 0 ? key.slice(0, i) : key; };
+  Object.defineProperty(node, "componentPropertyDefinitions", {
+    enumerable: true, configurable: true,
+    get() {
+      guard("componentPropertyDefinitions");
+      const out: Record<string, unknown> = {};
+      if (node.type === "COMPONENT_SET") {
+        const options = new Map<string, string[]>();
+        for (const v of node.children ?? []) {
+          const vp = v.variantProperties;
+          if (typeof vp !== "object" || vp === null) continue;
+          for (const [k, x] of Object.entries(vp as Record<string, string>)) { const list = options.get(k) ?? []; if (!list.includes(x)) list.push(x); options.set(k, list); }
+        }
+        for (const [k, list] of options) own(out, k, { type: "VARIANT", defaultValue: list[0], variantOptions: list });
+      }
+      for (const [k, d] of defs) own(out, k, { ...d });
+      return out;
+    },
+  });
+  node.addComponentProperty = (name: string, type: string, defaultValue: unknown, options?: { preferredValues?: unknown[] }) => {
+    guard("addComponentProperty");
+    if (type === "VARIANT" && node.type === "COMPONENT_SET") throw new Error("in Figma: a set's variant properties come from its variants");
+    if (type === "BOOLEAN" && typeof defaultValue !== "boolean") throw new Error("in Figma: a BOOLEAN property's default is a boolean");
+    if (type === "TEXT" && typeof defaultValue !== "string") throw new Error("in Figma: a TEXT property's default is a string");
+    const key = name + "#" + nextId();
+    defs.set(key, { type, defaultValue, ...(options && options.preferredValues ? { preferredValues: options.preferredValues } : {}) });
+    return key;
+  };
+  node.editComponentProperty = (key: string, value: { name?: string; defaultValue?: unknown; preferredValues?: unknown[] }) => {
+    guard("editComponentProperty");
+    const d = defs.get(key);
+    if (!d) throw new Error("in Figma: no property " + key);
+    const next: FakePropDef = { ...d, ...(value.defaultValue !== undefined ? { defaultValue: value.defaultValue } : {}), ...(value.preferredValues !== undefined ? { preferredValues: value.preferredValues } : {}) };
+    if (value.name !== undefined && value.name !== bare(key)) { defs.delete(key); const k2 = value.name + "#" + nextId(); defs.set(k2, next); return k2; }
+    defs.set(key, next);
+    return key;
+  };
+  node.deleteComponentProperty = (key: string) => {
+    guard("deleteComponentProperty");
+    if (!defs.delete(key)) throw new Error("in Figma: no property " + key);
+    for (const l of layers()) {
+      const r = l.componentPropertyReferences;
+      if (typeof r !== "object" || r === null) continue;
+      const left: Record<string, unknown> = {};
+      for (const [f, k] of Object.entries(r as Record<string, unknown>)) if (k !== key) own(left, f, k);
+      l.componentPropertyReferences = left;
+    }
+  };
+}
+
+/** A variant's VARIANT property values, from its name as Figma reads it ("Size=md, State=default"). */
+export function variantValues(name: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of name.split(",")) {
+    const i = part.indexOf("=");
+    if (i > 0) Object.defineProperty(out, part.slice(0, i).trim(), { value: part.slice(i + 1).trim(), enumerable: true, writable: true, configurable: true });
+  }
+  return out;
 }

@@ -30,7 +30,9 @@ import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-matc
 import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { nodeKind, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { OpProblem } from "./write-batch";
-import { plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
+import { plannedComponent, plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
+import { componentRootOf, propDefComponents } from "../../bridge/src/component-spec.ts";
+import { valueProps } from "../../bridge/src/tree-diff.ts";
 
 /** What a node of a spec resolved to, for the build. */
 export interface ResolvedRefs {
@@ -40,7 +42,11 @@ export interface ResolvedRefs {
   variables: Map<string, Variable>;
   /** a text style reference → the style */
   textStyles: Map<string, TextStyle>;
+  /** a component a component root's swap property names (its default, a suggestion) → the component or set */
+  components: Map<string, ComponentNode | ComponentSetNode>;
 }
+/** An empty resolution. */
+export const noRefs = (): ResolvedRefs => ({ instances: new Map(), variables: new Map(), textStyles: new Map(), components: new Map() });
 
 /** One place a spec or a patch names something, with what it needs. */
 export interface Use {
@@ -52,7 +58,7 @@ export interface Use {
   ref: string;
   /** a variable: the type the field takes */
   type?: VariableResolvedDataType;
-  /** a component: the node that names it */
+  /** a component: the node that names it (an instance), or none for a swap property's default or suggestion */
   node?: TreeNodeSpec;
 }
 
@@ -68,6 +74,8 @@ function usesOf(index: number, s: TreeNodeSpec, at: string, out: Use[], labels: 
   if (kind === "CLONE") return out;
   const op = "createTree";
   if (kind === "INSTANCE" && s.component !== undefined) out.push({ index, op, path: path + ".component", kind: "component", ref: s.component, node: s });
+  // A component root's swap properties: the components they show and suggest.
+  if (at === "tree" && componentRootOf(s)) for (const ref of propDefComponents(s)) out.push({ index, op, path: path + ".props", kind: "component", ref });
   if (kind === "TEXT" && s.styles && s.styles.text !== undefined) out.push({ index, op, path: path + ".styles.text", kind: "textStyle", ref: s.styles.text });
   (s.fills || []).forEach((f, i) => { if (f.tokens) out.push({ index, op, path: path + ".fills[" + i + "].tokens.color", kind: "variable", ref: f.tokens.color, type: "COLOR" }); });
   const t = s.tokens || {};
@@ -133,11 +141,19 @@ export interface RefResolution {
  * else why not), shared with the raw-font loads so a family loads once.
  */
 export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) => Promise<string | null>): Promise<RefResolution> {
-  const refs: ResolvedRefs = { instances: new Map(), variables: new Map(), textStyles: new Map() };
+  const refs: ResolvedRefs = noRefs();
   const problems: OpProblem[] = [];
   if (!uses.length) return { refs, problems, imports: async () => ({ problems: [], revoked: false }), importCount: 0 };
 
   const file = fileLookups();
+  // An instance's swap value: a component in this file (an INSTANCE_SWAP takes the id of one the file has).
+  const swapOf = async (ref: string): Promise<{ ok: ComponentNode } | { error: string }> => {
+    const f = await lookup("component", ref, () => file.component(ref));
+    if ("error" in f) return f;
+    if ("later" in f) return { error: "component '" + ref + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
+    const c = f.ok;
+    return { ok: c.type === "COMPONENT_SET" ? c.defaultVariant : c };
+  };
   // One lookup per distinct name; one problem per op per name (the first place it is used, and how many more).
   const found = new Map<string, Promise<Found<unknown>>>();
   const lookup = <T>(kind: Use["kind"], ref: string, run: () => Promise<Found<T>>): Promise<Found<T>> => {
@@ -162,7 +178,7 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
       imported.push({ use: u, get: f.later });
       continue;
     }
-    const err = await accept(u, f.ok, refs, loadFont);
+    const err = await accept(u, f.ok, refs, loadFont, swapOf);
     if (err) bad(u, err);
   }
   report.finish();
@@ -188,7 +204,7 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
           once.set(k, got);
         }
         if ("error" in got) { lateReport.bad(use, importFailed(use, got.error)); continue; }
-        const err = await accept(use, got.item, refs, loadFont);
+        const err = await accept(use, got.item, refs, loadFont, swapOf);
         if (err) lateReport.bad(use, err);
       }
       lateReport.finish();
@@ -224,7 +240,7 @@ const typeMismatch = (u: Use, actual: VariableResolvedDataType): string =>
   "variable '" + u.ref + "' holds a " + actual.toLowerCase() + ", and this field takes a " + (u.type || "").toLowerCase() + " variable";
 
 /** Record a resolved item for its use, or say why it does not fit there. */
-async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: FontName) => Promise<string | null>): Promise<string | null> {
+async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: FontName) => Promise<string | null>, swapOf: (ref: string) => Promise<{ ok: ComponentNode } | { error: string }>): Promise<string | null> {
   if (u.kind === "variable") {
     const v = item as Variable;
     if (u.type && v.resolvedType !== u.type) return typeMismatch(u, v.resolvedType);
@@ -242,13 +258,16 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   }
   const c = item as ComponentNode | ComponentSetNode;
   const node = u.node;
-  if (!node) return "no node";
+  // A swap property's default or suggestion: the component itself (a set shows its default variant).
+  if (!node) { refs.components.set(u.ref, c); return null; }
   const set = c.type === "COMPONENT_SET" ? c : c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
   const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
   let defs: ComponentPropertyDefinitions;
   try { defs = (set || c).componentPropertyDefinitions; } catch { defs = {}; }
-  const mapped = mapProps(node.props || {}, defs, (set || c).name);
+  const mapped = mapProps(valueProps(node.props || {}), defs, (set || c).name, true);
   if ("errors" in mapped) return mapped.errors.join("; ");
+  const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
+  if (swapErr) return swapErr;
   // An instance hugs only when the variant it ends up as has auto-layout (checkTree cannot know; Figma would refuse
   // mid-build): the variant the given variant values pick, the default's values for the rest.
   const shown = set ? variantFor(set, main, mapped.ok, defs) : main;
@@ -291,9 +310,24 @@ export function variantFor(set: ComponentSetNode, start: ComponentNode, props: R
   return { missing: Object.keys(want).map((k) => k + "=" + want[k]).join(", ") };
 }
 
+/** Every INSTANCE_SWAP value of `props` (mapped: keyed as setProperties takes them, each a component's name, key or id)
+ *  replaced by the id of the component it names (a set: its default variant). The first problem, or null. */
+export async function swapIds(props: Record<string, string | boolean>, defs: ComponentPropertyDefinitions, component: string, swapOf: (ref: string) => Promise<{ ok: ComponentNode } | { error: string }>): Promise<string | null> {
+  for (const key of Object.keys(props)) {
+    const d = Object.prototype.hasOwnProperty.call(defs, key) ? defs[key] : undefined;
+    const v = props[key];
+    if (!d || d.type !== "INSTANCE_SWAP" || typeof v !== "string") continue;
+    const got = await swapOf(v);
+    if ("error" in got) return "property '" + key + "' of '" + component + "' swaps to a component: " + got.error;
+    putOwn(props, key, got.ok.id);
+  }
+  return null;
+}
+
 /** An instance's property values keyed the way setProperties takes them: a VARIANT property by its name, the others
- *  by their "name#id" key. A bare name is enough when it names one property; the full key always works. */
-export function mapProps(given: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions, component: string):
+ *  by their "name#id" key. A bare name is enough when it names one property; the full key always works. With `swaps`, an
+ *  INSTANCE_SWAP property takes a component's name, key or id (swapIds resolves it); without, it is refused. */
+export function mapProps(given: Readonly<Record<string, string | boolean>>, defs: ComponentPropertyDefinitions, component: string, swaps = false):
   { ok: Record<string, string | boolean> } | { errors: string[] } {
   const keys = Object.keys(defs);
   const bare = (k: string): string => { const i = k.lastIndexOf("#"); return i > 0 ? k.slice(0, i) : k; };
@@ -323,6 +357,8 @@ export function mapProps(given: Readonly<Record<string, string | boolean>>, defs
       if (typeof value !== "boolean") { errors.push("property '" + name + "' of '" + component + "' is a boolean: give true or false"); continue; }
     } else if (def.type === "TEXT") {
       if (typeof value !== "string") { errors.push("property '" + name + "' of '" + component + "' is a text: give a string"); continue; }
+    } else if (def.type === "INSTANCE_SWAP" && swaps) {
+      if (typeof value !== "string" || !value.trim()) { errors.push("property '" + name + "' of '" + component + "' swaps the nested instance: give a component (its exact name, key or id)"); continue; }
     } else {
       errors.push("property '" + name + "' of '" + component + "' swaps a nested instance, which a write cannot set yet");
       continue;
@@ -388,6 +424,9 @@ function fileLookups() {
       const m = matchByName(ref, named, (c) => c.name);
       if (m.kind === "one") return { ok: m.item };
       if (m.kind === "many") return ambiguous("component", ref, m.matches);
+      // A component an op of this same batch makes: every name resolves before the batch runs.
+      const planned = plannedComponent(ref);
+      if (planned !== undefined) return { error: "component '" + ref + "' matches no component in this file yet: ops[" + planned + "] of this batch makes it, and a batch resolves every name before it runs — create it in an earlier call, then use it" };
       return none("component", ref, m.candidates, "in this file (a library component is named by its key)");
     },
     async variable(ref: string): Promise<Found<Variable>> {
@@ -443,6 +482,14 @@ function fileLookups() {
       return none("text style", ref, m.candidates, "in this file (a library style is named by its key)");
     },
   };
+}
+
+/** A swap value outside a tree spec (a patch's): the component `ref` names in this file (a set: its default variant). */
+export async function swapTarget(ref: string): Promise<{ ok: ComponentNode } | { error: string }> {
+  const f = await fileLookups().component(ref);
+  if ("error" in f) return f;
+  if ("later" in f) return { error: "component '" + ref + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
+  return { ok: f.ok.type === "COMPONENT_SET" ? f.ok.defaultVariant : f.ok };
 }
 
 /** A name a create op of the batch makes (and nothing else in the file has): resolved once that op has run. Its type is

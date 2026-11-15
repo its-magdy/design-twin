@@ -4,7 +4,7 @@ import { checkPatch } from "../../bridge/src/patch-spec.ts";
 import { MAX_TREE_NODES, NUMBER_TOKEN_FIELDS } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import { MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
+import { componentApi, MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, variantValues, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -149,8 +149,12 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     // Out of auto-layout, a FILL child becomes fixed (as in Figma).
     if (old && (n.layoutMode === undefined || n.layoutMode === "NONE")) for (const k of ["layoutSizingHorizontal", "layoutSizingVertical"]) if (c[k] === "FILL") c[k] = "FIXED";
   };
+  // Every level of a page, as findAllWithCriteria walks it (an instance's layers are its component's: not walked).
+  const findAll = (root: FakeNode, types: readonly string[]): FakeNode[] =>
+    kids(root).flatMap((k) => [...(types.includes(String(k.type)) ? [k] : []), ...(k.type === "INSTANCE" ? [] : findAll(k, types))]);
   const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
     const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], loadAsync: async () => { pageLoads.push(id); } };
+    pg.findAllWithCriteria = (c: { types: string[] }) => findAll(pg, c.types);
     pg.appendChild = appendTo(pg);
     pg.insertChild = insertInto(pg);
     for (const k of existing) appendTo(pg)(k);
@@ -161,7 +165,8 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
     { id: "1:2", type: "FRAME", name: "Existing B", x: 500, y: -20, width: 390, height: 844 },
   ]);
   const screens = page("0:2", "Screens");
-  const node = (type: "FRAME" | "TEXT" | "INSTANCE", main?: FakeNode): FakeNode => {
+  let propSeq = 0;
+  const node = (type: "FRAME" | "TEXT" | "INSTANCE" | "COMPONENT" | "COMPONENT_SET", main?: FakeNode): FakeNode => {
     // What each kind has (a text has no auto-layout or corner radius, as in Figma), so a write that names a field
     // the node lacks is caught as it would be there.
     const box: FakeNode = type === "TEXT"
@@ -174,11 +179,11 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
           cornerRadius: 0, topLeftRadius: 0, topRightRadius: 0, bottomRightRadius: 0, bottomLeftRadius: 0,
           strokeTopWeight: 1, strokeRightWeight: 1, strokeBottomWeight: 1, strokeLeftWeight: 1 };
     const fields: FakeNode = {
-      id: "n:" + ++seq, type, name: type === "FRAME" ? "Frame" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
+      id: "n:" + ++seq, type, name: type === "FRAME" ? "Frame" : type === "COMPONENT" ? "Component" : type === "COMPONENT_SET" ? "Component set" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
       x: 0, y: 0, width: 100, height: 100, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
       layoutPositioning: "AUTO", layoutGrow: 0, layoutAlign: "INHERIT", opacity: 1, strokes: [], strokeWeight: 1, strokeAlign: "INSIDE", ...box,
-      fills: type === "FRAME" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
-      boundVariables: {},
+      fills: type === "FRAME" || type === "COMPONENT" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
+      boundVariables: {}, componentPropertyReferences: null,
     };
     // This plugin's own data on the node (a keyed spec stamps every node it builds); "" when unset, as in Figma.
     const data = new Map<string, string>();
@@ -300,7 +305,19 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       unregister(n);
     };
     // An instance has the children API too, and refuses a new child (insertInto), as Figma's does.
-    if (type !== "TEXT") { fields.children = []; fields.appendChild = type === "FRAME" ? appendTo(n) : (c: FakeNode) => insertInto(n)(0, c); fields.insertChild = insertInto(n); }
+    if (type !== "TEXT") { fields.children = []; fields.appendChild = type !== "INSTANCE" ? appendTo(n) : (c: FakeNode) => insertInto(n)(0, c); fields.insertChild = insertInto(n); }
+    // A main component and a set: Figma's property API, instances made from it (and found again), a set's default variant.
+    if (type === "COMPONENT" || type === "COMPONENT_SET") {
+      Object.assign(fields, { key: "local-" + String(fields.id), remote: false, description: "" });
+      componentApi(fields, () => made, () => String(++propSeq) + ":0");
+    }
+    if (type === "COMPONENT") {
+      // A variant's values are read from its name, as Figma reads them (null outside a set).
+      Object.defineProperty(fields, "variantProperties", { enumerable: false, get: () => (parentOf(fields)?.type === "COMPONENT_SET" ? variantValues(String(fields.name)) : null) });
+      fields.createInstance = () => node("INSTANCE", n);
+      fields.getInstancesAsync = async () => made.filter((m) => m.type === "INSTANCE" && m.mainComponent === n && !m.removed);
+    }
+    if (type === "COMPONENT_SET") Object.defineProperty(fields, "defaultVariant", { enumerable: false, get: () => kids(n).find((k) => k.type === "COMPONENT") ?? null });
     // Figma's clone(): a new node with every value and layer of this one (plugin data included), on the current page.
     fields.clone = () => {
       if (trap.has("clone")) throw new Error("in Figma: cannot clone " + String(fields.name));
@@ -334,6 +351,17 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
   const w = world({ ...opts.extra, pages, currentPage: current, ...(kit ? kit.scene : {}), ...(opts.extra?.nodes ? { nodes: opts.extra.nodes } : {}) }, {
     createFrame: () => node("FRAME"),
     createText: () => node("TEXT"),
+    createComponent: () => node("COMPONENT"),
+    // Figma's combineAsVariants: a set in `parent` holding the components, each variant's values read from its name.
+    combineAsVariants: (list: FakeNode[], parent: FakeNode) => {
+      if (trap.has("combineAsVariants")) throw new Error("in Figma: cannot combine these components");
+      if (!list.length) throw new Error("in Figma: combineAsVariants needs at least one component");
+      for (const c of list) if (c.type !== "COMPONENT" || parentOf(c)?.type === "COMPONENT_SET") throw new Error("in Figma: only components outside a set can be combined");
+      const set = node("COMPONENT_SET");
+      if (parent !== current && typeof parent.appendChild === "function") (parent.appendChild as (c: FakeNode) => void)(set);
+      for (const c of list) appendTo(set)(c);
+      return set;
+    },
     loadFontAsync: async (f) => {
       if (!AVAILABLE_FONTS.some(([fam, st]) => fam === f.family && st === f.style)) throw new Error("font not found");
       loadedFonts.add(fontKey(f));
@@ -387,11 +415,11 @@ const KIT_STYLES: FakeNode[] = [
  *  name), an Avatar component and a Caption text style (by key only). */
 function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const comp = (id: string, name: string, extra: FakeNode): FakeNode => {
-    const c: FakeNode = { id, type: "COMPONENT", name, key: "local-" + id, layoutMode: "HORIZONTAL", parent: null, ...extra };
+    const c: FakeNode = { id, type: "COMPONENT", name, key: "local-" + id, layoutMode: "HORIZONTAL", parent: null, getPluginData: () => "", ...extra };
     c.createInstance = () => instanceOf(c);
     return c;
   };
-  const set: FakeNode = { id: "5:1", type: "COMPONENT_SET", name: "Button", key: "local-button", parent: null, componentPropertyDefinitions: {
+  const set: FakeNode = { id: "5:1", type: "COMPONENT_SET", name: "Button", key: "local-button", parent: null, getPluginData: () => "", componentPropertyDefinitions: {
     Size: { type: "VARIANT", defaultValue: "Medium", variantOptions: ["Small", "Medium", "Large"] },
     "Label#1:0": { type: "TEXT", defaultValue: "Button" },
     "Icon#1:1": { type: "BOOLEAN", defaultValue: false },
@@ -406,7 +434,7 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
   // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
   // Its two variants are Small/Off and Large/On: a sparse set, so Large/Off does not exist.
-  const chip: FakeNode = { id: "6:1", type: "COMPONENT_SET", name: "Chip", key: "local-chip", parent: null, componentPropertyDefinitions: {
+  const chip: FakeNode = { id: "6:1", type: "COMPONENT_SET", name: "Chip", key: "local-chip", parent: null, getPluginData: () => "", componentPropertyDefinitions: {
     Size: { type: "VARIANT", defaultValue: "Small", variantOptions: ["Small", "Large"] },
     Tone: { type: "VARIANT", defaultValue: "Off", variantOptions: ["Off", "On"] },
   } };
@@ -418,7 +446,7 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   // A variant property whose name is "__proto__" (any string is a valid property name in Figma; a variant's key is its name).
   const odd = comp("6:5", "Odd", { componentPropertyDefinitions: JSON.parse('{"__proto__": {"type": "VARIANT", "defaultValue": "Off", "variantOptions": ["On", "Off"]}}') as Record<string, unknown> });
   // A conflicting set (Figma allows it): two variants with the same values, the first without auto-layout.
-  const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, componentPropertyDefinitions: {
+  const twin: FakeNode = { id: "7:1", type: "COMPONENT_SET", name: "Twin", key: "local-twin", parent: null, getPluginData: () => "", componentPropertyDefinitions: {
     Kind: { type: "VARIANT", defaultValue: "A", variantOptions: ["A"] },
   } };
   const twinFlat = comp("7:2", "Kind=A", { parent: twin, layoutMode: "NONE", variantProperties: { Kind: "A" } });
@@ -935,7 +963,7 @@ export const cases: Case[] = [{
     ok("[TREE-REFUSE] …each named by its path, read fields with the reason",
       many.includes("ops[0].tree.effects: a read field a write cannot set yet")
       && many.includes("ops[0].tree.children[0].font.colour: not a field the write accepts; closest: 'color'")
-      && many.includes("ops[0].tree.children[1].type: 'RECTANGLE' cannot be written yet (FRAME, TEXT and INSTANCE can)")
+      && many.includes("ops[0].tree.children[1].type: 'RECTANGLE' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)")
       && many.includes("ops[0].tree.children[2].mainComponent: a read field a write cannot set yet — name the component in `component`")
       && many.includes("ops[0].tree.children[2]: `widthMode: \"hug\"` needs the node itself to have auto-layout")
       && many.includes("ops[0].tree.children[3].runs: a read field a write cannot set yet — mixed-format text comes in a later write step"));
@@ -1166,7 +1194,7 @@ export const cases: Case[] = [{
     ok("[REFS-REFUSE] a component that matches two: pass a key or id", has("ops[0] (createTree): tree.children[1].component: component 'Card' matches 2 components — pass one's key or id: 'Card' (5:4), 'Card' (5:5)"));
     ok("[REFS-REFUSE] property names and values checked against the component, every one at once",
       has("ops[0] (createTree): tree.children[2].component: component 'Button' has no property 'Sise'; closest: 'Size', 'Label', 'Icon'; property 'Size' of 'Button' has no value \"Huge\"; closest: 'Large', 'Small', 'Medium'; "
-        + "property 'Icon' of 'Button' is a boolean: give true or false; property 'Glyph' of 'Button' swaps a nested instance, which a write cannot set yet"));
+        + "property 'Icon' of 'Button' is a boolean: give true or false"));
     ok("[REFS-REFUSE] an instance cannot hug when its component has no auto-layout", has("ops[0] (createTree): tree.children[3].component: component 'Badge' has no auto-layout, so its instance cannot `widthMode: \"hug\"`"));
     ok("[REFS-REFUSE] a variable that matches nothing: candidates from the file and the library, reported once with how many more places",
       has("ops[0] (createTree): tree.children[4].fills[0].tokens.color: variable 'color/brnd' matches no variable in this file or an enabled library; closest: 'color/brand', 'color/text', 'color/accent' (and 1 more place in this spec)"));

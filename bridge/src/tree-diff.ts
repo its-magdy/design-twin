@@ -15,6 +15,10 @@
 // Children are matched by `handle`, then by a name that is unique among the old and the new children, then in order.
 // A copy of an existing node (`clone`) is kept while its spec is the same, and made again when anything in it changes.
 //
+// A component root's property definitions (`props`) and every layer's `propRefs` are not fields a patch sets: they are
+// left out here, and the plugin brings them to the new spec itself (figma-plugin/src/component-build.ts), reading
+// `kept` for which node each spec node is.
+//
 // Pure and dependency-free (bar pure siblings): the plugin bundle imports it, so it must type-check under
 // figma-plugin/tsconfig.json (ES2019 lib, no Node types).
 import type { PatchLayout, PatchSet, PatchStrokes, PatchTokens } from "./patch-spec.ts";
@@ -66,6 +70,18 @@ export interface Plan<T> {
   stamps: Array<{ ref: T; spec: TreeNodeSpec }>;
   /** handles the new spec gives to kept nodes that did not have them (their ids come back) */
   handles: Array<{ handle: string; ref: T }>;
+  /** every kept node (the root first), with its new spec and the own spec it was last built or updated from */
+  kept: Array<{ ref: T; spec: TreeNodeSpec; old: TreeNodeSpec }>;
+}
+
+/** An instance's property values (a component root's `props` are definitions, which no patch sets). */
+export function valueProps(p: Readonly<Record<string, unknown>>): Record<string, string | boolean> {
+  const out: Record<string, string | boolean> = {};
+  for (const k of Object.keys(p)) {
+    const v = p[k];
+    if (typeof v === "string" || typeof v === "boolean") Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
+  return out;
 }
 
 /** A spec node's own fields: without `children`. */
@@ -103,7 +119,9 @@ function compared(s: TreeNodeSpec, kind: NodeKind): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(s)) {
     const v = (s as Record<string, unknown>)[k];
-    if (v === undefined || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key") continue;
+    if (v === undefined || k === "children" || k === "handle" || k === "renderBox" || k === "reference" || k === "key" || k === "propRefs") continue;
+    // A component's property definitions: brought to the new spec by the plugin, not by a patch.
+    if (k === "props" && (s.type === "COMPONENT" || s.type === "COMPONENT_SET")) continue;
     if (k === "box") { out.box = without(v, ["x", "y"]); continue; }
     if (k === "font") { out.font = without(v, ["weightValue"]); continue; }
     if (k === "layout") { out.layout = without(v, ["width", "height"]); continue; }
@@ -164,7 +182,7 @@ function translate(kind: NodeKind, a: TreeNodeSpec, b: TreeNodeSpec, changed: re
   if (has("opacity")) { set.opacity = b.opacity !== undefined ? b.opacity : 1; touch("opacity"); }
   if (has("text") && b.text !== undefined) { set.text = b.text; touch("text"); }
   if (has("styles") && b.styles && b.styles.text !== undefined) { set.styles = { text: b.styles.text }; touch("styles"); }
-  if (has("props") && b.props) { set.props = b.props; touch("props"); }
+  if (has("props") && b.props) { set.props = valueProps(b.props); touch("props"); }
   if (has("layout") && kind === "FRAME") { set.layout = layoutOf(b); touch("layout"); }
   if (has("radius")) {
     const r = b.radius;
@@ -314,13 +332,14 @@ function match<T>(olds: ReadonlyArray<OldNode<T>>, news: readonly TreeNodeSpec[]
 
 /** Plan the update of the result `old` (the root of the earlier spec) to the new spec `spec`. */
 export function planUpdate<T>(old: OldNode<T>, spec: TreeNodeSpec): Plan<T> {
-  const plan: Plan<T> = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [] };
+  const plan: Plan<T> = { updates: [], builds: [], removals: [], orders: [], stamps: [], handles: [], kept: [] };
   visit(old, spec, "tree", plan);
   return plan;
 }
 
 function visit<T>(old: OldNode<T>, spec: TreeNodeSpec, path: string, plan: Plan<T>): void {
   const kind = nodeKind(spec) || "FRAME";
+  plan.kept.push({ ref: old.ref, spec, old: old.spec });
   const a = compared(old.spec, kind);
   const b = compared(spec, kind);
   const changed = Object.keys(a).concat(Object.keys(b).filter((k) => !(k in a))).filter((k) => !same(a[k], b[k]));

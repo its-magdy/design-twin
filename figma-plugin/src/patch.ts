@@ -26,7 +26,7 @@ import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { checkPatch, isPatchSet, type PatchSet } from "../../bridge/src/patch-spec.ts";
 import { NUMBER_TOKEN_FIELDS, type NumberTokenField, type TreeFill } from "../../bridge/src/tree-spec.ts";
 import { solid } from "./tree";
-import { mapProps, patchUses, resolveRefs, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
+import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 
@@ -244,8 +244,10 @@ export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boole
     const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
     let defs: ComponentPropertyDefinitions;
     try { defs = (owner || main).componentPropertyDefinitions; } catch { defs = {}; }
-    const mapped = mapProps(set.props, defs, (owner || main).name);
+    const mapped = mapProps(set.props, defs, (owner || main).name, true);
     if ("errors" in mapped) { for (const e of mapped.errors) bad("set.props: " + e); return null; }
+    const swapErr = await swapIds(mapped.ok, defs, (owner || main).name, swapTarget);
+    if (swapErr) { bad("set.props: " + swapErr); return null; }
     if (!later) { const v = await variantProblem(node, mapped.ok); if (v) { bad(v); return null; } }
     props = mapped.ok;
   }
@@ -260,7 +262,7 @@ export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boole
     if (v) bound.set(id, v);
   }
   if (misfits.length) return null;
-  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() }, bound, ...(fontsLater && node.type === "TEXT" ? { fontsLater: true as const } : {}) };
+  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map(), components: new Map() }, bound, ...(fontsLater && node.type === "TEXT" ? { fontsLater: true as const } : {}) };
 }
 
 // ---------------------------------------------------------------- keeping and putting back

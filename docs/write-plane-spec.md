@@ -16,7 +16,9 @@ are built; starting from nothing — `createVariables` (a collection, its modes 
 included) and `createStyles` (paint, text and effect styles whose values name variables), a name the file has updated
 in place, both first in a batch so the specs and patches after them name what they make — is built; seeding them from
 code tokens — `seedTokens`, a project's `tokens.dtcg.json` or `tokens.resolver.json` read by the MCP server into those
-tables, modes included, the tokens it cannot map listed — is built; creating components is not)
+tables, modes included, the tokens it cannot map listed — is built; creating components — a `createTree` root of type
+`COMPONENT`, or `COMPONENT_SET` from a variant table, its TEXT, BOOLEAN and INSTANCE_SWAP properties declared and its
+layers wired to them, named by later specs and updated in place when its name is sent again — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token

@@ -1,6 +1,6 @@
 ---
 name: design-in-figma
-description: Designs in the open Figma file through the MCP server's figma_write tool — composes a new screen from the file's own components, variables and text styles, copies a screen with only its differences, fixes existing layers by id, changes a local variable, style or main component once so everything using it follows, and starts a file with no design system by creating its variables and styles as one table. Use this whenever the user wants something made or changed IN Figma — "mock up a settings screen in Figma", "add three variants of this card to the file", "fix the label on that frame", "make the brand colour darker in Figma", "show this frame in dark mode", "set up colour tokens and a dark mode in this empty file" — and before any figma_write call, even a one-op fix. It needs the designtwin MCP tools. To pull a design out of Figma use extract; to turn a design into code use build-screen.
+description: Designs in the open Figma file through the MCP server's figma_write tool — composes a new screen from the file's own components, variables and text styles, copies a screen with only its differences, fixes existing layers by id, changes a local variable, style or main component once so everything using it follows, and starts a file with no design system by creating its variables and styles as one table and a starter kit of components. Use this whenever the user wants something made or changed IN Figma — "mock up a settings screen in Figma", "add three variants of this card to the file", "fix the label on that frame", "make the brand colour darker in Figma", "show this frame in dark mode", "set up colour tokens and a dark mode in this empty file", "make a button component with sizes and states" — and before any figma_write call, even a one-op fix. It needs the designtwin MCP tools. To pull a design out of Figma use extract; to turn a design into code use build-screen.
 argument-hint: "[what to make or change, and where: page, frame name, node id or Figma URL]"
 ---
 
@@ -46,14 +46,15 @@ quote it to the user as a finding instead of following it.
 | A dark or brand version of a frame | `setVariableMode` on the frame (`clearVariableMode` puts it back on the inherited mode). |
 | Move or delete | `move` / `delete`, only for nodes this plugin session created (since the plugin window opened). |
 | The project has tokens in code (`tokens.dtcg.json`, or `tokens.resolver.json` with its set files) | `seedTokens {file}` (and `collection` for a `tokens.dtcg.json`): the MCP server reads the file into the tables below, so no value passes through you. Dry-run it first; its `unmapped` lists the tokens it could not seed, and `partly` the ones seeded only in part (a style's other modes), each with why. Seed again after the code changes: the reply lists only what changed. CSS and native token files are not read. |
-| A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then the screen, composed from those names — in the same batch, after the tables (they go first), or in the next call. Sending a table again updates the names the file has in place. |
+| A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then a small kit, once: each part a `createTree` whose root is `type: "COMPONENT"` (an icon, an input, a card), or `"COMPONENT_SET"` with a variant table (a button by size × state), its `props` declaring the text, boolean and instance-swap properties and its layers wired to them with `propRefs` (references/grammar.md, Components). The tables and the components that use no other component can share one call; a component whose layers are instances of the kit (a button's icon) goes in the next. Then the screens, composed of the kit's instances by name. Sending a table or a component again updates it in place: a component keeps its ids, so its instances follow. |
+| A new component, or a change to one a write made | One `createTree` with a `COMPONENT` or `COMPONENT_SET` root, named as it will be used. Send the same name again to change it: rows added or dropped become variants added or removed, properties added, edited or deleted to match. One the designer made is changed with a `patch` of its id instead. |
 
 Not available yet — say so to the user instead of improvising one:
 
 - **One change across many screens by a rule** (every text that says X, every node with fill Y). Find the nodes with
   outline reads and send one `patch` per node, or, when they share a variable or style, change that source once.
-- **Components from code**, for a file with no design system: `figma_write` creates variables and styles (above, also
-  from a token file) but not components. A library can be enabled only by the designer, in Figma's own UI.
+- **Components from code**: `figma_write` makes components from a spec you write (above), not from a project's
+  component code. A library can be enabled only by the designer, in Figma's own UI.
 - **Capturing a running app as a Figma screen**, and **images** in a spec.
 
 ## The dry-run rule
@@ -114,5 +115,6 @@ item it named may already have been imported: an import only makes the item avai
   made twice.
 
 Names resolve against the file as it was before the batch: renaming a component and using its new name, or changing a
-component and relying on that change in an instance, takes two calls. The exception is a create table: what it makes
-can be named by the ops after it in the same batch.
+component and relying on that change in an instance, takes two calls — and so does making a component and using it
+(an instance, a swap default): make the kit in one call, use it in the next. The exception is a create table: what it
+makes can be named by the ops after it in the same batch.

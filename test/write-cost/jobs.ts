@@ -167,6 +167,24 @@ export interface Briefs {
   /** the file has no variables: make the token table `tokens` (one collection, `modes`), then build `want` on the
    *  current page with its colours bound to those tokens */
   "start-from-nothing": { pageId: string; collection: string; modes: readonly string[]; tokens: readonly Token[]; want: Want };
+  /** a blank file: make the token table `tokens`, then the starter kit `kit` (components the screen uses by name, their
+   *  colours bound to the tokens), then the screen `screen` on the current page, composed of the kit's instances */
+  "blank-file": { pageId: string; collection: string; modes: readonly string[]; tokens: readonly Token[]; kit: StarterKit; screen: KitScreen };
+}
+/** A starter kit: icons, a button set (one variant per size × state; a label, an optional icon that can be swapped), an
+ *  input with a placeholder, a card with a title and a body. */
+export interface StarterKit {
+  icons: readonly string[];
+  button: { name: string; sizes: readonly string[]; states: readonly string[]; label: string };
+  input: { name: string; placeholder: string };
+  card: { name: string; title: string; body: string };
+}
+/** A screen of the kit's instances: a title, a card, the inputs (by placeholder), a button. */
+export interface KitScreen {
+  frame: string; title: string;
+  card: { title: string; body: string };
+  inputs: readonly string[];
+  button: { size: string; state: string; label: string; icon: string };
 }
 /** One design token: a colour or a number, a value per mode — or an alias of another token. */
 export interface Token { name: string; type: "color" | "number"; values: ReadonlyArray<Hex | number | { aliasOf: string }> }
@@ -459,6 +477,123 @@ const startFromNothing: Job<"start-from-nothing"> = {
   },
 };
 
-/** The six jobs, in the design record's order, then the fix round and starting from nothing. */
-export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing] as const;
+// A blank file (#176): one empty page, no variables, no components. The job is the start of a design system — a few
+// colour tokens (light and dark), a starter kit of components the screens will share, then one screen composed of the
+// kit's instances, by name. Done when the components exist as asked (the button a set of size × state variants with
+// its label, icon toggle and icon swap) and the screen shows the instances with their values; the way a designer would
+// have it when the kit's colours are bound to the tokens.
+const KIT_TOKENS: readonly Token[] = [
+  { name: "color/bg", type: "color", values: ["#ffffff", "#18181b"] },
+  { name: "color/text", type: "color", values: ["#18181b", "#fafafa"] },
+  { name: "color/muted", type: "color", values: [MUTED, "#a1a1aa"] },
+  { name: "color/border", type: "color", values: ["#d4d4d8", "#3f3f46"] },
+  { name: "color/brand", type: "color", values: [BRAND.hex, "#818cf8"] },
+  { name: "color/brand-hover", type: "color", values: ["#4338ca", "#6366f1"] },
+  { name: "color/on-brand", type: "color", values: ["#ffffff", "#ffffff"] },
+];
+const STARTER: StarterKit = {
+  icons: ["Icon/Plus", "Icon/Arrow"],
+  button: { name: "Button", sizes: ["md", "sm"], states: ["default", "hover"], label: "Button" },
+  input: { name: "Input", placeholder: "Placeholder" },
+  card: { name: "Card", title: "Title", body: "Body" },
+};
+const SIGN_UP: KitScreen = {
+  frame: "Sign up", title: "Create your account",
+  card: { title: "Free for 30 days", body: "No card needed. Cancel any time." },
+  inputs: ["Full name", "Email", "Password"],
+  button: { size: "md", state: "default", label: "Create account", icon: "Icon/Arrow" },
+};
+const blankFile: Job<"blank-file"> = {
+  id: "blank-file", title: "Blank file",
+  what: "7 colour tokens (light and dark), a 5-component kit (2 icons, a 4-variant Button set with text, boolean and swap properties, an Input, a Card), then a sign-up screen of their instances",
+  fixture() {
+    const c = canvas();
+    const screens = c.page("Screens");
+    const before = new Set(Object.keys(c.nodes));
+    const brief: Briefs["blank-file"] = { pageId: screens.id, collection: "Theme", modes: ["Light", "Dark"], tokens: KIT_TOKENS, kit: STARTER, screen: SIGN_UP };
+    const all = (): CNode[] => Object.values(c.nodes).filter((n) => !before.has(n.id) && !n.id.startsWith("I"));
+    const onPage = (n: CNode | null | undefined): boolean => (n ? n.type === "PAGE" || onPage(n.parent) : false);
+    const mains = (type: string, name: string): CNode[] => all().filter((n) => n.type === type && n.name === name && onPage(n));
+    const defsOf = (n: CNode): Array<{ name: string; type: string }> =>
+      Object.entries((n.componentPropertyDefinitions ?? {}) as Record<string, { type: string }>).map(([k, d]) => ({ name: k.includes("#") ? k.slice(0, k.lastIndexOf("#")) : k, type: d.type }));
+    const hasDef = (n: CNode, name: string, type: string): boolean => defsOf(n).some((d) => d.name === name && d.type === type);
+    return {
+      c, brief,
+      check() {
+        const problems: string[] = [];
+        const gaps: string[] = [];
+        let unbound = 0;
+        const live = c.live();
+        const madeVars = Object.values(live.variables);
+        if (!madeVars.length) gaps.push(`the file still has no variables: the ${KIT_TOKENS.length} tokens were not made`);
+        else for (const t of KIT_TOKENS) if (!madeVars.some((v) => v.name === t.name)) problems.push(`no variable ${t.name}`);
+        // The kit: none made is a gap (the four ops cannot make one); one made must be as asked.
+        const names = [...STARTER.icons, STARTER.button.name, STARTER.input.name, STARTER.card.name];
+        const anyKit = names.some((n) => mains("COMPONENT", n).length + mains("COMPONENT_SET", n).length > 0);
+        const one = (type: string, name: string): CNode | null => {
+          const found = mains(type, name);
+          if (found.length !== 1) { problems.push(`${found.length} ${type === "COMPONENT_SET" ? "component sets" : "components"} named "${name}", wanted 1`); return null; }
+          return found[0] ?? null;
+        };
+        const kitParts: CNode[] = [];
+        let button: CNode | null = null;
+        let input: CNode | null = null;
+        let card: CNode | null = null;
+        if (!anyKit) gaps.push(`the file has no components: the ${names.length}-component kit was not made, so the screen is built node by node (a change to a button is a change to each copy)`);
+        else {
+          for (const name of STARTER.icons) { const i = one("COMPONENT", name); if (i) kitParts.push(i); }
+          button = one("COMPONENT_SET", STARTER.button.name);
+          if (button) {
+            kitParts.push(button);
+            const want = STARTER.button.sizes.flatMap((sz) => STARTER.button.states.map((st) => `Size=${sz}, State=${st}`));
+            const got = (button.children ?? []).map((k) => k.name);
+            if (JSON.stringify([...got].sort()) !== JSON.stringify([...want].sort())) problems.push(`Button's variants are ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+            if (!hasDef(button, "Label", "TEXT") || !hasDef(button, "Show icon", "BOOLEAN") || !hasDef(button, "Icon", "INSTANCE_SWAP")) problems.push(`Button's properties are ${JSON.stringify(defsOf(button))}, wanted Label (TEXT), Show icon (BOOLEAN), Icon (INSTANCE_SWAP)`);
+          }
+          input = one("COMPONENT", STARTER.input.name);
+          if (input) { kitParts.push(input); if (!hasDef(input, "Placeholder", "TEXT")) problems.push("Input has no Placeholder TEXT property"); }
+          card = one("COMPONENT", STARTER.card.name);
+          if (card) { kitParts.push(card); if (!hasDef(card, "Title", "TEXT") || !hasDef(card, "Body", "TEXT")) problems.push("Card lacks its Title and Body TEXT properties"); }
+        }
+        const kidsOf = (n: CNode): CNode[] => n.children ?? [];
+        const paints = (n: CNode): void => { for (const p of n.fills ?? []) if (!p.boundVariables?.color) unbound++; if (n.type !== "INSTANCE") for (const k of kidsOf(n)) paints(k); };
+        for (const k of kitParts) for (const v of k.type === "COMPONENT_SET" ? kidsOf(k) : [k]) paints(v);
+        const frames = (screens.children ?? []).filter((k) => k.name === SIGN_UP.frame && k.type === "FRAME");
+        if (frames.length !== 1) problems.push(`${frames.length} frames named "${SIGN_UP.frame}" on Screens, wanted 1`);
+        const screen = frames[0];
+        if (screen) {
+          paints(screen);
+          // What the screen reads, in order, whether its parts are instances or frames.
+          const texts = (n: CNode): string[] => kidsOf(n).flatMap((x) => (x.type === "TEXT" ? (x.visible === false ? [] : [String(x.characters ?? "")]) : texts(x)));
+          const want = [SIGN_UP.title, SIGN_UP.card.title, SIGN_UP.card.body, ...SIGN_UP.inputs, SIGN_UP.button.label];
+          if (JSON.stringify(texts(screen)) !== JSON.stringify(want)) problems.push(`the screen reads ${JSON.stringify(texts(screen))}, wanted ${JSON.stringify(want)}`);
+          if (anyKit) {
+            // Built from the kit: the parts are its instances, the button the variant asked for with its icon.
+            const instances = (n: CNode): CNode[] => kidsOf(n).flatMap((k) => (k.type === "INSTANCE" ? [k] : instances(k)));
+            const of = (k: CNode): CNode | null => (k.mainOf as CNode | undefined) ?? null;
+            const inst = instances(screen);
+            if (inst.filter((k) => of(k) === input).length !== SIGN_UP.inputs.length) problems.push(`the screen has ${inst.filter((k) => of(k) === input).length} Input instances, wanted ${SIGN_UP.inputs.length}`);
+            if (inst.filter((k) => of(k) === card).length !== 1) problems.push("the screen has no Card instance");
+            const buttons = inst.filter((k) => { const m = of(k); return m !== null && m.parent === button; });
+            const b = buttons[0];
+            const wantVariant = `Size=${SIGN_UP.button.size}, State=${SIGN_UP.button.state}`;
+            if (buttons.length !== 1 || !b) problems.push(`${buttons.length} Button instances on the screen, wanted 1`);
+            else {
+              const props = (b.componentProperties ?? {}) as Record<string, { type: string; value: unknown }>;
+              const by = (name: string): unknown => Object.entries(props).find(([k]) => k.startsWith(name + "#"))?.[1]?.value;
+              const arrow = mains("COMPONENT", SIGN_UP.button.icon)[0];
+              if (of(b)?.name !== wantVariant) problems.push(`the button is ${String(of(b)?.name)}, wanted ${wantVariant}`);
+              if (by("Show icon") !== true || by("Icon") !== arrow?.id) problems.push(`the button's icon is ${JSON.stringify([by("Show icon"), by("Icon")])}, wanted shown and ${SIGN_UP.button.icon}`);
+            }
+          }
+        }
+        if (unbound) gaps.push(`${unbound} paint(s) are raw colours, not bound to the tokens`);
+        return { problems, gaps };
+      },
+    };
+  },
+};
+
+/** The six jobs, in the design record's order, then the fix round, starting from nothing and a blank file's kit. */
+export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing, blankFile] as const;
 export type AnyJob = (typeof JOBS)[number];

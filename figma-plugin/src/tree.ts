@@ -33,7 +33,10 @@ import { fontOf, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec
 import { checkTree } from "../../bridge/src/tree-check.ts";
 import { cloneUses, copiesOf, makeCopy, resolveClones, restamp, type CloneTarget, type CopyPatch } from "./clones";
 import { patchCopy } from "./patch";
-import { resolveRefs, treeUses, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
+import { noRefs, resolveRefs, treeUses, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
+import { componentKey, componentRootOf, type ComponentRootType } from "../../bridge/src/component-spec.ts";
+import { addDefs, arrangeVariants, fileDefs, propRecord, wireAll } from "./component-build";
+import { setPlannedComponents } from "./batch-plan";
 import { markCreated } from "./session";
 import { readIndex, stampNode, writeIndex } from "./keyed-store";
 import type { KeyedUpdate } from "./keyed";
@@ -111,8 +114,12 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     for (const c of clones.values()) cloneTargets.push(c);
     if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
     await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
-    targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: { instances: new Map(), variables: new Map(), textStyles: new Map() } });
+    targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs() });
   }
+  // The components the batch makes or updates (by name): another spec of the same batch cannot use one yet.
+  const planned = new Map<string, number>();
+  for (const [index, { spec }] of specs) { const c = componentRootOf(spec); if (c && !planned.has(c.name)) planned.set(c.name, index); }
+  setPlannedComponents(planned);
   // Every op's references, resolved together (one lookup per name across the batch), into one shared map.
   const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
   problems.push(...r.problems);
@@ -162,6 +169,8 @@ function resolvePage(ref: string | undefined): { ok: PageNode } | { error: strin
  * the build and removes the hidden, unplaced root (it never showed in the file).
  */
 export async function buildTree(t: TreeTarget, consent: () => void): Promise<Change> {
+  const comp = componentRootOf(t.spec);
+  if (comp) return buildComponent(t, comp.type, comp.name, consent);
   // Handles are the agent's own strings: a Map, so one called "__proto__" is a key like any other.
   const made = newMade(t.refs, t.clones);
   // A copy as the root (a screen like an existing one): the source's copy, made where Figma makes a new frame.
@@ -206,9 +215,72 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
   };
 }
 
+/**
+ * Build a component spec (component-build.ts): a main component, or a set whose variants are built one by one and then
+ * combined. Like a frame's, it is built hidden where Figma creates nodes, its properties declared and its layers wired,
+ * and only then moved to its page, placed and shown; any throw removes everything it made. It is stamped with its name
+ * as key, so the same name sent again updates it in place.
+ */
+async function buildComponent(t: TreeTarget, type: ComponentRootType, name: string, consent: () => void): Promise<Change> {
+  const made = newMade(t.refs, t.clones);
+  const key = componentKey(name);
+  const parts: SceneNode[] = [];
+  let root: ComponentNode | ComponentSetNode | null = null;
+  try {
+    if (type === "COMPONENT") {
+      const c = figma.createComponent();
+      parts.push(c);
+      root = c;
+      c.visible = false; // built to the side: nothing shows until the whole component is in place
+      applyFrame(c, t.spec, null, made);
+    } else {
+      const variants: Array<[ComponentNode, TreeNodeSpec]> = [];
+      for (const v of t.spec.children || []) {
+        const c = figma.createComponent();
+        parts.push(c);
+        c.visible = false;
+        applyFrame(c, v, null, made);
+        variants.push([c, v]);
+      }
+      const set = figma.combineAsVariants(variants.map(([c]) => c), figma.currentPage);
+      parts.push(set);
+      root = set;
+      set.visible = false;
+      // The set's own fields; its children are the variants, already built.
+      applyFrame(set, t.spec, null, made, false);
+      for (const [c, v] of variants) {
+        c.visible = v.hidden !== true;
+        place(c, v, set); // its place in the set's flow, now that it is in the set
+        sizing(c, v);
+      }
+      arrangeVariants(set, t.spec, null);
+    }
+    await finish(made, 0, 0, consent);
+    const keys = addDefs(root, fileDefs(t.spec, t.refs));
+    wireAll(made.pairs, keys);
+    const { x, y } = placement(t.page, root, t.spec);
+    t.page.appendChild(root);
+    root.x = x;
+    root.y = y;
+    root.visible = t.spec.hidden !== true;
+    stampAll(made, key);
+    markCreated(root);
+    const applied: AppliedWrite = { id: root.id, component: name, created: createdCount(made) };
+    if (type === "COMPONENT_SET" && applied.created) applied.created.variants = (t.spec.children || []).length;
+    if (keys.size) applied.props = propRecord(keys);
+    if (made.handles.size) applied.handles = handleRecord(made.handles);
+    if (t.summary.unbound) applied.unbound = t.summary.unbound;
+    const built = root;
+    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); } };
+  } catch (e) {
+    for (const p of parts.slice().reverse()) { try { if (!p.removed) p.remove(); } catch { /* already gone */ } }
+    throw e;
+  }
+}
+
 /** What a build made, as the reply counts it (`instances` and `clones` only when it made any). */
-export function createdCount(made: Made): { frames: number; texts: number; instances?: number; clones?: number } {
-  const out: { frames: number; texts: number; instances?: number; clones?: number } = { frames: made.frames, texts: made.texts };
+export function createdCount(made: Made): { frames: number; texts: number; instances?: number; clones?: number; variants?: number } {
+  const out: { frames: number; texts: number; instances?: number; clones?: number; variants?: number } = { frames: made.frames, texts: made.texts };
   if (made.instances) out.instances = made.instances;
   if (made.clones) out.clones = made.clones;
   return out;
@@ -270,7 +342,7 @@ function applyClone(s: TreeNodeSpec, parent: Parent, made: Made): SceneNode {
  * a keyed re-send adds or builds anew (keyed.ts). Its texts' styles are set before it returns (the one await; `consent`
  * is checked after each). Throws, leaving nothing behind, when Figma refuses a value.
  */
-export async function buildSubtree(spec: TreeNodeSpec, parent: FrameNode, made: Made, consent: () => void): Promise<SceneNode> {
+export async function buildSubtree(spec: TreeNodeSpec, parent: Parent, made: Made, consent: () => void): Promise<SceneNode> {
   const kind = nodeKind(spec);
   const first = made.pairs.length;
   const styledFrom = made.styled.length;
@@ -280,6 +352,8 @@ export async function buildSubtree(spec: TreeNodeSpec, parent: FrameNode, made: 
     if (kind === "TEXT") { const t = figma.createText(); node = t; applyText(t, spec, parent, made); }
     else if (kind === "INSTANCE") node = applyInstance(spec, parent, made);
     else if (kind === "CLONE") node = applyClone(spec, parent, made);
+    // A new variant of a set a re-send updates: a component, appended to the set.
+    else if (spec.type === "COMPONENT") { const c = figma.createComponent(); node = c; applyFrame(c, spec, parent, made); }
     else { const f = figma.createFrame(); node = f; applyFrame(f, spec, parent, made); }
     await finish(made, styledFrom, patchesFrom, consent);
   } catch (e) {
@@ -341,8 +415,8 @@ export interface Made {
   /** every node made, with the spec it was made from (a keyed spec stamps each with its own fields) */
   pairs: Array<[SceneNode, TreeNodeSpec]>;
 }
-type Parent = FrameNode;
-type Built = FrameNode | TextNode | InstanceNode;
+type Parent = FrameNode | ComponentNode | ComponentSetNode;
+type Built = FrameNode | ComponentNode | ComponentSetNode | TextNode | InstanceNode;
 
 const ALIGN_MAIN = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" } as const;
 const ALIGN_CROSS = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" } as const;
@@ -395,7 +469,7 @@ function common(n: Built, s: TreeNodeSpec, parent: Parent | null, made: Made): v
   if (s.strokes) {
     if (s.strokes.weight !== undefined) n.strokeWeight = s.strokes.weight;
     const w = s.strokes.weights;
-    if (w && n.type === "FRAME") {
+    if (w && (n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET")) {
       if (w.top !== undefined) n.strokeTopWeight = w.top;
       if (w.right !== undefined) n.strokeRightWeight = w.right;
       if (w.bottom !== undefined) n.strokeBottomWeight = w.bottom;
@@ -424,12 +498,17 @@ function place(n: SceneNode, s: TreeNodeSpec, parent: Parent): void {
 }
 
 function sizing(n: Built, s: TreeNodeSpec): void {
-  if (s.widthMode) n.layoutSizingHorizontal = SIZING[s.widthMode];
-  if (s.heightMode) n.layoutSizingVertical = SIZING[s.heightMode];
+  // A variant fills its set only once it is in it (buildComponent sizes it again there).
+  const p = n.parent;
+  const inFlex = !!p && "layoutMode" in p && p.layoutMode !== "NONE";
+  if (s.widthMode && (s.widthMode !== "fill" || inFlex)) n.layoutSizingHorizontal = SIZING[s.widthMode];
+  if (s.heightMode && (s.heightMode !== "fill" || inFlex)) n.layoutSizingVertical = SIZING[s.heightMode];
 }
 
-function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: Made): void {
-  made.frames++;
+/** A frame's fields (a component's and a set's too), then its children unless `withChildren` is false (a set's children
+ *  are its variants, built apart). */
+function applyFrame(f: FrameNode | ComponentNode | ComponentSetNode, s: TreeNodeSpec, parent: Parent | null, made: Made, withChildren = true): void {
+  if (f.type === "FRAME") made.frames++;
   made.pairs.push([f, s]);
   if (parent) parent.appendChild(f);
   f.fills = paints(s.fills, s.tokens && s.tokens.fills, made);
@@ -478,7 +557,7 @@ function applyFrame(f: FrameNode, s: TreeNodeSpec, parent: Parent | null, made: 
     if (m.minHeight !== undefined) f.minHeight = m.minHeight;
     if (m.maxHeight !== undefined) f.maxHeight = m.maxHeight;
   }
-  for (const c of s.children || []) {
+  for (const c of withChildren ? s.children || [] : []) {
     const kind = nodeKind(c);
     if (kind === "TEXT") applyText(figma.createText(), c, f, made);
     else if (kind === "INSTANCE") applyInstance(c, f, made);

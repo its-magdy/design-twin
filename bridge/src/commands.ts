@@ -445,8 +445,18 @@ export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | Sc
  *  names the collection and the mode before and after (by name; "inherited" when no mode was set on the node). */
 export interface AppliedWrite {
   id?: string;
-  /** createTree: how many nodes the tree made (`instances` and `clones`, the copies of existing nodes, only when it made any) */
-  created?: { frames: number; texts: number; instances?: number; clones?: number };
+  /** createTree: how many nodes the tree made (`instances` and `clones`, the copies of existing nodes, only when it made any;
+   *  `variants`, a component set's, only for a set). A component and its variants are not counted as frames. */
+  created?: { frames: number; texts: number; instances?: number; clones?: number; variants?: number };
+  /** createTree with a COMPONENT or COMPONENT_SET root: the component's name (its key: the same name sent again updates it) */
+  component?: string;
+  /** createTree with a component root: each property it declared, bare name → the key Figma gave it ("Label#12:0"); a
+   *  re-send lists only the ones it added or changed */
+  props?: Record<string, string>;
+  /** a component re-send: the properties it deleted (the spec no longer declares them), by name */
+  propsRemoved?: string[];
+  /** a component re-send: how many layers were wired to a property again */
+  rewired?: number;
   /** createTree / patch: the raw values where a variable or text style could stand (colours, spacing, radii, stroke
    *  weights, a tree's texts without a style); absent when none */
   unbound?: number;
@@ -586,8 +596,11 @@ export interface WriteImpactStep {
   affects?: WriteImpactCounts;
   /** the file refuses the op as it is now: a library-owned item (naming its file when Figma says which), no such name */
   problem?: string;
-  /** createVariables / createStyles: what it would create and what it would update in place */
+  /** createVariables / createStyles: what it would create and what it would update in place; a component spec: the
+   *  component, under create or update */
   plan?: CreatePlan;
+  /** a component spec: what the write would do, in a sentence ("would update component 'Button' in place (3 instances follow)") */
+  change?: string;
 }
 /** writeImpact's reply: the dry run's file-side half. `warnings`: pages that could not be read, so a count may be low. */
 export interface WriteImpactReply {

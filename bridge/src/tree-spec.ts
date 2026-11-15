@@ -26,6 +26,7 @@ import type { Box, FontSpec, IrNode, LayoutSpec, RadiusCorners, RenderBox, SizeL
 import { parseHexColor, HEX_COLOR_HINT } from "./hex-color.ts";
 import { nearestNames, quoteList } from "./name-match.ts";
 import { expandTree, type TreeRow } from "./tree-expand.ts";
+import { componentRootOf, PROP_REF_FIELDS, PROP_REF_TYPES, propDefComponents, propDefsOf, propDefsProblems, propRefsShape, RESERVED_KEY_PREFIX, variantColumns, type ComponentRootType, type PropDefType, type TreePropDef } from "./component-spec.ts";
 
 /** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity, and the colour
  *  variable it is bound to (`tokens.color`: a variable's name, key or id; the colour may then be left out). */
@@ -85,9 +86,10 @@ export interface TreeStrokes {
   variableWidth?: { profile: "uniform" };
 }
 /** One node of a tree spec. `type` defaults to INSTANCE when the node names a `component`, TEXT when it has `text`,
- *  else FRAME; a node with `clone` is a copy of an existing node. */
+ *  else FRAME; a node with `clone` is a copy of an existing node. The root may be a COMPONENT (a main component) or a
+ *  COMPONENT_SET (its variants, the COMPONENT children, made from a variant table: tree-expand.ts). */
 export interface TreeNodeSpec {
-  type?: "FRAME" | "TEXT" | "INSTANCE";
+  type?: "FRAME" | "TEXT" | "INSTANCE" | ComponentRootType;
   /** A copy of the existing node with this id (decision 6). Its own fields are a patch of the copy (patch-spec.ts
    *  PatchSet, checked by checkPatch), and its place (`x`, `y`, `absolute`, `grow`, `alignSelf`, `handle`). */
   clone?: string;
@@ -105,8 +107,12 @@ export interface TreeNodeSpec {
   columns?: string[];
   /** INSTANCE: the component — a local component or component set's exact name, or a component's key or id */
   component?: string;
-  /** INSTANCE: property values by name (a variant's value, a text, a boolean) */
-  props?: Record<string, string | boolean>;
+  /** INSTANCE: property values by name (a variant's value, a text, a boolean, a swap's component by name, key or id).
+   *  A COMPONENT or COMPONENT_SET root: its property definitions (component-spec.ts), by name. */
+  props?: Record<string, string | boolean | TreePropDef>;
+  /** A layer inside a component root: the property (its bare name) that drives its text, its visibility, or the
+   *  component its instance shows. */
+  propRefs?: { characters?: string; visible?: string; mainComponent?: string };
   /** variables bound to this node's fields (Figma's field names) */
   tokens?: TreeTokens;
   /** TEXT: the text style it uses (a local style's exact name, or a style's key or id) */
@@ -183,6 +189,8 @@ export interface TreeSummary {
   fonts: Array<{ family: string; weight: string }>;
   /** what is accepted but has no effect (x/y inside auto-layout, …), with the node's path */
   warnings: string[];
+  /** a component root: what it makes (absent for a frame) */
+  component?: { type: ComponentRootType; name: string; variants: number; props: string[] };
 }
 
 /** A field's check: null when `v` is fine, else what is wrong (the caller prefixes the path). */
@@ -336,7 +344,7 @@ const propsCheck: Check = (v) => {
   if (!isObj(v)) return "must be an object of property name → value";
   for (const [k, x] of Object.entries(v)) {
     if (!k.trim()) return "has an empty property name";
-    if (x !== undefined && typeof x !== "string" && typeof x !== "boolean") return "." + k + " must be a string (a variant's value, a text) or a boolean";
+    if (x !== undefined && typeof x !== "string" && typeof x !== "boolean") return "." + k + " must be a string (a variant's value, a text, a swap's component) or a boolean";
   }
   return null;
 };
@@ -350,7 +358,8 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule; key: Rule } = {
   // reply could not carry it back however the plugin builds it.
   handle: (v) => (typeof v !== "string" || v.length === 0 ? "must be a non-empty string" : v === "__proto__" ? "'__proto__' cannot be a handle (Figma's message passing drops that key); pick another name" : null),
   // Stored on the node as plugin data (an entry is capped at 100 kB by Figma; a key is far below it).
-  key: (v) => (typeof v !== "string" || !v.trim() ? "must be a non-empty string" : v.length > MAX_KEY_LENGTH ? "must be at most " + MAX_KEY_LENGTH + " characters" : null),
+  key: (v) => (typeof v !== "string" || !v.trim() ? "must be a non-empty string" : v.length > MAX_KEY_LENGTH ? "must be at most " + MAX_KEY_LENGTH + " characters"
+    : v.indexOf(RESERVED_KEY_PREFIX) === 0 ? "cannot start with '" + RESERVED_KEY_PREFIX + "' (the plugin keeps it for the components it builds)" : null),
   id: refuse("a new node gets its id from Figma; give it a `handle` to get the id back"),
   hidden: trueOnly,
   x: num, y: num,
@@ -379,7 +388,7 @@ const NODE_RULES: Record<keyof IrNode, Rule> & { handle: Rule; key: Rule } = {
   // Read fields a write does not set (yet). Each is refused by name.
   propTokens: refuse("a property bound to a variable cannot be written yet; give its value in `props`"),
   mainComponent: refuse("name the component in `component` (its name, key or id)"),
-  propRefs: NOT_YET, overrides: NOT_YET, exposedInstances: NOT_YET, detachedFrom: NOT_YET,
+  propRefs: propRefsShape, overrides: NOT_YET, exposedInstances: NOT_YET, detachedFrom: NOT_YET,
   renderBox: objOf(RENDER_BOX_RULES), // it follows `box`: accepted, sets nothing
   layoutGrids: NOT_YET, scroll: NOT_YET,
   gridColumnSpan: NOT_YET, gridRowSpan: NOT_YET, gridColumnStart: NOT_YET, gridRowStart: NOT_YET, gridJustifySelf: NOT_YET,
@@ -430,12 +439,14 @@ export type NodeKind = "FRAME" | "TEXT" | "INSTANCE" | "CLONE";
 export function nodeKind(n: { type?: unknown; text?: unknown; component?: unknown; clone?: unknown }): NodeKind | null {
   if (n.clone !== undefined) return n.type === undefined ? "CLONE" : null;
   if (n.type === undefined) return n.component !== undefined ? "INSTANCE" : n.text !== undefined ? "TEXT" : "FRAME";
+  // A component and a component set are frames with more to them (component-spec.ts): every frame field applies.
+  if (n.type === "COMPONENT" || n.type === "COMPONENT_SET") return "FRAME";
   return n.type === "FRAME" || n.type === "TEXT" || n.type === "INSTANCE" ? n.type : null;
 }
 /** The fields an INSTANCE node may carry: its place and size, and the component with its property values. Its
  *  content comes from the component, so everything else is refused on it. */
 const INSTANCE_FIELDS = new Set(["type", "component", "props", "name", "handle", "hidden", "x", "y", "box", "renderBox", "reference",
-  "absolute", "grow", "alignSelf", "widthMode", "heightMode", "opacity", "tokens"]);
+  "absolute", "grow", "alignSelf", "widthMode", "heightMode", "opacity", "tokens", "propRefs"]);
 /** The font fields a text style sets: on a styled text they are accepted and set nothing. */
 const STYLE_FONT_FIELDS = ["family", "weight", "size", "lineHeight", "letterSpacing", "case", "decoration", "variationSettings"] as const;
 const SIDE_PAD = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const;
@@ -573,6 +584,13 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
   if (ex.problems.length) return { problems: ex.problems, summary, expanded: null, labels: ex.labels };
   summary.warnings.push(...ex.warnings);
   const tree = ex.tree;
+  // A component root (component-spec.ts): its type, its declared properties (by name, for the layers' `propRefs`) and
+  // which of them a layer uses; a set's variant properties are its variants' names.
+  const root = componentRootOf(tree);
+  const variantList: readonly unknown[] = root && root.type === "COMPONENT_SET" && isObj(tree) && Array.isArray(tree.children) ? tree.children : [];
+  const firstVariant = variantList[0];
+  const columns = isObj(firstVariant) && typeof firstVariant.name === "string" ? variantColumns(firstVariant.name) : [];
+  const comp = root && isObj(tree) ? { ...root, defs: new Map<string, PropDefType>(propDefsOf(tree).map(([k, d]) => [k, d.type] as const)), used: new Set<string>() } : null;
   const seenHandles = new Set<string>();
   const seenFonts = new Set<string>();
   const addRef = (list: string[], name: unknown): void => { if (typeof name === "string" && list.indexOf(name) < 0) list.push(name); };
@@ -635,12 +653,53 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
     if (depth > MAX_TREE_DEPTH) { problems.push(path + ": nested deeper than " + MAX_TREE_DEPTH + " levels"); return; }
     if (n.clone !== undefined) { cloneNode(n, path, parentFlex); return; }
     const before = problems.length;
-    problems.push(...objectProblems(n, NODE_RULES, path));
-    const kind = nodeKind(n);
-    if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can)");
     const isRoot = parentFlex === null;
+    const compType = n.type === "COMPONENT" || n.type === "COMPONENT_SET" ? n.type : null;
+    const isCompRoot = isRoot && compType !== null;
+    // A variant: a child of a COMPONENT_SET root (the set's table made it: tree-expand.ts).
+    const isVariant = depth === 1 && comp !== null && comp.type === "COMPONENT_SET";
+    // On a component root `props` declares the properties (checked below), so the value check is not run on it.
+    const fields: Record<string, unknown> = {};
+    for (const k of Object.keys(n)) if (!(isCompRoot && k === "props")) Object.defineProperty(fields, k, { value: n[k], enumerable: true, writable: true, configurable: true });
+    problems.push(...objectProblems(fields, NODE_RULES, path));
+    const kind = nodeKind(n);
+    if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
     const flex = isFlex(n);
     const say = (msg: string): void => { problems.push(path + ": " + msg); };
+    if (compType !== null && !isRoot && !(isVariant && compType === "COMPONENT")) {
+      say("`type: \"" + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
+    }
+    if (isVariant && compType !== "COMPONENT") say("a component set holds only its variants (each a COMPONENT)");
+    if (isCompRoot) {
+      if (typeof n.name !== "string" || !n.name.trim()) say("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
+      if (n.key !== undefined) say("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
+      if (n.component !== undefined && n.component !== n.name) say("`component` on a component root is only the read's echo of its own `name`; leave it out");
+      if (n.props !== undefined) problems.push(...propDefsProblems(n.props, path + ".props", columns));
+    }
+    if (isVariant && n.props !== undefined) say("a variant's properties are the set's: declare them in the root's `props`");
+    if (isVariant && n.key !== undefined) say("a component's name is its key: leave `key` out");
+    if (n.propRefs !== undefined && isObj(n.propRefs) && propRefsShape(n.propRefs) === null) {
+      if (!comp) say("`propRefs` wires a layer to a property of the component it is in, so it is only inside a COMPONENT or COMPONENT_SET root");
+      else if (isCompRoot || isVariant) say("`propRefs` wires a layer inside the component to one of its properties; the component itself cannot be wired");
+      else {
+        for (const f of PROP_REF_FIELDS) {
+          const prop = n.propRefs[f];
+          if (typeof prop !== "string") continue;
+          const at = "`propRefs." + f + "`";
+          const want = PROP_REF_TYPES[f];
+          const has = comp.defs.get(prop);
+          if (has === undefined) {
+            const near = nearestNames(prop, [...comp.defs.keys()]);
+            say(at + " names '" + prop + "', which the component does not declare in its root's `props`" + (near.length ? "; closest: " + quoteList(near) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+            continue;
+          }
+          comp.used.add(prop);
+          if (has !== want) say(at + " names '" + prop + "', a " + has + " property; `" + f + "` follows a " + want + " property");
+          if (f === "characters" && kind !== "TEXT") say(at + ": only a TEXT layer's text follows a property");
+          if (f === "mainComponent" && kind !== "INSTANCE") say(at + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
+        }
+      }
+    }
     if (!isRoot && n.key !== undefined) say("`key` names a whole result, so only the root carries it");
     if (kind === "TEXT") {
       if (typeof n.text !== "string") say("a TEXT node needs `text`");
@@ -652,7 +711,7 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
       if (n.component === undefined) say("an INSTANCE node needs `component` (a component's name, key or id)");
       for (const k of Object.keys(n)) if (n[k] !== undefined && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
     }
-    if (kind !== "INSTANCE") for (const k of ["component", "props"]) if (n[k] !== undefined) say("`" + k + "` is only on an INSTANCE node");
+    if (kind !== "INSTANCE") for (const k of ["component", "props"]) if (n[k] !== undefined && !isCompRoot && !(isVariant && k === "props")) say("`" + k + "` is only on an INSTANCE node");
     if (isObj(n.styles) && n.styles.text !== undefined && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
     for (const axis of ["widthMode", "heightMode"] as const) {
       // An instance hugs when its component has auto-layout: only the file knows, so the plugin checks it.
@@ -699,9 +758,10 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
           if (!seenFonts.has(key)) { seenFonts.add(key); summary.fonts.push(f); }
         }
       } else if (kind === "INSTANCE") summary.instances++;
-      else summary.frames++;
+      else if (compType === null) summary.frames++;
       if (typeof n.handle === "string" && n.handle) summary.handles.push(n.handle);
       if (kind === "INSTANCE") addRef(summary.refs.components, n.component);
+      if (isCompRoot) for (const c of propDefComponents(n)) addRef(summary.refs.components, c);
       if (styled && isObj(n.styles)) addRef(summary.refs.textStyles, n.styles.text);
       if (Array.isArray(n.fills)) for (const p of n.fills) if (isObj(p) && isObj(p.tokens)) addRef(summary.refs.variables, p.tokens.color);
       if (isObj(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
@@ -712,6 +772,10 @@ export function checkTreeWith(spec: unknown, patch: PatchCheck): TreeCheck {
   if (!isObj(tree)) problems.push("tree: must be a node object (the root frame)");
   else {
     walk(tree, "tree", 0, null);
+    if (comp && isObj(tree)) {
+      for (const name of comp.defs.keys()) if (!comp.used.has(name)) summary.warnings.push("tree.props[" + JSON.stringify(name) + "]: no layer uses it (wire one with `propRefs`), so an instance can set it but nothing shows it");
+      summary.component = { type: comp.type, name: comp.name, variants: comp.type === "COMPONENT_SET" && Array.isArray(tree.children) ? tree.children.length : 0, props: [...comp.defs.keys()] };
+    }
     const k = nodeKind(tree);
     if (k !== "FRAME" && k !== "CLONE") problems.push("tree: the root must be a FRAME (a screen)" + (k === "INSTANCE" || k === "TEXT" ? "; put the " + (k === "INSTANCE" ? "instance" : "text") + " inside one" : ""));
     if (tooMany) problems.push("tree: more than " + MAX_TREE_NODES + " nodes — send a large screen as several trees");
@@ -738,13 +802,17 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
     const e = n.edits ? Object.keys(n.edits).length : 0;
     return e ? " with " + plural(e, "layer") + " changed" : "";
   };
+  const c = s.component;
+  const what = c ? (c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural(c.variants, "variant") : "component '" + c.name + "'") : "frame '" + (spec.name || "Frame") + "'";
   const parts = [spec.clone !== undefined
     ? "creates a copy of node " + spec.clone + (spec.name !== undefined ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where
-    : "creates frame '" + (spec.name || "Frame") + "'" + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") +
+    : "creates " + what + size + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") +
       " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") +
       (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where,
   ];
   if (s.clones > (spec.clone !== undefined ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
+  if (c && c.props.length) parts.push("properties " + quoteList(c.props));
+  if (c) parts.push("a component's name is its key: when the file has a component named '" + c.name + "' that a write made, it is updated in place instead (same ids, so its instances follow) and the reply lists only what changed; one made by hand is refused");
   if (spec.key !== undefined) parts.push("key '" + spec.key + "': when the file already holds this key's earlier result, that result is updated in place instead (same ids, only the fields that differ from the spec sent last time) and the reply lists only what changed");
   if (s.handles.length) parts.push("ids come back for " + quoteList(s.handles));
   if (s.fonts.length) parts.push("fonts " + quoteList(s.fonts.map((f) => f.family + " " + f.weight)));
