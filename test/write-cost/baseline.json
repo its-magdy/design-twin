@@ -65,6 +65,13 @@
         "out": 436,
         "in": 509,
         "total": 945
+      },
+      "capture-page": {
+        "calls": 6,
+        "ops": 39,
+        "out": 1035,
+        "in": 1149,
+        "total": 2184
       }
     },
     "tree-spec": {
@@ -174,6 +181,15 @@
         "out": 1023,
         "in": 1148,
         "total": 2171
+      }
+    },
+    "capture-page": {
+      "capture-page": {
+        "calls": 1,
+        "ops": 1,
+        "out": 28,
+        "in": 156,
+        "total": 184
       }
     }
   }

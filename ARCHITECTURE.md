@@ -349,7 +349,8 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
   designer questions), `build-screen` gates on that audit → maps → builds → verifies by rendering;
   MCP/CLI **provide the data**. Complementary. The audit is offline-only (reads `design/`), like
   drift-lint. The write direction has its own skill, `design-in-figma`: the route per job (a tree spec composed from
-  the file's components and variables, a copy with its differences, a patch by id, a source edit), the dry-run rule,
+  the file's components and variables, a copy with its differences, a patch by id, a source edit, a captured page landed by
+  `treeFile`), the dry-run rule,
   and the grammar in `references/grammar.md`, which the skill reads only before a write. So `figma_write`'s own
   description is only the op names with a line each, the dry-run rule and a pointer to that reference, and a session
   that never writes never loads the grammar.
@@ -425,7 +426,12 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    updated in place through the keyed re-send (`keyed.ts`), its property definitions and layer wiring brought to the
    spec; a spec cannot use a component the same batch makes. A spec given as `treeFile` is read by the MCP server
    (`spec-file.ts`) and never reaches the plugin as a path; so is a `seedTokens` op's token file (`seed-file.ts`,
-   mapped by `token-seed.ts`), which becomes the create tables in its place, so the plugin sees only those. The design record is `docs/write-plane-spec.md`; the
+   mapped by `token-seed.ts`), which becomes the create tables in its place, so the plugin sees only those. A page of
+   an existing app reaches Figma through that path: `design-to-code/capture-page.ts` (shipped as
+   `claude-plugin/scripts/capture-page.js`) renders it in the project's Playwright like the verify probe (the same
+   resolution and launch, `probe-browser.ts`; the same init script and reader, `measureElements`, plus a walker of its
+   own for layout facts, `probe-capture.ts`), converts it with the pure `capture-spec.ts` and writes the spec and its
+   images to disk — files only, never a write; the agent lands them with `treeFile` ops. The design record is `docs/write-plane-spec.md`; the
    token cost of each route is measured by `test/write-cost.test.ts`.
 
 ## Security posture

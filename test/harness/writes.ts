@@ -111,9 +111,11 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * library to import from. Every node can bind a variable (setBoundVariable), a text can take a text style
  * (setTextStyleIdAsync, which needs the style's font loaded), and a component's createInstance makes an INSTANCE that
  * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
- * setTextStyleIdAsync (to untick "Allow edits" there).
+ * setTextStyleIdAsync (to untick "Allow edits" there). `fonts`: families + styles the file has besides AVAILABLE_FONTS (a
+ * captured page's own).
  */
-export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
+export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: ReadonlyArray<readonly [string, string]> } = {}) {
+  const fonts: ReadonlyArray<readonly [string, string]> = [...AVAILABLE_FONTS, ...(opts.fonts ?? [])];
   let seq = 0;
   // getNodeByIdAsync's live table (the world's own): every node made here is found by id until it is removed.
   const reg: { nodes: Record<string, FakeNode> | null; styles: Record<string, unknown> | null } = { nodes: null, styles: null };
@@ -368,10 +370,10 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene } = {}) {
       return set;
     },
     loadFontAsync: async (f) => {
-      if (!AVAILABLE_FONTS.some(([fam, st]) => fam === f.family && st === f.style)) throw new Error("font not found");
+      if (!fonts.some(([fam, st]) => fam === f.family && st === f.style)) throw new Error("font not found");
       loadedFonts.add(fontKey(f));
     },
-    listAvailableFontsAsync: async () => AVAILABLE_FONTS.map(([family, style]) => ({ fontName: { family, style } })),
+    listAvailableFontsAsync: async () => fonts.map(([family, style]) => ({ fontName: { family, style } })),
     getFontFamilyVariationAxes: fontAxes,
     ...(kit ? {
       importComponentByKeyAsync: async (key: string) => { imports.push("component " + key); if (hooks.onImport) await hooks.onImport(); const c = kit.library.components[key]; if (!c) throw new Error("not published"); return c; },

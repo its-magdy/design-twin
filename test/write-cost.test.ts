@@ -1,4 +1,5 @@
-// The write plane's cost meter: what each of the six jobs of the design record (and a new screen's fix round) costs an agent, in tokens and round
+// The write plane's cost meter: what each of the six jobs of the design record (and a new screen's fix round, starting
+// from nothing, a blank file and a captured page) costs an agent, in tokens and round
 // trips, through each route (docs/write-plane-spec.md decision 21). No live Figma.
 //   bun test/write-cost.test.ts            measure, print the table, check every route against baseline.json
 //   bun test/write-cost.test.ts --record   measure and write the numbers to test/write-cost/baseline.json
@@ -94,7 +95,7 @@ void (async () => {
         ping: () => ({ pong: true, page: "Screens", file: "Sample App" }),
         whoami: (): WhoamiReply => ({ instanceId: "fig-wc", startedAt: 0, uptimeMs: 1, file: "Sample App", page: "Screens", pageId: "", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: true }),
         // Awaited here: the VM's promise is not this realm's Promise, which fake-plugin.ts tells answers apart by.
-        write: async (a) => await on().api.applyWrites(a.ops.map((o) => ({ ...o }))),
+        write: async (a) => await on().api.applyWrites(a.ops.map((o) => ({ ...o })), a.images),
         exportNode: async (a) => await on().api.collectNode(a.nodeId, a),
         listPages: async (a): Promise<ListPagesReply> => {
           const r = await on().api.listPages(a.depth !== undefined ? { depth: a.depth } : {});

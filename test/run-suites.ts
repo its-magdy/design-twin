@@ -106,6 +106,8 @@ const SUITE_FILES: readonly string[] = [
   "token-seed.test.ts", "write-seed.test.ts",
   // images in a write: the reader, the loader, the plugin on a fake file, figma_write end to end (no live Figma)
   "write-images.test.ts",
+  // a rendered page captured to a tree spec (the converter, pure; the built script in chromium; the spec landed by treeFile)
+  "capture-page.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];

@@ -29,7 +29,7 @@ import esbuild, { type BuildResult } from "esbuild";
 
 const SRC = path.join(import.meta.dirname, "..", "design-to-code");
 // The CLI entry points. kinds.ts / catalog-input.ts are libraries — they get inlined, not shipped.
-const ENTRIES: readonly string[] = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verifier-guard", "verify-build", "verify-probe", "verify-screen"];
+const ENTRIES: readonly string[] = ["audit", "capture-page", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verifier-guard", "verify-build", "verify-probe", "verify-screen"];
 
 // A CLI guard in code (a mention in a `//` comment is not one).
 const CLI_GUARD = /^(?!\s*\/\/).*\bimport\.meta\.main\b/m;

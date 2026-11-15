@@ -260,7 +260,8 @@ instead of building a second one:
 
 `treeFile` is a path to a JSON file holding the spec, relative to the directory the MCP server runs in and inside it,
 at most 2 MB. The server reads it into `tree` before anything else, so it is checked, previewed and applied exactly
-like the same spec inline. Only a `createTree` takes it, and never beside `tree`.
+like the same spec inline. Only a `createTree` takes it, and never beside `tree`. `capture-page` writes its specs for
+this path (SKILL.md, Capture a page): send them as it prints them.
 
 ## Patch
 

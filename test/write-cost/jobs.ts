@@ -1,11 +1,13 @@
 // The six jobs of the write-plane design record (docs/write-plane-spec.md, "The cheap route for each job"), a new
-// screen's fix round, and starting from nothing (a file with no design system: tokens first, then a screen bound to
-// them) — each a file to start from, what the agent is told (its brief), and the check of the file afterwards.
+// screen's fix round, starting from nothing (a file with no design system: tokens first, then a screen bound to
+// them), a blank file's kit, and a captured page landed from disk — each a file to start from, what the agent is told (its brief), and the check of the file afterwards.
 //
 // A job knows nothing about HOW it is done: a route (routes.ts) does it through the MCP tools, and the suite runs
 // every route of every job on a fresh copy of the job's file. The check reads the file the plugin wrote, not the
 // replies: `problems` (the job is not done; the route fails) and `gaps` (done, but not the way a designer would have
 // it — a raw colour where the file has a variable, a text layer left with its content as its name; reported, not failed).
+import fs from "node:fs";
+import path from "node:path";
 import { canvas, fillHex, fillVariable, hexOf, rgb, type Canvas, type CNode, type Fill, type Rgb } from "./canvas.ts";
 import type { FakeVariable } from "../fake-figma.ts";
 
@@ -170,6 +172,21 @@ export interface Briefs {
   /** a blank file: make the token table `tokens`, then the starter kit `kit` (components the screen uses by name, their
    *  colours bound to the tokens), then the screen `screen` on the current page, composed of the kit's instances */
   "blank-file": { pageId: string; collection: string; modes: readonly string[]; tokens: readonly Token[]; kit: StarterKit; screen: KitScreen };
+  /** an existing app's page, rendered: put it on the current page as a screen. `capture` is what capture-page wrote for
+   *  it (its spec file and images, under the directory the MCP server runs in); `spec` is that spec as read, for a route
+   *  that types the screen itself */
+  "capture-page": { pageId: string; capture: CapturedPage; spec: CapturedNode };
+}
+/** What capture-page wrote for one width of a page (test/fixtures/capture/sample): the spec's path relative to the
+ *  directory the MCP server runs in, the fixture directory it is copied from, and its images. */
+export interface CapturedPage { specFile: string; fixtureDir: string; images: readonly string[] }
+/** A tree spec node as capture-page writes it (the fields a check and the four-op route read). */
+export interface CapturedNode {
+  name?: string; text?: string; box?: { w: number; h: number };
+  font?: { size?: number; color?: Hex };
+  layout?: { display?: string; flexDirection?: string; gap?: number; padding?: number[] };
+  fills?: Array<{ type: string; color?: Hex; file?: string }>;
+  children?: CapturedNode[];
 }
 /** A starter kit: icons, a button set (one variant per size × state; a label, an optional icon that can be swapped), an
  *  input with a placeholder, a card with a title and a body. */
@@ -594,6 +611,47 @@ const blankFile: Job<"blank-file"> = {
   },
 };
 
-/** The six jobs, in the design record's order, then the fix round, starting from nothing and a blank file's kit. */
-export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing, blankFile] as const;
+// An existing app's page to Figma (#175): capture-page has rendered a page and written its spec and images to disk
+// (test/fixtures/capture/sample: a generic dashboard captured at 1280 px, 39 nodes). Done when the current page has
+// exactly one new frame of the spec's name with the spec's texts in order and its node count; the way a designer would
+// have it when its pictures landed too.
+const CAPTURE_DIR = path.join(import.meta.dirname, "..", "fixtures", "capture", "sample");
+const capturePage: Job<"capture-page"> = {
+  id: "capture-page", title: "Capture a page",
+  what: "a rendered 39-node dashboard page (flex, grid, text, 3 images) captured to a spec on disk, landed as one screen",
+  fixture() {
+    const f = appFile();
+    const screens = page(f, "Screens");
+    build(f, screens, settingsScreen("Home", "jane@example.com"));
+    const before = new Set(Object.keys(f.c.nodes));
+    const spec = JSON.parse(fs.readFileSync(path.join(CAPTURE_DIR, "sample@1280.json"), "utf8")) as CapturedNode;
+    const images = fs.readdirSync(path.join(CAPTURE_DIR, "images")).sort();
+    const capture: CapturedPage = { specFile: "design/capture/sample@1280.json", fixtureDir: CAPTURE_DIR, images };
+    const textsOf = (n: CapturedNode): string[] => (n.text !== undefined ? [n.text] : (n.children ?? []).flatMap(textsOf));
+    const countOf = (n: CapturedNode): number => 1 + (n.children ?? []).reduce((a, c) => a + countOf(c), 0);
+    const imagesOf = (n: CapturedNode): number => (n.fills ?? []).filter((p) => p.type === "image").length + (n.children ?? []).reduce((a, c) => a + imagesOf(c), 0);
+    return {
+      c: f.c, brief: { pageId: screens.id, capture, spec },
+      check() {
+        const problems: string[] = [];
+        const gaps: string[] = [];
+        const made = (screens.children ?? []).filter((k) => k.name === spec.name && !before.has(k.id));
+        if (made.length !== 1) return { problems: [`${made.length} new frames named "${String(spec.name)}" on Screens, wanted 1`], gaps };
+        const root = made[0];
+        if (!root) return { problems, gaps };
+        const all = walk(root);
+        const texts = all.filter((n) => n.type === "TEXT").map((n) => String(n.characters ?? ""));
+        if (JSON.stringify(texts) !== JSON.stringify(textsOf(spec))) problems.push(`the screen reads ${JSON.stringify(texts.slice(0, 4))}…, wanted ${JSON.stringify(textsOf(spec).slice(0, 4))}…`);
+        if (all.length !== countOf(spec)) problems.push(`the screen has ${all.length} nodes, wanted ${countOf(spec)}`);
+        const pictures = all.reduce((a, n) => a + (n.fills ?? []).filter((p) => String(p.type) === "IMAGE").length, 0);
+        if (pictures < imagesOf(spec)) gaps.push(`${imagesOf(spec) - pictures} of the page's ${imagesOf(spec)} images did not land (the four ops cannot place an image)`);
+        return { problems, gaps };
+      },
+    };
+  },
+};
+
+/** The six jobs, in the design record's order, then the fix round, starting from nothing, a blank file's kit and a
+ *  captured page. */
+export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing, blankFile, capturePage] as const;
 export type AnyJob = (typeof JOBS)[number];

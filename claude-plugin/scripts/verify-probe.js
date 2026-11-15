@@ -2,16 +2,15 @@
 
 
 // design-to-code/verify-probe.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 import os4 from "node:os";
-import path12 from "node:path";
+import path13 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // design-to-code/verify-probe.ts
-import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
 import { setTimeout as sleep7 } from "node:timers/promises";
@@ -568,6 +567,12 @@ function measureElements(input) {
       const tt = typoCs.getPropertyValue("text-transform").trim();
       if (tt) styles.textTransform = tt;
     }
+    if (input.capture) {
+      const tt = typoCs.getPropertyValue("text-transform").trim(), fs11 = typoCs.getPropertyValue("font-style").trim(), td = typoCs.getPropertyValue("text-decoration-line").trim();
+      if (tt) styles.textTransform = tt;
+      if (fs11) styles.fontStyle = fs11;
+      if (td) styles.textDecoration = td;
+    }
     return res;
   });
 }
@@ -610,17 +615,17 @@ function rawHoverPoint(arg) {
   }
   return { covered };
 }
-function focusablePath(path13) {
+function focusablePath(path14) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
   const dt = window.__dt;
-  const el = dt.find(path13);
+  const el = dt.find(path14);
   const f = el ? el.closest(FOCUSABLE) : null;
   return f ? dt.path(f) : null;
 }
-function focusableWithin(path13) {
+function focusableWithin(path14) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
   const dt = window.__dt;
-  const el = dt.find(path13);
+  const el = dt.find(path14);
   if (!el) return null;
   const f = el.matches(FOCUSABLE) ? el : Array.from(el.querySelectorAll(FOCUSABLE)).find((c) => !c.matches(":disabled") && dt.visible(c, { sized: true }));
   return f ? dt.path(f) : null;
@@ -700,8 +705,8 @@ function screenTags(a) {
   }
   return { shown, ambiguous, foreign: null };
 }
-function focusInfo(path13) {
-  const el = window.__dt.find(path13);
+function focusInfo(path14) {
+  const el = window.__dt.find(path14);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -750,11 +755,11 @@ function installPageRuntime() {
       return base;
     };
   };
-  const find = (path13) => {
-    const steps = /^html((?: > | )[^\s>]+:nth-child\(\d+\))*$/.test(path13) ? Array.from(path13.slice(4).matchAll(/( > | )([^\s>]+):nth-child\((\d+)\)/g)) : null;
+  const find = (path14) => {
+    const steps = /^html((?: > | )[^\s>]+:nth-child\(\d+\))*$/.test(path14) ? Array.from(path14.slice(4).matchAll(/( > | )([^\s>]+):nth-child\((\d+)\)/g)) : null;
     if (steps === null) {
       try {
-        return document.querySelector(path13);
+        return document.querySelector(path14);
       } catch {
         return null;
       }
@@ -1222,7 +1227,7 @@ async function registerPathEngine(selectors) {
     if (e instanceof Error && /already registered/.test(e.message)) pathEngine = true;
   }
 }
-var byPath = (page, path13) => page.locator(pathEngine ? `${PATH_ENGINE}=${path13}` : path13);
+var byPath = (page, path14) => page.locator(pathEngine ? `${PATH_ENGINE}=${path14}` : path14);
 
 // bridge/src/hex-color.ts
 function formatHex(c) {
@@ -3107,8 +3112,8 @@ function ownClear(_arg) {
   window.__dtOwn = null;
   return true;
 }
-function syntheticClick(path13) {
-  const el = window.__dt.find(path13);
+function syntheticClick(path14) {
+  const el = window.__dt.find(path14);
   if (!el) return false;
   el.click();
   return true;
@@ -3346,9 +3351,9 @@ async function restoreSettled(page) {
     held = await page.evaluate(scrollHeld) ? held + 1 : 0;
   }
 }
-function pointOn(path13) {
+function pointOn(path14) {
   const dt = window.__dt;
-  const el = dt.find(path13);
+  const el = dt.find(path14);
   const pt = el ? dt.clickPoint(el) : null;
   if (!el || !pt) return null;
   return { x: pt.x, y: pt.y, onScreen: pt.onScreen, hits: pt.onScreen && dt.within(dt.hitAt(pt.x, pt.y), el) };
@@ -7180,7 +7185,10 @@ var ScreenGate = class {
   }
 };
 
-// design-to-code/verify-probe.ts
+// design-to-code/probe-browser.ts
+import fs9 from "node:fs";
+import path12 from "node:path";
+import { createRequire } from "node:module";
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
 function isPlaywrightModule(x) {
   if (typeof x !== "object" || x === null || !("chromium" in x)) return false;
@@ -7294,14 +7302,14 @@ function resolveAxe(dir) {
   }
   return { ok: true, source: mod.source, version, file };
 }
-function rendererUnavailable(reason, hint) {
+function rendererUnavailable(reason, hint, tool = "verify-probe", nothing = "measured or written") {
   if (hint === null) {
-    console.error(`verify-probe: renderer unavailable \u2014 ${reason} \u2014 nothing was measured or written.`);
+    console.error(`${tool}: renderer unavailable \u2014 ${reason} \u2014 nothing was ${nothing}.`);
     return 3;
   }
-  console.error(`verify-probe: renderer unavailable \u2014 ${reason}
-  nothing was measured or written. Ask the user to run:  ${hint}
-  (verify-probe never installs a package or downloads a browser itself.)`);
+  console.error(`${tool}: renderer unavailable \u2014 ${reason}
+  nothing was ${nothing}. Ask the user to run:  ${hint}
+  (${tool} never installs a package or downloads a browser itself.)`);
   return 3;
 }
 var LAUNCH_ARGS = ["--disable-lcd-text"];
@@ -7327,24 +7335,6 @@ function browserPathError(p) {
   }
   return ok ? null : `--browser-path ${p} is not an executable file (on macOS pass the binary inside the .app: \u2026/Contents/MacOS/\u2026)`;
 }
-var SELF2 = fileURLToPath2(import.meta.url);
-function probeVersion() {
-  for (const p of [path12.join(path12.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path12.join(path12.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
-    const doc = readJsonOrNull(p, isJsonObject);
-    if (doc && typeof doc.version === "string") return doc.version;
-  }
-  return null;
-}
-var selfSha256 = () => sha256Hex(fs9.readFileSync(SELF2));
-var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
-function buildFrom(url, served, viteClient, unhashed = 0) {
-  const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
-  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Hex(lines.join("\n")), ...unhashed > 0 ? { unhashed } : {} };
-}
-function gitState(dir, git = systemGit) {
-  const head = git.head(dir);
-  return head ? { gitHead: head, gitDirty: git.dirty(dir) } : { gitHead: null, gitDirty: null };
-}
 var INIT_SCRIPT = `try { ${PAGE_RUNTIME} } catch (e) {}
 (() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
@@ -7356,6 +7346,26 @@ var INIT_SCRIPT = `try { ${PAGE_RUNTIME} } catch (e) {}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add, { once: true }); else add();
   addEventListener("load", adopt, { once: true });
 })();`;
+
+// design-to-code/verify-probe.ts
+var SELF2 = fileURLToPath2(import.meta.url);
+function probeVersion() {
+  for (const p of [path13.join(path13.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path13.join(path13.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+    const doc = readJsonOrNull(p, isJsonObject);
+    if (doc && typeof doc.version === "string") return doc.version;
+  }
+  return null;
+}
+var selfSha256 = () => sha256Hex(fs10.readFileSync(SELF2));
+var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
+function buildFrom(url, served, viteClient, unhashed = 0) {
+  const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Hex(lines.join("\n")), ...unhashed > 0 ? { unhashed } : {} };
+}
+function gitState(dir, git = systemGit) {
+  const head = git.head(dir);
+  return head ? { gitHead: head, gitDirty: git.dirty(dir) } : { gitHead: null, gitDirty: null };
+}
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
 var POLL_MS4 = 100;
@@ -8204,7 +8214,7 @@ async function probeMain(argv, own) {
     "browser-path": { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path12.resolve(f.project ?? ".");
+  const project = path13.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
@@ -8273,7 +8283,7 @@ ${USAGE}`);
     if (parsed.noNavigate) console.error(`note  --steps '${f.steps}' is a plan with no \`navigate\` list \u2014 no steps run: the screen is measured where --url lands`);
     else {
       steps = parsed.steps;
-      stepsSource = `--steps ${(path12.relative(process.cwd(), path12.resolve(f.steps)) || f.steps).split(path12.sep).join("/")}`;
+      stepsSource = `--steps ${(path13.relative(process.cwd(), path13.resolve(f.steps)) || f.steps).split(path13.sep).join("/")}`;
     }
   }
   let expectation = null, expBytes = null;
@@ -8286,7 +8296,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs9.readFileSync(f.expected);
+    expBytes = fs10.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -8356,7 +8366,7 @@ ${USAGE}`);
     const browserLine = `chromium ${identity2.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`;
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path12.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path13.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
       return 0;
     }
     let run2;
@@ -8441,7 +8451,7 @@ ${USAGE}`);
             budgetMs,
             measuredTags: run2.result.visibleTags,
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: setFile(outBase, "forcedColors").split(path12.sep).join("/")
+            forcedPng: setFile(outBase, "forcedColors").split(path13.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -8507,13 +8517,13 @@ ${USAGE}`);
   const diffPath = setFile(outBase, "diff");
   let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng = null;
-  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path12.sep).join("/"), captureMs }));
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path13.sep).join("/"), captureMs }));
   const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
   const measuredBase = {
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path12.sep).join("/")],
+    artifacts: [png.split(path13.sep).join("/")],
     expectationSha256: sha256Hex(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
@@ -8535,7 +8545,7 @@ ${USAGE}`);
   const writeFiles = () => {
     try {
       if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
-      else if (fs9.existsSync(diffPath)) fs9.rmSync(diffPath, { force: true });
+      else if (fs10.existsSync(diffPath)) fs10.rmSync(diffPath, { force: true });
     } catch (e) {
       console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
       if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
@@ -8546,7 +8556,7 @@ ${USAGE}`);
     const forcedPath = setFile(outBase, "forcedColors");
     try {
       if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-      else if (fs9.existsSync(forcedPath)) fs9.rmSync(forcedPath, { force: true });
+      else if (fs10.existsSync(forcedPath)) fs10.rmSync(forcedPath, { force: true });
     } catch (e) {
       console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
     }
@@ -8569,7 +8579,7 @@ ${USAGE}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
   if (wrote.kind === "refused") console.error(participant.unrecordedWarning(outBase));
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(setFile(outBase, "measured"))} --out ${shellArg(path12.dirname(outBase))}`);
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(setFile(outBase, "measured"))} --out ${shellArg(path13.dirname(outBase))}`);
   return 0;
 }
 var EXIT_GRACE_MS = 1e3;
