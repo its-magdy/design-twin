@@ -32,6 +32,26 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can seed those tables from the project's code tokens: `seedTokens {file, collection?}` names a
+  `tokens.dtcg.json` or a `tokens.resolver.json` (with its set and context files), and the MCP server reads it into
+  `createVariables` and `createStyles` ops in its place, so no token value passes through the model and the dry run,
+  the checks and the one-undo write are the tables' own. A resolver's sets are collections and its modifiers' contexts
+  their modes (the default first); a `tokens.dtcg.json`'s modes come from `$extensions["figma.com"].modes`, one
+  collection per set of modes (numbered when two would share a name), the default first: tokens.dtcg.json now records
+  it as `$extensions["figma.com"].defaultMode`, and a file without it gives the mode whose value is the `$value`. Names are the path joined with `/`, `{a.b}` an alias. Colours, dimensions (rem × 16),
+  numbers, strings, font families and weights, and booleans become variables; `typography` and `shadow` tokens become
+  text and effect styles bound to them (a style takes the default mode's value; a mode that differs is listed). What
+  cannot be seeded (a gradient, a duration, an alias to nothing, a loop, a token inside a token, …) is listed in
+  `unmapped` with the reason. A token seeded only in part (a style's other modes, extended-collection overrides) is
+  listed in `partly`, and the dry run counts the two apart. The reply lists only the rows created or updated, with a count of the
+  unchanged ones, so a second seed of the same file reports no change. Every file read stays inside the server's
+  directory (its symbolic links followed, and the real path opened without following a final link), is JSON and at most 2 MB; a seed
+  makes at most 50 collections, reads at most 20,000 tokens (a token not seeded counts too), and a resolver's build
+  reads at most 1,500,000 values. A token only modifiers give is seeded by the first collection whose modifier gives
+  it, or not at all; another collection's value for it is listed. A `$ref` that is a URL, absolute or a pointer is refused, and so are CSS and
+  native token files. A resolver's set files now keep a boolean's origin (`originalType`), as tokens.dtcg.json does.
+  The write-cost suite records the start-from-nothing job seeded from a token file: 1,689 estimated tokens.
+  `figma_write`'s definition grew from 1,101 to 1,137 estimated tokens.
 - `figma_write` can start a design system in a file that has none. `createVariables` (`collection`, `modes`,
   `variables`) makes a collection, its modes and every variable from one table of rows `[name, type, …a value per
   mode]` (`color`, `number`, `string` or `boolean`; a value as the read export writes one, or `{aliasOf}` a row of the

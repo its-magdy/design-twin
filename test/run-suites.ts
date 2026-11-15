@@ -102,6 +102,8 @@ const SUITE_FILES: readonly string[] = [
   "write-cost.test.ts",
   // a tree spec from disk and a keyed re-send's plan (pure)
   "write-keyed.test.ts",
+  // code tokens read back into the create tables (pure), and seedTokens through the MCP server (no live Figma)
+  "token-seed.test.ts", "write-seed.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];

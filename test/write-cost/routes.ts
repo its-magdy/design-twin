@@ -407,6 +407,40 @@ export const createTokens: Route = {
   },
 };
 
+// ---- the same theme seeded from the project's code tokens (#182): the project already holds them as a DTCG file
+// (tokens.dtcg.json, its modes in $extensions["figma.com"].modes), so the agent names the file and no token value
+// crosses the tool boundary. The file is the project's, not the agent's work: it is put there unmeasured. One write
+// (seedTokens, then the screen naming the tokens), then the outline read of the new screen.
+/** A brief's tokens as a DTCG tree, the way design-to-code's toDTCG writes them: groups by `/`, aliases as {a.b}. */
+function dtcgOf(b: Briefs["start-from-nothing"]): Record<string, unknown> {
+  const root: Record<string, unknown> = {};
+  const cell = (v: Token["values"][number]): unknown => (typeof v === "object" ? "{" + v.aliasOf.split("/").join(".") + "}" : v);
+  for (const t of b.tokens) {
+    const segs = t.name.split("/");
+    let node = root;
+    for (const seg of segs.slice(0, -1)) {
+      const next = node[seg];
+      node = typeof next === "object" && next !== null ? (next as Record<string, unknown>) : (node[seg] = {});
+    }
+    const modes: Record<string, unknown> = {};
+    b.modes.forEach((m, i) => { modes[m] = cell(t.values[i] ?? t.values[0] ?? 0); });
+    node[segs[segs.length - 1] ?? t.name] = { $type: t.type, $value: cell(t.values[0] ?? 0), $extensions: { "figma.com": { modes } } };
+  }
+  return root;
+}
+export const seedTokens: Route = {
+  name: "seed-tokens",
+  ticket: "#182",
+  jobs: {
+    "start-from-nothing": async (s, b) => {
+      fs.writeFileSync(path.join(s.dir, "tokens.dtcg.json"), JSON.stringify(dtcgOf(b), null, 2));
+      const r = must(await s.call("figma_write", { ops: [{ op: "seedTokens", file: "tokens.dtcg.json", collection: b.collection }, { op: "createTree", tree: dsTreeOf(b.want, { components: {}, variables: [] }) }] }, "write"), "figma_write");
+      const [, root] = appliedIds(r);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -422,5 +456,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens];
 export const BASELINE = fourOp.name;

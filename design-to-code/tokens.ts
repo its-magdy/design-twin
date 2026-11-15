@@ -93,6 +93,8 @@ export type DtcgLeafValue = string | number | boolean | DtcgDimension | DtcgColo
 export type DtcgOpacity = number | string;
 export interface DtcgFigmaExtension {
   modes?: Record<string, DtcgLeafValue>;
+  /** 2+ modes: the mode $value holds (the collection default), so a reader can make it the default again */
+  defaultMode?: string;
   /** composed colour: the opacity half of $value (see the header comment) */
   opacity?: DtcgOpacity;
   /** composed colour, 2+ modes: the opacity half per mode (only modes whose value is composed) */
@@ -531,6 +533,8 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
       const setExt: DtcgFigmaExtension = {};
       if (opacity !== undefined) setExt.opacity = opacity;
       if (cls === "percent") setExt.unit = "percent";
+      // …and a boolean's origin, so a set file read back (bridge/src/token-seed.ts) makes a boolean, not a string.
+      if (v.type === "BOOLEAN") setExt.originalType = "boolean";
       if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf; continue;
     }
@@ -544,7 +548,7 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     // — which, unlike an object literal, creates a REAL own "__proto__" key. On a plain object
     // `modes["__proto__"] = {...}` sets the prototype instead of an own key, so the mode vanished from
     // the emitted JSON with no warning. Same hardening as toDTCG's reserved-key guard on token NAMES.
-    if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = nullProto(); for (const m of modeKeys) { const mv = values[m] === undefined ? null : dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); if (mv !== null) modes[m] = mv; } ext.modes = modes; }
+    if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = nullProto(); for (const m of modeKeys) { const mv = values[m] === undefined ? null : dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); if (mv !== null) modes[m] = mv; } ext.modes = modes; const def = defaultModeName(v, ds.collections); if (def !== undefined && modes[def] !== undefined) ext.defaultMode = def; }
     // …and each composed mode's opacity half beside it (null-prototype for the same reason as `modes`).
     if (modeKeys.length > 1 && modeKeys.some((m) => isComposed(values[m]))) {
       const byMode: Record<string, DtcgOpacity> = nullProto();

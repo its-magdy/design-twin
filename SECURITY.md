@@ -33,7 +33,8 @@ its guarantees are especially welcome, for example:
   own earlier result), or a source edit (`setVariable`, `setStyle`, a `patch` of a main component) changing a
   variable, style or component that lives in another library file (a `createVariables` / `createStyles` table matches
   only this file's own collections and styles by name, and makes a local one beside a library's);
-- a `treeFile` spec read from outside the directory the MCP server runs in.
+- a `treeFile` spec, or a `seedTokens` token file (a symbolic link leading out of it included), read from outside
+  the directory the MCP server runs in. A process that rewrites that directory while a file is read is out of scope.
 
 Out of scope: a malicious process already running as your user (it can read the token file), and issues in Figma,
 Claude Code or other third-party tools themselves — report those to their vendors.

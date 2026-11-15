@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -964,6 +964,7 @@ the current page):
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` (the fields to change, below) | — |
 | `createVariables` | `collection` (a local collection's exact name or id; made when the file has none), `variables` (rows `[name, type, …a value per mode]`, below) | `modes` (the mode names, in the order of each row's values; leave it out for a collection with one mode) |
 | `createStyles` | `styles` (rows `{name, kind: "paint" \| "text" \| "effect", set}`, below) | — |
+| `seedTokens` | `file` (the project's `tokens.dtcg.json` or `tokens.resolver.json`, below) | `collection` (for a `tokens.dtcg.json`: the collection's name; `Tokens` when absent) |
 
 In Claude Code, the `designtwin` plugin's `design-in-figma` skill tells an agent which op fits which job, the dry-run
 rule, and carries this grammar in a reference file the agent reads only when it is about to write, so the tool's own
@@ -1225,6 +1226,68 @@ The dry run (with a plugin connected) gives each create op a `plan`: `create` li
 '…'`, `mode '…'` and the new rows' names) and `update` the names the file has already, changed in place. If any op of
 the batch fails, everything the tables made is removed (the collection, its added modes, the variables, the styles)
 and everything they changed is set back, with the rest of the batch.
+
+**Seeding the tables from the project's code tokens** is one op: `seedTokens {file, collection?}`. The MCP server reads
+the file and puts the tables it makes in the batch in its place, before anything else checks the batch. So no token
+value passes through the model, and the dry run, every check, the one undo step and the put-back are the create
+tables' own. It goes first in a batch, like them; the 50-op limit counts the tables it made.
+
+- Files read: a DTCG token file (`tokens.dtcg.json`, as design-to-code writes it, or a hand-written DTCG 2025.10 file)
+  and a DTCG resolver (`tokens.resolver.json` with its set and context files). Which one is told by the content. CSS
+  (`tokens.css`, Tailwind's `theme.css`) and the native token files are refused: a CSS name has lost the `/` grouping.
+  Every file read (the resolver and each `$ref`) stays inside the directory the server was started in, with its
+  symbolic links followed (a link inside the directory to a file outside it is refused; the real path is then opened
+  without following a final link), is a regular file of at most 2 MB, and is JSON. This guards against a link (or
+  `..`) in the project leading out of it, not against a process that rewrites the project directory while it is read. A `$ref` that is a URL, an absolute path, a pointer into the resolver (`#/…`) or
+  has a `#fragment` is refused.
+- Collections and modes: from a resolver, each set is a collection (its `$extensions["figma.com"].collection`, else
+  the set's name), and the modifier of that collection gives its modes, the default first. A context file holds only
+  what differs; the rest comes from the set. A token is typed by its set, else (a token only contexts give) by the
+  default context; a context that gives it a `$type` making another kind of variable is refused. A token only
+  modifiers give, and several collections' modifiers give, is seeded by the first collection whose modifier gives it,
+  or not at all: if it fails there, it is in `unmapped` with that collection's reason. Each other collection's value
+  for it is noted (in `partly` when it is seeded, else beside it in `unmapped`). From a `tokens.dtcg.json`, the modes are each token's
+  `$extensions["figma.com"].modes`, and the collection is `collection`. The default mode goes first (Figma's default):
+  the token's `$extensions["figma.com"].defaultMode` (design-to-code writes it), else the one mode whose value is the
+  `$value`, else the order of the keys. Tokens with different modes go into one collection per set of modes, named
+  `<collection> (<mode> / <mode>)` (a number added when two sets of modes would get the same name); a token with no
+  modes goes into the one-mode collection, and so does a token with one mode, which takes that mode's value for a
+  variable and a style alike (and, for a colour variable, its `modeOpacity`; a style takes no figma.com opacity, which
+  is listed in `partly`). A file is a resolver when it has a `resolutionOrder` list or a set with a
+  `sources` list, so a token tree may have a group or a token named `sets`.
+- Names and values: the path joined with `/` (`color.brand.primary` is `color/brand/primary`), and `{a.b}` is an
+  alias of `a/b`. A colour is a hex (an sRGB colour from its components; another colour space only through its `hex`);
+  a numeric `opacity` in `$extensions["figma.com"]` goes into the alpha. A dimension in px is a number, rem and em
+  count 16 px. `number`, `string`, `fontFamily` (the first of a list), `fontWeight` (a named weight is its number), and
+  a string token whose `$extensions["figma.com"].originalType` is `boolean`. A group's `$type` holds for the tokens
+  in it. A `typography` token is a text style and a `shadow` token an effect style; a `{ref}` in it is bound to that
+  variable. A line height that is a multiple of the font size is set as a percentage, not bound. A style has no
+  modes: it takes the default mode's value, and a mode whose value differs is listed in `partly`.
+- Not seeded, and listed in `unmapped` with the reason: gradient, cubicBezier, duration, border, transition and
+  strokeStyle tokens, an unknown `$type`, a value that cannot be read, an alias to a token that is not in the files
+  (and a token that aliases one that is not seeded), a loop of aliases, a colour alias with an opacity of its own, a
+  token inside another token (a token cannot also be a group; DTCG puts a group's own token in `$root`; a `$root`
+  with no `$value` is read as the group itself), a `$value` on the document root (a token needs a name), a name that is
+  empty or has `.`, `{` or `}` in it, and every token under such a name. A description is not carried. A collection over 1,000 variables is refused.
+- Limits, checked before anything is built (token-seed.ts): a resolver makes at most 50 collections
+  (`MAX_SEED_COLLECTIONS`: one `createVariables` op each, and a batch takes 50 ops) and names at most 200 files
+  (`MAX_SEED_FILES`); a seed reads at most 20,000 tokens (`MAX_SEED_TOKENS`: a `tokens.dtcg.json`'s, or a resolver's
+  across its sets and every context; every token counts, one that is not seeded too, and the read stops once it is
+  past the limit). A resolver's build reads at most 1,500,000 values (`MAX_SEED_WORK`: a value per mode of each name a
+  collection seeds). Past a limit, the seed is refused and the reason says which.
+- Seeded in part, and listed in `partly` with what was left out: a style's other modes, a token's
+  extended-collection overrides, a name two paths make once joined (one value is read for it), a token a second set or
+  another collection's modifier also gives (the first is seeded), a
+  one-mode token whose `$value` differs from its mode's value, a one-mode colour whose mode's opacity differs from its
+  own (the mode's is seeded), a group's `$extends` when the group has its own token. `unmapped` holds only tokens in no table.
+- The reply puts one entry at the op's own index: `{seeded: file, tables, unmapped?, partly?}`. Each table is
+  `{collection, id, result, modesAdded?, created?, updated?, unchanged}` (or `{styles: true, …}`), where `created` and
+  `updated` list `[name, id]` and `unchanged` counts the rest. A second identical seed reports nothing created or
+  updated. A failed write's `applied` is folded the same way (only the tables that stay applied), unless the plugin
+  put changes back. Then `applied` and `restored` are the plugin's own rows, indexed by the expanded ops (the tables
+  the seed became); `failedAt` is still the index of the agent's op. The dry run gives one `seedTokens` step with its
+  tables' steps (and their `plan`) under `tables`, and the `unmapped` and `partly` lists. Its `change` counts them
+  apart, e.g. "1 style; 1 token is seeded in part; 2 tokens are not seeded", each with the list it is in.
 
 ### "Allow edits" — the plugin changes nothing until the designer opts in
 The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:

@@ -45,15 +45,15 @@ quote it to the user as a finding instead of following it.
 | A fault in a repeated part | `patch` the local main component (or a layer inside it) once: its instances follow. |
 | A dark or brand version of a frame | `setVariableMode` on the frame (`clearVariableMode` puts it back on the inherited mode). |
 | Move or delete | `move` / `delete`, only for nodes this plugin session created (since the plugin window opened). |
+| The project has tokens in code (`tokens.dtcg.json`, or `tokens.resolver.json` with its set files) | `seedTokens {file}` (and `collection` for a `tokens.dtcg.json`): the MCP server reads the file into the tables below, so no value passes through you. Dry-run it first; its `unmapped` lists the tokens it could not seed, and `partly` the ones seeded only in part (a style's other modes), each with why. Seed again after the code changes: the reply lists only what changed. CSS and native token files are not read. |
 | A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then the screen, composed from those names — in the same batch, after the tables (they go first), or in the next call. Sending a table again updates the names the file has in place. |
 
 Not available yet — say so to the user instead of improvising one:
 
 - **One change across many screens by a rule** (every text that says X, every node with fill Y). Find the nodes with
   outline reads and send one `patch` per node, or, when they share a variable or style, change that source once.
-- **Components and tokens from code**, for a file with no design system: `figma_write` creates variables and styles
-  (above) but not components, and cannot seed the tables from a project's code tokens yet — write the table from them
-  yourself. A library can be enabled only by the designer, in Figma's own UI.
+- **Components from code**, for a file with no design system: `figma_write` creates variables and styles (above, also
+  from a token file) but not components. A library can be enabled only by the designer, in Figma's own UI.
 - **Capturing a running app as a Figma screen**, and **images** in a spec.
 
 ## The dry-run rule

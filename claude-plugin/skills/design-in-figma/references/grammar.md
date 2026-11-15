@@ -31,6 +31,7 @@ the file; `client` names the file when several are connected (a connId, fileKey 
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` | — |
 | `createVariables` | `collection` (a local collection's name or id; made when none has it), `variables` (rows `[name, type, …a value per mode]`) | `modes` (mode names, in the rows' value order; none for a one-mode collection) |
 | `createStyles` | `styles` (rows `{name, kind: "paint" \| "text" \| "effect", set}`) | — |
+| `seedTokens` | `file` (the project's `tokens.dtcg.json` or `tokens.resolver.json`) | `collection` (a `tokens.dtcg.json`'s collection; `Tokens` by default) |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
 | `move` | `nodeId`, `parentId` | `index` (0 first; last when absent) |
@@ -53,6 +54,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
     `{id, key, unchanged: true}`.
   - `createVariables` `{id, result, modesAdded?, rows}` (the collection, `created` / `updated` / `unchanged`, then per
     row `[id, "created" | "updated" | "unchanged"]` in table order) · `createStyles` `{rows}` (per row `[id, …]`).
+  - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?, partly?}`
+    (`created` / `updated` list `[name, id]`, `unchanged` counts the rest; the styles table is `{styles: true, …}`).
   - `patch` `{id, unbound?}` · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
     the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
 - Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
@@ -247,6 +250,31 @@ local one is made beside it.
   would match two. A mode past the file plan's limit is refused by Figma, naming the plan.
 - Sent again, the reply says per row what changed; a failure anywhere in the batch removes what the tables made and
   sets back what they changed.
+
+### Tables from the project's token file
+
+`seedTokens {file, collection?}` makes the tables from a token file in the project; the MCP server reads it, so no value
+passes through the call. It goes first in a batch, like the tables; the 50-op limit counts the tables it makes.
+
+```json
+{"op": "seedTokens", "file": "src/theme/tokens.resolver.json"}
+{"op": "seedTokens", "file": "tokens.dtcg.json", "collection": "Theme"}
+```
+
+- Read: a DTCG file (`tokens.dtcg.json`, or hand-written DTCG) and a DTCG resolver with its set and context files
+  (`$ref`s next to it). Not read: CSS, Tailwind's `theme.css`, native token files. Every file must be inside the
+  project, JSON, at most 2 MB; a `$ref` that is a URL, absolute, or a `#` pointer is refused.
+- A resolver: each set is a collection, its modifier's contexts are the modes (the default first). A `tokens.dtcg.json`:
+  the modes are `$extensions["figma.com"].modes` (the default first: its `defaultMode`, else the mode whose value is the
+  `$value`), the collection is `collection`; tokens with other modes go into `<collection> (<mode> / <mode>)`, numbered
+  on a clash.
+- Names: the path joined with `/`; `{a.b}` is an alias of `a/b`. color → hex, dimension → px (rem × 16), number,
+  string, fontFamily, fontWeight, a boolean kept as a string token → boolean; `typography` → a text style, `shadow` → an
+  effect style, their `{ref}`s bound (a style has no modes: the default's value, a differing mode listed).
+- `unmapped` lists each token in no table, with why (gradient, duration, an alias to nothing, a loop, a token inside a
+  token, …). `partly` lists each token seeded only in part, with what was left out (a style's other modes,
+  extended-collection overrides, a name given twice). The dry run's `seedTokens` step has the tables' steps (with their
+  `plan`) under `tables`, then `unmapped` and `partly`; its `change` counts the two apart.
 
 ## Variable modes
 
