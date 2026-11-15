@@ -141,7 +141,9 @@ export interface DefsPlan {
 
 /** Plan the definitions of the component a re-send updates; `bad` hears what cannot change in place. */
 export function planDefs(owner: Owner, spec: TreeNodeSpec, refs: ResolvedRefs, bad: (m: string) => void): DefsPlan | null {
-  const defs = fileDefs(spec, refs);
+  // A swap default that did not resolve throws here; resolveRefs already reported it, so the batch is refused cleanly.
+  let defs: FileDef[];
+  try { defs = fileDefs(spec, refs); } catch { return null; }
   let current: ComponentPropertyDefinitions;
   try { current = owner.componentPropertyDefinitions; } catch { current = {}; }
   const have = new Map<string, { key: string; type: string; defaultValue: string | boolean; preferredValues?: InstanceSwapPreferredValue[] }>();

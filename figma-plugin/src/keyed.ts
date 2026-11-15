@@ -394,7 +394,13 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
       consent();
       const size = { w: root.width, h: root.height };
       const at = root.children.map((c) => [c, c.x, c.y] as const);
-      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), restore() { for (const [c, x, y] of at) if (!c.removed) { c.x = x; c.y = y; } if (root.width !== size.w || root.height !== size.h) root.resize(size.w, size.h); } });
+      const sizing = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
+      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), restore() {
+        for (const [c, x, y] of at) if (!c.removed) { c.x = x; c.y = y; }
+        // resize first: it makes both axes fixed, so the sizing modes are put back after it
+        if (root.width !== size.w || root.height !== size.h) root.resize(size.w, size.h);
+        if (sizing) { root.layoutSizingHorizontal = sizing.h; root.layoutSizingVertical = sizing.v; }
+      } });
       arrangeVariants(root, t.spec, built.filter((n): n is ComponentNode => n.type === "COMPONENT" && n.parent === root));
     }
     const synced = syncComponent(u.component.defs, plan.kept, made.pairs, consent, changes);

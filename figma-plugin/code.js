@@ -8024,7 +8024,12 @@
   };
   var sameJson = (a, b) => JSON.stringify(a === void 0 ? null : a) === JSON.stringify(b === void 0 ? null : b);
   function planDefs(owner, spec, refs2, bad) {
-    const defs = fileDefs(spec, refs2);
+    let defs;
+    try {
+      defs = fileDefs(spec, refs2);
+    } catch {
+      return null;
+    }
     let current3;
     try {
       current3 = owner.componentPropertyDefinitions;
@@ -9040,12 +9045,17 @@
         consent2();
         const size2 = { w: root.width, h: root.height };
         const at3 = root.children.map((c) => [c, c.x, c.y]);
+        const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
         changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
           for (const [c, x, y] of at3) if (!c.removed) {
             c.x = x;
             c.y = y;
           }
           if (root.width !== size2.w || root.height !== size2.h) root.resize(size2.w, size2.h);
+          if (sizing2) {
+            root.layoutSizingHorizontal = sizing2.h;
+            root.layoutSizingVertical = sizing2.v;
+          }
         } });
         arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
       }
