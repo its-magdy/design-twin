@@ -951,8 +951,8 @@
       }
       for (const k of Object.keys(d)) {
         if (d[k] === void 0 || DEF_FIELDS.indexOf(k) >= 0) continue;
-        const near = nearestNames(k, DEF_FIELDS);
-        out.push(p + "." + k + ": not a field of a property definition" + (near.length ? "; closest: " + quoteList(near) : "") + " (it takes type, default, preferredValues)");
+        const near2 = nearestNames(k, DEF_FIELDS);
+        out.push(p + "." + k + ": not a field of a property definition" + (near2.length ? "; closest: " + quoteList(near2) : "") + " (it takes type, default, preferredValues)");
       }
       const t = d.type;
       if (t === "VARIANT") {
@@ -987,8 +987,8 @@
       const x = v[k];
       if (x === void 0) continue;
       if (fields.indexOf(k) < 0) {
-        const near = nearestNames(k, fields);
-        return "." + k + ": not a field a property drives" + (near.length ? "; closest: " + quoteList(near) : "") + " (characters, visible, mainComponent)";
+        const near2 = nearestNames(k, fields);
+        return "." + k + ": not a field a property drives" + (near2.length ? "; closest: " + quoteList(near2) : "") + " (characters, visible, mainComponent)";
       }
       if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
     }
@@ -1134,8 +1134,8 @@
         return [];
       }
       if (!own(fragments, name)) {
-        const near = nearestNames(name, Object.keys(fragments));
-        say(path + ".use: no fragment '" + name + "'" + (near.length ? "; closest: " + quoteList(near) : "; define it under the root's `fragments`"));
+        const near2 = nearestNames(name, Object.keys(fragments));
+        say(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
         return [];
       }
       if (stack.indexOf(name) >= 0) {
@@ -1735,11 +1735,11 @@
       const at3 = path + "." + k;
       const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
       if (rule === void 0) {
-        const near = nearestNames(k, Object.keys(rules).filter((r) => {
+        const near2 = nearestNames(k, Object.keys(rules).filter((r) => {
           const x = rules[r];
           return x !== void 0 && !isRefuse(x);
         }));
-        out.push(at3 + ": not a field the write accepts" + (near.length ? "; closest: " + quoteList(near) : ""));
+        out.push(at3 + ": not a field the write accepts" + (near2.length ? "; closest: " + quoteList(near2) : ""));
       } else if (isRefuse(rule)) {
         out.push(at3 + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
       } else {
@@ -2010,8 +2010,8 @@
             const want = PROP_REF_TYPES[f];
             const has2 = comp.defs.get(prop);
             if (has2 === void 0) {
-              const near = nearestNames(prop, [...comp.defs.keys()]);
-              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near.length ? "; closest: " + quoteList(near) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+              const near2 = nearestNames(prop, [...comp.defs.keys()]);
+              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
               continue;
             }
             comp.used.add(prop);
@@ -2249,8 +2249,8 @@
       if (why !== void 0) problems.push(at3 + ": a patch cannot set it \u2014 " + why);
       else if (tree !== void 0) problems.push(at3 + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
       else {
-        const near = nearestNames(k, PATCH_FIELD_NAMES);
-        problems.push(at3 + ": not a field a patch sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+        const near2 = nearestNames(k, PATCH_FIELD_NAMES);
+        problems.push(at3 + ": not a field a patch sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
@@ -2377,8 +2377,8 @@
     if (!keys.length) return "is empty";
     for (const k of keys) {
       if (fields.indexOf(k) < 0) {
-        const near = nearestNames(k, fields);
-        return "." + k + ": not a field a variable binds to here" + (near.length ? "; closest: " + quoteList(near) : "");
+        const near2 = nearestNames(k, fields);
+        return "." + k + ": not a field a variable binds to here" + (near2.length ? "; closest: " + quoteList(near2) : "");
       }
       if (typeof v[k] !== "string" || !String(v[k]).trim()) return "." + k + " must be a variable's name, key or id";
     }
@@ -2441,8 +2441,8 @@
         if (!keys.length) return "is empty";
         for (const k of keys) {
           if (TEXT_STYLE_TOKEN_FIELDS.indexOf(k) < 0) {
-            const near = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
-            return "." + k + ": not a text style field a variable binds to" + (near.length ? "; closest: " + quoteList(near) : "");
+            const near2 = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
+            return "." + k + ": not a text style field a variable binds to" + (near2.length ? "; closest: " + quoteList(near2) : "");
           }
           const x = v[k];
           if (x !== null && (typeof x !== "string" || !x.trim())) return "." + k + " must be a variable's name, key or id, or null to unbind";
@@ -2476,8 +2476,8 @@
       const why = Object.prototype.hasOwnProperty.call(NOT_STYLED, k) ? NOT_STYLED[k] : void 0;
       if (why !== void 0) problems.push(at3 + ": a style edit cannot set it \u2014 " + why);
       else {
-        const near = nearestNames(k, STYLE_FIELD_NAMES);
-        problems.push(at3 + ": not a field a style edit sets" + (near.length ? "; closest: " + quoteList(near) : ""));
+        const near2 = nearestNames(k, STYLE_FIELD_NAMES);
+        problems.push(at3 + ": not a field a style edit sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
@@ -2633,8 +2633,8 @@
         continue;
       }
       if (!isTypeName(type)) {
-        const near = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
-        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near.length ? "; closest: " + quoteList(near) : ""));
+        const near2 = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
+        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near2.length ? "; closest: " + quoteList(near2) : ""));
         continue;
       }
       const was = names.get(name);
@@ -2727,8 +2727,8 @@
       }
       const extra = Object.keys(s).filter((k) => k !== "name" && k !== "kind" && k !== "set" && s[k] !== void 0);
       for (const k of extra) {
-        const near = nearestNames(k, ["name", "kind", "set"]);
-        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near.length ? "; closest: " + quoteList(near) : "") + ")");
+        const near2 = nearestNames(k, ["name", "kind", "set"]);
+        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near2.length ? "; closest: " + quoteList(near2) : "") + ")");
       }
       if (!nonEmpty3(s.name)) {
         problems.push(sp + ".name: must be the style's name (a non-empty string)");
@@ -2845,7 +2845,8 @@
     if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
     const { problems, summary, expanded } = checkTree(o.tree);
     if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
-    return { ...base, change: describeTree(expanded, o.page, summary), ...summary.warnings.length ? { warnings: summary.warnings } : {} };
+    const bind = o.bind === true ? "; `bind`: its raw colours, spacing, radii and text fonts are bound to the file's variables and text styles where exactly one equals them \u2014 decided by the file when it is applied (a dry run a plugin answers counts them)" : "";
+    return { ...base, change: describeTree(expanded, o.page, summary) + bind, ...summary.warnings.length ? { warnings: summary.warnings } : {} };
   }
   function patchPreview(o, index, missing) {
     const base = { index, op: o.op, effect: "overwrites", target: o.nodeId || null };
@@ -2984,10 +2985,12 @@
       ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum4, "a number", `${at3}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at3}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at3}.padding`),
-      opt(o, "index", isIndex, "a whole number \u2265 0", `${at3}.index`)
+      opt(o, "index", isIndex, "a whole number \u2265 0", `${at3}.index`),
+      opt(o, "bind", isBool, "a boolean", `${at3}.bind`)
     ]);
     if (typeErr !== null) return typeErr;
     if (o.treeFile !== void 0) return `\`${at3}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
+    if (o.bind !== void 0 && op !== "createTree") return `\`${at3}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
     const missing = missingWriteFields(op, o);
     if (missing.length) return `\`${at3}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {
@@ -7051,8 +7054,8 @@
       const hits = keys.indexOf(name) >= 0 ? [name] : keys.filter((k) => bare(k) === name);
       const key = hits[0];
       if (key === void 0) {
-        const near = nearestNames(name, keys.map(bare));
-        errors.push("component '" + component + "' has no property '" + name + "'" + (near.length ? "; closest: " + quoteList(near) : keys.length ? "" : " (it has none)"));
+        const near2 = nearestNames(name, keys.map(bare));
+        errors.push("component '" + component + "' has no property '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : keys.length ? "" : " (it has none)"));
         continue;
       }
       if (hits.length > 1) {
@@ -7064,8 +7067,8 @@
       if (def.type === "VARIANT") {
         const options = def.variantOptions || [];
         if (typeof value !== "string" || options.indexOf(value) < 0) {
-          const near = typeof value === "string" ? nearestNames(value, options) : options.slice(0, 3);
-          errors.push("property '" + name + "' of '" + component + "' has no value " + JSON.stringify(value) + (near.length ? "; closest: " + quoteList(near) : ""));
+          const near2 = typeof value === "string" ? nearestNames(value, options) : options.slice(0, 3);
+          errors.push("property '" + name + "' of '" + component + "' has no value " + JSON.stringify(value) + (near2.length ? "; closest: " + quoteList(near2) : ""));
           continue;
         }
       } else if (def.type === "BOOLEAN") {
@@ -7211,8 +7214,8 @@
           return { later: () => figma.variables.importVariableByKeyAsync(one.key) };
         }
         if (lib.length > 1) return { error: "variable '" + ref2 + "' matches " + lib.length + " library variables \u2014 pass one's key: " + lib.slice(0, 3).map((v) => "'" + v.name + "' in '" + v.libraryName + "' (" + v.key + ")").join(", ") };
-        const near = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
-        return none("variable", ref2, near, "in this file or an enabled library");
+        const near2 = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
+        return none("variable", ref2, near2, "in this file or an enabled library");
       },
       async textStyle(ref2) {
         if (!styles) styles = figma.getLocalTextStylesAsync();
@@ -8096,8 +8099,8 @@
     const first2 = hits[0];
     if (hits.length === 1 && first2) return { ok: first2 };
     if (hits.length > 1) return { error: "matches " + hits.length + " layers of " + label(source) + "; name one by its id: " + hits.slice(0, 3).map(label).join(", ") };
-    const near = nearestNames(ref2, all.map((n) => n.name));
-    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near.length ? "; closest: " + quoteList(near) : "") };
+    const near2 = nearestNames(ref2, all.map((n) => n.name));
+    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near2.length ? "; closest: " + quoteList(near2) : "") };
   }
   function pageOf2(n) {
     let p = n.parent;
@@ -8661,9 +8664,251 @@
     return null;
   }
 
+  // ../bridge/src/bind-values.ts
+  var AMBIGUOUS_SAMPLES = 5;
+  var SCOPES = {
+    fill: ["ALL_SCOPES", "ALL_FILLS", "FRAME_FILL"],
+    text: ["ALL_SCOPES", "ALL_FILLS", "TEXT_FILL"],
+    stroke: ["ALL_SCOPES", "STROKE_COLOR"],
+    spacing: ["ALL_SCOPES", "GAP"],
+    radius: ["ALL_SCOPES", "CORNER_RADIUS"]
+  };
+  var WORDS = {
+    fill: ["bg", "background", "surface", "fill"],
+    text: ["text", "fg", "foreground", "content"],
+    stroke: ["border", "stroke", "outline", "divider"],
+    spacing: ["space", "spacing", "gap", "padding", "inset", "gutter"],
+    radius: ["radius", "radii", "round", "corner"]
+  };
+  function wordsOf(name) {
+    return name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w !== "");
+  }
+  var hasWordFor = (name, kind) => wordsOf(name).some((w) => WORDS[kind].some((k) => w.indexOf(k) === 0));
+  var allows = (v, kind) => v.scopes.some((s) => SCOPES[kind].indexOf(s) >= 0);
+  function canonicalHex(hex2) {
+    const c = parseHexColor(hex2);
+    if (!c) return null;
+    return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a === void 0 ? 1 : c.a });
+  }
+  var isObj8 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var NUMBER_TOLERANCE = 0.01;
+  function resolveAll(list) {
+    const byRef = /* @__PURE__ */ new Map();
+    for (const v of list) if (!byRef.has(v.ref)) byRef.set(v.ref, v);
+    const out = /* @__PURE__ */ new Map();
+    for (const v of list) {
+      const chain = [];
+      let at3 = v;
+      let value = null;
+      const seen = /* @__PURE__ */ new Set();
+      while (at3) {
+        if (seen.has(at3.ref)) {
+          value = null;
+          break;
+        }
+        seen.add(at3.ref);
+        if (at3.aliasOf === void 0) {
+          value = at3.value === void 0 ? null : at3.value;
+          break;
+        }
+        chain.push(at3.aliasOf);
+        at3 = byRef.get(at3.aliasOf);
+        if (!at3) value = null;
+      }
+      out.set(v.ref, { value, chain });
+    }
+    return out;
+  }
+  function chooser(list, eq) {
+    const resolved = resolveAll(list);
+    const usable = list.filter((v) => v.candidate !== false);
+    return (value, kind) => {
+      let cands = usable.filter((v) => {
+        const r = resolved.get(v.ref);
+        return r !== void 0 && r.value !== null && eq(r.value, value);
+      });
+      cands = cands.filter((v) => allows(v, kind));
+      if (cands.length > 1) {
+        const named = cands.filter((v) => hasWordFor(v.name, kind));
+        if (named.length) cands = named;
+      }
+      if (cands.length > 1) {
+        const reached = /* @__PURE__ */ new Set();
+        for (const v of cands) {
+          const r = resolved.get(v.ref);
+          if (r) for (const x of r.chain) reached.add(x);
+        }
+        const top = cands.filter((v) => !reached.has(v.ref));
+        if (top.length) cands = top;
+      }
+      const first2 = cands[0];
+      if (cands.length === 1 && first2) return { one: first2 };
+      return cands.length ? { many: cands } : { none: true };
+    };
+  }
+  function textFont(font) {
+    if (isObj8(font.variationSettings) && Object.keys(font.variationSettings).length) return null;
+    const size2 = typeof font.size === "number" ? font.size : 12;
+    const lh = isObj8(font.lineHeight) ? font.lineHeight : null;
+    const lineHeight = !lh || lh.unit === "auto" ? null : typeof lh.value !== "number" ? null : lh.unit === "percent" ? lh.value * size2 / 100 : lh.value;
+    const ls = isObj8(font.letterSpacing) ? font.letterSpacing : null;
+    const letterSpacing = !ls || typeof ls.value !== "number" ? 0 : ls.unit === "percent" ? ls.value * size2 / 100 : ls.value;
+    return {
+      family: typeof font.family === "string" ? font.family : DEFAULT_FONT.family,
+      style: typeof font.weight === "string" ? font.weight : DEFAULT_FONT.weight,
+      size: size2,
+      lineHeight,
+      letterSpacing,
+      textCase: typeof font.case === "string" ? font.case : "original",
+      decoration: typeof font.decoration === "string" ? font.decoration : "none"
+    };
+  }
+  var near = (a, b) => Math.abs(a - b) < NUMBER_TOLERANCE;
+  var sameFont = (a, b) => a.family === b.family && a.style === b.style && near(a.size, b.size) && (a.lineHeight === null ? b.lineHeight === null : b.lineHeight !== null && near(a.lineHeight, b.lineHeight)) && near(a.letterSpacing, b.letterSpacing) && a.textCase === b.textCase && a.decoration === b.decoration;
+  function textStyleEntry(ref2, name, s) {
+    const lineHeight = s.lineHeight.unit === "AUTO" || typeof s.lineHeight.value !== "number" ? null : s.lineHeight.unit === "PERCENT" ? s.lineHeight.value * s.size / 100 : s.lineHeight.value;
+    const letterSpacing = s.letterSpacing.unit === "PERCENT" ? s.letterSpacing.value * s.size / 100 : s.letterSpacing.value;
+    return { ref: ref2, name, family: s.family, style: s.style, size: s.size, lineHeight, letterSpacing, textCase: s.textCase.toLowerCase(), decoration: s.textDecoration.toLowerCase() };
+  }
+  var STYLE_SET_FIELDS = ["family", "weight", "weightValue", "size", "lineHeight", "letterSpacing", "case", "decoration", "variationSettings"];
+  var SIDES3 = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+  var CORNERS2 = [["tl", "topLeftRadius"], ["tr", "topRightRadius"], ["br", "bottomRightRadius"], ["bl", "bottomLeftRadius"]];
+  function bindSpec(spec, table) {
+    const copy2 = JSON.parse(JSON.stringify(spec));
+    const outcome = { bound: 0, ambiguous: { count: 0, samples: [] } };
+    const color = chooser(table.colors, (a, b) => a === b);
+    const number = chooser(table.numbers, (a, b) => typeof a === "number" && typeof b === "number" && near(a, b));
+    const unsure = (path, field, value, many) => {
+      outcome.ambiguous.count++;
+      if (outcome.ambiguous.samples.length < AMBIGUOUS_SAMPLES) outcome.ambiguous.samples.push({ path, field, value, candidates: many.slice(0, 3).map((v) => v.name) });
+    };
+    const bindOne = (pick, value, kind, path, field) => {
+      const p = pick(value, kind);
+      if ("one" in p) return p.one.ref;
+      if ("many" in p) unsure(path, field, value, p.many);
+      return null;
+    };
+    const tokensOf = (n) => {
+      if (!n.tokens) n.tokens = {};
+      return n.tokens;
+    };
+    const walk = (n, path) => {
+      const kind = nodeKind(n);
+      if (kind === "CLONE" || kind === "INSTANCE" || kind === null) return;
+      const t = n.tokens ? n.tokens : {};
+      (n.fills || []).forEach((p, i) => {
+        if (p.type !== "solid" || p.tokens !== void 0 || p.opacity !== void 0 && p.opacity !== 1) return;
+        const hex2 = canonicalHex(p.color);
+        if (hex2 === null) return;
+        const ref2 = bindOne(color, hex2, kind === "TEXT" ? "text" : "fill", path, "fills[" + i + "]");
+        if (ref2 === null) return;
+        p.tokens = { color: ref2 };
+        outcome.bound++;
+      });
+      if (kind === "TEXT") {
+        const font = n.font;
+        if (n.fills === void 0 && t.fills === void 0 && font && font.color !== void 0) {
+          const hex2 = canonicalHex(font.color);
+          const ref2 = hex2 === null ? null : bindOne(color, hex2, "text", path, "font.color");
+          if (ref2 !== null) {
+            tokensOf(n).fills = ref2;
+            outcome.bound++;
+          }
+        }
+        if (!(n.styles && n.styles.text !== void 0)) {
+          const want = textFont(isObj8(font) ? font : {});
+          if (want) {
+            const hits = table.textStyles.filter((s) => sameFont(s, want));
+            const one = hits[0];
+            if (hits.length === 1 && one) {
+              n.styles = { text: one.ref };
+              if (font) {
+                for (const k of STYLE_SET_FIELDS) delete font[k];
+                if (!Object.keys(font).length) delete n.font;
+              }
+              outcome.bound++;
+            } else if (hits.length > 1) unsure(path, "styles.text", want.family + " " + want.style + " " + want.size, hits);
+          }
+        }
+      }
+      const st = n.strokes;
+      if (st && st.colors && st.colors.length && t.strokes === void 0) {
+        const refs2 = [];
+        for (const [i, c] of st.colors.entries()) {
+          const hex2 = canonicalHex(c);
+          const ref2 = hex2 === null ? null : bindOne(color, hex2, "stroke", path, "strokes.colors[" + i + "]");
+          if (ref2 === null) break;
+          refs2.push(ref2);
+        }
+        if (refs2.length === st.colors.length) {
+          const only = refs2[0];
+          tokensOf(n).strokes = refs2.length === 1 && only !== void 0 ? only : refs2;
+          outcome.bound += refs2.length;
+        }
+      }
+      if (kind === "FRAME") {
+        const l = n.layout;
+        if (l && l.display === "flex") {
+          if (l.gap !== void 0 && t.itemSpacing === void 0) {
+            const ref2 = bindOne(number, l.gap, "spacing", path, "itemSpacing");
+            if (ref2 !== null) {
+              tokensOf(n).itemSpacing = ref2;
+              outcome.bound++;
+            }
+          }
+          const track = l.flexDirection === "column" ? l.columnGap : l.rowGap;
+          if (l.flexWrap !== void 0 && track !== void 0 && t.counterAxisSpacing === void 0) {
+            const ref2 = bindOne(number, track, "spacing", path, "counterAxisSpacing");
+            if (ref2 !== null) {
+              tokensOf(n).counterAxisSpacing = ref2;
+              outcome.bound++;
+            }
+          }
+          const pad = l.padding;
+          if (pad) SIDES3.forEach((side, i) => {
+            const v = pad[i];
+            if (v === void 0 || t[side] !== void 0) return;
+            const ref2 = bindOne(number, v, "spacing", path, side);
+            if (ref2 !== null) {
+              tokensOf(n)[side] = ref2;
+              outcome.bound++;
+            }
+          });
+        }
+        const r = n.radius;
+        if (typeof r === "number" && CORNERS2.every(([, f]) => t[f] === void 0)) {
+          const ref2 = bindOne(number, r, "radius", path, "radius");
+          if (ref2 !== null) {
+            const tk = tokensOf(n);
+            for (const [, f] of CORNERS2) tk[f] = ref2;
+            outcome.bound++;
+          }
+        } else if (isObj8(r)) {
+          for (const [k, f] of CORNERS2) {
+            const v = r[k];
+            if (typeof v !== "number" || t[f] !== void 0) continue;
+            const ref2 = bindOne(number, v, "radius", path, f);
+            if (ref2 !== null) {
+              tokensOf(n)[f] = ref2;
+              outcome.bound++;
+            }
+          }
+        }
+      }
+      (n.children || []).forEach((c, i) => walk(c, path + ".children[" + i + "]"));
+    };
+    walk(copy2, "tree");
+    return { spec: copy2, outcome };
+  }
+  function bindCounts(outcome, instanced, unbound) {
+    const out = { bound: outcome.bound, instanced, unbound };
+    if (outcome.ambiguous.count) out.ambiguous = { count: outcome.ambiguous.count, samples: outcome.ambiguous.samples };
+    return out;
+  }
+
   // src/tree.ts
   var PLACE_GAP = 100;
-  async function resolveTreeOps(ops) {
+  async function resolveTreeOps(ops, bound = /* @__PURE__ */ new Map()) {
     const targets = /* @__PURE__ */ new Map();
     const specs = /* @__PURE__ */ new Map();
     const cloneRefs = [];
@@ -8680,8 +8925,8 @@
       let p = loaded3.get(key);
       if (!p) {
         p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
-          const near = nearestNames(family + " " + weight, await availableNames());
-          return "font '" + family + " " + weight + "' is not available in this file" + (near.length ? "; closest: " + quoteList(near) : "");
+          const near2 = nearestNames(family + " " + weight, await availableNames());
+          return "font '" + family + " " + weight + "' is not available in this file" + (near2.length ? "; closest: " + quoteList(near2) : "");
         });
         loaded3.set(key, p);
       }
@@ -8698,7 +8943,8 @@
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
       };
-      const { problems: invalid, summary, expanded: spec, labels } = checkTree(op.tree);
+      const b = bound.get(index);
+      const { problems: invalid, summary, expanded: spec, labels } = checkTree(b ? b.spec : op.tree);
       if (invalid.length || !spec) {
         bad("the tree spec did not pass its check");
         continue;
@@ -8717,7 +8963,7 @@
       for (const c of clones.values()) cloneTargets.push(c);
       if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
       await page.ok.loadAsync();
-      targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs() });
+      targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {} });
     }
     const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
     problems.push(...r.problems);
@@ -9163,7 +9409,7 @@
   }
 
   // src/keyed.ts
-  var isObj8 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj9 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
@@ -9223,7 +9469,7 @@
     };
     for (const [index, op] of ops.entries()) {
       const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
-      if (op.op !== "createTree" || !isObj8(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
+      if (op.op !== "createTree" || !isObj9(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
       const key = comp ? componentKey(comp.name) : String(op.tree.key);
       const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
       const bad = (message) => {
@@ -9345,8 +9591,8 @@
   var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
   function boundTo(n, k) {
     const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj8(bv) ? bv[k] : void 0;
-    return isObj8(a) && typeof a.id === "string" ? a.id : null;
+    const a = isObj9(bv) ? bv[k] : void 0;
+    return isObj9(a) && typeof a.id === "string" ? a.id : null;
   }
   function applyExtras(n, s, fields, only, variables, changes) {
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
@@ -9639,10 +9885,10 @@
         if (planned && m.kind === "none") return { error: "style '" + ref2 + "' is new in this batch (" + plannedWhere(planned) + "): give its fields in that row" };
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return { error: "style '" + ref2 + "' matches " + m.matches.length + " styles \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((st) => "'" + st.name + "' (" + st.type.toLowerCase() + ", " + st.id + ")").join(", ") };
-        const near = nearestNames(ref2, pool.map((st) => st.name));
+        const near2 = nearestNames(ref2, pool.map((st) => st.name));
         const elsewhere = kind ? all.filter((st) => st.name === ref2)[0] : void 0;
         if (elsewhere) return { error: "'" + ref2 + "' is a " + elsewhere.type.toLowerCase() + " style, and these fields are a " + kind + " style's" };
-        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near.length ? "; closest: " + quoteList(near) : "") };
+        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near2.length ? "; closest: " + quoteList(near2) : "") };
       }
     };
   }
@@ -10307,6 +10553,187 @@
     return warnings.length ? { steps: steps2, warnings } : { steps: steps2 };
   }
 
+  // src/bind.ts
+  var bindsOf = (ops) => {
+    const out = [];
+    ops.forEach((op, i) => {
+      if (op.op !== "createTree" || op.bind !== true) return;
+      const c = checkTree(op.tree);
+      if (!c.problems.length && c.expanded) out.push([i, c.expanded]);
+    });
+    return out;
+  };
+  async function bindTreeOps(ops, creates) {
+    const out = /* @__PURE__ */ new Map();
+    const todo = bindsOf(ops);
+    if (!todo.length) return out;
+    const table = await bindTable(creates);
+    for (const [i, spec] of todo) out.set(i, bindSpec(spec, table));
+    return out;
+  }
+  async function bindImpact(ops, creates) {
+    const steps2 = [];
+    for (const [index, b] of await bindTreeOps(ops, creates)) {
+      const { summary } = checkTree(b.spec);
+      steps2.push({ index, op: "createTree", bind: bindCounts(b.outcome, summary.instances, summary.unbound) });
+    }
+    return steps2;
+  }
+  var getF3 = (o, k) => Reflect.get(o, k);
+  function aliasId(x) {
+    if (!x || typeof x !== "object" || getF3(x, "type") !== "VARIABLE_ALIAS") return null;
+    const id = getF3(x, "id");
+    return typeof id === "string" ? id : null;
+  }
+  function hexOfRgba(x) {
+    if (!x || typeof x !== "object") return null;
+    const r = getF3(x, "r"), g = getF3(x, "g"), b = getF3(x, "b"), a = getF3(x, "a");
+    if (typeof r !== "number" || typeof g !== "number" || typeof b !== "number") return null;
+    return formatHex({ r: r * 255, g: g * 255, b: b * 255, a: typeof a === "number" ? a : 1 });
+  }
+  function entryOf(ref2, name, type, x, scopes, candidate) {
+    const base = candidate ? { ref: ref2, name, scopes } : { ref: ref2, name, scopes, candidate: false };
+    const to = aliasId(x);
+    if (to !== null) return { ...base, aliasOf: to };
+    if (type === "COLOR") {
+      const hex2 = hexOfRgba(x);
+      return hex2 === null ? null : { ...base, value: hex2 };
+    }
+    return typeof x === "number" ? { ...base, value: x } : null;
+  }
+  async function bindTable(creates) {
+    const colors = /* @__PURE__ */ new Map();
+    const numbers = /* @__PURE__ */ new Map();
+    const listFor = (t) => t === "COLOR" ? colors : t === "FLOAT" ? numbers : null;
+    const defaults = /* @__PURE__ */ new Map();
+    const defaultModeOf = async (collectionId) => {
+      const known = defaults.get(collectionId);
+      if (known !== void 0) return known;
+      let c = null;
+      try {
+        c = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+      } catch {
+        c = null;
+      }
+      if (!c) return null;
+      defaults.set(collectionId, c.defaultModeId);
+      return c.defaultModeId;
+    };
+    for (const c of await figma.variables.getLocalVariableCollectionsAsync()) defaults.set(c.id, c.defaultModeId);
+    const locals = await figma.variables.getLocalVariablesAsync();
+    const pending2 = [];
+    const add = async (v, candidate) => {
+      const list = listFor(v.resolvedType);
+      if (!list || list.has(v.id)) return;
+      const mode = await defaultModeOf(v.variableCollectionId);
+      if (mode === null) return;
+      const e = entryOf(v.id, v.name, v.resolvedType, v.valuesByMode[mode], v.scopes, candidate);
+      if (!e) return;
+      list.set(v.id, e);
+      if (e.aliasOf !== void 0) pending2.push(e.aliasOf);
+    };
+    for (const v of locals) await add(v, !v.remote);
+    const localNames = /* @__PURE__ */ new Map();
+    for (const v of locals) localNames.set(v.name, (localNames.get(v.name) || 0) + 1);
+    const targets = creates ? [...creates.targets.values()] : [];
+    const plannedNames = /* @__PURE__ */ new Map();
+    for (const t of targets) if (t.kind === "variables") {
+      for (const r of t.rows) if (!r.existing) plannedNames.set(r.name, (plannedNames.get(r.name) || 0) + 1);
+    }
+    for (const t of targets) {
+      if (t.kind !== "variables") continue;
+      const coll = t.collection;
+      const j = coll ? t.modes.findIndex((m) => m.modeId === coll.defaultModeId) : 0;
+      for (const r of t.rows) {
+        const list = listFor(r.type);
+        if (!list) continue;
+        const cell = j >= 0 ? r.values[j] : r.existing ? void 0 : r.values[0];
+        const at3 = j >= 0 ? j : 0;
+        if (cell === void 0) continue;
+        const ref2 = r.existing ? r.existing.id : r.name;
+        const unique = r.existing !== null || !localNames.get(r.name) && plannedNames.get(r.name) === 1;
+        const scopes = r.existing ? r.existing.scopes : ["ALL_SCOPES"];
+        const base = unique ? { ref: ref2, name: r.name, scopes } : { ref: ref2, name: r.name, scopes, candidate: false };
+        let e = null;
+        if (typeof cell === "object") {
+          const target = r.targets[at3];
+          if (target && "row" in target) e = { ...base, aliasOf: target.row.existing ? target.row.existing.id : target.row.name };
+          else if (target && creates) {
+            const v = creates.refs.variables.get(target.ref);
+            if (v) {
+              e = { ...base, aliasOf: v.id };
+              pending2.push(v.id);
+            }
+          }
+        } else if (r.type === "COLOR") {
+          const hex2 = canonicalHex(cell);
+          if (hex2 !== null) e = { ...base, value: hex2 };
+        } else if (typeof cell === "number") e = { ...base, value: cell };
+        if (e) list.set(ref2, e);
+        else list.delete(ref2);
+      }
+    }
+    for (let hops = 0; pending2.length && hops < 200; hops++) {
+      const id = pending2.shift();
+      if (id === void 0 || colors.has(id) || numbers.has(id)) continue;
+      let v = null;
+      try {
+        v = await figma.variables.getVariableByIdAsync(id);
+      } catch {
+        v = null;
+      }
+      if (v) await add(v, false);
+    }
+    const styles = /* @__PURE__ */ new Map();
+    const fileStyles = await figma.getLocalTextStylesAsync();
+    const styleNames = /* @__PURE__ */ new Map();
+    for (const st of fileStyles) {
+      styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
+      if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
+      styles.set(st.id, textStyleEntry(st.id, st.name, {
+        family: st.fontName.family,
+        style: st.fontName.style,
+        size: st.fontSize,
+        lineHeight: st.lineHeight,
+        letterSpacing: st.letterSpacing,
+        textCase: st.textCase,
+        textDecoration: st.textDecoration
+      }));
+    }
+    const plannedStyles2 = /* @__PURE__ */ new Map();
+    for (const t of targets) if (t.kind === "styles") {
+      for (const s of t.rows) if (s.row.kind === "text" && !s.existing) plannedStyles2.set(s.row.name, (plannedStyles2.get(s.row.name) || 0) + 1);
+    }
+    for (const t of targets) {
+      if (t.kind !== "styles") continue;
+      for (const s of t.rows) {
+        if (s.row.kind !== "text") continue;
+        const set = s.row.set;
+        const ref2 = s.existing ? s.existing.id : s.row.name;
+        const tokens = set.tokens || {};
+        const boundAny = Object.keys(tokens).some((k) => Reflect.get(tokens, k) !== void 0 && Reflect.get(tokens, k) !== null);
+        const unique = s.existing !== null || !styleNames.get(s.row.name) && plannedStyles2.get(s.row.name) === 1;
+        if (boundAny || !unique) {
+          styles.delete(ref2);
+          continue;
+        }
+        const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
+        const lh = set.lineHeight;
+        const ls = set.letterSpacing;
+        styles.set(ref2, textStyleEntry(ref2, s.row.name, {
+          family: set.font !== void 0 ? set.font : was ? was.fontName.family : "Inter",
+          style: set.weight !== void 0 ? set.weight : was ? was.fontName.style : "Regular",
+          size: set.size !== void 0 ? set.size : was ? was.fontSize : 12,
+          lineHeight: lh ? lh.unit === "auto" || lh.value === void 0 ? { unit: "AUTO" } : { unit: lh.unit === "px" ? "PIXELS" : "PERCENT", value: lh.value } : was ? was.lineHeight : { unit: "AUTO" },
+          letterSpacing: ls ? { unit: ls.unit === "px" ? "PIXELS" : "PERCENT", value: ls.value } : was ? was.letterSpacing : { unit: "PERCENT", value: 0 },
+          textCase: set.case !== void 0 ? set.case : was ? was.textCase : "ORIGINAL",
+          textDecoration: set.decoration !== void 0 ? set.decoration : was ? was.textDecoration : "NONE"
+        }));
+      }
+    }
+    return { colors: [...colors.values()], numbers: [...numbers.values()], textStyles: [...styles.values()] };
+  }
+
   // src/creates.ts
   var isCreateOp = (op) => CREATE_OPS.indexOf(op.op) >= 0;
   var CreateFailed = class extends Error {
@@ -10316,10 +10743,10 @@
       this.reason = reason;
     }
   };
-  var getF3 = (o, k) => Reflect.get(o, k);
-  function aliasId(x) {
-    if (!x || typeof x !== "object" || getF3(x, "type") !== "VARIABLE_ALIAS") return null;
-    const id = getF3(x, "id");
+  var getF4 = (o, k) => Reflect.get(o, k);
+  function aliasId2(x) {
+    if (!x || typeof x !== "object" || getF4(x, "type") !== "VARIABLE_ALIAS") return null;
+    const id = getF4(x, "id");
     return typeof id === "string" ? id : null;
   }
   var STYLE_TYPE = { paint: "PAINT", text: "TEXT", effect: "EFFECT" };
@@ -10582,7 +11009,7 @@
       const out2 = [];
       for (const m of Object.keys(v.valuesByMode)) {
         if (skip.has(m)) continue;
-        const a = aliasId(v.valuesByMode[m]);
+        const a = aliasId2(v.valuesByMode[m]);
         if (a) out2.push("id:" + a);
       }
       return out2;
@@ -10925,7 +11352,8 @@
     const sources = await writeImpact(ops);
     const creates = await createImpact(ops);
     const components2 = await componentImpact(ops);
-    const steps2 = [...sources.steps, ...creates.steps, ...components2].sort((a, b) => a.index - b.index);
+    const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
+    const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds].sort((a, b) => a.index - b.index);
     return sources.warnings ? { steps: steps2, warnings: sources.warnings } : { steps: steps2 };
   }
 
@@ -11337,7 +11765,7 @@
       const creates2 = await resolveCreateOps(list);
       setBatchPlan(creates2.plan);
       const modes2 = await resolveModeOps(list);
-      const trees2 = await resolveTreeOps(list);
+      const trees2 = await resolveTreeOps(list, await bindTreeOps(list, creates2));
       const keyed = await resolveKeyed(list, trees2.targets);
       const patches2 = await resolvePatchOps(list);
       const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
@@ -11447,6 +11875,12 @@
         }, changes);
       } catch (e) {
         return fail(i, op, e);
+      }
+      const bound = trees.targets.get(i);
+      const row = rows[i];
+      if (bound && bound.bind && row) {
+        row.bind = bound.bind;
+        delete row.unbound;
       }
     }
     for (const [i, t] of structure.deletes) {

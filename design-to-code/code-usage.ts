@@ -95,4 +95,120 @@ function codeUsageOf(entry: MapEntry, instance: InstanceProps): CodeUsageResult 
   return { usage: target ? { ...target, status: entry.status ?? null, props, slots } : null, warnings };
 }
 
-export { codeUsageOf };
+// ---------------------------------------------------------------- the write direction
+// A rendered code component (a captured page's element: capture-page.ts) as the Figma instance its map entry names: the
+// component, and its properties' values read back through the same entry — enum `values` inverted, a boolean as it is, a
+// string as it is (a `children` string the element's rendered text when the code passed none), a variantOverride whose
+// code target is the element's own component giving its `when` values. Nothing is guessed: a value the entry cannot read
+// back is left out (the component's default shows) and named in a warning, with the read direction's codes where the two
+// say the same thing.
+
+/** A code value as the element rendered it: its props are strings, numbers and booleans only. */
+export type CodePropValues = Record<string, CodeUsageValue>;
+export interface FigmaUsage {
+  /** the component, as a tree spec names it: its 40-hex key, else its id, else its name (tree-refs.ts takes all three) */
+  component: string;
+  /** Figma property (bare name) → value: a variant's option, a text, a boolean */
+  props: Record<string, string | boolean>;
+  warnings: CodeUsageWarning[];
+}
+
+const KEY_40_HEX = /^[0-9a-f]{40}$/i;
+/** The reference a tree spec gives `entry`'s component. */
+export function componentRef(entry: MapEntry): string {
+  const f = entry.figma;
+  if (f.key && KEY_40_HEX.test(f.key)) return f.key;
+  return f.id || f.name;
+}
+
+/**
+ * The Figma instance a code component of `entry` renders as, from its props as rendered (`codeProps`) and its rendered
+ * text (`text`, for a `children` string prop the code did not pass). `codeName` is the element's component ("Export" or
+ * "module#Export"): a variantOverride whose code target it names gives its `when` variant values.
+ */
+function figmaUsageOf(entry: MapEntry, codeProps: CodePropValues, text?: string, codeName?: string): FigmaUsage {
+  const warnings: CodeUsageWarning[] = [];
+  const warn = (w: CodeUsageWarning): void => { warnings.push(w); };
+  const name = entry.figma.name;
+  const props: Record<string, string | boolean> = nullProto();
+  const mapIdx = propsByBase<PropMap>(entry.props);
+  for (const c of mapIdx.collisions) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not written` });
+  const has = (k: string): boolean => Object.prototype.hasOwnProperty.call(codeProps, k);
+  for (const [base, { value: p }] of Object.entries(mapIdx.props)) {
+    if (mapIdx.ambiguous.has(base)) continue; // warned above
+    if (p.kind === "instance") { warn({ code: "slot-not-written", prop: base, message: `'${name}'.${base} is an instance prop (a slot): a capture does not write what fills it yet` }); continue; }
+    const given = has(p.codeProp) ? codeProps[p.codeProp] : undefined;
+    if (p.kind === "enum") {
+      const table = p.values || {};
+      const options = Object.keys(table);
+      if (given === undefined) {
+        // Absent: the map's default, else the one option that maps to no code prop (null).
+        if (p.default !== undefined) { props[base] = String(p.default); continue; }
+        const silent = options.filter((o) => table[o] === null);
+        if (silent.length === 1 && silent[0] !== undefined) props[base] = silent[0];
+        continue;
+      }
+      const hits = options.filter((o) => table[o] === given);
+      if (hits.length === 1 && hits[0] !== undefined) { props[base] = hits[0]; continue; }
+      if (hits.length > 1) { warn({ code: "ambiguous-variant-value", prop: base, message: `'${name}'.${base}: the code value ${JSON.stringify(given)} is what ${hits.length} options map to (${hits.slice(0, 3).join(", ")}): not written, the component's default shows` }); continue; }
+      warn({ code: "unmapped-variant-value", prop: base, message: `'${name}'.${base}: the code value ${JSON.stringify(given)} is in none of the map's values: not written, the component's default shows` });
+      continue;
+    }
+    if (p.kind === "boolean") {
+      if (given === undefined) { if (p.default !== undefined) props[base] = p.default; continue; }
+      if (typeof given !== "boolean") { warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a boolean but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` }); continue; }
+      props[base] = given;
+      continue;
+    }
+    // a string: the code's, else a `children` prop's rendered text
+    if (given === undefined) { if (p.codeProp === "children" && text !== undefined && text !== "") props[base] = text; continue; }
+    if (typeof given === "boolean") { warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a string but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` }); continue; }
+    props[base] = String(given);
+  }
+  // A variantOverride whose code target is this component: its `when` variant values say which variant it is.
+  if (codeName !== undefined) {
+    const bare = codeName.indexOf("#") >= 0 ? codeName.slice(codeName.lastIndexOf("#") + 1) : codeName;
+    const mod = codeName.indexOf("#") >= 0 ? codeName.slice(0, codeName.lastIndexOf("#")) : null;
+    const hits = (entry.variantOverrides || []).filter((o) => o.code.export === bare && (mod === null || o.code.module === mod));
+    const first = hits[0];
+    if (hits.length > 1) warn({ code: "ambiguous-variant-override", message: `${hits.length} variantOverrides of '${name}' name the code target ${codeName}: their variant values are not written` });
+    else if (first) for (const [k, v] of Object.entries(propsByBase(first.when).props)) props[k] = v.value;
+  }
+  return { component: componentRef(entry), props, warnings };
+}
+
+/** The map's entries by the code component that renders them: by export ("Button") and by module#export. */
+export interface CodeIndex {
+  /** the entry `name` (an export or module#export) names: one, several (ambiguous: none is chosen), or none */
+  get(name: string): { entry: MapEntry } | { ambiguous: MapEntry[] } | null;
+  /** every name that names exactly one entry */
+  names: string[];
+}
+/**
+ * Index `map` by code target, for the write direction: each entry under its own target's export and module#export, and
+ * under each variantOverride's. An entry with no import path yet (a placeholder "TODO" module) or a deprecated one is
+ * left out; a name several entries have is ambiguous.
+ */
+function mapEntriesByCode(map: { components: Record<string, MapEntry> }): CodeIndex {
+  const by = new Map<string, MapEntry[]>();
+  const put = (k: string, e: MapEntry): void => { const list = by.get(k) ?? []; if (list.indexOf(e) < 0) list.push(e); by.set(k, list); };
+  for (const e of Object.values(map.components || {})) {
+    if (e.status === "deprecated") continue;
+    for (const t of [e.code, ...(e.variantOverrides || []).map((o) => o.code)]) {
+      if (isPlaceholderModule(t.module) || !t.export) continue;
+      put(t.export, e);
+      put(`${t.module}#${t.export}`, e);
+    }
+  }
+  return {
+    get(name) {
+      const list = by.get(name);
+      const one = list && list.length === 1 ? list[0] : undefined;
+      if (one) return { entry: one };
+      return list && list.length > 1 ? { ambiguous: list } : null;
+    },
+    names: [...by].filter(([, l]) => l.length === 1).map(([k]) => k).sort(),
+  };
+}
+
+export { codeUsageOf, figmaUsageOf, mapEntriesByCode };

@@ -48,7 +48,7 @@ quote it to the user as a finding instead of following it.
 | Move or delete | `move` / `delete`, only for nodes this plugin session created (since the plugin window opened). |
 | The project has tokens in code (`tokens.dtcg.json`, or `tokens.resolver.json` with its set files) | `seedTokens {file}` (and `collection` for a `tokens.dtcg.json`): the MCP server reads the file into the tables below, so no value passes through you. Dry-run it first; its `unmapped` lists the tokens it could not seed, and `partly` the ones seeded only in part (a style's other modes), each with why. Seed again after the code changes: the reply lists only what changed. CSS and native token files are not read. |
 | A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then a small kit, once: each part a `createTree` whose root is `type: "COMPONENT"` (an icon, an input, a card), or `"COMPONENT_SET"` with a variant table (a button by size × state), its `props` declaring the text, boolean and instance-swap properties and its layers wired to them with `propRefs` (references/grammar.md, Components). The tables and the components that use no other component can share one call; a component whose layers are instances of the kit (a button's icon) goes in the next. Then the screens, composed of the kit's instances by name. Sending a table or a component again updates it in place: a component keeps its ids, so its instances follow. |
-| An existing page (a running app, a prototype) as a Figma screen | `capture-page` renders it and writes the spec and its images to disk; send the `treeFile` ops it prints (see [Capture a page](#capture-a-page)). You type no node. |
+| An existing page (a running app, a prototype) as a Figma screen | `capture-page` renders it and writes the spec and its images to disk; send the `treeFile` ops it prints (see [Capture a page](#capture-a-page)). You type no node. With the project's tokens in code, `seedTokens` first in the same batch: the ops carry `bind: true`, so every value equal to one of the file's variables or text styles is bound to it, and the elements the component map names arrive as instances. |
 | A new component, or a change to one a write made | One `createTree` with a `COMPONENT` or `COMPONENT_SET` root, named as it will be used. Send the same name again to change it: variants pair by a row's `handle`, then name, then order, so a changed value or a column added, renamed or dropped renames them in place (instances follow); only a dropped row's variant is removed, and its instances lose their main (the reply warns how many). Properties are added, edited or deleted to match; a wired text or `hidden` shows its property's default, so change the `default`, not the layer. One the designer made is changed with a `patch` of its id instead. |
 
 Not available yet — say so to the user instead of improvising one:
@@ -57,9 +57,11 @@ Not available yet — say so to the user instead of improvising one:
   outline reads and send one `patch` per node, or, when they share a variable or style, change that source once.
 - **Components from code**: `figma_write` makes components from a spec you write (above), not from a project's
   component code. A library can be enabled only by the designer, in Figma's own UI.
-- **Binding a captured page to the file's design system** (its colours to variables, its parts to instances): a
-  capture lands with raw values. (An image in a spec is a fill: `{type: "image", file}` names a PNG, JPEG or GIF in the
-  project, `{type: "image", hash}` one the file has; references/grammar.md.)
+- **Binding to paint styles**: `bind` binds colours to variables and fonts to text styles, never to a paint or effect
+  style (a tree spec has no fill style). A part the page repeats with no component is offered as a candidate
+  component (below), not made into one, and an instance's slots (instance-swap properties) are not filled from code.
+  (An image in a spec is a fill: `{type: "image", file}` names a PNG, JPEG or GIF in the project, `{type: "image", hash}`
+  one the file has; references/grammar.md.)
 
 ## Capture a page
 
@@ -74,14 +76,32 @@ bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/capture-page.js" -
 - `--width` takes one width or several (one screen each); `--height` is the viewport's (800), and the whole document's
   height is captured. `--root "<css selector>"` captures one part (a section, the main column) at that element's box.
   `--ready "<selector>"` waits for an element to show before reading the page; `--name` sets the files' slug.
+  `--map <file>` names the component map (default `design/codeconnect.local.json`, then a root `codeconnect.local.json`;
+  none: no instances), `--no-instances` reads no component, `--no-bind` leaves `bind` off the printed ops.
 - It writes `design/capture/<name>@<width>.json` (a tree spec per width), `design/capture/images/` (every picture: a
   PNG, JPEG or GIF as the page loaded it, anything else — WebP, SVG, an inline `<svg>`, a `<canvas>` — as a PNG of that
   element) and the report `design/capture/<name>.capture.json`, and prints one summary line and the ops, e.g.
-  `{"ops":[{"op":"createTree","treeFile":"design/capture/settings@1280.json"},{"op":"createTree","treeFile":"design/capture/settings@390.json"}]}`.
+  `{"ops":[{"op":"createTree","treeFile":"design/capture/settings@1280.json","bind":true},{"op":"createTree","treeFile":"design/capture/settings@390.json","bind":true}]}`.
 - Send those ops as one `figma_write` (several widths: one batch, all or nothing; each new screen is placed beside the
   last). Dry-run it first when the file already holds an earlier capture of the same name: each root carries the key
   `capture:<name>@<width>`, so a re-send updates that screen in place.
-- What lands is faithful but plain: raw values (counted as `unbound`), no components or variables. Flex and grid become
+- With `bind: true` the plugin binds, before anything resolves, every raw colour, gap, padding side, corner radius and text
+  font that equals exactly one of the file's variables (in its collection's default mode, through aliases) or text
+  styles — or one a create table earlier in the batch makes, so `seedTokens` first in the same `figma_write` works. When
+  several match, a variable whose scopes leave the field out goes, then one whose name says another kind of field, then
+  a primitive another candidate aliases; still several: the value stays raw and the reply lists it under
+  `bind.ambiguous`. The reply's `bind: {bound, instanced, unbound}` says what happened; report the counts and every
+  ambiguous value. Sizes, opacity, stroke weights and pictures stay raw.
+- An element the component map names (its `data-component="Export"` or `"module#Export"` with `data-props` JSON, else
+  the component a React development build rendered it with) lands as an instance of the map's Figma component, its
+  props read back through the map; the report's `instances` counts them by component and says which props could not be
+  translated, `namedUnmapped` lists the code components the map does not name. A component the file does not have
+  refuses the batch, naming it — the map is wrong or the library is not enabled; tell the user.
+- A part repeated with no component (a card, a list row) is a **candidate component**: the report's `candidates` lists
+  each (how often, how big, where) with a spec under `design/capture/<name>@<width>.candidates/` — a `COMPONENT` with
+  a text property per text that differs. Offer them; sending one makes the component, but does not replace its copies
+  in the captured screen: map it to its code component, then capture again.
+- Otherwise what lands is faithful: flex and grid become
   auto-layout, a block's children keep their x/y, text is real text in the font the browser drew it with. **A font the
   file lacks refuses the whole batch**, listing every missing font with the closest names the file has: the report's
   `fonts` lists every family and style up front — tell the user which to install or enable; never edit the spec to
@@ -116,8 +136,8 @@ drops against the one you sent last time; the real reply then lists `changed`, `
 
 ## Write, check, fix
 
-1. **Write.** The reply is small: the root id, counts, ids only for nodes the spec gave a `handle`, `unbound`, and
-   `warnings` for what had no effect.
+1. **Write.** The reply is small: the root id, counts, ids only for nodes the spec gave a `handle`, `unbound` (in
+   `bind`, with what was bound and instanced, for a `bind: true` spec), and `warnings` for what had no effect.
 2. **Check** with one outline read of the new root: `figma_export_url {url: "<root id>"}`. A screenshot
    (`figma_screenshot`) only when the user wants to see it.
 3. **Fix.** A keyed spec: change it, dry-run the re-send and show the user (above), then send it again. Otherwise

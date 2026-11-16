@@ -20,7 +20,9 @@ tables, modes included, the tokens it cannot map listed — is built; creating c
 `COMPONENT`, or `COMPONENT_SET` from a variant table, its TEXT, BOOLEAN and INSTANCE_SWAP properties declared and its
 layers wired to them, named by later specs and updated in place when its name is sent again — is built; images — a
 paint `{type: "image", file}` or `{type: "image", hash}` — are built; capturing a rendered page as a screen —
-`capture-page`, which writes a tree spec per viewport width and its images to disk for `treeFile` ops — is built)
+`capture-page`, which writes a tree spec per viewport width and its images to disk for `treeFile` ops — is built; binding
+the capture to the file — a `createTree` op's `bind: true`, which binds raw values to the file's variables and text
+styles, and instances of the components the component map names, read in the write direction — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -91,6 +93,33 @@ tree spec has no effects) or approximated, and the ops to send (several widths: 
 3. Values that equal a variable or style in the file are bound to it, and an element the component map
    names arrives as an instance. The component map is used in the write direction: a code component and
    its props resolve to the Figma component and its property values.
+
+As built (step 3): the ops `capture-page` prints carry `bind: true`. Before the batch's names resolve (and before a keyed
+re-send compares its spec with the last one), the plugin gathers the file's local colour and number variables — each
+by its collection's default mode, through its aliases, with its scopes — its local text styles, and what the create
+tables earlier in the batch make (`figma-plugin/src/bind.ts`), and the pure binder (`bridge/src/bind-values.ts`) rewrites
+every raw value equal to exactly one of them into the spec's own reference fields: a solid paint's colour
+(`fills[i].tokens.color`; a text's font colour through `tokens.fills`), the stroke colours (`tokens.strokes`, all or
+none), the gap, the wrapped tracks' gap, each padding side and the radius (`tokens.<field>`), and a text's font
+(`styles.text`, when family, style, size, line height, letter spacing, case and decoration all equal). A colour is equal
+by its 8-bit RGBA, a number within 0.01. A file's variable or style is named by its id, one the batch makes by its
+name (so `seedTokens` and the capture land in one call). Several equal: those whose scopes leave the field out go, then
+those whose name has no word for the field (when one has), then a variable another candidate aliases; still several,
+the value stays raw and the reply lists it (decision 15). Sizes, opacity, stroke weights and pictures are not bound, nor
+is a paint style (a tree spec has no fill style; a follow-up). The bound refs resolve through the same resolver as any
+written by hand, so the batch stays all or nothing and one undo step. The reply's `bind: {bound, instanced, unbound,
+ambiguous?}` replaces `unbound` (decision 20); a dry run a plugin answers carries the same counts.
+
+Instances: the capture's walker reads each element's code component — its `data-component` (`Export` or
+`module#Export`, props in `data-props`), else a React development build's fibers (the composite components whose first
+host node is the element, outermost first) — and the first one the component map names (`design/codeconnect.local.json`,
+or `--map`) is resolved in the write direction (`design-to-code/code-usage.ts` `figmaUsageOf`: enum values inverted, a
+boolean as it is, a `children` string from the rendered text, a variantOverride's `when` values; what cannot be read back
+is left at the component's default and warned). That element lands as an INSTANCE (by the entry's key, else id, else
+name) at its place and size, nothing inside it captured; a component the file lacks refuses the batch with candidates,
+as any name does. Slots (instance-swap properties) are not filled from code yet. Parts repeated with no component are
+listed in the report as candidate components, each written as a `COMPONENT` spec (a TEXT property per text that differs)
+for a `createTree` of its own; making one does not replace the captured copies — map it, then capture again.
 
 With tokens seeded from the code first, this is the whole route from an app to a design system plus its
 screens.
@@ -200,7 +229,12 @@ screens.
     page: a generic 39-node dashboard captured at 1280 px with three images (`test/fixtures/capture/sample`, the
     converter's output from a committed capture), sent by `treeFile` — recorded at 1 call, 1 op, about 184 tokens
     (28 out, 156 in), against 6 calls, 39 ops and about 2,184 tokens for the four-op route typing it node by node
-    (which cannot place its images).
+    (which cannot place its images). Its eleventh (`capture-bind`) is the whole route from an app: the project's 9 code tokens
+    (`test/fixtures/capture/bind/tokens.dtcg.json`: 6 colours, one an alias, 2 spacings, a radius) seeded, then a captured
+    9-node settings panel with two instances of the file's Button landed with `bind: true` — one call with both ops,
+    recorded at 1 call, 2 ops, about 196 tokens (43 out, 153 in; the reply binds 13 values and leaves 10 raw), against 5
+    calls, 9 ops and about 698 tokens for the four-op route typing it node by node (no variables, no instances). Adding
+    `bind` to `figma_write`'s schema and description took `toolDefinition` from 1,229 to 1,257.
 
 ## Build order
 

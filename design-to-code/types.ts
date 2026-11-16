@@ -438,7 +438,9 @@ export type PlanComponentMatch =
   | { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
   | { by: "ambiguous"; candidates: MatchCandidate[] };
 export type CodeUsageValue = string | number | boolean;
-export type CodeUsageWarningCode = "unmapped-variant-value" | "uncovered-prop" | "ambiguous-prop" | "prop-value-mismatch" | "conflicting-code-prop" | "no-slot-name" | "no-code-target" | "ambiguous-variant-override";
+export type CodeUsageWarningCode = "unmapped-variant-value" | "uncovered-prop" | "ambiguous-prop" | "prop-value-mismatch" | "conflicting-code-prop" | "no-slot-name" | "no-code-target" | "ambiguous-variant-override"
+  // the write direction (code-usage.ts figmaUsageOf): a code value two Figma options map to; an instance prop (a slot) not written
+  | "ambiguous-variant-value" | "slot-not-written";
 export interface CodeUsageWarning { code: CodeUsageWarningCode; message: string; prop?: string }
 /** An instance as its code component is used (code-usage.ts). Skeleton-owned: refreshed on every merge. */
 export interface CodeUsage {

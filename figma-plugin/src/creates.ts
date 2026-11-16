@@ -29,6 +29,7 @@ import type { SourceValue } from "../../bridge/src/source-spec.ts";
 import type { BatchPlan, Planned } from "./batch-plan";
 import { applyStyle, fontAfter, styleSnapshot, styleUses, writeImpact, type StyleTarget } from "./sources";
 import { componentImpact } from "./component-build";
+import { bindImpact } from "./bind";
 import { resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
@@ -666,6 +667,8 @@ export async function designImpact(ops: readonly WriteOp[]): Promise<WriteImpact
   const creates = await createImpact(ops);
   // A component spec: made, or updated in place (with its instances), or refused by the file (component-build.ts).
   const components = await componentImpact(ops);
-  const steps = [...sources.steps, ...creates.steps, ...components].sort((a, b) => a.index - b.index);
+  // A `bind: true` spec: what the file would bind (bind.ts), against the file and the batch's create tables.
+  const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
+  const steps = [...sources.steps, ...creates.steps, ...components, ...binds].sort((a, b) => a.index - b.index);
   return sources.warnings ? { steps, warnings: sources.warnings } : { steps };
 }

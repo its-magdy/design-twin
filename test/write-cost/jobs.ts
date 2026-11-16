@@ -176,6 +176,9 @@ export interface Briefs {
    *  it (its spec file and images, under the directory the MCP server runs in); `spec` is that spec as read, for a route
    *  that types the screen itself */
   "capture-page": { pageId: string; capture: CapturedPage; spec: CapturedNode };
+  /** the same, from a project that has its tokens in code (`tokens`, a tokens.dtcg.json, the fixture to copy) and a kit
+   *  component the page renders (its capture places instances of it): seed the tokens, land the page bound to them */
+  "capture-bind": { pageId: string; capture: CapturedPage; spec: CapturedNode; tokens: string };
 }
 /** What capture-page wrote for one width of a page (test/fixtures/capture/sample): the spec's path relative to the
  *  directory the MCP server runs in, the fixture directory it is copied from, and its images. */
@@ -183,6 +186,8 @@ export interface CapturedPage { specFile: string; fixtureDir: string; images: re
 /** A tree spec node as capture-page writes it (the fields a check and the four-op route read). */
 export interface CapturedNode {
   name?: string; text?: string; box?: { w: number; h: number };
+  /** an instance of the file's component (the component map named the element), with its property values */
+  component?: string; props?: Record<string, string | boolean>;
   font?: { size?: number; color?: Hex };
   layout?: { display?: string; flexDirection?: string; gap?: number; padding?: number[] };
   fills?: Array<{ type: string; color?: Hex; file?: string }>;
@@ -651,7 +656,88 @@ const capturePage: Job<"capture-page"> = {
   },
 };
 
-/** The six jobs, in the design record's order, then the fix round, starting from nothing, a blank file's kit and a
- *  captured page. */
-export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing, blankFile, capturePage] as const;
+// An existing app to Figma, the whole route (#187): the project has its tokens in code (a tokens.dtcg.json: 6 colours,
+// one an alias of another, 2 spacings and a radius) and renders the kit's Button, which the file has (its Label a TEXT
+// property); capture-page has written the page's spec (test/fixtures/capture/bind: a generic 9-node settings panel whose
+// colours, spacing and radius equal the tokens, with two Button instances and a badge no token equals). Done when the
+// current page has one new frame of the spec's name with its texts in order and its node count; the way a designer would
+// have it when the file has the tokens as variables, the page's values bound to them (each one the binding rules pick)
+// and its buttons instances of the kit's Button with their labels — a route that seeds the tokens must bind them.
+const BIND_DIR = path.join(import.meta.dirname, "..", "fixtures", "capture", "bind");
+/** The bindings a seeded file must show: a node of the spec (by its name, or a text's content), the field, the token. */
+const WANT_BOUND: ReadonlyArray<readonly [node: string, field: string, token: string]> = [
+  ["settings @1280", "fill", "color/bg"], ["main", "fill", "color/surface"], ["main", "stroke", "color/border"],
+  ["main", "itemSpacing", "space/md"], ["main", "paddingTop", "space/lg"], ["main", "paddingLeft", "space/lg"], ["main", "topLeftRadius", "radius/md"],
+  ["Account settings", "fill", "color/text"], ["Manage your profile and notifications.", "fill", "color/muted"], ["div", "itemSpacing", "space/md"],
+  // white text: color/white and color/bg both equal it and neither name says "text": the alias (bg) is kept over what it names
+  ["Beta", "fill", "color/bg"],
+];
+const captureBind: Job<"capture-bind"> = {
+  id: "capture-bind", title: "Capture and bind",
+  what: "a captured 9-node settings panel (2 Button instances) landed bound to the project's 9 code tokens, seeded first, in a file with the kit's Button and no variables",
+  fixture() {
+    const c = canvas();
+    const screens = c.page("Screens");
+    const kit = c.page("Components");
+    const button = c.component(kit, { name: "Button", layoutMode: "HORIZONTAL", w: 120, h: 40, padding: [8, 16, 8, 16] });
+    c.text(button, { name: "Label", text: "Button" });
+    c.textProps(button, { Label: "Label" });
+    const before = new Set(Object.keys(c.nodes));
+    const spec = JSON.parse(fs.readFileSync(path.join(BIND_DIR, "settings@1280.json"), "utf8")) as CapturedNode;
+    const capture: CapturedPage = { specFile: "design/capture/settings@1280.json", fixtureDir: BIND_DIR, images: [] };
+    // what the spec shows outside its instances, and its instances in order
+    const textsOf = (n: CapturedNode): string[] => (n.component !== undefined ? [] : n.text !== undefined ? [n.text] : (n.children ?? []).flatMap(textsOf));
+    const countOf = (n: CapturedNode): number => 1 + (n.component !== undefined ? 0 : (n.children ?? []).reduce((a, k) => a + countOf(k), 0));
+    const instancesOf = (n: CapturedNode): CapturedNode[] => (n.component !== undefined ? [n] : (n.children ?? []).flatMap(instancesOf));
+    return {
+      c, brief: { pageId: screens.id, capture, spec, tokens: path.join(BIND_DIR, "tokens.dtcg.json") },
+      check() {
+        const problems: string[] = [];
+        const gaps: string[] = [];
+        const made = (screens.children ?? []).filter((k) => k.name === spec.name && !before.has(k.id));
+        if (made.length !== 1) return { problems: [`${made.length} new frames named "${String(spec.name)}" on Screens, wanted 1`], gaps };
+        const root = made[0];
+        if (!root) return { problems, gaps };
+        // the screen outside its instances (an instance's layers are its component's)
+        const own = (n: CNode): CNode[] => [n, ...(n.type === "INSTANCE" ? [] : (n.children ?? []).flatMap(own))];
+        const all = own(root);
+        const texts = all.filter((n) => n.type === "TEXT").map((n) => String(n.characters ?? ""));
+        if (JSON.stringify(texts) !== JSON.stringify(textsOf(spec))) problems.push(`the screen reads ${JSON.stringify(texts)}, wanted ${JSON.stringify(textsOf(spec))}`);
+        if (all.length !== countOf(spec)) problems.push(`the screen has ${all.length} nodes, wanted ${countOf(spec)}`);
+        const wanted = instancesOf(spec);
+        const instances = all.filter((n) => n.type === "INSTANCE");
+        if (!instances.length) gaps.push(`the page's ${wanted.length} buttons are plain frames, not instances of the kit's Button (a change to the Button misses them)`);
+        else {
+          const labels = instances.map((n) => (n.mainOf === button ? Object.entries((n.componentProperties ?? {}) as Record<string, { value: unknown }>).find(([k]) => k.startsWith("Label#"))?.[1]?.value : "not a Button"));
+          const want = wanted.map((w) => w.props?.Label);
+          if (JSON.stringify(labels) !== JSON.stringify(want)) problems.push(`the instances are ${JSON.stringify(labels)}, wanted Buttons labelled ${JSON.stringify(want)}`);
+        }
+        const live = c.live();
+        const vars = Object.values(live.variables);
+        if (!vars.length) { gaps.push("the file still has no variables: the project's tokens were not seeded, so every value is raw"); return { problems, gaps }; }
+        const idOf = (name: string): string | undefined => vars.find((x) => x.name === name)?.id;
+        const nodeNamed = (name: string): CNode | undefined => all.find((n) => (n.type === "TEXT" ? n.characters === name : n.name === name));
+        const boundId = (n: CNode, field: string): string | undefined => {
+          const alias = (x: unknown): string | undefined => (typeof x === "object" && x !== null && "id" in x && typeof x.id === "string" ? x.id : undefined);
+          if (field === "fill") return alias(n.fills?.[0]?.boundVariables?.color);
+          if (field === "stroke") return alias((n.strokes as Array<{ boundVariables?: { color?: unknown } }> | undefined)?.[0]?.boundVariables?.color);
+          return alias((n.boundVariables as Record<string, unknown> | undefined)?.[field]);
+        };
+        // the tokens were seeded: every value the rules bind must be bound to its token, and the badge's red to none
+        for (const [node, field, token] of WANT_BOUND) {
+          const n = nodeNamed(node);
+          const got = n ? boundId(n, field) : undefined;
+          if (got !== idOf(token)) problems.push(`${node} ${field}: bound to ${got === undefined ? "nothing" : (vars.find((x) => x.id === got)?.name ?? got)}, wanted ${token}`);
+        }
+        const badge = nodeNamed("span");
+        if (badge && boundId(badge, "fill") !== undefined) problems.push("the badge's red is bound, though no token equals it");
+        return { problems, gaps };
+      },
+    };
+  },
+};
+
+/** The six jobs, in the design record's order, then the fix round, starting from nothing, a blank file's kit, a captured
+ *  page, and a captured page bound to the project's tokens and components. */
+export const JOBS = [newScreen, similarScreens, fixOneNode, sameChangeMany, colourUpdate, repeatedPart, fixRound, startFromNothing, blankFile, capturePage, captureBind] as const;
 export type AnyJob = (typeof JOBS)[number];

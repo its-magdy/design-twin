@@ -2,7 +2,9 @@
 // for `figma_write {op:"createTree", treeFile}`. Pure: no browser, no file system; test/capture-page.test.ts runs it on
 // hand-made captures.
 //
-// Faithful but plain: raw values, no components or variables. The mapping:
+// Raw values (the plugin binds them to the file's variables and text styles when the op says `bind`: bridge/src/bind-values.ts)
+// and an element the component map names as an instance of its component (`CapEl.instance`, resolved by capture-page.ts).
+// Parts repeated with no component are offered as candidate components (candidatesOf, below). The mapping:
 //   - the root is a FRAME `<name> @<width>` keyed `capture:<name>@<width>` (a re-send updates it in place), the document's
 //     size (or the --root element's box), filled with the page's background;
 //   - flex → auto-layout (direction, gap, padding, justify, align, wrap); a *-reverse direction reverses the children
@@ -23,6 +25,8 @@
 //     opacity; overflow hidden → clip; images → image paints by file;
 //   - an element with no paint, stroke, clip or padding and exactly one child of the same box is that child; an empty
 //     unpainted leaf is left out (in an auto-layout parent it is kept: it takes space).
+//   - an element the component map names → an INSTANCE (`component`, `props`, the component's name, its box and place);
+//     nothing inside it is written.
 // Shadows, gradients, pseudo-element content, transforms and filters cannot be written (the tree spec has no effects):
 // they are counted under `dropped`.
 import type { TreeFill, TreeFont, TreeLayout, TreeNodeSpec, TreeStrokes } from "../bridge/src/tree-spec.ts";
@@ -124,8 +128,13 @@ export interface CapEl {
   text: CapText | null;
   /** what cannot be written on it (`shadow`, `gradient`, `pseudo-element`, `transform`, `filter`, `inline-paint`, `image`) */
   dropped: string[];
+  /** the Figma component it renders as (the component map read in the write direction: code-usage.ts figmaUsageOf): an
+   *  instance at its place, with these property values; its children are not captured */
+  instance?: CapInstance;
   children: Array<CapEl | CapText>;
 }
+/** An element the component map names: the component as a tree spec names it, its property values, the layer's name. */
+export interface CapInstance { component: string; props: Record<string, string | boolean>; name: string }
 /** One width of a capture. */
 export interface CaptureDoc {
   /** the slug the files are named by */
@@ -145,6 +154,8 @@ export interface CaptureStats {
   nodes: number;
   frames: number;
   texts: number;
+  /** instances of the file's components (elements the component map names) */
+  instances: number;
   images: number;
   depth: number;
   /** every font the texts use, family + Figma style, first-use order */
@@ -154,7 +165,7 @@ export interface CaptureStats {
   /** what was written as the nearest thing the tree spec has, by kind */
   approximated: Record<string, Tally>;
 }
-export type CaptureResult = { ok: true; spec: TreeNodeSpec; stats: CaptureStats } | { ok: false; error: string; stats: CaptureStats };
+export type CaptureResult = { ok: true; spec: TreeNodeSpec; stats: CaptureStats; candidates: Candidate[] } | { ok: false; error: string; stats: CaptureStats };
 
 /** How many sample paths a tally keeps. */
 const SAMPLES = 3;
@@ -192,7 +203,7 @@ export function firstFamily(stack: string): string {
 
 /** The spec of one width of a capture, and what it holds. Refused (ok false) past MAX_TREE_NODES or MAX_TREE_DEPTH. */
 export function captureSpec(doc: CaptureDoc): CaptureResult {
-  const stats: CaptureStats = { nodes: 0, frames: 0, texts: 0, images: 0, depth: 0, fonts: [], dropped: Object.create(null) as Record<string, Tally>, approximated: Object.create(null) as Record<string, Tally> };
+  const stats: CaptureStats = { nodes: 0, frames: 0, texts: 0, instances: 0, images: 0, depth: 0, fonts: [], dropped: Object.create(null) as Record<string, Tally>, approximated: Object.create(null) as Record<string, Tally> };
   const tally = (into: Record<string, Tally>, kind: string, at: string): void => {
     const t = into[kind] || (into[kind] = { count: 0, samples: [] });
     t.count++;
@@ -201,6 +212,8 @@ export function captureSpec(doc: CaptureDoc): CaptureResult {
   const drop = (kind: string, at: string): void => tally(stats.dropped, kind, at);
   const approx = (kind: string, at: string): void => tally(stats.approximated, kind, at);
   const fontSeen = new Set<string>();
+  /** the page path of the element each frame and instance of the spec was made from (a candidate's sample paths) */
+  const pagePaths = new Map<TreeNodeSpec, string>();
 
   /** The parent a node is placed in: its element, and the auto-layout it got (null: none). */
   interface Parent { el: CapEl; flex: { dir: "row" | "column"; align: string; grow?: boolean } | null }
@@ -540,6 +553,16 @@ export function captureSpec(doc: CaptureDoc): CaptureResult {
     const inFlex = pf !== null && !/absolute|fixed/.test(outer.position);
     const grows = inFlex && pf !== null && outer.flexGrow > 0 && pf.grow === true && pf.dir === "row";
     const stretched = inFlex && parent !== null && pf !== null && pf.dir === "column" && near(outer.rect.w, contentBox(parent.el).w) && (outer.alignSelf === "stretch" || ((outer.alignSelf === "auto" || outer.alignSelf === "normal") && (pf.align === "normal" || pf.align === "stretch")));
+    // an element the component map names: an instance of the file's component, at the element's place and size
+    if (parent && el.instance) {
+      stats.instances++;
+      const n: TreeNodeSpec = { component: el.instance.component, name: el.instance.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) } };
+      if (Object.keys(el.instance.props).length) n.props = { ...el.instance.props };
+      if (el.opacity < 1) n.opacity = r2(Math.max(0, el.opacity));
+      pagePaths.set(n, at);
+      place(n, outer, parent, false);
+      return n;
+    }
     // text only, and nothing a frame must keep: the element is its TEXT
     if (parent && asText(el) && el.text) {
       // a flex item wider than its text keeps its width: the flow after it depends on it
@@ -552,6 +575,7 @@ export function captureSpec(doc: CaptureDoc): CaptureResult {
     }
     const n: TreeNodeSpec = { name: el.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) } };
     stats.frames++;
+    pagePaths.set(n, at);
     look(n, el, at);
     if (el.media && !el.image) drop("image", at);
     // the whole document is placed as it lies (its <body>'s own layout is not the page's box)
@@ -622,7 +646,116 @@ export function captureSpec(doc: CaptureDoc): CaptureResult {
   stats.nodes = countNodes(root);
   if (stats.nodes > MAX_TREE_NODES) return { ok: false, error: `the capture at ${doc.width} px is ${stats.nodes} nodes, more than the ${MAX_TREE_NODES} one spec may hold`, stats };
   if (stats.depth > MAX_TREE_DEPTH) return { ok: false, error: `the capture at ${doc.width} px nests ${stats.depth} levels deep, more than the ${MAX_TREE_DEPTH} one spec may`, stats };
-  return { ok: true, spec: root, stats };
+  return { ok: true, spec: root, stats, candidates: candidatesOf(root, doc.name, (n) => pagePaths.get(n)) };
+}
+
+// ---------------------------------------------------------------- candidate components
+// A part of the page repeated with no component to stand for it (a card, a list row): each is a candidate component. A
+// subtree's structure is its signature — the kind of each node, a frame's auto-layout (direction, wrap), which paints,
+// strokes, radius and clipping it has (not their values), a text's font (family, style, size: its role), an instance's
+// component, and its children's signatures in order; text content, image hashes, sizes and places are not in it. A
+// signature of two or more nodes found twice or more, outside any instance, is a candidate, unless every occurrence lies
+// inside occurrences of a bigger candidate (only the largest repeated part is offered).
+
+/** A candidate component: how often it repeats, its size, where (up to SAMPLES page paths), and a component spec made from
+ *  its first occurrence — a COMPONENT root with a TEXT property for each text that differs between the occurrences. */
+export interface Candidate {
+  name: string;
+  /** the file name of its spec (letters, digits, -) */
+  slug: string;
+  count: number;
+  nodes: number;
+  paths: string[];
+  spec: TreeNodeSpec;
+}
+/** The most candidates a capture offers. */
+export const MAX_CANDIDATES = 20;
+
+function signatureOf(n: TreeNodeSpec, memo: Map<TreeNodeSpec, string>): string {
+  const known = memo.get(n);
+  if (known !== undefined) return known;
+  let sig: string;
+  if (n.component !== undefined) sig = "I(" + n.component + ")";
+  else if (n.text !== undefined) {
+    const f = n.font || {};
+    sig = "T(" + [f.family || "", f.weight || "", f.size !== undefined ? String(f.size) : ""].join("|") + ")";
+  } else {
+    const l = n.layout;
+    const lay = l && l.display === "flex" ? (l.flexDirection === "column" ? "col" : "row") + (l.flexWrap ? "+wrap" : "") : "none";
+    const paints = (n.fills || []).map((p) => p.type).join(",");
+    const look = [lay, paints, n.strokes ? "s" : "", n.radius !== undefined ? "r" : "", n.clip ? "c" : ""].join(";");
+    sig = "F(" + look + ")[" + (n.children || []).map((c) => signatureOf(c, memo)).join(",") + "]";
+  }
+  memo.set(n, sig);
+  return sig;
+}
+
+/** The candidate components of a captured spec (its root excluded), in a fixed order: most nodes covered first. */
+export function candidatesOf(root: TreeNodeSpec, page: string, pathOf: (n: TreeNodeSpec) => string | undefined): Candidate[] {
+  const memo = new Map<TreeNodeSpec, string>();
+  const parentOf = new Map<TreeNodeSpec, TreeNodeSpec>();
+  const order: TreeNodeSpec[] = [];
+  const bySig = new Map<string, TreeNodeSpec[]>();
+  const visit = (n: TreeNodeSpec): void => {
+    order.push(n);
+    for (const c of n.children || []) { parentOf.set(c, n); visit(c); }
+  };
+  visit(root);
+  for (const n of order) {
+    if (n === root || n.component !== undefined || n.text !== undefined || !(n.children || []).length) continue;
+    const sig = signatureOf(n, memo);
+    const list = bySig.get(sig) || [];
+    list.push(n);
+    bySig.set(sig, list);
+  }
+  const repeated = [...bySig.values()].filter((l) => l.length >= 2).map((l) => ({ occ: l, nodes: countNodes(l[0] || {}) })).filter((c) => c.nodes >= 2);
+  // the biggest first (then the first on the page), so a smaller one inside them is seen to be inside
+  repeated.sort((a, b) => b.nodes - a.nodes || order.indexOf(a.occ[0] || {}) - order.indexOf(b.occ[0] || {}));
+  const kept: typeof repeated = [];
+  const inside = (n: TreeNodeSpec, of: ReadonlySet<TreeNodeSpec>): boolean => { for (let p = parentOf.get(n); p; p = parentOf.get(p)) if (of.has(p)) return true; return false; };
+  for (const c of repeated) {
+    const bigger = new Set<TreeNodeSpec>(kept.flatMap((k) => k.occ));
+    if (c.occ.every((n) => inside(n, bigger))) continue;
+    kept.push(c);
+  }
+  kept.sort((a, b) => b.nodes * b.occ.length - a.nodes * a.occ.length || order.indexOf(a.occ[0] || {}) - order.indexOf(b.occ[0] || {}));
+  return kept.slice(0, MAX_CANDIDATES).map((c, i) => {
+    const first = c.occ[0] || {};
+    const label = (first.name || "frame").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "frame";
+    const name = page + " " + (first.name || "frame") + " " + (i + 1);
+    const paths = c.occ.map(pathOf).filter((p): p is string => p !== undefined).slice(0, SAMPLES);
+    return { name, slug: (i + 1) + "-" + label, count: c.occ.length, nodes: c.nodes, paths, spec: componentSpecOf(c.occ, name) };
+  });
+}
+
+/** A COMPONENT spec from the first of `occ` (structurally the same subtrees): out of any flow (no place fields), and a
+ *  TEXT property for each text whose content differs between them (its default the first's; the layer wired to it). */
+function componentSpecOf(occ: readonly TreeNodeSpec[], name: string): TreeNodeSpec {
+  const first = occ[0] || {};
+  const spec = JSON.parse(JSON.stringify(first)) as TreeNodeSpec;
+  for (const k of ["x", "y", "absolute", "grow", "alignSelf", "key", "handle"] as const) delete spec[k];
+  if (spec.widthMode === "fill") delete spec.widthMode;
+  if (spec.heightMode === "fill") delete spec.heightMode;
+  spec.type = "COMPONENT";
+  spec.name = name;
+  const props: Record<string, { type: "TEXT"; default: string }> = {};
+  let n = 0;
+  // the same place in every occurrence: each is the same shape (one signature)
+  const walk = (copy: TreeNodeSpec, all: readonly TreeNodeSpec[]): void => {
+    if (copy.text !== undefined) {
+      if (all.some((o) => o.text !== copy.text)) {
+        const prop = "Text " + ++n;
+        props[prop] = { type: "TEXT", default: copy.text };
+        copy.name = prop;
+        copy.propRefs = { characters: prop };
+      }
+      return;
+    }
+    (copy.children || []).forEach((c, i) => walk(c, all.map((o) => (o.children || [])[i] || {})));
+  };
+  walk(spec, occ);
+  if (n) spec.props = props;
+  return spec;
 }
 
 /** How deep a spec nests below its root. */

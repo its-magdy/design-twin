@@ -30,6 +30,7 @@ import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
 import { imageTableError, type ImageTable } from "./image-spec.ts";
+import type { BindCounts } from "./bind-values.ts";
 
 // ---------------------------------------------------------------- arguments
 
@@ -103,6 +104,9 @@ export interface WriteOp {
   tree?: TreeNodeSpec | Record<string, unknown> | undefined;
   /** createTree: the page the new frame lands on — its exact name or id (the current page when absent) */
   page?: string | undefined;
+  /** createTree: bind the spec's raw colours, spacing, radii and text fonts to the file's variables and text styles where
+   *  exactly one equals them (bind-values.ts), before the spec resolves; the reply's `bind` counts what was bound */
+  bind?: boolean | undefined;
   /** patch: the fields to change on node `nodeId`, in the read export's field names (patch-spec.ts); setStyle: the style's fields (source-spec.ts). Typed loosely on
    *  the wire, like `tree`: patch-spec.ts checkPatch narrows it, at all three readers of WRITE_OPS. */
   set?: PatchSet | StyleSet | Record<string, unknown> | undefined;
@@ -214,6 +218,8 @@ export interface WritePreviewStep {
   plan?: CreatePlan;
   /** "missing <fields>", or every problem with a createTree spec — the plugin refuses the batch up front for the same reason */
   invalid?: string;
+  /** createTree with `bind`, when a plugin answered the dry run: what the file would bind (bind-values.ts) */
+  bind?: BindCounts;
   /** the images its paints use, one line each: a file the server read ("photo.png: PNG 800×600, 41 kB"), or a hash the
    *  file must have (checked when the write runs) — figma_write's dry run (image-file.ts imagePreview) */
   images?: string[];
@@ -249,7 +255,8 @@ function treePreview(o: WriteOp, index: number, missing: readonly string[]): Wri
   if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
   const { problems, summary, expanded } = checkTree(o.tree);
   if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
-  return { ...base, change: describeTree(expanded, o.page, summary), ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
+  const bind = o.bind === true ? "; `bind`: its raw colours, spacing, radii and text fonts are bound to the file's variables and text styles where exactly one equals them — decided by the file when it is applied (a dry run a plugin answers counts them)" : "";
+  return { ...base, change: describeTree(expanded, o.page, summary) + bind, ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
 }
 
 /** A patch op's preview: the node, one row per field it sets, the change in one sentence — or every problem. */
@@ -471,6 +478,9 @@ export interface AppliedWrite {
   /** createTree / patch: the raw values where a variable or text style could stand (colours, spacing, radii, stroke
    *  weights, a tree's texts without a style); absent when none */
   unbound?: number;
+  /** createTree with `bind`: the raw values it bound to the file's variables and text styles, the instances the spec
+   *  places, the raw values left (then not repeated as `unbound`), and the values several candidates matched */
+  bind?: BindCounts;
   /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did). A keyed re-send lists
    *  only the handles that are new: on a node it built, or given to a node that had none. */
   handles?: Record<string, string>;
@@ -621,6 +631,8 @@ export interface WriteImpactStep {
   plan?: CreatePlan;
   /** a component spec: what the write would do, in a sentence ("would update component 'Button' in place (3 instances follow)") */
   change?: string;
+  /** a createTree with `bind`: what the file would bind */
+  bind?: BindCounts;
 }
 /** writeImpact's reply: the dry run's file-side half. `warnings`: pages that could not be read, so a count may be low. */
 export interface WriteImpactReply {
@@ -821,11 +833,13 @@ export function writeOpError(o: unknown, i: number): string | null {
     opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
     opt(o, "padding", isPadding, "four numbers", `${at}.padding`),
     opt(o, "index", isIndex, "a whole number ≥ 0", `${at}.index`),
+    opt(o, "bind", isBool, "a boolean", `${at}.bind`),
   ]);
   if (typeErr !== null) return typeErr;
   // A spec path is read by figma_write (spec-file.ts), which hands the plugin the spec itself: one that arrives here
   // came round the MCP server.
   if (o.treeFile !== undefined) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
+  if (o.bind !== undefined && op !== "createTree") return `\`${at}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
   const missing = missingWriteFields(op, o);
   if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
   if (op === "createTree") {

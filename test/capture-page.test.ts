@@ -28,6 +28,7 @@ import { encodePng } from "../bridge/src/png.ts";
 import { sniffImage } from "../bridge/src/image-file.ts";
 import { imagePaintsIn } from "../bridge/src/image-spec.ts";
 import type { TreeNodeSpec } from "../bridge/src/tree-spec.ts";
+import { checkTree } from "../bridge/src/tree-check.ts";
 import type { WhoamiReply, WriteResult } from "../bridge/src/commands.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
 import { captureSpec, checkCaptured, countNodes, firstFamily, fontStyleName, hexOf, type CapEl, type CapFont, type CapText, type CaptureDoc } from "../design-to-code/capture-spec.ts";
@@ -303,6 +304,46 @@ console.log("converter:");
   check("the files' slug comes from the URL's path, else its host", same(["http://127.0.0.1:5173/", "https://example.test/app/settings", "http://localhost:3000/index.html", "file:///tmp/site/about.html"].map(nameFromUrl), ["127-0-0-1", "app-settings", "localhost", "tmp-site-about"]));
 }
 
+// ---------------------------------------------------------------- instances and candidate components (#187)
+console.log("\ninstances and candidate components:");
+{
+  // an element the component map names: an instance at its place (in a flex row: no x/y, its grow and stretch), its children not written
+  const inst = (o: Partial<CapEl> & { rect: CapEl["rect"] }): CapEl => el({ ...o, instance: { component: "a1".repeat(20), props: { Size: "Large", Label: "Save" }, name: "Button" } });
+  const row = el({ display: "flex", rect: { x: 0, y: 0, w: 400, h: 40 }, columnGap: 8, alignItems: "normal", children: [
+    inst({ rect: { x: 0, y: 0, w: 196, h: 40 }, flexGrow: 1, children: [textEl("never written", { x: 0, y: 0, w: 60, h: 20 })] }),
+    inst({ rect: { x: 204, y: 0, w: 196, h: 40 }, flexGrow: 1 }),
+  ] });
+  const r = captureSpec(docOf(page([row, inst({ rect: { x: 10, y: 100, w: 80, h: 30 }, opacity: 0.5 })])));
+  const s = r.ok ? r.spec : {};
+  const a = at(s, 0, 0), b = at(s, 1);
+  check("an element the map names is an INSTANCE: the component (by key), its props, the component's name as the layer's, its box", same(a, { component: "a1".repeat(20), name: "Button", box: { w: 196, h: 40 }, props: { Size: "Large", Label: "Save" }, grow: 1, alignSelf: "stretch" }));
+  check("…in a block parent at its x/y, its opacity kept; nothing inside it is written; counted", same({ x: b?.x, y: b?.y, o: b?.opacity, c: b?.children }, { x: 10, y: 100, o: 0.5, c: undefined }) && r.ok && r.stats.instances === 3);
+  check("…and the spec passes the tree spec's check", r.ok && checkCaptured(r.spec, () => IMG).length === 0);
+}
+{
+  // three cards: a painted, rounded frame with a title and a meta row of two texts; a fourth meta row stands alone
+  const meta = (y: number, a: string, b: string): CapEl => el({ display: "flex", rect: { x: 16, y, w: 200, h: 20 }, columnGap: 8, border: { widths: [1, 0, 0, 0], color: "rgb(200, 200, 200)", from: "border", align: "inside" }, children: [
+    textEl(a, { x: 16, y, w: 60, h: 20 }), textEl(b, { x: 84, y, w: 60, h: 20 }),
+  ] });
+  const card = (y: number, title: string, a: string): CapEl => el({ rect: { x: 0, y, w: 300, h: 80 }, background: "rgb(255, 255, 255)", radius: 8, children: [
+    textEl(title, { x: 16, y: y + 8, w: 200, h: 24 }, {}, { size: 18, weight: 600 }), meta(y + 40, a, "today"),
+  ] });
+  const r = captureSpec(docOf(page([card(0, "First", "3 items"), card(100, "Second", "5 items"), card(200, "Third", "8 items"), meta(320, "Alone", "now")])));
+  const cands = r.ok ? r.candidates : [];
+  const [c1, c2] = cands;
+  check(`the repeated card is a candidate: 3 times, 5 nodes, sample paths of the page (${JSON.stringify(cands.map((c) => [c.name, c.count, c.nodes]))})`, c1 !== undefined && c1.count === 3 && c1.nodes === 5 && c1.paths.length === 3 && c1.slug === "1-div");
+  check("…the meta row inside every card is only offered because one stands outside them (4 times); a part only ever inside a bigger one is not", c2 !== undefined && c2.count === 4 && c2.nodes === 3 && cands.length === 2);
+  const cs = c1?.spec ?? {};
+  check("its spec: a COMPONENT root named after the page, a TEXT property per text that differs (default the first's), the layer wired; a text the same everywhere is not one",
+    cs.type === "COMPONENT" && cs.name === "t div 1" && same(cs.props, { "Text 1": { type: "TEXT", default: "First" }, "Text 2": { type: "TEXT", default: "3 items" } }) &&
+    same(at(cs, 0)?.propRefs, { characters: "Text 1" }) && same(at(cs, 1, 0)?.propRefs, { characters: "Text 2" }) && at(cs, 1, 1)?.propRefs === undefined && cs.x === undefined);
+  const checked = checkTree(cs);
+  check(`…and it passes the tree spec's check (${checked.problems.slice(0, 2).join("; ")})`, checked.problems.length === 0 && checked.summary.component?.props.length === 2);
+  const instRow = el({ rect: { x: 0, y: 0, w: 400, h: 200 }, children: [0, 1].map((i) => el({ rect: { x: 0, y: i * 50, w: 100, h: 40 }, instance: { component: "Chip", props: {}, name: "Chip" } })) });
+  const ri = captureSpec(docOf(page([instRow])));
+  check("instances are never candidates themselves", ri.ok && ri.candidates.length === 0);
+}
+
 // ---------------------------------------------------------------- the CLI's parts
 console.log("\nthe CLI's parts:");
 {
@@ -405,6 +446,27 @@ const hideHtml = `<!doctype html><body><div id="x" style="color: rgb(1, 2, 3) !i
   `<section id="hid"><span>Shown</span><span style="visibility:hidden">Hidden<i style="visibility:visible">Back</i></span><span style="opacity:0">Faded</span><span style="display:none">Gone</span><div>Details</div></section>` +
   // the same rule for an element of inline content only (one TEXT): its drawn characters, its <br> a line break
   `<section id="inl"><p>Shown<span style="visibility:hidden">Hidden<span style="visibility:visible">Back</span></span><span style="opacity:0">Faded</span><br>Next</p><div>Details</div></section></body>`;
+// code components (#187): by data-component (with data-props), and by a React dev build's fibers (made by hand here: a
+// forwardRef "Badge" around a function component "Inner", both first-host-wrapping the element; a lone "Widget")
+const identityHtml = `<!doctype html><body><section id="ids">` +
+  `<div id="dc" data-component="Button" data-props='{"variant":"primary","disabled":true,"size":2,"onClick":{"x":1}}'><span>Save</span></div>` +
+  `<div id="dcm" data-component="@/ui/card#Card"><p>Inside</p></div>` +
+  `<div id="un" data-component="Unknown"><p>Kept</p></div>` +
+  `<div id="fib"><span>Fiber text</span></div><div id="fib2"><p>Plain</p></div></section>` +
+  `<script>
+    function Inner() {} function Outer() {} Outer.displayName = "Badge"; function Widget() {}
+    const fiberOf = (el) => ({ tag: 5, stateNode: el });
+    const host = fiberOf(document.getElementById("fib"));
+    const inner = { tag: 0, type: Inner, memoizedProps: { tone: "info", count: 3, children: "Fiber text", onClick() {} }, child: host };
+    const outer = { tag: 11, type: { render: Outer }, memoizedProps: { tone: "warn", children: { nested: true } }, child: inner };
+    const section = { tag: 5, child: outer };
+    host.return = inner; inner.return = outer; outer.return = section;
+    document.getElementById("fib")["__reactFiber$test"] = host;
+    const host2 = fiberOf(document.getElementById("fib2"));
+    const widget = { tag: 15, type: Widget, memoizedProps: {}, child: host2, return: { tag: 5 } };
+    host2.return = widget;
+    document.getElementById("fib2")["__reactFiber$test"] = host2;
+  </script></body>`;
 // a lazy image far down the page whose response sends its headers and part of a body, then never ends
 const stallImgHtml = `<!doctype html><body style="margin:0"><div style="height:3000px">Top</div><img loading="lazy" width="40" height="40" src="/stall-img.png"></body>`;
 const server = Bun.serve({
@@ -421,6 +483,7 @@ const server = Bun.serve({
     if (p === "/stall-img.png") return new Response(new ReadableStream({ start(c) { c.enqueue(photo.subarray(0, 16)); } }), { headers: { "content-type": "image/png" } });
     if (p === "/bg-text.html") return new Response(bgTextHtml, { headers: { "content-type": "text/html" } });
     if (p === "/hide.html") return new Response(hideHtml, { headers: { "content-type": "text/html" } });
+    if (p === "/identity.html") return new Response(identityHtml, { headers: { "content-type": "text/html" } });
     const f = path.join(FIX, p === "/" ? "page.html" : p.slice(1));
     if (!f.startsWith(FIX) || !fs.existsSync(f) || !fs.statSync(f).isFile()) return new Response("not found", { status: 404 });
     return new Response(fs.readFileSync(f), { headers: { "content-type": f.endsWith(".svg") ? "image/svg+xml" : "text/html; charset=utf-8" } });
@@ -447,7 +510,7 @@ async function e2e(): Promise<void> {
   const lines = run.stdout.trim().split("\n");
   check(`stdout is one summary line, then the ops (${lines[0] ?? ""})`, lines.length === 2 && /^capture-page: sample — 1280: \d+ nodes .* · 390: \d+ nodes/.test(lines[0] ?? ""));
   const ops = (() => { try { return (JSON.parse(lines[1] ?? "") as { ops: Report["ops"] }).ops; } catch { return []; } })();
-  check("…the ops: one createTree per width, by treeFile, in one batch", same(ops, [{ op: "createTree", treeFile: "design/capture/sample@1280.json" }, { op: "createTree", treeFile: "design/capture/sample@390.json" }]));
+  check("…the ops: one createTree per width, by treeFile, bound to the file's variables and styles, in one batch", same(ops, [{ op: "createTree", treeFile: "design/capture/sample@1280.json", bind: true }, { op: "createTree", treeFile: "design/capture/sample@390.json", bind: true }]));
   const rep = readJson(path.join(project, "design", "capture", "sample.capture.json")) as Report;
   const specs = ops.map((o) => readJson(path.join(project, o.treeFile)) as TreeNodeSpec);
   const imgs = fs.readdirSync(path.join(project, "design", "capture", "images"));
@@ -501,6 +564,7 @@ async function e2e(): Promise<void> {
     bgText.status === 0 && bgFile("div#a") !== undefined && bgFile("div#a") === bgFile("div#b") && walk(bgSpec).some((n) => n.text === "Label"));
 
   await hideRestores();
+  await identityWalk();
   await land(ops, rep);
 }
 
@@ -539,6 +603,33 @@ async function hideRestores(): Promise<void> {
     const para = inl.root ? inl.root.children.find((c) => c.kind === "el") : undefined;
     const inlText = para && para.kind === "el" && para.text ? para.text.drawn : undefined;
     check(`…and an element of inline content only (one TEXT) carries its drawn characters, a <br> a line break (${JSON.stringify(inlText)})`, inlText === "ShownBack\nNext");
+  } finally {
+    await browser.close();
+  }
+}
+
+/** The walker's code components in a real page: data-component with data-props, and a React dev build's fibers (outermost
+ *  composite first); an element the map names is not walked into; one it does not name is walked and says its name. */
+async function identityWalk(): Promise<void> {
+  const pw = await import("playwright").catch(() => null);
+  const browser = pw ? await pw.chromium.launch().catch(() => null) : null;
+  if (!browser) { check("chromium for the code-component walk", !CI); return; }
+  try {
+    const pg = await browser.newPage();
+    await pg.addInitScript({ content: INIT_SCRIPT });
+    await pg.goto(base + "/identity.html");
+    const walked = await pg.evaluate(walkCapture, { root: "#ids", maxElements: 100, identity: true, components: ["Button", "@/ui/card#Card", "Badge", "Inner"] });
+    const els = walked.root ? walked.root.children.flatMap((c) => (c.kind === "el" ? [c] : [])) : [];
+    const [dc, dcm, un, fib, fib2] = els;
+    check(`data-component + data-props: the component, its string/number/boolean props, its text; nothing inside walked (${JSON.stringify(dc?.component)})`,
+      same(dc?.component, { name: "Button", props: { variant: "primary", disabled: true, size: 2 }, text: "Save" }) && dc?.children.length === 0 && dc.text === null);
+    check("…a module#Export name matches as given", dcm?.component?.name === "@/ui/card#Card" && dcm.children.length === 0);
+    check("…a name the map does not have: walked as before, its name kept (namedUnmapped)", un?.component === undefined && un?.codeName === "Unknown" && (un?.children.length ?? 0) > 0);
+    check(`React fibers: the outermost composite whose first host is the element wins (a forwardRef's render name), a children object left out (${JSON.stringify(fib?.component)})`,
+      same(fib?.component, { name: "Badge", props: { tone: "warn" }, text: "Fiber text" }));
+    check("…a composite the map does not name is the element's codeName", fib2?.component === undefined && fib2?.codeName === "Widget");
+    const off = await pg.evaluate(walkCapture, { root: "#ids", maxElements: 100 });
+    check("without identity nothing is read (no component, no codeName)", off.root !== null && off.root.children.every((c) => c.kind !== "el" || (c.component === undefined && c.codeName === undefined)));
   } finally {
     await browser.close();
   }

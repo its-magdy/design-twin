@@ -740,6 +740,8 @@ const writeOpShape = z.object({
   // createTree: the same spec as a JSON file, read by this server into `tree` before anything else (spec-file.ts).
   treeFile: z.string().optional(),
   page: z.string().optional(),
+  // createTree: bind its raw values to the file's variables and text styles where exactly one equals them (bind-values.ts).
+  bind: z.boolean().optional(),
   // patch: the fields to change, checked by patch-spec.ts checkPatch at the same three places as a tree spec.
   set: z.record(z.string(), z.unknown()).optional(),
   index: z.number().int().min(0).optional(),
@@ -773,15 +775,17 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
       if (s.affects) step.affects = s.affects;
       if (s.problem) step.refusedByFile = step.refusedByFile ? step.refusedByFile + "; " + s.problem : s.problem;
       if (s.plan) step.plan = s.plan;
+      // A `bind: true` spec: what the file would bind, instance and leave raw.
+      if (s.bind) step.bind = s.bind;
       // A component spec: the file says whether it is made or updated in place (with how many instances follow).
       if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");
     }
   }
   const sourceNote = impact.asked
     ? impact.reply
-      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place. " +
+      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind. " +
         (impact.reply.warnings && impact.reply.warnings.length ? "Some pages could not be read, so a count may be low: " + impact.reply.warnings.join("; ") + ". " : "")
-      : "How much a source edit carries to (and which names of a create table the file has already) is read by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see it. "
+      : "How much a source edit carries to (which names of a create table the file has already, what a `bind: true` spec binds) is read by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see it. "
     : "";
   return {
     dryRun: true,
@@ -817,7 +821,8 @@ function counted(steps: ReadonlyArray<{ effect: WriteEffect }>, effect: "moves" 
 interface ImpactRead { asked: boolean; reply: WriteImpactReply | null; why: string }
 async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | undefined, extra: ToolExtra): Promise<ImpactRead> {
   // A component spec asks too: only the file knows whether it makes the component or updates the one it has.
-  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && componentRootOf(o.tree) !== null))) return { asked: false, reply: null, why: "" };
+  // So does a `bind: true` spec: only the file knows what its values bind to.
+  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true)))) return { asked: false, reply: null, why: "" };
   // Only a patch that changes a main component is a source edit: the plugin says which, so every patch asks.
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
@@ -852,7 +857,7 @@ registerTool(
       // fields, the replies and the limits are the designtwin plugin's design-in-figma skill (references/grammar.md),
       // and a field this summary leaves out is still checked: the refusal names it by path.
       "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch, but each component property it declares, edits or deletes ends a step (the reply's `undoSteps`); a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
-      "createTree {tree|treeFile, page?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
+      "createTree {tree|treeFile, page?, bind?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place; bind:true binds raw values to the one variable or text style equal to each); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
       "patch {nodeId, set}: change the given fields of an existing node. An image is a fill {type:\"image\", file|hash}: a PNG/JPEG/GIF path, or a hash the file has | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +

@@ -32,6 +32,20 @@ list of merged PRs.
 
 ### Added
 
+- A captured page now lands bound to the Figma file's design system. A `createTree` op takes `bind: true`: before the
+  batch runs, the plugin binds every raw colour, gap, padding side, corner radius and text font in the spec that equals
+  exactly one of the file's variables (in its collection's default mode, through aliases) or text styles — or one a
+  `seedTokens` / create table earlier in the same batch makes — to it. When several match, the variable whose scopes
+  allow the field wins, then the one whose name fits the field (`bg`, `text`, `border`, `space`, `radius`, …), then the
+  semantic alias over the primitive it names; still several, the value stays raw and the reply lists it. The reply's
+  `bind: {bound, instanced, unbound, ambiguous?}` replaces `unbound`, and a dry run with the plugin connected shows the
+  same counts. `capture-page` prints its ops with `bind: true` (`--no-bind` leaves it off), and an element the
+  component map names — by `data-component` (with `data-props`), or the component a React development build rendered
+  it with — lands as an instance of the map's Figma component with its props read back through the map (`--map`
+  names the map; `--no-instances` turns this off). The report lists the instances by component, the code components the
+  map does not name, and candidate components: parts repeated with no component, each written as a `COMPONENT` spec
+  ready to send. Paint styles are not bound, and instance slots are not filled from code yet. The write-cost suite
+  records the whole route (seed the tokens, land the capture bound): one call and about 196 tokens.
 - The Claude Code plugin ships `scripts/capture-page.js`, which captures a rendered page as a Figma screen: it opens a
   page URL (a dev server, a deployed page or an HTML file) in the project's own Playwright chromium at one or several
   viewport widths, reads what rendered with the probe the verify step uses, and writes a tree spec per width, its

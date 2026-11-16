@@ -15,6 +15,7 @@ import { markCreated } from "./session";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
 import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./creates";
 import { setBatchPlan } from "./batch-plan";
+import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
 import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
@@ -348,7 +349,9 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined): Pro
     const creates = await resolveCreateOps(list);
     setBatchPlan(creates.plan);
     const modes = await resolveModeOps(list);
-    const trees = await resolveTreeOps(list);
+    // A `bind: true` spec is bound to the file's variables and text styles (and what the create tables make) first: the
+    // bound spec is what resolves, builds and, for a keyed re-send, is compared with the last one (bind.ts).
+    const trees = await resolveTreeOps(list, await bindTreeOps(list, creates));
     // A createTree whose key names a result the file holds becomes an update of it (keyed.ts).
     const keyed = await resolveKeyed(list, trees.targets);
     const patches = await resolvePatchOps(list);
@@ -469,6 +472,10 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined): Pro
     } catch (e) {
       return fail(i, op, e);
     }
+    // A bound spec's reply counts what was bound, instanced and left raw (`unbound` is then part of it).
+    const bound = trees.targets.get(i);
+    const row = rows[i];
+    if (bound && bound.bind && row) { row.bind = bound.bind; delete row.unbound; }
   }
   // Every delete is checked before the first one runs: a deleted node cannot be brought back, so a check that fails
   // must fail while the batch can still be put back whole.
