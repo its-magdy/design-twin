@@ -197,8 +197,12 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
       const unique = s.existing !== null || (!styleNames.get(s.row.name) && plannedStyles.get(s.row.name) === 1);
       if (boundAny || !unique) { styles.delete(ref); continue; }
       const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
-      // the table sets no paragraph field: an existing style keeps its own
-      if (was && !plainParagraph(was)) { styles.delete(ref); continue; }
+      // its paragraph settings once the row has run: the row's paragraph spacing and indent, else the style's own (list
+      // spacing and leading trim a table cannot set)
+      const paraSpacing = set.paragraphSpacing !== undefined ? set.paragraphSpacing : was ? was.paragraphSpacing : 0;
+      const paraIndent = set.paragraphIndent !== undefined ? set.paragraphIndent : was ? was.paragraphIndent : 0;
+      const restPlain = !was || (!was.listSpacing && (was.leadingTrim === undefined || was.leadingTrim === "NONE"));
+      if (paraSpacing || paraIndent || !restPlain) { styles.delete(ref); continue; }
       const lh = set.lineHeight;
       const ls = set.letterSpacing;
       styles.set(ref, textStyleEntry(ref, s.row.name, {

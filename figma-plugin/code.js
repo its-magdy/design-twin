@@ -10727,7 +10727,10 @@
           continue;
         }
         const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
-        if (was && !plainParagraph(was)) {
+        const paraSpacing = set.paragraphSpacing !== void 0 ? set.paragraphSpacing : was ? was.paragraphSpacing : 0;
+        const paraIndent = set.paragraphIndent !== void 0 ? set.paragraphIndent : was ? was.paragraphIndent : 0;
+        const restPlain = !was || !was.listSpacing && (was.leadingTrim === void 0 || was.leadingTrim === "NONE");
+        if (paraSpacing || paraIndent || !restPlain) {
           styles.delete(ref2);
           continue;
         }

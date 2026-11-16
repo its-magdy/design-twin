@@ -251,6 +251,15 @@ void (async () => {
     const second: WriteResult = await w3.api.applyWrites(seedAndCapture());
     check(`the first send binds what the batch makes (${JSON.stringify(first.applied[2] ?? first.error)})`, first.ok && first.applied[2]?.bind?.bound === 3);
     check(`the identical batch again: the keyed result is unchanged (${JSON.stringify(second.applied[2] ?? second.error)})`, second.ok && second.applied[2]?.unchanged === true && second.applied[2]?.bind?.bound === 3);
+    // a text style the batch makes with paragraph spacing or an indent would add them to the text: never bound
+    const w5 = await treeWorld();
+    const para: WriteResult = await w5.api.applyWrites([
+      { op: "createStyles", styles: [{ name: "Spaced", kind: "text", set: { font: "Inter", weight: "Regular", size: 14, paragraphSpacing: 32 } }, { name: "Indented", kind: "text", set: { font: "Inter", weight: "Regular", size: 15, paragraphIndent: 16 } }] },
+      { op: "createTree", bind: true, tree: { name: "Para", box: { w: 300, h: 200 }, children: [{ text: "A", font: { family: "Inter", weight: "Regular", size: 14 } }, { text: "B", font: { family: "Inter", weight: "Regular", size: 15 } }] } },
+    ]);
+    const paraRoot = w5.alive().find((n) => n.name === "Para");
+    check(`a text style the batch makes with paragraph spacing or an indent is not bound (${JSON.stringify(para.applied[1] ?? para.error)})`,
+      para.ok && para.applied[1]?.bind?.bound === 0 && !kids(paraRoot)[0]?.textStyleId && !kids(paraRoot)[1]?.textStyleId);
     // names the resolver reads as a ref (a 40-hex key, an id): never bound to, on the send that makes them or after
     const w4 = await treeWorld();
     const pre: WriteResult = await w4.api.applyWrites([{ op: "createVariables", collection: "Base", modes: ["Light"], variables: [["color/base", "color", "#222222"]] }]);
