@@ -381,11 +381,12 @@ export function outcomeOf(card: Card): Promise<WriteResult> {
 export async function answerTicket(ticket: string, holdMs: number, cancel: boolean): Promise<WriteReply> {
   const card = current && current.ticket === ticket ? current : null;
   if (card && !card.done) {
-    if (!cancel) return hold(card, holdMs);
-    // After whatever the card is doing: an approved batch already running cannot be withdrawn, so then the answer is
-    // its outcome (the withdrawal finds the card done and does nothing).
-    await act(card, () => end(card, { end: "withdrawn" }));
-    return card.outcome;
+    // A withdrawal runs after whatever the card is doing: an approved batch already running cannot be withdrawn, so then
+    // the outcome is that batch's (the withdrawal finds the card done and does nothing). Either way it is answered
+    // through the same hold as a poll — the outcome if it is there in time, else pending (asked again, it answers the
+    // outcome, kept like any other) — so a long apply or put-back never outlasts the agent's call.
+    if (cancel) void act(card, () => end(card, { end: "withdrawn" }));
+    return hold(card, holdMs);
   }
   const f = finished.get(ticket);
   if (f && Date.now() - f.at <= FINISHED_MS) {

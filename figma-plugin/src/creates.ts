@@ -676,7 +676,7 @@ export async function designImpact(ops: readonly WriteOp[]): Promise<WriteImpact
   // has one (a component spec's), else a step of its own.
   for (const k of await keyedImpact(ops, createdThisSession)) {
     const at = steps.filter((x) => x.index === k.index)[0];
-    if (at) at.changedLayers = k.changedLayers;
+    if (at && k.changedLayers !== undefined) at.changedLayers = k.changedLayers;
     else steps.push(k);
   }
   steps.sort((a, b) => a.index - b.index);

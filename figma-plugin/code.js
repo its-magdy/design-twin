@@ -11256,9 +11256,8 @@
   async function answerTicket(ticket, holdMs, cancel) {
     const card = current3 && current3.ticket === ticket ? current3 : null;
     if (card && !card.done) {
-      if (!cancel) return hold(card, holdMs);
-      await act(card, () => end(card, { end: "withdrawn" }));
-      return card.outcome;
+      if (cancel) void act(card, () => end(card, { end: "withdrawn" }));
+      return hold(card, holdMs);
     }
     const f = finished.get(ticket);
     if (f && Date.now() - f.at <= FINISHED_MS) {
@@ -12237,7 +12236,7 @@
     const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds].sort((a, b) => a.index - b.index);
     for (const k of await keyedImpact(ops, createdThisSession)) {
       const at3 = steps2.filter((x) => x.index === k.index)[0];
-      if (at3) at3.changedLayers = k.changedLayers;
+      if (at3 && k.changedLayers !== void 0) at3.changedLayers = k.changedLayers;
       else steps2.push(k);
     }
     steps2.sort((a, b) => a.index - b.index);

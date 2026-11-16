@@ -242,7 +242,9 @@ screens.
       tests, within 0…50 s): then the plugin answers `{pending, ticket, why, waited, note}` and keeps the card up.
       `figma_write {ticket}` sends `writeTicket`, which the plugin answers with the result once there is one, or
       pending again after the hold; `{ticket, cancel: true}` withdraws it (card down, nothing applied, a preview put
-      back). Finished outcomes are kept a while (the newest 20, 30 min), so a repeat answers at once, and an MCP server
+      back), answered within the same hold: when the card is busy longer (an approved batch applying, a preview being
+      put back) it answers pending, and the next `{ticket}` gets the outcome (an approved batch already running is not
+      withdrawn: its result is the outcome). Finished outcomes are kept a while (the newest 20, 30 min), so a repeat answers at once, and an MCP server
       restart loses nothing. A card whose ticket is not asked about within 2 min of its last pending answer ends
       "withdrawn — the agent stopped waiting"; no card stays up longer than 15 min. One waiting card at a time: a second
       batch is refused at once, naming the waiting ticket (`refused: "waiting"`). A late poll gets a refusal that says

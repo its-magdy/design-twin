@@ -301,6 +301,37 @@ export const cases: Case[] = [{
     ok("[REVIEW] a batch refused on its names gets no card", bad.card === undefined && asResult(await bad.reply)?.ok === false);
   },
 }, {
+  name: "Review: a withdrawal while the approved batch still applies answers within its hold — pending, then the outcome",
+  async run() {
+    const w = reviewWorld();
+    await w.allowEdits();
+    const ops: WriteOp[] = [{ op: "setText", nodeId: "t:1", text: "new" }];
+    const { reply, card } = await writeAwaitingReview(w, "h1", ops);
+    // The approved batch's node lookup is where it stalls (a slow file): held until released.
+    const lookup = w.figma.getNodeByIdAsync;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let stalled = false;
+    w.figma.getNodeByIdAsync = async (id: string) => { stalled = true; await gate; return lookup(id); };
+    await answer(w, card, "apply");
+    await tick(() => stalled);
+    let answered = false;
+    const cancel = bridge(w, "h2", "writeTicket", { ticket: String(card?.id), cancel: true, holdMs: 0 }).then((r) => { answered = true; return r; });
+    await tick(() => answered);
+    // Not awaited unless it answered: a withdrawal that waits for the batch would hang the case here.
+    const first = answered ? (await cancel).result : undefined;
+    ok("[CANCEL] withdrawn while the approved batch applies: answered pending within the hold, nothing changed yet",
+      stalled && answered && isPending(first) && first.ticket === card?.id && w.label.characters === "old");
+    release();
+    await cancel;
+    const done = asResult(await reply);
+    ok("[CANCEL] …the approved batch lands (it was already running), and the write's own call gets it", done?.ok === true && w.label.characters === "new");
+    const repliesToCancel = w.posted.filter((m) => m.type === "bridge-result" && m.id === "h2").length;
+    const polled = asResult((await bridge(w, "h3", "writeTicket", { ticket: String(card?.id), holdMs: 0 })).result);
+    ok("[CANCEL] …the next poll answers that outcome, and the withdrawal got one reply only",
+      JSON.stringify(polled) === JSON.stringify(done) && repliesToCancel === 1);
+  },
+}, {
   name: "Review: 'Allow edits' unticked while a preview is on the canvas — it stays, and the reply says so",
   async run() {
     const w = reviewWorld();
