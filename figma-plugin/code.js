@@ -10632,7 +10632,7 @@
       list.set(v.id, e);
       if (e.aliasOf !== void 0) pending2.push(e.aliasOf);
     };
-    for (const v of locals) await add(v, !v.remote);
+    for (const v of locals) await add(v, !v.remote && !readsAsRef(v.name, "VariableID:"));
     const localNames = /* @__PURE__ */ new Map();
     for (const v of locals) localNames.set(v.name, (localNames.get(v.name) || 0) + 1);
     const targets = creates ? [...creates.targets.values()] : [];
@@ -10650,14 +10650,15 @@
         const cell = j >= 0 ? r.values[j] : r.existing ? void 0 : r.values[0];
         const at3 = j >= 0 ? j : 0;
         if (cell === void 0) continue;
+        if (!r.existing && readsAsRef(r.name, "VariableID:")) continue;
         const ref2 = r.existing ? r.existing.id : r.name;
-        const unique = r.existing !== null || !localNames.get(r.name) && plannedNames.get(r.name) === 1;
+        const unique = (r.existing !== null || !localNames.get(r.name) && plannedNames.get(r.name) === 1) && !readsAsRef(r.name, "VariableID:");
         const scopes = r.existing ? r.existing.scopes : ["ALL_SCOPES"];
         const base = unique ? { ref: ref2, name: r.name, scopes } : { ref: ref2, name: r.name, scopes, candidate: false };
         let e = null;
         if (typeof cell === "object") {
           const target = r.targets[at3];
-          if (target && "row" in target) e = { ...base, aliasOf: target.row.existing ? target.row.existing.id : target.row.name };
+          if (target && "row" in target) e = target.row.existing ? { ...base, aliasOf: target.row.existing.id } : readsAsRef(target.row.name, "VariableID:") ? null : { ...base, aliasOf: target.row.name };
           else if (target && creates) {
             const v = creates.refs.variables.get(target.ref);
             if (v) {
@@ -10692,6 +10693,7 @@
     for (const st of fileStyles) {
       styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
       if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
+      if (readsAsRef(st.name, "S:")) continue;
       styles.set(st.id, textStyleEntry(st.id, st.name, {
         family: st.fontName.family,
         style: st.fontName.style,
@@ -10711,6 +10713,10 @@
       for (const s of t.rows) {
         if (s.row.kind !== "text") continue;
         const set = s.row.set;
+        if (readsAsRef(s.row.name, "S:")) {
+          if (s.existing) styles.delete(s.existing.id);
+          continue;
+        }
         const ref2 = s.existing ? s.existing.id : s.row.name;
         const tokens = set.tokens || {};
         const boundAny = Object.keys(tokens).some((k) => Reflect.get(tokens, k) !== void 0 && Reflect.get(tokens, k) !== null);
@@ -10746,7 +10752,10 @@
     };
   }
   function byName(name, idPrefix, inFile, planned) {
-    return inFile === 1 && !planned && name.indexOf(idPrefix) !== 0 && !/^[0-9a-f]{40}$/i.test(name);
+    return inFile === 1 && !planned && !readsAsRef(name, idPrefix);
+  }
+  function readsAsRef(name, idPrefix) {
+    return name.indexOf(idPrefix) === 0 || /^[0-9a-f]{40}$/i.test(name);
   }
 
   // src/creates.ts

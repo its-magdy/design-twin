@@ -33,7 +33,7 @@ import type { WhoamiReply, WriteResult } from "../bridge/src/commands.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
 import { captureSpec, checkCaptured, countNodes, firstFamily, fontStyleName, hexOf, type CapEl, type CapFont, type CapText, type CaptureDoc } from "../design-to-code/capture-spec.ts";
 import { CaptureError, ImageBudget, faceStyle, keptShot, nameFromUrl, outputEscape, within, type Kept } from "../design-to-code/capture-page.ts";
-import { hideChildren, walkCapture } from "../design-to-code/probe-capture.ts";
+import { hideChildren, walkCapture, type WalkEl, type WalkRun } from "../design-to-code/probe-capture.ts";
 import { INIT_SCRIPT } from "../design-to-code/probe-browser.ts";
 import { runAsync, type ProcResult } from "../design-to-code/proc.ts";
 
@@ -460,6 +460,11 @@ const identityHtml = `<!doctype html><body><section id="ids">` +
   `<div id="dcm" data-component="@/ui/card#Card"><p>Inside</p></div>` +
   `<div id="un" data-component="Unknown"><p>Kept</p></div>` +
   `<div id="fib"><span>Fiber text</span></div><div id="fib2"><p>Plain</p></div></section>` +
+  // a mapped inline component inside a paragraph, and inside an inline element; prototype-named props and components
+  `<section id="more"><p id="inl">Text <span data-component="Badge" data-props='{"tone":"info"}'>New</span> tail</p>` +
+  `<p id="deep">Lead <em>in <span data-component="Badge">Deep</span></em> end</p>` +
+  `<div id="proto" data-component="Button" data-props='{"__proto__":"ghost","constructor":"x"}'><span>P</span></div>` +
+  `<div id="ctor" data-component="constructor"><p>C</p></div><div id="ctor2" data-component="constructor"><p>D</p></div></section>` +
   `<script>
     function Inner() {} function Outer() {} Outer.displayName = "Badge"; function Widget() {}
     const fiberOf = (el) => ({ tag: 5, stateNode: el });
@@ -570,6 +575,21 @@ async function e2e(): Promise<void> {
   check(`a background screenshot of an element with its own text leaves the text out of the picture (it is a TEXT layer): the same picture as the empty box (${bgText.stderr.slice(0, 160)})`,
     bgText.status === 0 && bgFile("div#a") !== undefined && bgFile("div#a") === bgFile("div#b") && walk(bgSpec).some((n) => n.text === "Label"));
 
+  // the component map end to end: a --root on a mapped component, and counts keyed by prototype names
+  const mapFile = path.join(project, "ids.map.json");
+  fs.writeFileSync(mapFile, JSON.stringify({ version: 1, components: {
+    k1: { figma: { name: "Button", key: "c3".repeat(20) }, code: { module: "@/ui/button", export: "Button" }, props: { Variant: { kind: "enum", codeProp: "variant", values: { Primary: "primary", Ghost: "ghost" } } } },
+  } }));
+  const rootRun = await cli(["--url", base + "/identity.html", "--root", "#dc", "--map", mapFile, "--name", "rootbtn", "--project", project], project);
+  const rootSpec = rootRun.status === 0 ? readJson(path.join(project, "design", "capture", "rootbtn@1280.json")) as TreeNodeSpec : {};
+  check(`--root on an element the map names: the keyed screen frame holding its instance, props read back (${rootRun.stderr.slice(0, 160)}${JSON.stringify(rootSpec).slice(0, 300)})`,
+    rootSpec.key === "capture:rootbtn@1280" && kids(rootSpec).length === 1 && kids(rootSpec)[0]?.component === "c3".repeat(20) && same(kids(rootSpec)[0]?.props, { Variant: "Primary" }));
+  const idsRun = await cli(["--url", base + "/identity.html", "--map", mapFile, "--name", "ids", "--project", project], project);
+  const idsRep = idsRun.status === 0 ? readJson(path.join(project, "design", "capture", "ids.capture.json")) as { widths: Array<{ instances: { byComponent: Record<string, number> }; namedUnmapped: Record<string, number> }> } : { widths: [] };
+  const w0 = idsRep.widths[0];
+  check(`…the report counts by name from zero, a component called constructor too (${JSON.stringify(w0?.namedUnmapped)})`,
+    w0 !== undefined && w0.namedUnmapped["constructor"] === 2 && w0.namedUnmapped.Unknown === 1 && w0.instances.byComponent.Button === 2);
+
   await hideRestores();
   await identityWalk();
   await land(ops, rep);
@@ -629,14 +649,31 @@ async function identityWalk(): Promise<void> {
     const els = walked.root ? walked.root.children.flatMap((c) => (c.kind === "el" ? [c] : [])) : [];
     const [dc, dcm, un, fib, fib2] = els;
     check(`data-component + data-props: the component, its string/number/boolean props, its text; nothing inside walked (${JSON.stringify(dc?.component)})`,
-      same(dc?.component, { name: "Button", props: { variant: "primary", disabled: true, size: 2 }, text: "Save" }) && dc?.children.length === 0 && dc.text === null);
+      same(dc?.component, { name: "Button", props: [["variant", "primary"], ["disabled", true], ["size", 2]], text: "Save" }) && dc?.children.length === 0 && dc.text === null);
     check("…a module#Export name matches as given", dcm?.component?.name === "@/ui/card#Card" && dcm.children.length === 0);
     check("…a name the map does not have: walked as before, its name kept (namedUnmapped)", un?.component === undefined && un?.codeName === "Unknown" && (un?.children.length ?? 0) > 0);
     check(`React fibers: the outermost composite whose first host is the element wins (a forwardRef's render name), a children object left out (${JSON.stringify(fib?.component)})`,
-      same(fib?.component, { name: "Badge", props: { tone: "warn" }, text: "Fiber text" }));
+      same(fib?.component, { name: "Badge", props: [["tone", "warn"]], text: "Fiber text" }));
     check("…a composite the map does not name is the element's codeName", fib2?.component === undefined && fib2?.codeName === "Widget");
     const off = await pg.evaluate(walkCapture, { root: "#ids", maxElements: 100 });
     check("without identity nothing is read (no component, no codeName)", off.root !== null && off.root.children.every((c) => c.kind !== "el" || (c.component === undefined && c.codeName === undefined)));
+    // the --root element itself: its code component read, nothing inside it walked
+    const rootDc = await pg.evaluate(walkCapture, { root: "#dc", maxElements: 100, identity: true, components: ["Button"] });
+    check(`a --root element the map names: the root carries its component, nothing inside walked (${JSON.stringify(rootDc.root?.component)})`,
+      rootDc.root?.component?.name === "Button" && rootDc.root.children.length === 0 && rootDc.root.text === null);
+    const rootUn = await pg.evaluate(walkCapture, { root: "#un", maxElements: 100, identity: true, components: ["Button"] });
+    check("…one it does not name: walked as before, its name kept", rootUn.root?.component === undefined && rootUn.root?.codeName === "Unknown" && (rootUn.root?.children.length ?? 0) > 0);
+    // a mapped inline component is not folded into its paragraph's text (directly, or inside an inline element)
+    const more = await pg.evaluate(walkCapture, { root: "#more", maxElements: 100, identity: true, components: ["Button", "Badge"] });
+    const all = (n: WalkEl | WalkRun): Array<WalkEl | WalkRun> => [n, ...(n.kind === "el" ? n.children.flatMap(all) : [])];
+    const found = more.root ? all(more.root) : [];
+    const badges = found.flatMap((n) => (n.kind === "el" && n.component?.name === "Badge" ? [n] : []));
+    const runsOf = found.flatMap((n) => (n.kind === "run" ? [n.text] : []));
+    check(`…a mapped inline component inside text, and one inside an inline element: each its own component, the text around it runs (${JSON.stringify(runsOf)})`,
+      badges.length === 2 && same(badges[0]?.component, { name: "Badge", props: [["tone", "info"]], text: "New" }) && runsOf.includes("Text") && runsOf.includes("tail") && runsOf.includes("Lead") && runsOf.includes("end") && !runsOf.some((t) => /New|Deep/.test(t)));
+    const proto = found.find((n): n is WalkEl => n.kind === "el" && n.component?.name === "Button");
+    check(`…data-props keys named __proto__ and constructor are kept as props (${JSON.stringify(proto?.component?.props)})`,
+      same(proto?.component?.props, [["__proto__", "ghost"], ["constructor", "x"]]));
   } finally {
     await browser.close();
   }

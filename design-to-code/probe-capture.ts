@@ -76,8 +76,9 @@ export interface WalkEl {
   dropped: string[];
   /** the code component this element renders, when the component map names it (WalkInput.components): its name as it
    *  matched ("Export" or "module#Export"), its props as rendered (strings, numbers, booleans; a string `children`), and
-   *  its rendered text. Nothing inside it is walked: it lands as an instance. */
-  component?: { name: string; props: Record<string, string | number | boolean>; text: string };
+   *  its rendered text. Nothing inside it is walked: it lands as an instance. The props are [name, value] pairs: an
+   *  object would lose a prop named `__proto__` on its way out of the page. */
+  component?: { name: string; props: Array<[string, string | number | boolean]>; text: string };
   /** the code component the element renders when the map names none of its candidates (the outermost one) */
   codeName?: string;
   children: Array<WalkEl | WalkRun>;
@@ -133,7 +134,8 @@ export function walkCapture(input: WalkInput): WalkOutput {
     if (known !== undefined) return known;
     const tag = e.tagName.toLowerCase();
     let ok = tag === "br" || tag === "wbr";
-    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag)) {
+    // an element the map names is never folded into a text (nor is one holding it): it is visited, and lands as an instance
+    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag) && !mapped(e)) {
       const d = getComputedStyle(e).getPropertyValue("display").trim();
       ok = (d === "inline" || d === "contents") && Array.from(e.children).every((c) => isInline(c));
     }
@@ -236,21 +238,34 @@ export function walkCapture(input: WalkInput): WalkOutput {
     return nameOf(getK(t, "render"), depth + 1) || nameOf(getK(t, "type"), depth + 1);
   };
   // the string, number and boolean entries (a `children` that is a string included; elements, functions, objects not)
-  const plainProps = (o: unknown): Record<string, string | number | boolean> => {
-    const out: Record<string, string | number | boolean> = {};
+  // (own keys only, as [name, value] pairs: `__proto__` or `constructor` is a prop like any other)
+  type Props = Array<[string, string | number | boolean]>;
+  const plainProps = (o: unknown): Props => {
+    const out: Props = [];
     if (!o || typeof o !== "object" || Array.isArray(o)) return out;
     for (const k of Object.keys(o)) {
       const v = getK(o, k);
-      if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) || typeof v === "boolean") out[k] = v;
+      if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) || typeof v === "boolean") out.push([k, v]);
     }
     return out;
   };
-  const identityOf = (e: PageElement): { hit: { name: string; props: Record<string, string | number | boolean> } | null; codeName: string | null } => {
+  type Identity = { hit: { name: string; props: Props } | null; codeName: string | null };
+  const identityMemo = new Map<PageElement, Identity>();
+  const identityOf = (e: PageElement): Identity => {
+    const seen = identityMemo.get(e);
+    if (seen !== undefined) return seen;
+    const id = readIdentity(e);
+    identityMemo.set(e, id);
+    return id;
+  };
+  /** The element renders a code component the map names (identity read only when asked). */
+  const mapped = (e: PageElement): boolean => input.identity === true && identityOf(e).hit !== null;
+  const readIdentity = (e: PageElement): Identity => {
     const dc = (e.getAttribute("data-component") || "").trim();
     if (dc) {
-      let props: Record<string, string | number | boolean> = {};
+      let props: Props = [];
       const raw = e.getAttribute("data-props");
-      if (raw) { try { const parsed: unknown = JSON.parse(raw); props = plainProps(parsed); } catch { props = {}; } }
+      if (raw) { try { const parsed: unknown = JSON.parse(raw); props = plainProps(parsed); } catch { props = []; } }
       return known.has(dc) ? { hit: { name: dc, props }, codeName: null } : { hit: null, codeName: dc };
     }
     const fk = Object.keys(e).find((k) => k.indexOf("__reactFiber$") === 0);
@@ -415,7 +430,13 @@ export function walkCapture(input: WalkInput): WalkOutput {
   count++;
   const root = element(rootEl, rootCs);
   if (!input.root) { root.rect = rootBox; root.clip = true; }
-  kids(rootEl, root.children);
+  // the root's code component too (a --root on a component the map names: nothing inside it is walked)
+  if (input.identity) {
+    const id = identityOf(rootEl);
+    if (id.hit) root.component = { name: id.hit.name, props: id.hit.props, text: childrenText(rootEl) };
+    else if (id.codeName) root.codeName = id.codeName;
+  }
+  if (!root.component) kids(rootEl, root.children);
   return { root, doc, elements: count, skipped, htmlPath, bodyPath };
 }
 

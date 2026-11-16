@@ -134,6 +134,8 @@ function figmaUsageOf(entry: MapEntry, codeProps: CodePropValues, text?: string,
   const mapIdx = propsByBase<PropMap>(entry.props);
   for (const c of mapIdx.collisions) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not written` });
   const has = (k: string): boolean => Object.prototype.hasOwnProperty.call(codeProps, k);
+  /** the props decoded from a code prop the element passed (not inferred from its absence) */
+  const fromCode = new Set<string>();
   for (const [base, { value: p }] of Object.entries(mapIdx.props)) {
     if (mapIdx.ambiguous.has(base)) continue; // warned above
     if (p.kind === "instance") { warn({ code: "slot-not-written", prop: base, message: `'${name}'.${base} is an instance prop (a slot): a capture does not write what fills it yet` }); continue; }
@@ -151,7 +153,7 @@ function figmaUsageOf(entry: MapEntry, codeProps: CodePropValues, text?: string,
         continue;
       }
       const hits = options.filter((o) => table[o] === given);
-      if (hits.length === 1 && hits[0] !== undefined) { props[base] = hits[0]; continue; }
+      if (hits.length === 1 && hits[0] !== undefined) { props[base] = hits[0]; fromCode.add(base); continue; }
       if (hits.length > 1) { warn({ code: "ambiguous-variant-value", prop: base, message: `'${name}'.${base}: the code value ${JSON.stringify(given)} is what ${hits.length} options map to (${hits.slice(0, 3).join(", ")}): not written, the component's default shows` }); continue; }
       warn({ code: "unmapped-variant-value", prop: base, message: `'${name}'.${base}: the code value ${JSON.stringify(given)} is in none of the map's values: not written, the component's default shows` });
       continue;
@@ -161,21 +163,35 @@ function figmaUsageOf(entry: MapEntry, codeProps: CodePropValues, text?: string,
       if (given === undefined) { if (p.omitDefault === true && p.default !== undefined) props[base] = p.default; continue; }
       if (typeof given !== "boolean") { warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a boolean but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` }); continue; }
       props[base] = given;
+      fromCode.add(base);
       continue;
     }
     // a string: the code's, else a `children` prop's rendered text
     if (given === undefined) { if (p.codeProp === "children" && text !== undefined && text !== "") props[base] = text; continue; }
     if (typeof given === "boolean") { warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a string but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` }); continue; }
     props[base] = String(given);
+    fromCode.add(base);
   }
-  // A variantOverride whose code target is this component: its `when` variant values say which variant it is.
+  // A variantOverride whose code target is this component, and only its: its `when` variant values say which variant it
+  // is. A target the entry's own code shares says nothing (the props decoded above do); a value decoded from a code prop
+  // the element passed wins over the override's, warned when they differ.
   if (codeName !== undefined) {
     const bare = codeName.indexOf("#") >= 0 ? codeName.slice(codeName.lastIndexOf("#") + 1) : codeName;
     const mod = codeName.indexOf("#") >= 0 ? codeName.slice(0, codeName.lastIndexOf("#")) : null;
-    const hits = (entry.variantOverrides || []).filter((o) => o.code.export === bare && (mod === null || o.code.module === mod));
+    const names = (c: { module: string; export: string }): boolean => c.export === bare && (mod === null || c.module === mod);
+    const hits = (entry.variantOverrides || []).filter((o) => names(o.code));
     const first = hits[0];
     if (hits.length > 1) warn({ code: "ambiguous-variant-override", message: `${hits.length} variantOverrides of '${name}' name the code target ${codeName}: their variant values are not written` });
-    else if (first) for (const [k, v] of Object.entries(propsByBase(first.when).props)) props[k] = v.value;
+    else if (first && !names(entry.code)) {
+      for (const [k, v] of Object.entries(propsByBase(first.when).props)) {
+        const had = Object.prototype.hasOwnProperty.call(props, k) ? props[k] : undefined;
+        if (fromCode.has(k) && had !== undefined && String(had) !== v.value) {
+          warn({ code: "conflicting-code-prop", prop: k, message: `'${name}'.${k}: the element's code props say '${String(had)}', the variantOverride for ${codeName} says '${v.value}': the code props' value is written` });
+          continue;
+        }
+        props[k] = v.value;
+      }
+    }
   }
   return { component: componentRef(entry), props, warnings };
 }

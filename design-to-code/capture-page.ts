@@ -41,6 +41,7 @@ import { sniffImage, MAX_BATCH_IMAGE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE } fr
 import { MAX_TREE_NODES } from "../bridge/src/tree-spec.ts";
 import type { TreeNodeSpec } from "../bridge/src/tree-spec.ts";
 import { sha256Hex } from "../bridge/src/hash.ts";
+import { nullProto } from "../bridge/src/json-util.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind } from "./pw-errors.ts";
@@ -446,8 +447,9 @@ export async function captureWidth(browser: Browser, width: number, o: CaptureOp
     };
     const runText = (r: WalkRun, parent: WalkEl): CapText => ({ kind: "text", text: r.text, rect: r.rect, lines: r.lines, font: fontOf(parent) });
     // the instances: the component map read in the write direction (code-usage.ts figmaUsageOf)
-    const instances: InstanceReport = { count: 0, byComponent: {}, warnings: [], moreWarnings: 0 };
-    const namedUnmapped: Record<string, number> = {};
+    // counts by user names: prototype-free records (a component called `constructor` counts from zero)
+    const instances: InstanceReport = { count: 0, byComponent: nullProto<number>(), warnings: [], moreWarnings: 0 };
+    const namedUnmapped = nullProto<number>();
     const noteInstance = (msg: string): void => { if (instances.warnings.length < MAX_INSTANCE_WARNINGS) instances.warnings.push(msg); else instances.moreWarnings++; };
 
     const convert = async (e: WalkEl, isRoot: boolean): Promise<CapEl> => {
@@ -469,7 +471,10 @@ export async function captureWidth(browser: Browser, width: number, o: CaptureOp
       if (e.component && o.map) {
         const hit = o.map.get(e.component.name);
         if (hit && "entry" in hit) {
-          const u = figmaUsageOf(hit.entry, e.component.props, e.component.text, e.component.name);
+          // the props as own keys of a prototype-free record (`__proto__`, `constructor` are props like any other)
+          const codeProps = nullProto<string | number | boolean>();
+          for (const [k, v] of e.component.props) Object.defineProperty(codeProps, k, { value: v, enumerable: true, writable: true, configurable: true });
+          const u = figmaUsageOf(hit.entry, codeProps, e.component.text, e.component.name);
           el.instance = { component: u.component, props: u.props, name: hit.entry.figma.name };
           instances.count++;
           instances.byComponent[hit.entry.figma.name] = (instances.byComponent[hit.entry.figma.name] ?? 0) + 1;

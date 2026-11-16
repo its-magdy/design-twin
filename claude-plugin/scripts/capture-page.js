@@ -700,7 +700,7 @@ function walkCapture(input) {
     if (known2 !== void 0) return known2;
     const tag = e.tagName.toLowerCase();
     let ok = tag === "br" || tag === "wbr";
-    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag)) {
+    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag) && !mapped(e)) {
       const d = getComputedStyle(e).getPropertyValue("display").trim();
       ok = (d === "inline" || d === "contents") && Array.from(e.children).every((c) => isInline(c));
     }
@@ -800,25 +800,34 @@ function walkCapture(input) {
     return nameOf(getK(t, "render"), depth + 1) || nameOf(getK(t, "type"), depth + 1);
   };
   const plainProps = (o) => {
-    const out = {};
+    const out = [];
     if (!o || typeof o !== "object" || Array.isArray(o)) return out;
     for (const k of Object.keys(o)) {
       const v = getK(o, k);
-      if (typeof v === "string" || typeof v === "number" && Number.isFinite(v) || typeof v === "boolean") out[k] = v;
+      if (typeof v === "string" || typeof v === "number" && Number.isFinite(v) || typeof v === "boolean") out.push([k, v]);
     }
     return out;
   };
+  const identityMemo = /* @__PURE__ */ new Map();
   const identityOf = (e) => {
+    const seen = identityMemo.get(e);
+    if (seen !== void 0) return seen;
+    const id = readIdentity(e);
+    identityMemo.set(e, id);
+    return id;
+  };
+  const mapped = (e) => input.identity === true && identityOf(e).hit !== null;
+  const readIdentity = (e) => {
     const dc = (e.getAttribute("data-component") || "").trim();
     if (dc) {
-      let props = {};
+      let props = [];
       const raw = e.getAttribute("data-props");
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
           props = plainProps(parsed);
         } catch {
-          props = {};
+          props = [];
         }
       }
       return known.has(dc) ? { hit: { name: dc, props }, codeName: null } : { hit: null, codeName: dc };
@@ -1026,7 +1035,12 @@ function walkCapture(input) {
     root.rect = rootBox;
     root.clip = true;
   }
-  kids(rootEl, root.children);
+  if (input.identity) {
+    const id = identityOf(rootEl);
+    if (id.hit) root.component = { name: id.hit.name, props: id.hit.props, text: childrenText(rootEl) };
+    else if (id.codeName) root.codeName = id.codeName;
+  }
+  if (!root.component) kids(rootEl, root.children);
   return { root, doc, elements: count2, skipped, htmlPath, bodyPath };
 }
 function eagerImages() {
@@ -4117,6 +4131,7 @@ function figmaUsageOf(entry, codeProps, text, codeName) {
   const mapIdx = propsByBase(entry.props);
   for (const c of mapIdx.collisions) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not written` });
   const has = (k) => Object.prototype.hasOwnProperty.call(codeProps, k);
+  const fromCode = /* @__PURE__ */ new Set();
   for (const [base, { value: p }] of Object.entries(mapIdx.props)) {
     if (mapIdx.ambiguous.has(base)) continue;
     if (p.kind === "instance") {
@@ -4137,6 +4152,7 @@ function figmaUsageOf(entry, codeProps, text, codeName) {
       const hits = options.filter((o) => table[o] === given);
       if (hits.length === 1 && hits[0] !== void 0) {
         props[base] = hits[0];
+        fromCode.add(base);
         continue;
       }
       if (hits.length > 1) {
@@ -4156,6 +4172,7 @@ function figmaUsageOf(entry, codeProps, text, codeName) {
         continue;
       }
       props[base] = given;
+      fromCode.add(base);
       continue;
     }
     if (given === void 0) {
@@ -4167,14 +4184,25 @@ function figmaUsageOf(entry, codeProps, text, codeName) {
       continue;
     }
     props[base] = String(given);
+    fromCode.add(base);
   }
   if (codeName !== void 0) {
     const bare = codeName.indexOf("#") >= 0 ? codeName.slice(codeName.lastIndexOf("#") + 1) : codeName;
     const mod = codeName.indexOf("#") >= 0 ? codeName.slice(0, codeName.lastIndexOf("#")) : null;
-    const hits = (entry.variantOverrides || []).filter((o) => o.code.export === bare && (mod === null || o.code.module === mod));
+    const names = (c) => c.export === bare && (mod === null || c.module === mod);
+    const hits = (entry.variantOverrides || []).filter((o) => names(o.code));
     const first = hits[0];
     if (hits.length > 1) warn({ code: "ambiguous-variant-override", message: `${hits.length} variantOverrides of '${name}' name the code target ${codeName}: their variant values are not written` });
-    else if (first) for (const [k, v] of Object.entries(propsByBase(first.when).props)) props[k] = v.value;
+    else if (first && !names(entry.code)) {
+      for (const [k, v] of Object.entries(propsByBase(first.when).props)) {
+        const had = Object.prototype.hasOwnProperty.call(props, k) ? props[k] : void 0;
+        if (fromCode.has(k) && had !== void 0 && String(had) !== v.value) {
+          warn({ code: "conflicting-code-prop", prop: k, message: `'${name}'.${k}: the element's code props say '${String(had)}', the variantOverride for ${codeName} says '${v.value}': the code props' value is written` });
+          continue;
+        }
+        props[k] = v.value;
+      }
+    }
   }
   return { component: componentRef(entry), props, warnings };
 }
@@ -5047,8 +5075,8 @@ async function captureWidth(browser, width, o) {
       return { widths, color, from, align: align === "outside" || align === "center" ? align : "inside" };
     };
     const runText = (r3, parent) => ({ kind: "text", text: r3.text, rect: r3.rect, lines: r3.lines, font: fontOf2(parent) });
-    const instances = { count: 0, byComponent: {}, warnings: [], moreWarnings: 0 };
-    const namedUnmapped = {};
+    const instances = { count: 0, byComponent: nullProto(), warnings: [], moreWarnings: 0 };
+    const namedUnmapped = nullProto();
     const noteInstance = (msg) => {
       if (instances.warnings.length < MAX_INSTANCE_WARNINGS) instances.warnings.push(msg);
       else instances.moreWarnings++;
@@ -5095,7 +5123,9 @@ async function captureWidth(browser, width, o) {
       if (e.component && o.map) {
         const hit = o.map.get(e.component.name);
         if (hit && "entry" in hit) {
-          const u = figmaUsageOf(hit.entry, e.component.props, e.component.text, e.component.name);
+          const codeProps = nullProto();
+          for (const [k, v] of e.component.props) Object.defineProperty(codeProps, k, { value: v, enumerable: true, writable: true, configurable: true });
+          const u = figmaUsageOf(hit.entry, codeProps, e.component.text, e.component.name);
           el.instance = { component: u.component, props: u.props, name: hit.entry.figma.name };
           instances.count++;
           instances.byComponent[hit.entry.figma.name] = (instances.byComponent[hit.entry.figma.name] ?? 0) + 1;

@@ -282,7 +282,8 @@ anything resolves, then builds the bound spec as if it had been written so:
   collection's default mode, through its aliases (a broken or looping chain has none). A variable or style is named by
   its name when nothing else in the file or the batch has that name, else (the file's) by its id; one a create table
   earlier in the batch makes (`seedTokens`, `createVariables`, `createStyles`) must be new and made once. So the same
-  seed-and-capture batch sent again names each one as the first send did.
+  seed-and-capture batch sent again names each one as the first send did. One whose name reads as an id
+  (`VariableID:…`, `S:…`) or a 40-hex key is never bound to: its values stay raw.
 - **Several equal.** In order: drop a variable whose `scopes` leave the field out; keep those whose name has a word for
   the field (fill: bg, background, surface, fill; text: text, fg, foreground, content; stroke: border, stroke, outline,
   divider; spacing: space, spacing, gap, padding, inset, gutter; radius: radius, radii, round, corner) when any has; drop

@@ -115,12 +115,14 @@ Instances: the capture's walker reads each element's code component — its `dat
 `module#Export`, props in `data-props`), else a React development build's fibers (the composite components whose first
 host node is the element, outermost first) — and the first one the component map names (`design/codeconnect.local.json`,
 or `--map`) is resolved in the write direction (`design-to-code/code-usage.ts` `figmaUsageOf`: enum values inverted, a
-boolean as it is, a `children` string from the rendered text, a variantOverride's `when` values; a code prop the element
-does not pass reads back as the one option the read direction writes no code prop for — mapped to null, or the default
-with `omitDefault` — else it is left out; what cannot be read back is left at the component's default and warned). That
-element lands as an INSTANCE (by the entry's key, else id, else name) at its place and size, nothing inside it captured
-(a `--root` element the map names is that instance inside the keyed screen frame); a component the file lacks refuses the batch with candidates,
-as any name does. Slots (instance-swap properties) are not filled from code yet. Parts repeated with no component are
+boolean as it is, a `children` string from the rendered text, the `when` values of the one variantOverride whose code
+target is the element's and not the entry's own — a value decoded from a code prop the element passed wins, warned when
+they differ; a code prop the element does not pass reads back as the one option the read direction writes no code prop
+for — mapped to null, or the default with `omitDefault` — else it is left out; what cannot be read back is left at the
+component's default and warned). That element lands as an INSTANCE (by the entry's key, else id, else name) at its
+place and size, nothing inside it captured — an inline one too (it is never folded into the text around it), and a
+`--root` element the map names is that instance inside the keyed screen frame; a component the file lacks refuses the
+batch with candidates, as any name does. Slots (instance-swap properties) are not filled from code yet. Parts repeated with no component are
 listed in the report as candidate components, each written as a `COMPONENT` spec (a TEXT property per text that differs)
 for a `createTree` of its own; making one does not replace the captured copies — map it, then capture again.
 

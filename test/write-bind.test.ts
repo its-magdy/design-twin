@@ -122,6 +122,23 @@ console.log("\nthe component map in the write direction (code-usage.ts):");
   check("a code value in none of the values, a boolean given as text: not written, warned",
     unknown.props.Variant === undefined && unknown.warnings.some((w) => w.code === "unmapped-variant-value") && unknown.warnings.some((w) => w.code === "prop-value-mismatch" && w.prop === "Disabled"));
   check("a variantOverride whose code target is the element's component gives its `when` values", figmaUsageOf(button, {}, "Go", "GhostButton").props.Variant === "Ghost" && figmaUsageOf(button, {}, "Go", "@/ui/button#GhostButton").props.Variant === "Ghost");
+  // a variantOverride whose code target the entry's own code shares says nothing; one of its own fills in, the code props win
+  const shared: MapEntry = { figma: { name: "Button" }, code: { module: "ui", export: "Button" },
+    props: { Tone: { kind: "enum", codeProp: "tone", values: { Primary: "primary", Ghost: "ghost" } } },
+    variantOverrides: [{ when: { Tone: "Ghost" }, code: { module: "ui", export: "Button" } }] };
+  check("an override sharing the entry's own code target: the decoded variant stands (not the override's `when`)",
+    figmaUsageOf(shared, { tone: "primary" }, "", "ui#Button").props.Tone === "Primary" && figmaUsageOf(shared, { tone: "primary" }, "", "Button").props.Tone === "Primary");
+  const own: MapEntry = { ...shared, variantOverrides: [{ when: { Tone: "Ghost" }, code: { module: "ui", export: "GhostButton" } }] };
+  const clash = figmaUsageOf(own, { tone: "primary" }, "", "GhostButton");
+  check("an override of its own: its `when` fills a value the code did not pass; a value the code passed wins, warned",
+    figmaUsageOf(own, {}, "", "GhostButton").props.Tone === "Ghost" && clash.props.Tone === "Primary" && clash.warnings.some((w) => w.code === "conflicting-code-prop" && w.prop === "Tone"));
+  // prototype keys are props like any other
+  const protoEntry: MapEntry = { figma: { name: "Odd" }, code: { module: "ui", export: "Odd" },
+    props: { Kind: { kind: "enum", codeProp: "__proto__", values: { Ghost: "ghost", Plain: "plain" } }, Ctor: { kind: "string", codeProp: "constructor" } } };
+  const protoProps: Record<string, string> = Object.create(null) as Record<string, string>;
+  Object.defineProperty(protoProps, "__proto__", { value: "ghost", enumerable: true });
+  const pu = figmaUsageOf(protoEntry, protoProps, "");
+  check("a code prop named __proto__ is read as given; constructor absent is absent (not Object's)", pu.props.Kind === "Ghost" && pu.props.Ctor === undefined && figmaUsageOf(protoEntry, {}, "").props.Ctor === undefined);
   check("the component reference: a 40-hex key, else the id, else the name", componentRef(button) === KEY && componentRef({ ...button, figma: { name: "B", key: "K", id: "1:2" } }) === "1:2" && componentRef({ ...button, figma: { name: "B" } }) === "B");
   const idx = mapEntriesByCode({
     components: {
@@ -230,6 +247,23 @@ void (async () => {
     const second: WriteResult = await w3.api.applyWrites(seedAndCapture());
     check(`the first send binds what the batch makes (${JSON.stringify(first.applied[2] ?? first.error)})`, first.ok && first.applied[2]?.bind?.bound === 3);
     check(`the identical batch again: the keyed result is unchanged (${JSON.stringify(second.applied[2] ?? second.error)})`, second.ok && second.applied[2]?.unchanged === true && second.applied[2]?.bind?.bound === 3);
+    // names the resolver reads as a ref (a 40-hex key, an id): never bound to, on the send that makes them or after
+    const w4 = await treeWorld();
+    const pre: WriteResult = await w4.api.applyWrites([{ op: "createVariables", collection: "Base", modes: ["Light"], variables: [["color/base", "color", "#222222"]] }]);
+    const baseId = Object.values(w4.scene.variables).find((x) => x.name === "color/base")?.id ?? "";
+    const HEX40 = "ab".repeat(20);
+    const oddBatch = () => [
+      { op: "createVariables", collection: "Odd", modes: ["Light"], variables: [[HEX40, "color", "#123456"], [baseId, "color", "#333333"]] },
+      { op: "createStyles", styles: [{ name: "S:odd", kind: "text", set: { font: "Inter", weight: "Regular", size: 13 } }] },
+      { op: "createTree", bind: true, tree: { name: "Odd", key: "capture:odd@300", box: { w: 300, h: 200 }, fills: [{ type: "solid", color: "#123456" }], layout: { display: "flex" }, children: [
+        { name: "Box", box: { w: 10, h: 10 }, fills: [{ type: "solid", color: "#333333" }] }, { text: "Hi", font: { family: "Inter", weight: "Regular", size: 13 } }] } },
+    ];
+    const odd1: WriteResult = await w4.api.applyWrites(oddBatch());
+    const oddRoot = w4.alive().find((n) => n.name === "Odd");
+    check(`a new variable named like a key or an id, a new text style named like an id: left raw on the send that makes them, the batch lands (${JSON.stringify(odd1.applied[2] ?? odd1.error)})`,
+      pre.ok && baseId !== "" && odd1.ok && odd1.applied[2]?.bind?.bound === 0 && !paintVar(oddRoot) && !paintVar(kids(oddRoot)[0]) && !kids(oddRoot)[1]?.textStyleId);
+    const odd2: WriteResult = await w4.api.applyWrites(oddBatch());
+    check(`…and on the re-send, once they exist: still raw, unchanged (${JSON.stringify(odd2.applied[2] ?? odd2.error)})`, odd2.ok && odd2.applied[2]?.unchanged === true && odd2.applied[2]?.bind?.bound === 0);
     // without bind nothing binds (the op is as before)
     const r3: WriteResult = await w2.api.applyWrites([{ op: "createTree", tree: { ...spec2, name: "Three" } }]);
     check("without bind: nothing is bound, the reply as before (`unbound`, no `bind`)", r3.ok && r3.applied[0]?.bind === undefined && r3.applied[0]?.unbound === 4);

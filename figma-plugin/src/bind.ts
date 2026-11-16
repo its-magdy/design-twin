@@ -107,7 +107,7 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
     list.set(v.id, e);
     if (e.aliasOf !== undefined) pending.push(e.aliasOf);
   };
-  for (const v of locals) await add(v, !v.remote);
+  for (const v of locals) await add(v, !v.remote && !readsAsRef(v.name, "VariableID:"));
 
   // ---- the batch's create tables: a row's value in its collection's default mode replaces what the file holds
   const localNames = new Map<string, number>();
@@ -126,15 +126,19 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
       const cell = j >= 0 ? r.values[j] : r.existing ? undefined : r.values[0];
       const at = j >= 0 ? j : 0;
       if (cell === undefined) continue;
+      // A new name that reads as an id or a key is left out altogether (as its ref it could even stand for another
+      // variable's id in this table).
+      if (!r.existing && readsAsRef(r.name, "VariableID:")) continue;
       const ref = r.existing ? r.existing.id : r.name;
       // A new name the file or another table also has would match several things once the batch runs: never bound to.
-      const unique = r.existing !== null || (!localNames.get(r.name) && plannedNames.get(r.name) === 1);
+      const unique = (r.existing !== null || (!localNames.get(r.name) && plannedNames.get(r.name) === 1)) && !readsAsRef(r.name, "VariableID:");
       const scopes = r.existing ? r.existing.scopes : ["ALL_SCOPES"];
       const base: BindVariable = unique ? { ref, name: r.name, scopes } : { ref, name: r.name, scopes, candidate: false };
       let e: BindVariable | null = null;
       if (typeof cell === "object") {
         const target = r.targets[at];
-        if (target && "row" in target) e = { ...base, aliasOf: target.row.existing ? target.row.existing.id : target.row.name };
+        // (an alias of a new row whose name reads as a ref: no value here, never bound)
+        if (target && "row" in target) e = target.row.existing ? { ...base, aliasOf: target.row.existing.id } : readsAsRef(target.row.name, "VariableID:") ? null : { ...base, aliasOf: target.row.name };
         else if (target && creates) {
           const v = creates.refs.variables.get(target.ref);
           if (v) { e = { ...base, aliasOf: v.id }; pending.push(v.id); }
@@ -167,6 +171,7 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
     styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
     // every field a style has in Figma; one that cannot be read leaves the style out (it is never matched half-known)
     if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
+    if (readsAsRef(st.name, "S:")) continue;
     styles.set(st.id, textStyleEntry(st.id, st.name, {
       family: st.fontName.family, style: st.fontName.style, size: st.fontSize,
       lineHeight: st.lineHeight, letterSpacing: st.letterSpacing, textCase: st.textCase, textDecoration: st.textDecoration,
@@ -179,6 +184,8 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
     for (const s of t.rows) {
       if (s.row.kind !== "text") continue;
       const set = s.row.set;
+      // a name that reads as an id or a key: never bound to (a new one left out, an existing one taken out by its id)
+      if (readsAsRef(s.row.name, "S:")) { if (s.existing) styles.delete(s.existing.id); continue; }
       const ref = s.existing ? s.existing.id : s.row.name;
       // A field bound to a variable shows the variable's value, which the table may be changing: such a style is left out.
       const tokens = set.tokens || {};
@@ -213,5 +220,10 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
  *  has it (`inFile` 1), no create table of the batch makes one (`planned`), and it reads as neither an id (`idPrefix`)
  *  nor a 40-hex key. */
 function byName(name: string, idPrefix: string, inFile: number | undefined, planned: number | undefined): boolean {
-  return inFile === 1 && !planned && name.indexOf(idPrefix) !== 0 && !/^[0-9a-f]{40}$/i.test(name);
+  return inFile === 1 && !planned && !readsAsRef(name, idPrefix);
+}
+/** A name the resolver would read as an id (`idPrefix`) or a 40-hex key, not as a name: a variable or style called that
+ *  is never bound to (named, it could resolve to another one, or to a library's), new or not, so a re-send stays raw too. */
+function readsAsRef(name: string, idPrefix: string): boolean {
+  return name.indexOf(idPrefix) === 0 || /^[0-9a-f]{40}$/i.test(name);
 }
