@@ -112,8 +112,8 @@ written by hand, so the batch stays all or nothing and one undo step. The reply'
 ambiguous?}` replaces `unbound` (decision 20); a dry run a plugin answers carries the same counts.
 
 Instances: the capture's walker reads each element's code component — its `data-component` (`Export` or
-`module#Export`, props in `data-props`), else a React development build's fibers (the composite components whose first
-host node is the element, outermost first) — and the first one the component map names (`design/codeconnect.local.json`,
+`module#Export`, props in `data-props`), else a React development build's fibers (the composite components whose only
+host node is the element, outermost first: one that renders several roots, a fragment, is never taken for one of them) — and the first one the component map names (`design/codeconnect.local.json`,
 or `--map`) is resolved in the write direction (`design-to-code/code-usage.ts` `figmaUsageOf`: enum values inverted, a
 boolean as it is, a `children` string from the rendered text, the `when` values of the one variantOverride whose code
 target is the element's and not the entry's own — a value decoded from a code prop the element passed wins, warned when

@@ -275,7 +275,8 @@ anything resolves, then builds the bound spec as if it had been written so:
 - **What binds.** A solid paint's colour (a frame's, a text's, and a text's `font.color` through `tokens.fills`), each
   stroke colour (all of a node's, or none), `layout.gap`, the wrapped tracks' gap, each `layout.padding` side, a radius
   (one number: all four corners) — to a colour or number variable; a text's font to a text style whose family, style,
-  size, line height, letter spacing, case and decoration all equal it (the fields the style sets are then dropped from
+  size, line height, letter spacing, case and decoration all equal it and which sets no paragraph indent, paragraph or
+  list spacing or leading trim (the fields the style sets are then dropped from
   `font`). Not bound: sizes, opacity, stroke weights, pictures, a paint with its own `opacity`, anything inside a copy
   or an instance — nor a paint style (a spec has no fill style).
 - **Equal.** A colour by its 8-bit RGBA (the read's hex), a number within 0.01. A variable's value is the one in its

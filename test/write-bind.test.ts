@@ -198,6 +198,10 @@ void (async () => {
     const h2: FakeNode = { id: "S:h2,", name: "Heading/H2", key: "local-h2", type: "TEXT", fontName: { family: "Inter", style: "Bold" }, fontSize: 24, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE" };
     w.scene.localStyles.text.push(h2);
     w.scene.styles["S:h2,"] = h2;
+    // the same font with paragraph spacing: it would add a gap the capture does not have, so it never competes with H2
+    const spaced: FakeNode = { ...h2, id: "S:sp,", name: "Heading/Spaced", key: "local-sp", paragraphSpacing: 32 };
+    w.scene.localStyles.text.push(spaced);
+    w.scene.styles["S:sp,"] = spaced;
 
     const impact = async (ops: ReadonlyArray<Record<string, unknown>>): Promise<WriteImpactReply | null> => {
       const posted = await w.send({ type: "bridge", id: "imp", cmd: "writeImpact", args: { ops } });
@@ -218,7 +222,7 @@ void (async () => {
     const paintVar = (n: FakeNode | undefined): unknown => ((n?.fills as Array<{ boundVariables?: { color?: { id: string } } }> | undefined)?.[0]?.boundVariables?.color?.id);
     check("the root's paint is bound to the semantic variable (its alias of the primitive)", paintVar(root) === "VariableID:50:2");
     check("gap and padding are bound to the GAP-scoped variable", same(root?.boundVariables, { itemSpacing: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingTop: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingRight: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingBottom: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingLeft: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" } }));
-    check("the title's colour (TEXT_FILL) and text style are bound", paintVar(title) === "VariableID:50:3" && title?.textStyleId === "S:h2,");
+    check("the title's colour (TEXT_FILL) and text style are bound (a style with paragraph spacing is not a candidate)", paintVar(title) === "VariableID:50:3" && title?.textStyleId === "S:h2,");
     check("the panel's radius is bound; its grey, equal only in a mode that is not the default, stays raw",
       (panel?.boundVariables as Record<string, unknown> | undefined)?.topLeftRadius !== undefined && paintVar(panel) === undefined);
     check("the instance is an instance of the kit's component with its props", inst?.type === "INSTANCE" && same(inst?.props, { Size: "Large", "Label#1:0": "Save" }));

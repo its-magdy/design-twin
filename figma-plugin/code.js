@@ -10688,12 +10688,13 @@
       if (v) await add(v, false);
     }
     const styles = /* @__PURE__ */ new Map();
+    const plainParagraph = (st) => !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === void 0 || st.leadingTrim === "NONE");
     const fileStyles = await figma.getLocalTextStylesAsync();
     const styleNames = /* @__PURE__ */ new Map();
     for (const st of fileStyles) {
       styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
       if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
-      if (readsAsRef(st.name, "S:")) continue;
+      if (readsAsRef(st.name, "S:") || !plainParagraph(st)) continue;
       styles.set(st.id, textStyleEntry(st.id, st.name, {
         family: st.fontName.family,
         style: st.fontName.style,
@@ -10726,6 +10727,10 @@
           continue;
         }
         const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
+        if (was && !plainParagraph(was)) {
+          styles.delete(ref2);
+          continue;
+        }
         const lh = set.lineHeight;
         const ls = set.letterSpacing;
         styles.set(ref2, textStyleEntry(ref2, s.row.name, {

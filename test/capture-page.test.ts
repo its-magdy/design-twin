@@ -459,7 +459,9 @@ const identityHtml = `<!doctype html><body><section id="ids">` +
   `<div id="dc" data-component="Button" data-props='{"variant":"primary","disabled":true,"size":2,"onClick":{"x":1}}'><span>Save</span></div>` +
   `<div id="dcm" data-component="@/ui/card#Card"><p>Inside</p></div>` +
   `<div id="un" data-component="Unknown"><p>Kept</p></div>` +
-  `<div id="fib"><span>Fiber text</span></div><div id="fib2"><p>Plain</p></div></section>` +
+  `<div id="fib"><span>Fiber text</span></div><div id="fib2"><p>Plain</p></div>` +
+  // a mapped component that renders two roots (a fragment): neither root is taken for the whole
+  `<div id="frag1"><p>Head</p></div><div id="frag2"><p>Body</p></div></section>` +
   // a mapped inline component inside a paragraph, and inside an inline element; prototype-named props and components
   `<section id="more"><p id="inl">Text <span data-component="Badge" data-props='{"tone":"info"}'>New</span> tail</p>` +
   `<p id="deep">Lead <em>in <span data-component="Badge">Deep</span></em> end</p>` +
@@ -478,6 +480,11 @@ const identityHtml = `<!doctype html><body><section id="ids">` +
     const widget = { tag: 15, type: Widget, memoizedProps: {}, child: host2, return: { tag: 5 } };
     host2.return = widget;
     document.getElementById("fib2")["__reactFiber$test"] = host2;
+    const f1 = fiberOf(document.getElementById("frag1")), f2 = fiberOf(document.getElementById("frag2"));
+    const two = { tag: 0, type: Outer, memoizedProps: { tone: "info" }, child: f1, return: { tag: 5 } };
+    f1.return = two; f2.return = two; f1.sibling = f2;
+    document.getElementById("frag1")["__reactFiber$test"] = f1;
+    document.getElementById("frag2")["__reactFiber$test"] = f2;
   </script></body>`;
 // a lazy image far down the page whose response sends its headers and part of a body, then never ends
 const stallImgHtml = `<!doctype html><body style="margin:0"><div style="height:3000px">Top</div><img loading="lazy" width="40" height="40" src="/stall-img.png"></body>`;
@@ -647,7 +654,7 @@ async function identityWalk(): Promise<void> {
     await pg.goto(base + "/identity.html");
     const walked = await pg.evaluate(walkCapture, { root: "#ids", maxElements: 100, identity: true, components: ["Button", "@/ui/card#Card", "Badge", "Inner"] });
     const els = walked.root ? walked.root.children.flatMap((c) => (c.kind === "el" ? [c] : [])) : [];
-    const [dc, dcm, un, fib, fib2] = els;
+    const [dc, dcm, un, fib, fib2, frag1, frag2] = els;
     check(`data-component + data-props: the component, its string/number/boolean props, its text; nothing inside walked (${JSON.stringify(dc?.component)})`,
       same(dc?.component, { name: "Button", props: [["variant", "primary"], ["disabled", true], ["size", 2]], text: "Save" }) && dc?.children.length === 0 && dc.text === null);
     check("…a module#Export name matches as given", dcm?.component?.name === "@/ui/card#Card" && dcm.children.length === 0);
@@ -655,6 +662,8 @@ async function identityWalk(): Promise<void> {
     check(`React fibers: the outermost composite whose first host is the element wins (a forwardRef's render name), a children object left out (${JSON.stringify(fib?.component)})`,
       same(fib?.component, { name: "Badge", props: [["tone", "warn"]], text: "Fiber text" }));
     check("…a composite the map does not name is the element's codeName", fib2?.component === undefined && fib2?.codeName === "Widget");
+    check("…a mapped component with two host roots (a fragment): neither root is an instance, both walked as layers",
+      frag1 !== undefined && frag2 !== undefined && frag1.component === undefined && frag2.component === undefined && frag1.children.length > 0 && frag2.children.length > 0);
     const off = await pg.evaluate(walkCapture, { root: "#ids", maxElements: 100 });
     check("without identity nothing is read (no component, no codeName)", off.root !== null && off.root.children.every((c) => c.kind !== "el" || (c.component === undefined && c.codeName === undefined)));
     // the --root element itself: its code component read, nothing inside it walked

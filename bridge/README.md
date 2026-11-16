@@ -1070,7 +1070,7 @@ resolves (`bridge/src/bind-values.ts`, its table gathered by `figma-plugin/src/b
 solid paint's colour (a text's `font.color` through `tokens.fills`), the stroke colours (all of a node's or none), the gap,
 the wrapped tracks' gap, each padding side and a radius bind to the one colour or number variable equal to them, and a
 text's font to the one text style whose family, style, size, line height, letter spacing, case and decoration all equal
-it. A colour is equal by its 8-bit RGBA, a number within 0.01; a variable's value is its collection's default mode's,
+it and which sets no paragraph indent, paragraph or list spacing or leading trim. A colour is equal by its 8-bit RGBA, a number within 0.01; a variable's value is its collection's default mode's,
 through its aliases (a broken or looping chain has none). Candidates are the file's local variables and text styles (by
 id) and what a create table earlier in the batch makes (by name: `seedTokens` then the spec in one call works). Several
 equal: a variable whose `scopes` leave the field out is dropped, then those whose name has no word for the field (fill:

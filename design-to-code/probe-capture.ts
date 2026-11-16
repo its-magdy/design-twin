@@ -272,8 +272,10 @@ export function walkCapture(input: WalkInput): WalkOutput {
     if (!fk) return { hit: null, codeName: null };
     const composites: unknown[] = [];
     let cur: unknown = getK(e, fk);
-    // up from the element's own fiber while each step is its parent's first child: host component, root, text, singleton end it
-    for (let p = getK(cur, "return"), n = 0; p && getK(p, "child") === cur && n < 50; cur = p, p = getK(p, "return"), n++) {
+    // up from the element's own fiber while each step is its parent's only child: host component, root, text, singleton
+    // end it. A step with a sibling ends it too: a component above it renders several roots (a fragment), so this element
+    // is only part of it and is never taken for the whole.
+    for (let p = getK(cur, "return"), n = 0; p && getK(p, "child") === cur && !getK(cur, "sibling") && n < 50; cur = p, p = getK(p, "return"), n++) {
       const tag = getK(p, "tag");
       if (tag === 3 || tag === 5 || tag === 6 || tag === 26 || tag === 27) break;
       if (tag === 0 || tag === 1 || tag === 11 || tag === 14 || tag === 15) composites.push(p);

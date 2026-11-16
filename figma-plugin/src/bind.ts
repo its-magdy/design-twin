@@ -165,13 +165,17 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
 
   // ---- text styles: the file's, then what a createStyles table makes or changes
   const styles = new Map<string, BindTextStyle>();
+  // A captured text has no paragraph settings (the tree spec writes none): a style with an indent, paragraph or list
+  // spacing, or a leading trim would add them, so it is never matched.
+  const plainParagraph = (st: TextStyle): boolean =>
+    !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === undefined || st.leadingTrim === "NONE");
   const fileStyles = await figma.getLocalTextStylesAsync();
   const styleNames = new Map<string, number>();
   for (const st of fileStyles) {
     styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
     // every field a style has in Figma; one that cannot be read leaves the style out (it is never matched half-known)
     if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
-    if (readsAsRef(st.name, "S:")) continue;
+    if (readsAsRef(st.name, "S:") || !plainParagraph(st)) continue;
     styles.set(st.id, textStyleEntry(st.id, st.name, {
       family: st.fontName.family, style: st.fontName.style, size: st.fontSize,
       lineHeight: st.lineHeight, letterSpacing: st.letterSpacing, textCase: st.textCase, textDecoration: st.textDecoration,
@@ -193,6 +197,8 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
       const unique = s.existing !== null || (!styleNames.get(s.row.name) && plannedStyles.get(s.row.name) === 1);
       if (boundAny || !unique) { styles.delete(ref); continue; }
       const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
+      // the table sets no paragraph field: an existing style keeps its own
+      if (was && !plainParagraph(was)) { styles.delete(ref); continue; }
       const lh = set.lineHeight;
       const ls = set.letterSpacing;
       styles.set(ref, textStyleEntry(ref, s.row.name, {

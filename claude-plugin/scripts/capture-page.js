@@ -836,7 +836,7 @@ function walkCapture(input) {
     if (!fk) return { hit: null, codeName: null };
     const composites = [];
     let cur = getK(e, fk);
-    for (let p = getK(cur, "return"), n = 0; p && getK(p, "child") === cur && n < 50; cur = p, p = getK(p, "return"), n++) {
+    for (let p = getK(cur, "return"), n = 0; p && getK(p, "child") === cur && !getK(cur, "sibling") && n < 50; cur = p, p = getK(p, "return"), n++) {
       const tag = getK(p, "tag");
       if (tag === 3 || tag === 5 || tag === 6 || tag === 26 || tag === 27) break;
       if (tag === 0 || tag === 1 || tag === 11 || tag === 14 || tag === 15) composites.push(p);
