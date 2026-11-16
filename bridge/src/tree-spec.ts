@@ -853,9 +853,24 @@ export function treeRefusal(problems: readonly string[]): string {
   return problems.length + " problems in the tree spec — nothing was changed:\n" + problems.join("\n");
 }
 
+/** A spec root's size in words: "320×200", or "320 wide, height hugs content" when only one side is given (the other
+ *  is said by its `heightMode` / `widthMode`; without one it keeps the size Figma gives a new frame); "" when neither is
+ *  given. The dry run's sentence and the review card both say it this way. */
+export function sizePhrase(spec: TreeNodeSpec): string {
+  const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
+  const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
+  const other = (mode: "fill" | "hug" | undefined, side: string): string =>
+    side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
+  if (typeof w === "number" && typeof h === "number") return w + "×" + h;
+  if (typeof w === "number") return w + " wide, " + other(spec.heightMode, "height");
+  if (typeof h === "number") return h + " tall, " + other(spec.widthMode, "width");
+  return "";
+}
+
 /** One sentence of what a valid spec creates: the dry run's `change`. `page` is the op's page, if it named one. */
 export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: TreeSummary): string {
-  const size = spec.box ? " " + spec.box.w + "×" + spec.box.h : spec.layout && spec.layout.width && spec.layout.height ? " " + spec.layout.width + "×" + spec.layout.height : "";
+  const sized = sizePhrase(spec);
+  const size = sized ? " " + sized : "";
   const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
   const nodes = s.frames + s.texts + s.instances + s.clones;
   const plural = (n: number, one: string): string => n + " " + one + (n === 1 ? "" : "s");

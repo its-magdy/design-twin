@@ -167,13 +167,21 @@ list of merged PRs.
   with the spec kept in a file and re-sent by key (the file's first write counts the whole spec as the agent's output;
   the fix itself is an edit of the file and a 25-token reply). `figma_write`'s definition grew by 61 tokens
   (1,332 → 1,393).
-- The plugin window has a **Review each write** checkbox under **Allow edits**, off by default. When it is on, each
-  `figma_write` batch waits on a card in the window that lists what it will do in plain words (the dry run's
-  description), and runs only when the designer presses **Apply**. **Reject** leaves the file untouched, and the reason
-  the designer types reaches the agent in the reply. A card nobody answers within 5 minutes, or one whose call was
-  cancelled or whose bridge dropped, is refused with nothing changed. A dry run reports `reviewWrites: true` when it is
-  on. The write's bridge budget is now 6 minutes (it was 2), and `figma_write`'s definition grew by 28 tokens
-  (1,304 → 1,332 on the write-cost suite; every job's cost is unchanged).
+- The designer reviews Claude's writes in the plugin window. **Review each change first**, under **Allow edits**, is on
+  by default: each `figma_write` batch waits on a card that says in plain words what it changes, with old → new values
+  and colour swatches ("30 layers: radius 6 → 20"), why it waited, **Show me** to select the layers, the dry run's
+  sentences under **Details**, **Apply**, and **Reject** with a reason that reaches the agent. Even with the box clear, a
+  batch waits when it changes a variable, style or main component, or when the existing layers changed since the last
+  approval would pass 25 (layers the plugin made this session do not count). For those, **Preview on canvas** applies
+  the batch for real (everyone in the file sees it) and offers **Keep** or **Put back** (which leaves two undo entries;
+  a preview left up when the plugin window closes stays). A call holds at most 45 s, under the 60 s an MCP client gives
+  a tool call; then it returns `{pending, ticket}`, and the agent asks again with `figma_write {ticket}` or withdraws
+  with `{ticket, cancel: true}`. The plugin keeps the ticket and the outcome, so an MCP server restart loses nothing; a
+  card nobody asks about for 2 min is withdrawn, and none stays up longer than 15 min. One write waits at a time; a
+  second is refused, naming the ticket. A dry run reports `wouldWait` and `waitReason`; `figma_status` reports the
+  last write's outcome (`lastFigmaWrite`). A new card also takes down a stale red toast, and a width-only frame now
+  reads "320 wide, height hugs content" in the dry run instead of "320×undefined". `figma_write`'s definition grew by
+  30 tokens (1,257 → 1,287 on the write-cost suite; every job's cost is unchanged).
 - `figma_write` can change existing nodes by id: `patch` (`nodeId`, `set`) takes the read export's field names and
   changes only the fields given — name, visibility, opacity, text, text style, fills, strokes, corner radius,
   auto-layout and spacing, size and sizing, text resizing, variable bindings (`null` unbinds) and an instance's

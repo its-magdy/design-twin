@@ -36,7 +36,9 @@ src/
   sources.ts     setVariable / setStyle and a patch of a main component, and the dry run's writeImpact count
   variable-modes.ts  setVariableMode / clearVariableMode on a node
   edits.ts       the "Allow edits" opt-in: off by default, saved per user in clientStorage
-  review.ts      "Review each write": a write waits on a card in the window until the designer applies or rejects it
+  review.ts      the designer's review: the card a write waits on, its preview, and the ticket the agent polls
+  review-reads.ts what the card reads of the file (names, current values, followers, landing spot) and Show me
+  toast.ts       Figma's toast; a stale red one comes down when a card goes up
   run.ts         one run's context: read options, counters, warnings, asset tables, memo caches, cancel flag
   state.ts       the run scheduler: queue, bracket (opens/closes each run's context), bridge cancels
   progress.ts    export progress frames + the cancellation flag/error (main thread -> ui.html)
@@ -57,11 +59,13 @@ thread decides (`src/edits.ts`, checked in `applyWrites`); the checkbox only sho
 nothing on the bridge can set it. The setting is saved per user for every file (`figma.clientStorage`).
 Every applied or refused batch shows a Figma toast and a line in the window.
 
-**Review each write** (off by default, saved the same way) holds every write that resolves against the file on a card
-at the top of the window: one plain line per op, **Apply**, **Reject**, and a reason box whose text goes back to the
-agent with the rejection (`src/review.ts`). The card ends without applying anything when nobody answers within 5
-minutes, when the bridge withdraws the request (its caller gave up or disconnected), on Cancel, or when "Allow edits"
-is unticked.
+**Review each change first** (on by default, saved the same way) holds a write that resolves against the file on a
+card at the top of the window; with it clear, a source edit, a bulk change by rule, or one taking the layers changed
+since the last approval over 25 still waits (`bridge/src/review-policy.ts`). The card lists the change in plain words
+with old → new values, Show me, Details, **Apply**, **Reject** with a reason that goes back to the agent, and for a
+source edit or a large batch **Preview on canvas** → **Keep** / **Put back** (`src/review.ts`). The agent waits on a
+ticket the plugin keeps (`writeTicket`); the card ends without applying anything when the agent withdraws it, stops
+asking for 2 min, after 15 min, or when "Allow edits" is unticked.
 
 ## Dev Mode
 

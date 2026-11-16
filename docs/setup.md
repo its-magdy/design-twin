@@ -134,8 +134,10 @@ Open your Figma file and run **Plugins → Development → Design Twin**. Expand
 
 The plugin only reads until you tick **Allow edits** in its window. Tick it only when you want Claude to write to
 the file through `figma_write`. The setting is per user and covers every file, so untick it when you are done.
-Tick **Review each write** too if you want to see each change first: it waits in the window until you press Apply or
-Reject (a reason you type goes back to Claude).
+**Review each change first** is on by default: each change waits in the window until you press Apply or Reject (a
+reason you type goes back to Claude), with Show me and, for big or far-reaching changes, Preview on canvas. Untick it to
+let small changes through; a change to a variable, style or main component, or past 25 layers since your last
+approval, still waits.
 
 ### 3. Check everything
 

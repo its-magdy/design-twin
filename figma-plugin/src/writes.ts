@@ -2,10 +2,14 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
-import { EDITS_OFF_MESSAGE, rejectedMessage, unreviewedMessage, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
-import { REVIEW_WAIT_MS } from "../../bridge/src/timeouts.ts";
+import { EDITS_OFF_MESSAGE, reviewLines, waitingMessage, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { cardLines } from "../../bridge/src/review-card.ts";
+import { previewOffered, reviewDecision } from "../../bridge/src/review-policy.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
-import { awaitReview, reviewWrites, type ReviewOutcome } from "./review";
+import { countUnreviewed, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card } from "./review";
+import { readBatch, SHOW_CAP } from "./review-reads";
+import { queueWork } from "./state";
+import { toast } from "./toast";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
@@ -259,17 +263,49 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
 // last, once everything else has landed, since a deleted node cannot be brought back. `applied` lists only what stays:
 // all of it on success; on a failure, whatever could not be put back (the designer turned "Allow edits" off, or a
 // restore failed), so the caller can always find what is in the file.
+//
+// A batch may wait for the designer's review (review.ts, spec decision 18). submitWrites is the first half — checked,
+// resolved, and either applied at once or put on a card — and the bridge's `write` runs only it, in its run; the card
+// then runs the rest as work of its own when the designer answers (the batch approved, a preview, its put-back).
+// applyWrites, the test surface, waits for the card's outcome.
 export async function applyWrites(ops: WriteOp[], images?: ImageTable): Promise<WriteResult> {
+  const s = await submitWrites(ops, images);
+  return "done" in s ? s.done : outcomeOf(s.card);
+}
+
+/** A batch as first sent: its result, or the card it waits on. */
+export type Submitted = { done: WriteResult } | { card: Card };
+
+export async function submitWrites(ops: WriteOp[], images?: ImageTable): Promise<Submitted> {
   const list = Array.isArray(ops) ? ops : [];
+  const r = await runBatch(list, images, "submit");
+  return "card" in r ? r : { done: r.result };
+}
+
+/** How a batch runs: as first sent (it may wait for review), as the designer approved it, or as a preview of it. */
+type Mode = "submit" | "approved" | "preview";
+/** What a run leaves beside its result: the changes it made (a preview puts them back) and the existing layers it
+ *  counted for the review (review-policy.ts). */
+interface RunOut { changes: Change[]; layers: number }
+
+async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode): Promise<{ result: WriteResult; changes: Change[] } | { card: Card }> {
   // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
   // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
   // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
   // the next one never joins it. Committing with nothing pending is a no-op.
+  const out: RunOut = { changes: [], layers: 0 };
   if (list.length) commitUndo();
-  const r = await gatedWrites(list, images);
+  const r = await gatedWrites(list, images, mode, out);
   if (list.length) commitUndo();
-  announce(r);
-  return r;
+  if ("card" in r) return r;
+  // A preview is said by its card; a batch refused because another waits is said by that card already.
+  if (mode !== "preview" && r.refused !== "waiting") announce(r);
+  if (mode === "submit" && list.length && r.refused !== "waiting") {
+    rememberWrite(r);
+    // What a batch that did not wait changed counts toward the next forced review (review-policy.ts).
+    if (r.applied.length) countUnreviewed(out.layers);
+  }
+  return { result: r, changes: out.changes };
 }
 
 function commitUndo(): void {
@@ -292,19 +328,22 @@ function announce(r: WriteResult): void {
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
   if (text === null) return;
-  try { figma.notify(text, r.ok ? undefined : { error: true }); } catch (e) { console.error("[export] figma.notify failed:", e); }
+  toast(text, !r.ok);
   const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
   figma.ui.postMessage(m);
 }
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
 // So do the images it made (images.ts).
-async function gatedWrites(list: WriteOp[], images: ImageTable | undefined): Promise<WriteResult> {
-  try { return await batchWrites(list, images); } finally { setBatchPlan(null); setBatchImages(null); }
+async function gatedWrites(list: WriteOp[], images: ImageTable | undefined, mode: Mode, out: RunOut): Promise<WriteResult | { card: Card }> {
+  try { return await batchWrites(list, images, mode, out); } finally { setBatchPlan(null); setBatchImages(null); }
 }
 
-async function batchWrites(list: WriteOp[], images: ImageTable | undefined): Promise<WriteResult> {
+async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode: Mode, out: RunOut): Promise<WriteResult | { card: Card }> {
   const applied: AppliedWrite[] = [];
+  // One card at a time (review.ts): while a write waits for the designer, a new one is refused at once, naming it.
+  const waiting = mode === "submit" && list.length ? waitingTicket() : null;
+  if (waiting !== null) return { ok: false, applied, refused: "waiting", error: waitingMessage(waiting) };
   // The designer's consent (edits.ts): with "Allow edits" off the whole batch is refused before any op is
   // checked or run, with the refusal named so figma_write can tell the agent to ask the person at the window.
   // First, so it is the answer whatever else is wrong. Here, not in bridge.ts, so every caller of applyWrites —
@@ -362,31 +401,57 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined): Pro
       ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     return { creates, modes, trees, patches, structure, sources, problems };
   };
-  let { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
+  const { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
   const firstProblem = problems[0];
-  if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
-  // The designer's review (review.ts, spec decision 18), when "Review each write" is ticked: here, once the whole batch
-  // resolved (a batch that would be refused never puts a card up) and before anything touches the file (the library
-  // imports below included). Anything but Apply refuses the batch whole, saying why.
-  if (list.length && (await reviewWrites())) {
-    // Unticked while the batch resolved: refused now, with no card (main.ts ends only a card that is already up).
-    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const review = await awaitReview(list);
-    if (review.end !== "approved") return reviewRefusal(review);
-    // Unticked while the card was up: main.ts ends the card as edits-off then, and this is the same check for a click
-    // that raced it.
-    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    // The designer may have changed the file while the card was up (a node removed, a binding added), so nothing
-    // resolved before the wait is used: the batch is resolved again against the file as it is now, and what a
-    // failure puts back is what is there now. A batch the file no longer accepts is refused whole, as before review.
-    ({ creates, modes, trees, patches, structure, sources, problems } = await resolveBatch());
-    const changed = problems[0];
-    if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
-    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    // The batch is still one Cmd-Z step of its own: whatever happened while the card was up is not part of it.
-    commitUndo();
+  if (firstProblem) {
+    // Approved (or previewed) after a wait: the designer may have changed the file while the card was up, so the batch
+    // was resolved again just now, against the file as it is; one the file no longer accepts is refused whole.
+    const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
+    return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
   }
-  const changes: Change[] = [];
+  // #171 (bulk patch by rule): here, on approval (mode "approved" / "preview"), a rule op must count its matches again
+  // and refuse the batch when they drift from what its card showed the designer; at "submit" it sets `bulkByRule` below.
+  // The designer's review (review.ts, spec decision 18): decided here, once the whole batch resolved (a batch that would
+  // be refused never puts a card up) and before anything touches the file (the library imports below included).
+  if (mode === "submit" && list.length) {
+    const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
+    out.layers = reads.layers;
+    const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, sinceApproval: layersSinceApproval() });
+    if (decision.wait) {
+      // Unticked while the batch resolved: refused now, with no card (main.ts ends only a card that is already up).
+      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      const lines = cardLines(list, reads.ops.map((o) => o.read));
+      const shows = lines.map((l) => {
+        const ids: string[] = [];
+        let total = 0;
+        let spot: { pageId: string; x: number; y: number } | undefined;
+        for (const i of l.ops) {
+          const o = reads.ops[i];
+          if (!o) continue;
+          total += o.ids.length;
+          for (const id of o.ids) if (ids.length < SHOW_CAP && ids.indexOf(id) < 0) ids.push(id);
+          if (!spot && o.spot) spot = o.spot;
+        }
+        return { ids, total: Math.max(total, ids.length), ...(spot ? { spot } : {}) };
+      });
+      const keyedResend = [...trees.targets.values()].some((t) => !!t.update);
+      const card = openCard({
+        ops: list, lines, shows, details: reviewLines(list), why: decision.reason,
+        previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
+        // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
+        apply: () => queueWork(async () => { const r = await runBatch(list, images, "approved"); return "card" in r ? notApplied() : r.result; }),
+        preview: () => queueWork(async () => {
+          const r = await runBatch(list, images, "preview");
+          if ("card" in r) return { result: notApplied(), putBack: async () => null };
+          const changes = r.changes;
+          return { result: r.result, putBack: () => queueWork(() => putBack(changes)) };
+        }),
+        announce,
+      });
+      return { card };
+    }
+  }
+  const changes: Change[] = out.changes;
   countPropertySteps(changes);
   // In op order: each op's applied row, filled as it lands (the deletes last).
   const rows: Array<AppliedWrite | undefined> = list.map(() => undefined);
@@ -555,17 +620,27 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined): Pro
   return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}), ...(imgs.images.length ? { images: imgs.images } : {}) };
 }
 
+/** A run that could not even start its batch (it cannot happen: only a first send puts a card up). */
+function notApplied(): WriteResult {
+  return { ok: false, applied: [], error: "the write could not run. Nothing was changed." };
+}
+
+/** Put a preview back (review.ts Put back, or a card that ended while previewing): its own Cmd-Z step, after the
+ *  preview's — so the designer's undo history has two entries for a preview that was put back (a Cmd-Z after it brings
+ *  the preview back; the plugin cannot remove a step). Null when all of it went back; else what stays. */
+async function putBack(changes: readonly Change[]): Promise<WriteResult | null> {
+  commitUndo();
+  const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+  commitUndo();
+  if (!failed.length) return null;
+  const back = new Set(restored);
+  return { ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " — what stays is listed in `applied`." };
+}
+
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */
 function undoNote(steps: number): string {
   return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps +
     " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
-}
-
-/** A batch the review did not apply, refused whole: nothing in the file changed. */
-function reviewRefusal(o: ReviewOutcome): WriteResult {
-  if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...(o.reason !== undefined ? { reason: o.reason } : {}) };
-  if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
-  return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
 }
 
 /** A delete that takes a node a keyed re-send of the same batch changes, builds in or reorders (its result's root

@@ -256,8 +256,9 @@ work the same way on those files.
 - **Big files are slow.** A whole-file pull of a large file can take many minutes (the default budget is 300 s, and
   900 s with `--all-pages`), so pull one screen or page at a time.
 - **Allow edits** is off by default and nothing on the bridge or MCP side can turn it on. Once ticked, it stays on for
-  every file until you untick it. `figma_write` runs no arbitrary code. Tick **Review each write** as well to see each
-  change in the plugin window first and apply or reject it (with a reason that goes back to Claude).
+  every file until you untick it. `figma_write` runs no arbitrary code. **Review each change first** (on by default) shows
+  each change in the plugin window first, to apply or reject (with a reason that goes back to Claude); even with it
+  off, a change to a variable, style or main component, or one past 25 layers since your last approval, still waits.
 - **Windows details.** The `dtwin serve` daemon runs over a named pipe with a token handshake there
   ([#61](https://github.com/its-magdy/design-twin/pull/61), closing [#12](https://github.com/its-magdy/design-twin/issues/12)).
   A few raw-socket daemon checks are POSIX-only and skipped on Windows CI.
@@ -334,7 +335,8 @@ already on disk and need no Figma connection: `design_get_component` and `design
 `figma_write` applies a small set of safe ops (create a screen, or copy one with only its differences; a frame or text; change a node; set or clear a
 variable mode; change a local variable, style or main component once so everything using it follows) and runs no
 arbitrary code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**,
-and with **Review each write** ticked each batch waits for the designer's Apply or Reject in the plugin window. The
+and a batch waits for the designer's review in the plugin window (always with **Review each change first** on, the
+default; a call returns `{pending, ticket}` after 45 s and the agent asks again with `figma_write {ticket}`). The
 `design-in-figma` skill says which op fits which job and carries the full grammar.
 
 Pass `writeToDisk: true` to the export tools for anything large. It's also the only way to get asset

@@ -76,8 +76,8 @@
   function deriveTitle(root) {
     const slot = firstByName(root, "Page Title");
     if (slot) {
-      const named = firstNamedText(slot, "Title");
-      if (named) return named;
+      const named2 = firstNamedText(slot, "Title");
+      if (named2) return named2;
       const anyText = firstText(slot);
       if (anyText) return anyText;
     }
@@ -736,6 +736,9 @@
     if (kind === "identity") return fn();
     return enqueue(fn, run2, kind === "exclusive");
   }
+  function queueWork(fn) {
+    return enqueue(fn, { source: "ui", label: "review" }, false);
+  }
   function enqueue(fn, run2, bracketed) {
     const ticket = { run: run2, abandoned: false };
     queuedRuns.add(ticket);
@@ -838,7 +841,7 @@
   // ../bridge/src/name-match.ts
   function distance(a, b) {
     let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    let last2 = b.length;
+    let last3 = b.length;
     for (let i = 1; i <= a.length; i++) {
       const next = [i];
       let diag = i - 1;
@@ -850,9 +853,9 @@
         left = cur;
       }
       row = next;
-      last2 = left;
+      last3 = left;
     }
-    return last2;
+    return last3;
   }
   var MAX_CANDIDATES = 3;
   function nearestNames(ref2, names, max = MAX_CANDIDATES) {
@@ -1199,8 +1202,8 @@
           return;
         }
         const cells = row;
-        const last2 = cells[names.length];
-        const over = cells.length === names.length + 1 && isObj2(last2) ? last2 : null;
+        const last3 = cells[names.length];
+        const over = cells.length === names.length + 1 && isObj2(last3) ? last3 : null;
         if (cells.length !== names.length && !over) {
           say(r + ": must be " + shape);
           return;
@@ -2117,20 +2120,30 @@
     if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
     return problems.length + " problems in the tree spec \u2014 nothing was changed:\n" + problems.join("\n");
   }
+  function sizePhrase(spec) {
+    const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
+    const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
+    const other = (mode, side) => side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
+    if (typeof w === "number" && typeof h === "number") return w + "\xD7" + h;
+    if (typeof w === "number") return w + " wide, " + other(spec.heightMode, "height");
+    if (typeof h === "number") return h + " tall, " + other(spec.widthMode, "width");
+    return "";
+  }
   function describeTree(spec, page, s) {
-    const size2 = spec.box ? " " + spec.box.w + "\xD7" + spec.box.h : spec.layout && spec.layout.width && spec.layout.height ? " " + spec.layout.width + "\xD7" + spec.layout.height : "";
+    const sized = sizePhrase(spec);
+    const size2 = sized ? " " + sized : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
     const nodes = s.frames + s.texts + s.instances + s.clones;
-    const plural = (n, one) => n + " " + one + (n === 1 ? "" : "s");
+    const plural3 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
     const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
-      return e ? " with " + plural(e, "layer") + " changed" : "";
+      return e ? " with " + plural3(e, "layer") + " changed" : "";
     };
     const c = s.component;
-    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
+    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural3(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
     const parts = [
-      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural(s.frames, "frame") + ", " + plural(s.texts, "text") + (s.instances ? ", " + plural(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
+      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural3(s.frames, "frame") + ", " + plural3(s.texts, "text") + (s.instances ? ", " + plural3(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
     ];
     if (s.clones > (spec.clone !== void 0 ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
     if (c && c.props.length) parts.push("properties " + quoteList(c.props));
@@ -2142,7 +2155,7 @@
     if (components2.length) parts.push("components " + quoteList(components2));
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
-    if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
+    if (s.unbound) parts.push(plural3(s.unbound, "raw value") + " left unbound");
     const checked = (components2.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
@@ -2900,13 +2913,19 @@
   function rejectedMessage(reason) {
     return "The designer rejected this write in the Design Twin plugin window. Nothing in the file was changed. " + (reason ? 'Their reason: "' + reason + '"' : "They gave no reason.");
   }
-  function unreviewedMessage(end, waitMs) {
+  function unreviewedMessage(end2, waitMs) {
     const nothing = " Nothing in the file was changed.";
-    if (end === "timed-out") {
-      return "Nobody applied or rejected this write in the Design Twin plugin window within " + Math.round(waitMs / 6e4) + " min, so it was not applied." + nothing + " Ask the designer to watch the plugin window (or to untick 'Review each write' there), then retry.";
+    if (end2 === "timed-out") {
+      return "Nobody applied or rejected this write in the Design Twin plugin window within " + Math.round(waitMs / 6e4) + " min, so it was not applied." + nothing + " Ask the designer to watch the plugin window, then send it again.";
     }
-    if (end === "cancelled") return "The designer stopped this write with Cancel in the Design Twin plugin window before applying it." + nothing;
-    return "This write was withdrawn before the designer answered its review: the request was abandoned or the bridge disconnected." + nothing;
+    if (end2 === "expired") return "This write was withdrawn: its ticket was not asked about again within " + Math.round(waitMs / 6e4) + " min, so the card in the plugin window came down." + nothing;
+    return "This write was withdrawn at the agent's request before the designer answered." + nothing;
+  }
+  function waitingMessage(ticket) {
+    return "Another write is waiting for the designer's review in the Design Twin plugin window (ticket '" + ticket + "'). Call figma_write {ticket: '" + ticket + "'} to wait for its answer (or add cancel: true to withdraw it), then send this batch again. Nothing in the file was changed.";
+  }
+  function pendingNote(ticket, idleMs) {
+    return "The designer has not answered yet. Call figma_write {ticket: '" + ticket + "'} again to keep waiting \u2014 do not re-send the ops \u2014 and tell the user the change waits for them in the Design Twin plugin window. If no call asks within " + Math.round(idleMs / 6e4) + " min, the card is withdrawn and nothing is applied.";
   }
   function reviewLines(ops) {
     return ops.map((o, i) => {
@@ -2943,6 +2962,9 @@
     exportNode: { run: "exclusive", export: true },
     screenshot: { run: "exclusive", export: true },
     write: { run: "exclusive", export: false },
+    // A write waiting for review, asked about by its ticket: answered at once from the plugin's own record of it (a
+    // document change it leads to — the batch applied on approval, a preview put back — is scheduled as a run of its own).
+    writeTicket: { run: "identity", export: false },
     // Reads the file to count what a source edit would carry to (figma_write's dry run); changes nothing.
     writeImpact: { run: "scene", export: false }
   };
@@ -3021,8 +3043,13 @@
   }
   var writeArgs = (a) => {
     if (!Array.isArray(a.ops)) return a.ops === void 0 ? "`ops` is missing" : "`ops` is not an array";
-    return first([...a.ops.map(writeOpError), imageTableError(a.images)]);
+    return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "holdMs", isNum4, "a number")]);
   };
+  var writeTicketArgs = (a) => first([
+    isStr(a.ticket) && a.ticket ? null : a.ticket === void 0 ? "`ticket` is missing" : "`ticket` is not a non-empty string",
+    opt(a, "holdMs", isNum4, "a number"),
+    opt(a, "cancel", isBool, "a boolean")
+  ]);
   var noArgs = () => null;
   var ARGS_CHECKS = {
     ping: noArgs,
@@ -3038,6 +3065,7 @@
     exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
     screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum4, "a number")]),
     write: writeArgs,
+    writeTicket: writeTicketArgs,
     writeImpact: writeArgs
   };
   function argsShapeError(cmd, args) {
@@ -3078,6 +3106,8 @@
       case "screenshot":
         return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
       case "write":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "writeTicket":
         return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
       case "writeImpact":
         return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
@@ -3513,8 +3543,8 @@
   function baseNameFor(a) {
     if (a.kind === "reference") return safe(a.id.replace(/:ref$/, "")) + "_ref";
     if (a.kind === "source") return safe(a.id);
-    const last2 = String(a.name || "").split("/").pop() || "";
-    const cleaned = assetSafe(last2.trim()).replace(/^[-_]+|[-_]+$/g, "");
+    const last3 = String(a.name || "").split("/").pop() || "";
+    const cleaned = assetSafe(last3.trim()).replace(/^[-_]+|[-_]+$/g, "");
     return cleaned || safe(a.id);
   }
   function register(a) {
@@ -4124,9 +4154,9 @@
     const feats = src.openTypeFeatures;
     if (feats && feats !== figma.mixed) {
       const tags = Object.keys(feats);
-      const on2 = tags.filter((k) => feats[k]);
+      const on = tags.filter((k) => feats[k]);
       const off = tags.filter((k) => !feats[k]);
-      if (on2.length) f.openType = on2;
+      if (on.length) f.openType = on;
       if (off.length) f.openTypeOff = off;
     }
     const color = solidFromFills(src.fills);
@@ -6113,14 +6143,205 @@
     return { designSystem, layersDoc, assets: r.assets.slice() };
   }
 
-  // ../bridge/src/ports.ts
-  var ALLOWED_PORTS = [8787, 8788, 8789];
+  // ../bridge/src/review-card.ts
+  function lineText(l) {
+    return l.head + (l.rows.length ? ": " + l.rows.map(rowText).join(", ") : "") + (l.tail ? " \u2014 " + l.tail : "");
+  }
+  function rowText(r) {
+    return (r.field ? r.field + " " : "") + (r.from !== void 0 ? r.from + " \u2192 " : "\u2192 ") + r.to;
+  }
+  var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
+  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var cut = (s, n = 40) => s.length > n ? s.slice(0, n - 1) + "\u2026" : s;
+  function paintsText(v) {
+    if (!v.length) return "none";
+    const first2 = v[0];
+    const one = isObj6(first2) ? typeof first2.color === "string" ? first2.color : first2.type === "image" ? "image" : isObj6(first2.tokens) && typeof first2.tokens.color === "string" ? "variable '" + first2.tokens.color + "'" : typeof first2.type === "string" ? first2.type : "paint" : "paint";
+    return one + (v.length > 1 ? " +" + (v.length - 1) : "");
+  }
+  function valueText(field, v) {
+    if (v === void 0) return "\u2014";
+    if (v === null) return "none";
+    if (typeof v === "number") return field === "opacity" ? Math.round(v * 100) + "%" : String(Math.round(v * 100) / 100);
+    if (typeof v === "boolean") return field === "hidden" ? v ? "hidden" : "shown" : v ? "on" : "off";
+    if (typeof v === "string") return field === "text" || field === "characters" ? "\u201C" + cut(v) + "\u201D" : cut(v);
+    if (Array.isArray(v)) return field === "fills" || field === "strokes" || field === "paints" || field === "fill" ? paintsText(v) : cut(v.map((x) => valueText("", x)).join(", "));
+    if (isObj6(v)) {
+      if (typeof v.aliasOf === "string") return "alias of '" + v.aliasOf + "'";
+      if (field === "box" && (typeof v.w === "number" || typeof v.h === "number")) return (typeof v.w === "number" ? v.w : "\u2026") + "\xD7" + (typeof v.h === "number" ? v.h : "\u2026");
+      if (field === "strokes" && Array.isArray(v.paints)) return paintsText(v.paints) + (typeof v.weight === "number" ? ", " + v.weight + " px" : "");
+      return cut(Object.keys(v).map((k) => k + " " + valueText(k, v[k])).join(", "));
+    }
+    return cut(String(v));
+  }
+  function oldText(field, reads) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const r of reads) {
+      if (!r || !r.old || !(field in r.old)) return void 0;
+      seen.add(valueText(field, r.old[field]));
+    }
+    if (!seen.size) return void 0;
+    return seen.size === 1 ? [...seen][0] : "mixed";
+  }
+  function fieldRows(set, fields, reads) {
+    return fields.map((f) => {
+      const from = oldText(f, reads);
+      return { field: f, to: valueText(f, set[f]), ...from !== void 0 ? { from } : {} };
+    });
+  }
+  var named = (kind, r) => r && r.name ? kind + " '" + r.name + "'" : "A " + kind.toLowerCase();
+  var followTail = (r) => r && typeof r.follows === "number" ? r.follows === 1 ? "1 layer follows" : r.follows ? r.follows + " layers follow" : "nothing uses it yet" : void 0;
+  function cardLines(ops, reads = []) {
+    const lines = [];
+    const groups = /* @__PURE__ */ new Map();
+    const group = (key, i, build) => {
+      const g = groups.get(key);
+      if (g) {
+        g.ops.push(i);
+        g.reads.push(reads[i]);
+        return;
+      }
+      const fresh = { head: "", rows: [], ops: [i], reads: [reads[i]], build };
+      groups.set(key, fresh);
+      lines.push(fresh);
+    };
+    ops.forEach((o, i) => {
+      const r = reads[i];
+      switch (o.op) {
+        case "patch": {
+          if (!isPatchSet(o.set)) {
+            lines.push({ head: "Layer change", rows: [], ops: [i] });
+            return;
+          }
+          const set = { ...o.set };
+          const checked = checkPatch(o.set).summary.fields;
+          const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
+          if (r && r.component !== void 0) {
+            const tail = followTail(r);
+            lines.push({ head: "Main component '" + r.component + "'" + (r.name && r.name !== r.component ? ", layer '" + r.name + "'" : ""), rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
+            return;
+          }
+          group("patch " + JSON.stringify(o.set), i, (g) => {
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
+            g.rows = fieldRows(set, fields, g.reads);
+          });
+          return;
+        }
+        case "setFill":
+          group("fill " + String(o.color), i, (g) => {
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
+            const from = oldText("fill", g.reads);
+            g.rows = [{ field: "fill", to: String(o.color), ...from !== void 0 ? { from } : {} }];
+          });
+          return;
+        case "setText":
+          group("text " + JSON.stringify(o.text), i, (g) => {
+            g.head = g.ops.length === 1 ? named("Text", g.reads[0]) : plural(g.ops.length, "text");
+            const from = oldText("text", g.reads);
+            g.rows = [{ field: "text", to: valueText("text", o.text || ""), ...from !== void 0 ? { from } : {} }];
+          });
+          return;
+        case "setVariableMode":
+        case "clearVariableMode": {
+          const to = o.op === "clearVariableMode" ? "inherited" : "'" + String(o.mode) + "'";
+          group("mode " + String(o.collection) + " " + to, i, (g) => {
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
+            g.rows = [{ field: "'" + String(o.collection) + "' mode", to }];
+          });
+          return;
+        }
+        case "setVariable": {
+          const vals = o.value !== void 0 ? [["", o.value]] : isObj6(o.values) ? Object.entries(o.values) : [];
+          const rows = vals.map(([mode, v]) => {
+            const was = r && r.old ? mode === "" ? Object.values(r.old)[0] : r.old[mode] : void 0;
+            return { field: mode, to: valueText("", v), ...was !== void 0 ? { from: valueText("", was) } : {} };
+          });
+          const tail = followTail(r);
+          lines.push({ head: named("Variable", r), rows, ...tail ? { tail } : {}, ops: [i] });
+          return;
+        }
+        case "setStyle": {
+          const set = isStyleSet(o.set) ? { ...o.set } : {};
+          const fields = isStyleSet(o.set) ? checkStyleSet(o.set).summary.fields : [];
+          const tail = followTail(r);
+          lines.push({ head: named("Style", r), rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
+          return;
+        }
+        case "createTree": {
+          const spec = o.tree;
+          const { summary } = checkTree(o.tree);
+          if (r && r.updates !== void 0) {
+            const comp = componentRootOf(o.tree);
+            const tail = comp ? followTail(r) : void 0;
+            lines.push({ head: (comp ? "Updates component '" : "Updates '") + r.updates + "' in place", rows: [], ...tail ? { tail } : {}, ops: [i] });
+            return;
+          }
+          const c = summary.component;
+          const what = spec && spec.clone !== void 0 ? "New copy of a layer" + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") : c ? c.type === "COMPONENT_SET" ? "New component set '" + c.name + "' (" + plural(c.variants, "variant") + ")" : "New component '" + c.name + "'" : "New frame '" + (spec && spec.name ? spec.name : "Frame") + "'";
+          const size2 = spec ? sizePhrase(spec) : "";
+          const inside = summary.frames + summary.texts + summary.instances + summary.clones - (c ? 0 : 1);
+          const head = what + (size2 ? ", " + size2 : "") + (inside > 0 ? ", " + plural(inside, "layer") + " inside" : "");
+          const lands = r && r.lands ? "lands " + r.lands : void 0;
+          lines.push({ head, rows: [], ...lands ? { tail: lands } : {}, ops: [i] });
+          return;
+        }
+        case "createFrame": {
+          const size2 = o.width && o.height ? ", " + o.width + "\xD7" + o.height : "";
+          lines.push({ head: "New frame" + (o.name ? " '" + o.name + "'" : "") + size2 + (o.fill ? ", fill " + o.fill : ""), rows: [], tail: r && r.parent ? "inside '" + r.parent + "'" : "on the current page", ops: [i] });
+          return;
+        }
+        case "createText":
+          lines.push({ head: "New text " + valueText("text", o.text || "") + (o.fontSize ? ", size " + o.fontSize : ""), rows: [], tail: r && r.parent ? "inside '" + r.parent + "'" : "on the current page", ops: [i] });
+          return;
+        case "move":
+          lines.push({ head: "Moves " + (r && r.name ? "'" + r.name + "'" : "a layer") + (r && r.parent ? " into '" + r.parent + "'" : ""), rows: [], ops: [i] });
+          return;
+        case "delete":
+          lines.push({ head: "Deletes " + (r && r.name ? "'" + r.name + "'" : "a layer") + " and everything inside it", rows: [], tail: "cannot be put back from here", ops: [i] });
+          return;
+        case "createVariables": {
+          const { summary } = checkCreateVariables(o);
+          lines.push({ head: "Variables in collection '" + summary.collection + "': " + plural(summary.rows.length, "row"), rows: [], tail: "new names are created, names the file has are updated", ops: [i] });
+          return;
+        }
+        case "createStyles": {
+          const { rows } = checkCreateStyles(o);
+          lines.push({ head: "Styles: " + plural(rows.length, "row") + (rows.length ? " (" + rows.slice(0, 3).map((s) => "'" + s.name + "'").join(", ") + (rows.length > 3 ? ", \u2026" : "") + ")" : ""), rows: [], tail: "new names are created, names the file has are updated", ops: [i] });
+          return;
+        }
+        default: {
+          const never = o.op;
+          lines.push({ head: String(never), rows: [], ops: [i] });
+        }
+      }
+    });
+    for (const g of groups.values()) g.build(g);
+    return lines.map((l) => ({ head: l.head, rows: l.rows, ...l.tail !== void 0 ? { tail: l.tail } : {}, ops: l.ops }));
+  }
 
-  // ../bridge/src/timeouts.ts
-  var REVIEW_WAIT_MS = 3e5;
-  var TIMEOUTS = { command: 12e4, selection: 12e4, list: 3e5, export: 3e5, exportAll: 9e5, write: REVIEW_WAIT_MS + 6e4 };
-  var PLUGIN_REDIAL_MS = 1e3;
-  var SETTLE_MS = ALLOWED_PORTS.length * PLUGIN_REDIAL_MS + 500;
+  // ../bridge/src/review-policy.ts
+  var REVIEW_LAYER_LIMIT = 25;
+  var plural2 = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
+  function reviewDecision(f) {
+    const reasons = [];
+    if (f.sourceEdits) reasons.push("it changes " + (f.sourceEdits === 1 ? "a variable, style or main component" : f.sourceEdits + " variables, styles or main components") + " that other layers follow");
+    if (f.bulkByRule) reasons.push("it changes layers it picks by a rule");
+    const total = f.sinceApproval + f.layers;
+    if (total > REVIEW_LAYER_LIMIT) {
+      reasons.push(f.sinceApproval ? plural2(total, "existing layer") + " would have changed since your last approval (over " + REVIEW_LAYER_LIMIT + ")" : "it changes " + plural2(total, "existing layer") + " (over " + REVIEW_LAYER_LIMIT + ")");
+    }
+    if (f.checkbox) reasons.push("'Review each change first' is on");
+    return reasons.length ? { wait: true, reason: reasons.join("; ") } : { wait: false, reason: "" };
+  }
+  function previewOffered(f) {
+    if (f.deletes || f.keyedResend) return false;
+    return f.sourceEdits > 0 || f.bulkByRule || f.layers > REVIEW_LAYER_LIMIT;
+  }
+  function countLayers(ids, own4) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const id of ids) if (!own4(id)) seen.add(id);
+    return seen.size;
+  }
 
   // src/edits.ts
   var KEY = "allowEdits";
@@ -6140,178 +6361,50 @@
   function editsAllowedNow() {
     return allowed;
   }
-  async function setEditsAllowed(on2) {
+  async function setEditsAllowed(on) {
     await loaded;
-    allowed = on2;
+    allowed = on;
     try {
-      await figma.clientStorage.setAsync(KEY, on2);
+      await figma.clientStorage.setAsync(KEY, on);
     } catch (e) {
       console.error("[export] could not save the Allow edits setting:", e);
     }
     return allowed;
   }
 
-  // src/review.ts
-  var KEY2 = "reviewWrites";
-  var on = false;
-  var loaded2 = (async () => {
-    try {
-      on = await figma.clientStorage.getAsync(KEY2) === true;
-    } catch (e) {
-      console.error("[export] could not read the Review each write setting; review stays off:", e);
-      on = false;
-    }
-  })();
-  async function reviewWrites() {
-    await loaded2;
-    return on;
-  }
-  async function setReviewWrites(value) {
-    await loaded2;
-    on = value;
-    try {
-      await figma.clientStorage.setAsync(KEY2, value);
-    } catch (e) {
-      console.error("[export] could not save the Review each write setting:", e);
-    }
-    return on;
-  }
-  var pending = /* @__PURE__ */ new Map();
-  var seq = 0;
-  function awaitReview(ops) {
-    const id = "review-" + ++seq;
-    const run2 = activeRun();
-    return new Promise((resolve) => {
-      if (run2 && run2.cancel) {
-        resolve({ end: run2.cancel === "designer" ? "cancelled" : "withdrawn" });
-        return;
-      }
-      let timer;
-      const onCancel = () => settle({ end: run2 && run2.cancel === "designer" ? "cancelled" : "withdrawn" });
-      const settle = (o) => {
-        if (!pending.delete(id)) return;
-        if (timer !== void 0) clearTimeout(timer);
-        if (run2 && run2.onCancel === onCancel) run2.onCancel = null;
-        const ended = { type: "review-end", id, end: o.end };
-        figma.ui.postMessage(ended);
-        resolve(o);
-      };
-      pending.set(id, { settle });
-      if (run2) run2.onCancel = onCancel;
-      timer = setTimeout(() => settle({ end: "timed-out" }), REVIEW_WAIT_MS);
-      const card = { type: "review", id, lines: reviewLines(ops), waitMs: REVIEW_WAIT_MS };
-      figma.ui.postMessage(card);
-    });
-  }
-  function answerReview(id, apply, reason) {
-    const p = pending.get(id);
-    if (!p) return;
-    const said = reviewReason(reason);
-    p.settle(apply ? { end: "approved" } : { end: "rejected", ...said !== void 0 ? { reason: said } : {} });
-  }
-  function endReviews(end) {
-    for (const p of [...pending.values()]) p.settle({ end });
-  }
+  // ../bridge/src/ports.ts
+  var ALLOWED_PORTS = [8787, 8788, 8789];
 
-  // src/variable-modes.ts
-  var isModeOp = (op) => op.op === "setVariableMode" || op.op === "clearVariableMode";
-  async function resolveModeOps(ops) {
-    const targets = /* @__PURE__ */ new Map();
-    const problems = [];
-    let locals = null;
-    let library = null;
-    const localCollections = async () => {
-      if (!locals) locals = await figma.variables.getLocalVariableCollectionsAsync();
-      return locals;
-    };
-    const libraryCollections = async () => {
-      if (library) return library;
-      try {
-        library = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
-      } catch {
-        library = [];
-      }
-      return library;
-    };
-    for (const [index, op] of ops.entries()) {
-      if (!isModeOp(op)) continue;
-      const bad = (message) => {
-        problems.push({ index, op: op.op, message });
-      };
-      const nodeId = op.nodeId || "";
-      const ref2 = op.collection || "";
-      const nd = await figma.getNodeByIdAsync(nodeId);
-      let node = null;
-      if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
-      else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");
-      else node = nd;
-      const coll = await resolveCollection(ref2, localCollections, libraryCollections);
-      if ("error" in coll) {
-        bad(coll.error);
-        continue;
-      }
-      const collection = coll.ok;
-      let modeId = null;
-      if (op.op === "setVariableMode") {
-        const mode = resolveMode(op.mode || "", collection);
-        if ("error" in mode) {
-          bad(mode.error);
-          continue;
-        }
-        modeId = mode.ok;
-      }
-      if (node) targets.set(index, { node, collection, modeId });
-    }
-    return { targets, problems };
+  // ../bridge/src/timeouts.ts
+  var REVIEW_HOLD_MS = 45e3;
+  var REVIEW_HOLD_MAX_MS = 5e4;
+  var REVIEW_IDLE_MS = 12e4;
+  var REVIEW_CARD_MAX_MS = 15 * 6e4;
+  var TIMEOUTS = { command: 12e4, selection: 12e4, list: 3e5, export: 3e5, exportAll: 9e5, write: REVIEW_HOLD_MAX_MS + 7e4 };
+  var PLUGIN_REDIAL_MS = 1e3;
+  var SETTLE_MS = ALLOWED_PORTS.length * PLUGIN_REDIAL_MS + 500;
+
+  // src/batch-plan.ts
+  var current2 = null;
+  var components = /* @__PURE__ */ new Map();
+  function setBatchPlan(plan) {
+    current2 = plan;
+    if (plan === null) components = /* @__PURE__ */ new Map();
   }
-  async function resolveCollection(ref2, localCollections, libraryCollections) {
-    let byId = null;
-    try {
-      byId = ref2 ? await figma.variables.getVariableCollectionByIdAsync(ref2) : null;
-    } catch {
-      byId = null;
-    }
-    if (byId) return { ok: byId };
-    const locals = await localCollections();
-    const m = matchByName(ref2, locals, (c) => c.name, (c) => [c.id, c.key]);
-    if (m.kind === "one") return { ok: m.item };
-    if (m.kind === "many") {
-      return { error: "collection '" + ref2 + "' matches " + m.matches.length + " local collections \u2014 pass one's id: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + ")").join(", ") };
-    }
-    const lib = (await libraryCollections()).filter((c) => c.name === ref2 || c.key === ref2);
-    if (lib.length) {
-      const from = [...new Set(lib.map((c) => c.libraryName))];
-      return { error: "collection '" + ref2 + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) \u2014 use a local collection, or bind one of its variables in this file first" };
-    }
-    return { error: "collection '" + ref2 + "' matches no local variable collection" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "; this file has none") };
+  function setPlannedComponents(planned) {
+    components = planned;
   }
-  function resolveMode(ref2, collection) {
-    const m = matchByName(ref2, collection.modes, (md) => md.name, (md) => [md.modeId]);
-    if (m.kind === "one") return { ok: m.item.modeId };
-    if (m.kind === "many") {
-      return { error: "mode '" + ref2 + "' appears " + m.matches.length + " times in collection '" + collection.name + "' \u2014 pass its modeId: " + m.matches.slice(0, 3).map((md) => "'" + md.name + "' (" + md.modeId + ")").join(", ") };
-    }
-    return { error: "mode '" + ref2 + "' is not in collection '" + collection.name + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+  function plannedComponent(name) {
+    return components.get(name);
   }
-  function modeName(collection, modeId) {
-    if (modeId === void 0 || modeId === null) return INHERITED;
-    const m = collection.modes.find((md) => md.modeId === modeId);
-    return m ? m.name : modeId;
+  function plannedVariables(name) {
+    return current2 ? current2.variables.filter((v) => v.name === name) : [];
   }
-  function applyMode(t) {
-    const { node, collection, modeId } = t;
-    const prev = (node.explicitVariableModes || {})[collection.id];
-    if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
-    else node.setExplicitVariableModeForCollection(collection, modeId);
-    return {
-      applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
-      kind: "variable mode change",
-      what: "the '" + collection.name + "' mode on node " + node.id,
-      restore() {
-        if (prev === void 0) node.clearExplicitVariableModeForCollection(collection);
-        else node.setExplicitVariableModeForCollection(collection, prev);
-      }
-    };
+  function plannedStyles(name, kind) {
+    return current2 ? current2.styles.filter((s) => s.name === name && (kind === void 0 || s.kind === kind)) : [];
+  }
+  function plannedWhere(p) {
+    return "ops[" + p.op + "] makes it " + p.where;
   }
 
   // src/images.ts
@@ -6424,7 +6517,7 @@
     }
     return out;
   }
-  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj7 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   function canonical(v) {
     if (v === void 0) return "undefined";
     if (v === null || typeof v !== "object") return JSON.stringify(v);
@@ -6434,7 +6527,7 @@
   }
   var same = (a, b) => canonical(a) === canonical(b);
   function without(o, keys) {
-    if (!isObj6(o)) return void 0;
+    if (!isObj7(o)) return void 0;
     const out = {};
     for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
     return Object.keys(out).length ? out : void 0;
@@ -6750,7 +6843,7 @@
   function writeIndex(key, id) {
     figma.root.setPluginData(indexEntry(key), id);
   }
-  var isObj7 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj8 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var holds = (n) => n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
   function readOld(n, key) {
     let spec;
@@ -6759,7 +6852,7 @@
     } catch {
       return null;
     }
-    if (!isObj7(spec)) return null;
+    if (!isObj8(spec)) return null;
     const children = [];
     if (holds(n)) {
       for (const c of n.children) {
@@ -6769,29 +6862,6 @@
       }
     }
     return { ref: n, spec, children };
-  }
-
-  // src/batch-plan.ts
-  var current2 = null;
-  var components = /* @__PURE__ */ new Map();
-  function setBatchPlan(plan) {
-    current2 = plan;
-    if (plan === null) components = /* @__PURE__ */ new Map();
-  }
-  function setPlannedComponents(planned) {
-    components = planned;
-  }
-  function plannedComponent(name) {
-    return components.get(name);
-  }
-  function plannedVariables(name) {
-    return current2 ? current2.variables.filter((v) => v.name === name) : [];
-  }
-  function plannedStyles(name, kind) {
-    return current2 ? current2.styles.filter((s) => s.name === name && (kind === void 0 || s.kind === kind)) : [];
-  }
-  function plannedWhere(p) {
-    return "ops[" + p.op + "] makes it " + p.where;
   }
 
   // src/tree-refs.ts
@@ -7174,8 +7244,8 @@
         const first2 = exact[0];
         if (first2 && exact.length === 1) return { ok: first2 };
         if (isKey(ref2)) return { later: (allowed2) => importComponent(ref2, allowed2) };
-        const named = all.filter((c) => !(c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET"));
-        const m = matchByName(ref2, named, (c) => c.name);
+        const named2 = all.filter((c) => !(c.type === "COMPONENT" && c.parent && c.parent.type === "COMPONENT_SET"));
+        const m = matchByName(ref2, named2, (c) => c.name);
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return ambiguous("component", ref2, m.matches);
         const planned = plannedComponent(ref2);
@@ -8027,15 +8097,15 @@
     }
   }
   async function patchCopy(t, node, consent2) {
-    const on2 = { ...t, node };
+    const on = { ...t, node };
     const fit = unfit(node, t.set);
     const problems = fit.kind.concat(fit.state);
-    if (on2.props && node.type === "INSTANCE") {
-      const v = await variantProblem(node, on2.props);
+    if (on.props && node.type === "INSTANCE") {
+      const v = await variantProblem(node, on.props);
       if (v) problems.push(v);
     }
     if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
-    if (on2.fontsLater && node.type === "TEXT") {
+    if (on.fontsLater && node.type === "TEXT") {
       for (const f of await fontsToKeep(node)) {
         try {
           await figma.loadFontAsync(f);
@@ -8045,7 +8115,7 @@
       }
     }
     consent2();
-    await setFields(on2, consent2);
+    await setFields(on, consent2);
   }
   async function applyPatch(t, consent2, allowed2, changes) {
     await checkBeforeApply(t);
@@ -8158,7 +8228,7 @@
       const self = clonePatch(s);
       const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say(under(path, m)), fontsLater) : null;
       const edits = [];
-      const named = /* @__PURE__ */ new Map();
+      const named2 = /* @__PURE__ */ new Map();
       for (const [ref2, set] of cloneEdits(s)) {
         const where = path + ".edits[" + JSON.stringify(ref2) + "]";
         const layer = findLayer(nd, ref2);
@@ -8172,12 +8242,12 @@
           say(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
           continue;
         }
-        const twice = named.get(layer.ok.id);
+        const twice = named2.get(layer.ok.id);
         if (twice !== void 0) {
           say(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
           continue;
         }
-        named.set(layer.ok.id, ref2);
+        named2.set(layer.ok.id, ref2);
         const t = await resolvePatchNode(layer.ok, set, true, loadFont, (m) => say(under(where, m)), fontsLater);
         if (t) edits.push(t);
       }
@@ -8353,15 +8423,15 @@
     } catch {
       return null;
     }
-    let current3;
+    let current4;
     try {
-      current3 = owner.componentPropertyDefinitions;
+      current4 = owner.componentPropertyDefinitions;
     } catch {
-      current3 = {};
+      current4 = {};
     }
     const have = /* @__PURE__ */ new Map();
-    for (const key of Object.keys(current3)) {
-      const d = current3[key];
+    for (const key of Object.keys(current4)) {
+      const d = current4[key];
       if (!d || d.type === "VARIANT") continue;
       const name = bareName(key);
       if (!have.has(name)) have.set(name, { key, type: d.type, defaultValue: d.defaultValue, ...d.preferredValues ? { preferredValues: d.preferredValues } : {} });
@@ -8525,14 +8595,14 @@
   }
   function removeDefs(p, consent2, gone) {
     const out = [];
-    let current3;
+    let current4;
     try {
-      current3 = p.owner.componentPropertyDefinitions;
+      current4 = p.owner.componentPropertyDefinitions;
     } catch {
-      current3 = {};
+      current4 = {};
     }
     for (const r of p.remove) {
-      if (!own2(current3, r.key)) continue;
+      if (!own2(current4, r.key)) continue;
       consent2();
       p.owner.deleteComponentProperty(r.key);
       propertyCalled();
@@ -8690,7 +8760,7 @@
     if (!c) return null;
     return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a === void 0 ? 1 : c.a });
   }
-  var isObj8 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj9 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var NUMBER_TOLERANCE = 0.01;
   function resolveAll(list) {
     const byRef = /* @__PURE__ */ new Map();
@@ -8729,8 +8799,8 @@
       });
       cands = cands.filter((v) => allows(v, kind));
       if (cands.length > 1) {
-        const named = cands.filter((v) => hasWordFor(v.name, kind));
-        if (named.length) cands = named;
+        const named2 = cands.filter((v) => hasWordFor(v.name, kind));
+        if (named2.length) cands = named2;
       }
       if (cands.length > 1) {
         const reached = /* @__PURE__ */ new Set();
@@ -8747,11 +8817,11 @@
     };
   }
   function textFont(font) {
-    if (isObj8(font.variationSettings) && Object.keys(font.variationSettings).length) return null;
+    if (isObj9(font.variationSettings) && Object.keys(font.variationSettings).length) return null;
     const size2 = typeof font.size === "number" ? font.size : 12;
-    const lh = isObj8(font.lineHeight) ? font.lineHeight : null;
+    const lh = isObj9(font.lineHeight) ? font.lineHeight : null;
     const lineHeight = !lh || lh.unit === "auto" ? null : typeof lh.value !== "number" ? null : lh.unit === "percent" ? lh.value * size2 / 100 : lh.value;
-    const ls = isObj8(font.letterSpacing) ? font.letterSpacing : null;
+    const ls = isObj9(font.letterSpacing) ? font.letterSpacing : null;
     const letterSpacing = !ls || typeof ls.value !== "number" ? 0 : ls.unit === "percent" ? ls.value * size2 / 100 : ls.value;
     return {
       family: typeof font.family === "string" ? font.family : DEFAULT_FONT.family,
@@ -8816,7 +8886,7 @@
           }
         }
         if (!(n.styles && n.styles.text !== void 0)) {
-          const want = textFont(isObj8(font) ? font : {});
+          const want = textFont(isObj9(font) ? font : {});
           if (want) {
             const hits = table.textStyles.filter((s) => sameFont(s, want));
             const one = hits[0];
@@ -8883,7 +8953,7 @@
             for (const [, f] of CORNERS2) tk[f] = ref2;
             outcome.bound++;
           }
-        } else if (isObj8(r)) {
+        } else if (isObj9(r)) {
           for (const [k, f] of CORNERS2) {
             const v = r[k];
             if (typeof v !== "number" || t[f] !== void 0) continue;
@@ -9020,7 +9090,7 @@
       root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made2);
       await finish(made2, 0, 0, consent2);
-      const { x, y } = placement(t.page, root, t.spec);
+      const { x, y } = placement(t.page, root.id, t.spec);
       t.page.appendChild(root);
       root.x = x;
       root.y = y;
@@ -9087,7 +9157,7 @@
       await finish(made2, 0, 0, consent2);
       const keys = addDefs(root, fileDefs(t.spec, t.refs));
       wireAll(made2.pairs, keys);
-      const { x, y } = placement(t.page, root, t.spec);
+      const { x, y } = placement(t.page, root.id, t.spec);
       t.page.appendChild(root);
       root.x = x;
       root.y = y;
@@ -9208,12 +9278,17 @@
     const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
     return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
   }
-  function placement(page, root, spec) {
+  function landingSpot(t) {
+    const at3 = placement(t.page, "", t.spec);
+    const beside = !(t.spec.x !== void 0 && t.spec.y !== void 0) && t.page.children.length > 0;
+    return { page: t.page, x: at3.x, y: at3.y, beside };
+  }
+  function placement(page, rootId, spec) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
     let right = null;
     let top = null;
     for (const c of page.children) {
-      if (c.id === root.id) continue;
+      if (c.id === rootId) continue;
       const b = occupied(c);
       right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
       top = top === null ? b.y : Math.min(top, b.y);
@@ -9406,373 +9481,6 @@
     common(t, s, parent, made2);
     sizing(t, s);
     bindNumbers(t, s, made2);
-  }
-
-  // src/keyed.ts
-  var isObj9 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
-  async function findResult(key) {
-    const id = readIndex(key);
-    if (!id) return null;
-    const n = await figma.getNodeByIdAsync(id);
-    if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
-    return await loadPageOf(n) ? n : null;
-  }
-  async function loadPageOf(n) {
-    let p = n.parent;
-    while (p && p.type !== "PAGE") p = p.parent;
-    if (!p || p.type !== "PAGE") return false;
-    await p.loadAsync();
-    return true;
-  }
-  var MAX_STAMP_BYTES = 99e3;
-  function utf8Bytes(s) {
-    let n = 0;
-    for (let i = 0; i < s.length; i++) {
-      const c = s.charCodeAt(i);
-      if (c < 128) n += 1;
-      else if (c < 2048) n += 2;
-      else if (c >= 55296 && c <= 56319) {
-        n += 4;
-        i++;
-      } else n += 3;
-    }
-    return n;
-  }
-  function oversized(s, path, out) {
-    const bytes = utf8Bytes(JSON.stringify(ownSpec(s)));
-    if (bytes > MAX_STAMP_BYTES) out.push(path + ": its own fields are " + bytes + " bytes, more than a keyed spec can store on a node (" + MAX_STAMP_BYTES + "); shorten its text, or leave out the key");
-    (s.children || []).forEach((c, i) => oversized(c, path + ".children[" + i + "]", out));
-    return out;
-  }
-  function foreignIn(n, key) {
-    if (n.getPluginData(KEY_DATA) !== key) return n;
-    if (n.type === "INSTANCE" || !("children" in n)) return null;
-    for (const c of n.children) {
-      const f = foreignIn(c, key);
-      if (f) return f;
-    }
-    return null;
-  }
-  async function resolveKeyed(ops, targets) {
-    const problems = [];
-    const seen = /* @__PURE__ */ new Map();
-    const loaded3 = /* @__PURE__ */ new Map();
-    const loadFont = (f) => {
-      const k = f.family + "|" + f.style;
-      let p = loaded3.get(k);
-      if (!p) {
-        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
-        loaded3.set(k, p);
-      }
-      return p;
-    };
-    for (const [index, op] of ops.entries()) {
-      const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
-      if (op.op !== "createTree" || !isObj9(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
-      const key = comp ? componentKey(comp.name) : String(op.tree.key);
-      const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
-      const bad = (message) => {
-        problems.push({ index, op: op.op, message });
-      };
-      const first2 = seen.get(key);
-      if (first2 !== void 0) {
-        bad(comp ? "component '" + comp.name + "' is also made by ops[" + first2 + "]; one batch makes or updates a component once" : "tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
-        continue;
-      }
-      seen.set(key, index);
-      const t = targets.get(index);
-      if (!t) continue;
-      const big = oversized(t.spec, "tree", []);
-      if (big.length) {
-        for (const m of big) bad(m);
-        continue;
-      }
-      let root = null;
-      if (comp) {
-        const found = await existingComponent(comp.type, comp.name);
-        if ("problem" in found) {
-          bad(found.problem);
-          continue;
-        }
-        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
-      } else root = await findResult(key);
-      if (!root) continue;
-      if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
-        bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
-        continue;
-      }
-      const old = readOld(root, key);
-      if (!old) {
-        bad(what + ": the spec stored on its result " + label3(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
-        continue;
-      }
-      const plan = planUpdate(old, t.spec);
-      const before = problems.length;
-      for (const b of plan.builds) {
-        if (!b.replaces) continue;
-        const f = foreignIn(b.replaces, key);
-        if (f) bad(b.path + ": " + label3(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label3(f) + ", which this key did not build; move that layer out first");
-      }
-      for (const r of plan.removals) {
-        const f = foreignIn(r, key);
-        if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
-      }
-      const owner = root;
-      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
-      if (defs) {
-        defs.wiring = planWiring(defs, plan.kept);
-        const bound = new Map(defs.wiring.map((w) => [w.ref, w.stays]));
-        for (const u of plan.updates) {
-          const stays = bound.get(u.ref);
-          if (!u.set || !stays) continue;
-          if (stays.indexOf("characters") >= 0) delete u.set.text;
-          if (stays.indexOf("visible") >= 0) delete u.set.hidden;
-          if (!Object.keys(u.set).length) u.set = null;
-        }
-        for (const n of textsFollowing(defs)) {
-          const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
-          for (const f of fonts) {
-            const m = await loadFont(f);
-            if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
-          }
-        }
-      }
-      const patches = /* @__PURE__ */ new Map();
-      for (const [i, u] of plan.updates.entries()) {
-        if (!u.set) continue;
-        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
-        const checked = checkPatch(u.set);
-        if (checked.problems.length) {
-          for (const m of checked.problems) say(m);
-          continue;
-        }
-        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
-        if (!p) continue;
-        p.refs = t.refs;
-        patches.set(i, p);
-      }
-      if (problems.length === before) t.update = { key, root, plan, patches, ...comp && defs ? { component: { name: comp.name, defs } } : {} };
-    }
-    return { problems };
-  }
-  function checkRemoval(u, n) {
-    if (n.removed) return;
-    const f = foreignIn(n, u.key);
-    if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
-  }
-  function touchedBy(u) {
-    const out = /* @__PURE__ */ new Set([u.root.id]);
-    for (const x of u.plan.updates) out.add(x.ref.id);
-    for (const b of u.plan.builds) out.add(b.parent.id);
-    for (const o of u.plan.orders) out.add(o.parent.id);
-    for (const st of u.plan.stamps) out.add(st.ref.id);
-    for (const h of u.plan.handles) out.add(h.ref.id);
-    return out;
-  }
-  function removalCount(u) {
-    let n = 0;
-    const count2 = (x) => {
-      if (x.removed) return;
-      if (x.getPluginData(KEY_DATA) === u.key) n++;
-      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
-    };
-    for (const x of removalsOf(u)) count2(x);
-    return n;
-  }
-  function removalsOf(u) {
-    const out = u.plan.removals.slice();
-    for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
-    return out;
-  }
-  var ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" };
-  var LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
-  var PLACE_FIELDS = ["absolute", "grow", "alignSelf"];
-  var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
-  function boundTo(n, k) {
-    const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj9(bv) ? bv[k] : void 0;
-    return isObj9(a) && typeof a.id === "string" ? a.id : null;
-  }
-  function applyExtras(n, s, fields, only, variables, changes) {
-    const todo = only.filter((f) => fields.indexOf(f) >= 0);
-    if (!todo.length) return;
-    const kept = [];
-    const limits = todo.indexOf("sizeLimits") >= 0;
-    const bound = limits ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
-    const size2 = limits ? { w: n.width, h: n.height, sizing: ["layoutSizingHorizontal", "layoutSizingVertical"].map((k) => [k, k in n ? Reflect.get(n, k) : void 0]) } : null;
-    changes.push({
-      applied: { id: n.id },
-      kind: "updated node",
-      what: "the place, clipping or size limits of " + label3(n),
-      async restore() {
-        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
-        if (size2) {
-          if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
-          for (const [k, v] of size2.sizing) if (v !== void 0 && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
-        }
-        for (const [k, id] of bound) {
-          if (boundTo(n, k) === id) continue;
-          const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
-          n.setBoundVariable(k, v);
-        }
-      }
-    });
-    const put2 = (k, v) => {
-      if (!(k in n)) return;
-      const was = Reflect.get(n, k);
-      if (was === v) return;
-      if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
-      kept.push([k, was]);
-    };
-    const parent = n.parent;
-    const onPage = !parent || parent.type === "PAGE";
-    const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
-    for (const f of todo) {
-      if (f === "absolute" && inFlex) put2("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
-      else if (f === "grow" && inFlex) put2("layoutGrow", s.grow !== void 0 ? s.grow : 0);
-      else if (f === "alignSelf" && inFlex) put2("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
-      else if (f === "clip") put2("clipsContent", s.clip === true);
-      else if (f === "sizeLimits") {
-        for (const k of LIMITS) put2(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
-        for (const k of LIMITS) {
-          const ref2 = s.tokens && s.tokens[k];
-          const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
-          if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
-        }
-      } else if (f === "strokesInLayout") put2("strokesIncludedInLayout", s.strokesInLayout === true);
-      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
-    }
-  }
-  function arrange(parent, want) {
-    for (const [i, n] of want.entries()) {
-      if (n.parent !== parent) continue;
-      if (parent.children[i] !== n) parent.insertChild(i, n);
-    }
-  }
-  function applyOrder(o, built, replaced) {
-    const parent = o.parent;
-    const was = parent.children.slice();
-    const nodes = [];
-    const olds = [];
-    for (const e of o.order) {
-      const n = "ref" in e ? e.ref : built[e.build];
-      if (n && n.parent === parent) nodes.push(n);
-      const r = "build" in e ? replaced[e.build] : null;
-      if (r && r.parent === parent) olds.push(r);
-    }
-    const seq2 = nodes.concat(olds);
-    const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
-    const want = was.slice();
-    slots.forEach((slot, k) => {
-      const n = seq2[k];
-      if (n) want[slot] = n;
-    });
-    arrange(parent, want);
-    return {
-      applied: { id: parent.id },
-      kind: "reordered frame",
-      what: "the order of the layers in " + label3(parent),
-      restore() {
-        arrange(parent, was.filter((c) => c.parent === parent));
-      }
-    };
-  }
-  function restamp2(stamps, key, changes) {
-    const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
-    changes.push({
-      applied: {},
-      kind: "stored spec",
-      what: "the spec stored on " + stamps.length + " node(s)",
-      restore() {
-        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
-      }
-    });
-    for (const s of stamps) stampNode(s.ref, key, s.spec);
-  }
-  async function applyUpdate(t, u, consent2, allowed2, changes) {
-    const { plan, key } = u;
-    const changed = [];
-    const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
-    for (const [i, up] of plan.updates.entries()) {
-      const p = u.patches.get(i);
-      if (up.extras.length) {
-        consent2();
-        applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
-      }
-      if (p) {
-        consent2();
-        await applyPatch(p, consent2, allowed2, changes);
-      }
-      if (up.extras.length) {
-        consent2();
-        applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
-      }
-      changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
-    }
-    const made2 = newMade(t.refs, t.clones);
-    const built = [];
-    for (const b of plan.builds) {
-      consent2();
-      const from = made2.pairs.length;
-      const n = await buildSubtree(b.spec, b.parent, made2, consent2);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
-        n.remove();
-      } });
-      stampAll(made2, key, from);
-      built.push(n);
-    }
-    const replaced = plan.builds.map((b) => b.replaces);
-    for (const o of plan.orders) {
-      consent2();
-      changes.push(applyOrder(o, built, replaced));
-    }
-    if (plan.stamps.length) {
-      consent2();
-      restamp2(plan.stamps, key, changes);
-    }
-    let props = /* @__PURE__ */ new Map();
-    let rewired = 0;
-    if (u.component) {
-      const root = u.root;
-      if (root.type === "COMPONENT_SET" && built.length) {
-        consent2();
-        const size2 = { w: root.width, h: root.height };
-        const at3 = root.children.map((c) => [c, c.x, c.y]);
-        const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
-          for (const [c, x, y] of at3) if (!c.removed) {
-            c.x = x;
-            c.y = y;
-          }
-          if (root.width !== size2.w || root.height !== size2.h) root.resize(size2.w, size2.h);
-          if (sizing2) {
-            root.layoutSizingHorizontal = sizing2.h;
-            root.layoutSizingVertical = sizing2.v;
-          }
-        } });
-        arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
-      }
-      const synced = syncComponent(u.component.defs, unwired, made2.pairs, consent2, changes);
-      props = synced.props;
-      rewired = synced.rewired;
-    }
-    const applied = { id: u.root.id, key };
-    if (changed.length) applied.changed = changed;
-    if (plan.builds.length) applied.created = createdCount(made2);
-    const removed = removalCount(u);
-    if (removed) applied.removed = removed;
-    const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
-    if (reordered) applied.reordered = reordered;
-    const handles = {};
-    for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
-    for (const [h, id] of made2.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
-    if (Object.keys(handles).length) applied.handles = handles;
-    const dropped = u.component ? u.component.defs.remove.length : 0;
-    if (u.component) componentReply(applied, u.component.name, props, rewired);
-    if (dropped && u.component) applied.propsRemoved = u.component.defs.remove.map((r) => r.name);
-    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles && !props.size && !rewired && !dropped) applied.unchanged = true;
-    return applied;
   }
 
   // src/sources.ts
@@ -10430,7 +10138,7 @@
       warn("the layers using the style '" + style.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
     }
   }
-  async function variableImpact(v, lookups, graph, warn) {
+  async function variableImpact(v, lookups, graph, warn, keep2) {
     const ids = /* @__PURE__ */ new Set([v.id]);
     const locals = await lookups.localVariables();
     const aliasesNow = (x) => {
@@ -10452,7 +10160,7 @@
         break;
       }
     }
-    const nodes = /* @__PURE__ */ new Set();
+    const nodes = keep2 || /* @__PURE__ */ new Set();
     for (const page of figma.root.children) {
       try {
         await page.loadAsync();
@@ -10490,17 +10198,29 @@
       modes[x.modeId] = "ok" in target ? target.ok.id : null;
     }
   }
-  async function instancesOf(c, warn) {
+  async function instancesOf(c, warn, keep2) {
     const mains = c.type === "COMPONENT_SET" ? c.children.filter((k) => k.type === "COMPONENT") : [c];
     let n = 0;
     for (const m of mains) {
       try {
-        n += (await m.getInstancesAsync()).length;
+        const found = await m.getInstancesAsync();
+        n += found.length;
+        if (keep2) for (const x of found) keep2.add(x.id);
       } catch (e) {
         warn("the instances of '" + m.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
       }
     }
     return n;
+  }
+  async function followersOf(source, warn) {
+    const keep2 = /* @__PURE__ */ new Set();
+    if ("component" in source) await instancesOf(source.component, warn, keep2);
+    else if ("style" in source) await consumersOf(source.style, keep2, warn);
+    else await variableImpact(source.variable, sourceLookups(), /* @__PURE__ */ new Map(), warn, keep2);
+    return keep2;
+  }
+  function mainComponentOf(node) {
+    return componentOf(node);
   }
   async function writeImpact(ops) {
     const warnings = [];
@@ -10551,6 +10271,1105 @@
       }
     }
     return warnings.length ? { steps: steps2, warnings } : { steps: steps2 };
+  }
+
+  // src/keyed.ts
+  var isObj10 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
+  async function findResult(key) {
+    const id = readIndex(key);
+    if (!id) return null;
+    const n = await figma.getNodeByIdAsync(id);
+    if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
+    return await loadPageOf(n) ? n : null;
+  }
+  async function loadPageOf(n) {
+    let p = n.parent;
+    while (p && p.type !== "PAGE") p = p.parent;
+    if (!p || p.type !== "PAGE") return false;
+    await p.loadAsync();
+    return true;
+  }
+  var MAX_STAMP_BYTES = 99e3;
+  function utf8Bytes(s) {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 128) n += 1;
+      else if (c < 2048) n += 2;
+      else if (c >= 55296 && c <= 56319) {
+        n += 4;
+        i++;
+      } else n += 3;
+    }
+    return n;
+  }
+  function oversized(s, path, out) {
+    const bytes = utf8Bytes(JSON.stringify(ownSpec(s)));
+    if (bytes > MAX_STAMP_BYTES) out.push(path + ": its own fields are " + bytes + " bytes, more than a keyed spec can store on a node (" + MAX_STAMP_BYTES + "); shorten its text, or leave out the key");
+    (s.children || []).forEach((c, i) => oversized(c, path + ".children[" + i + "]", out));
+    return out;
+  }
+  function foreignIn(n, key) {
+    if (n.getPluginData(KEY_DATA) !== key) return n;
+    if (n.type === "INSTANCE" || !("children" in n)) return null;
+    for (const c of n.children) {
+      const f = foreignIn(c, key);
+      if (f) return f;
+    }
+    return null;
+  }
+  async function resolveKeyed(ops, targets) {
+    const problems = [];
+    const seen = /* @__PURE__ */ new Map();
+    const loaded3 = /* @__PURE__ */ new Map();
+    const loadFont = (f) => {
+      const k = f.family + "|" + f.style;
+      let p = loaded3.get(k);
+      if (!p) {
+        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
+        loaded3.set(k, p);
+      }
+      return p;
+    };
+    for (const [index, op] of ops.entries()) {
+      const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
+      if (op.op !== "createTree" || !isObj10(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
+      const key = comp ? componentKey(comp.name) : String(op.tree.key);
+      const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const first2 = seen.get(key);
+      if (first2 !== void 0) {
+        bad(comp ? "component '" + comp.name + "' is also made by ops[" + first2 + "]; one batch makes or updates a component once" : "tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
+        continue;
+      }
+      seen.set(key, index);
+      const t = targets.get(index);
+      if (!t) continue;
+      const big = oversized(t.spec, "tree", []);
+      if (big.length) {
+        for (const m of big) bad(m);
+        continue;
+      }
+      let root = null;
+      if (comp) {
+        const found = await existingComponent(comp.type, comp.name);
+        if ("problem" in found) {
+          bad(found.problem);
+          continue;
+        }
+        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+      } else root = await findResult(key);
+      if (!root) continue;
+      if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
+        bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+        continue;
+      }
+      const old = readOld(root, key);
+      if (!old) {
+        bad(what + ": the spec stored on its result " + label3(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
+        continue;
+      }
+      const plan = planUpdate(old, t.spec);
+      const before = problems.length;
+      for (const b of plan.builds) {
+        if (!b.replaces) continue;
+        const f = foreignIn(b.replaces, key);
+        if (f) bad(b.path + ": " + label3(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label3(f) + ", which this key did not build; move that layer out first");
+      }
+      for (const r of plan.removals) {
+        const f = foreignIn(r, key);
+        if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
+      }
+      const owner = root;
+      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
+      if (defs) {
+        defs.wiring = planWiring(defs, plan.kept);
+        const bound = new Map(defs.wiring.map((w) => [w.ref, w.stays]));
+        for (const u of plan.updates) {
+          const stays = bound.get(u.ref);
+          if (!u.set || !stays) continue;
+          if (stays.indexOf("characters") >= 0) delete u.set.text;
+          if (stays.indexOf("visible") >= 0) delete u.set.hidden;
+          if (!Object.keys(u.set).length) u.set = null;
+        }
+        for (const n of textsFollowing(defs)) {
+          const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
+          for (const f of fonts) {
+            const m = await loadFont(f);
+            if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
+          }
+        }
+      }
+      const patches = /* @__PURE__ */ new Map();
+      for (const [i, u] of plan.updates.entries()) {
+        if (!u.set) continue;
+        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
+        const checked = checkPatch(u.set);
+        if (checked.problems.length) {
+          for (const m of checked.problems) say(m);
+          continue;
+        }
+        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
+        if (!p) continue;
+        p.refs = t.refs;
+        patches.set(i, p);
+      }
+      if (problems.length === before) t.update = { key, root, plan, patches, ...comp && defs ? { component: { name: comp.name, defs } } : {} };
+    }
+    return { problems };
+  }
+  function checkRemoval(u, n) {
+    if (n.removed) return;
+    const f = foreignIn(n, u.key);
+    if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
+  }
+  function touchedBy(u) {
+    const out = /* @__PURE__ */ new Set([u.root.id]);
+    for (const x of u.plan.updates) out.add(x.ref.id);
+    for (const b of u.plan.builds) out.add(b.parent.id);
+    for (const o of u.plan.orders) out.add(o.parent.id);
+    for (const st of u.plan.stamps) out.add(st.ref.id);
+    for (const h of u.plan.handles) out.add(h.ref.id);
+    return out;
+  }
+  function changedBy(plan, key) {
+    const out = [];
+    for (const u of plan.updates) out.push(u.ref.id);
+    for (const o of plan.orders) {
+      const kept = [];
+      for (const e of o.order) if ("ref" in e) kept.push(e.ref);
+      const now = o.parent.children.filter((c) => kept.indexOf(c) >= 0);
+      kept.forEach((n, i) => {
+        if (now[i] !== n) out.push(n.id);
+      });
+    }
+    const gone = (x) => {
+      if (x.removed) return;
+      if (x.getPluginData(KEY_DATA) === key) out.push(x.id);
+      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) gone(c);
+    };
+    for (const r of plan.removals) gone(r);
+    for (const b of plan.builds) if (b.replaces) gone(b.replaces);
+    return out;
+  }
+  async function keyedImpact(ops, own4) {
+    const steps2 = [];
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree" || !isObj10(op.tree)) continue;
+      const comp = componentRootOf(op.tree);
+      if (typeof op.tree.key !== "string" && !comp) continue;
+      try {
+        const checked = checkTree(op.tree);
+        if (checked.problems.length || !checked.expanded) continue;
+        const key = comp ? componentKey(comp.name) : String(op.tree.key);
+        let root = null;
+        if (comp) {
+          const found = await existingComponent(comp.type, comp.name);
+          if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+        } else root = await findResult(key);
+        if (!root) continue;
+        const old = readOld(root, key);
+        if (!old) continue;
+        const ids = /* @__PURE__ */ new Set();
+        for (const id of changedBy(planUpdate(old, checked.expanded), key)) if (!own4(id)) ids.add(id);
+        steps2.push({ index, op: op.op, changedLayers: ids.size });
+      } catch {
+      }
+    }
+    return steps2;
+  }
+  function removalCount(u) {
+    let n = 0;
+    const count2 = (x) => {
+      if (x.removed) return;
+      if (x.getPluginData(KEY_DATA) === u.key) n++;
+      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
+    };
+    for (const x of removalsOf(u)) count2(x);
+    return n;
+  }
+  function removalsOf(u) {
+    const out = u.plan.removals.slice();
+    for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
+    return out;
+  }
+  var ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" };
+  var LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
+  var PLACE_FIELDS = ["absolute", "grow", "alignSelf"];
+  var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
+  function boundTo(n, k) {
+    const bv = "boundVariables" in n ? n.boundVariables : void 0;
+    const a = isObj10(bv) ? bv[k] : void 0;
+    return isObj10(a) && typeof a.id === "string" ? a.id : null;
+  }
+  function applyExtras(n, s, fields, only, variables, changes) {
+    const todo = only.filter((f) => fields.indexOf(f) >= 0);
+    if (!todo.length) return;
+    const kept = [];
+    const limits = todo.indexOf("sizeLimits") >= 0;
+    const bound = limits ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+    const size2 = limits ? { w: n.width, h: n.height, sizing: ["layoutSizingHorizontal", "layoutSizingVertical"].map((k) => [k, k in n ? Reflect.get(n, k) : void 0]) } : null;
+    changes.push({
+      applied: { id: n.id },
+      kind: "updated node",
+      what: "the place, clipping or size limits of " + label3(n),
+      async restore() {
+        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+        if (size2) {
+          if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
+          for (const [k, v] of size2.sizing) if (v !== void 0 && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
+        }
+        for (const [k, id] of bound) {
+          if (boundTo(n, k) === id) continue;
+          const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+          n.setBoundVariable(k, v);
+        }
+      }
+    });
+    const put2 = (k, v) => {
+      if (!(k in n)) return;
+      const was = Reflect.get(n, k);
+      if (was === v) return;
+      if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
+      kept.push([k, was]);
+    };
+    const parent = n.parent;
+    const onPage = !parent || parent.type === "PAGE";
+    const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
+    for (const f of todo) {
+      if (f === "absolute" && inFlex) put2("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
+      else if (f === "grow" && inFlex) put2("layoutGrow", s.grow !== void 0 ? s.grow : 0);
+      else if (f === "alignSelf" && inFlex) put2("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
+      else if (f === "clip") put2("clipsContent", s.clip === true);
+      else if (f === "sizeLimits") {
+        for (const k of LIMITS) put2(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
+        for (const k of LIMITS) {
+          const ref2 = s.tokens && s.tokens[k];
+          const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
+          if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
+        }
+      } else if (f === "strokesInLayout") put2("strokesIncludedInLayout", s.strokesInLayout === true);
+      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
+    }
+  }
+  function arrange(parent, want) {
+    for (const [i, n] of want.entries()) {
+      if (n.parent !== parent) continue;
+      if (parent.children[i] !== n) parent.insertChild(i, n);
+    }
+  }
+  function applyOrder(o, built, replaced) {
+    const parent = o.parent;
+    const was = parent.children.slice();
+    const nodes = [];
+    const olds = [];
+    for (const e of o.order) {
+      const n = "ref" in e ? e.ref : built[e.build];
+      if (n && n.parent === parent) nodes.push(n);
+      const r = "build" in e ? replaced[e.build] : null;
+      if (r && r.parent === parent) olds.push(r);
+    }
+    const seq2 = nodes.concat(olds);
+    const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
+    const want = was.slice();
+    slots.forEach((slot, k) => {
+      const n = seq2[k];
+      if (n) want[slot] = n;
+    });
+    arrange(parent, want);
+    return {
+      applied: { id: parent.id },
+      kind: "reordered frame",
+      what: "the order of the layers in " + label3(parent),
+      restore() {
+        arrange(parent, was.filter((c) => c.parent === parent));
+      }
+    };
+  }
+  function restamp2(stamps, key, changes) {
+    const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
+    changes.push({
+      applied: {},
+      kind: "stored spec",
+      what: "the spec stored on " + stamps.length + " node(s)",
+      restore() {
+        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
+      }
+    });
+    for (const s of stamps) stampNode(s.ref, key, s.spec);
+  }
+  async function applyUpdate(t, u, consent2, allowed2, changes) {
+    const { plan, key } = u;
+    const changed = [];
+    const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
+    for (const [i, up] of plan.updates.entries()) {
+      const p = u.patches.get(i);
+      if (up.extras.length) {
+        consent2();
+        applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
+      }
+      if (p) {
+        consent2();
+        await applyPatch(p, consent2, allowed2, changes);
+      }
+      if (up.extras.length) {
+        consent2();
+        applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
+      }
+      changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
+    }
+    const made2 = newMade(t.refs, t.clones);
+    const built = [];
+    for (const b of plan.builds) {
+      consent2();
+      const from = made2.pairs.length;
+      const n = await buildSubtree(b.spec, b.parent, made2, consent2);
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
+        n.remove();
+      } });
+      stampAll(made2, key, from);
+      built.push(n);
+    }
+    const replaced = plan.builds.map((b) => b.replaces);
+    for (const o of plan.orders) {
+      consent2();
+      changes.push(applyOrder(o, built, replaced));
+    }
+    if (plan.stamps.length) {
+      consent2();
+      restamp2(plan.stamps, key, changes);
+    }
+    let props = /* @__PURE__ */ new Map();
+    let rewired = 0;
+    if (u.component) {
+      const root = u.root;
+      if (root.type === "COMPONENT_SET" && built.length) {
+        consent2();
+        const size2 = { w: root.width, h: root.height };
+        const at3 = root.children.map((c) => [c, c.x, c.y]);
+        const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
+        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
+          for (const [c, x, y] of at3) if (!c.removed) {
+            c.x = x;
+            c.y = y;
+          }
+          if (root.width !== size2.w || root.height !== size2.h) root.resize(size2.w, size2.h);
+          if (sizing2) {
+            root.layoutSizingHorizontal = sizing2.h;
+            root.layoutSizingVertical = sizing2.v;
+          }
+        } });
+        arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
+      }
+      const synced = syncComponent(u.component.defs, unwired, made2.pairs, consent2, changes);
+      props = synced.props;
+      rewired = synced.rewired;
+    }
+    const applied = { id: u.root.id, key };
+    if (changed.length) applied.changed = changed;
+    if (plan.builds.length) applied.created = createdCount(made2);
+    const removed = removalCount(u);
+    if (removed) applied.removed = removed;
+    const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
+    if (reordered) applied.reordered = reordered;
+    const handles = {};
+    for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
+    for (const [h, id] of made2.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
+    if (Object.keys(handles).length) applied.handles = handles;
+    const dropped = u.component ? u.component.defs.remove.length : 0;
+    if (u.component) componentReply(applied, u.component.name, props, rewired);
+    if (dropped && u.component) applied.propsRemoved = u.component.defs.remove.map((r) => r.name);
+    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles && !props.size && !rewired && !dropped) applied.unchanged = true;
+    return applied;
+  }
+
+  // src/review-reads.ts
+  var SHOW_CAP = 200;
+  function hexOf(c, opacity) {
+    const h = (v) => {
+      const s = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
+      return s.length === 1 ? "0" + s : s;
+    };
+    const a = "a" in c ? c.a * (opacity === void 0 ? 1 : opacity) : opacity;
+    return "#" + h(c.r) + h(c.g) + h(c.b) + (a !== void 0 && a < 1 ? h(a) : "");
+  }
+  function paintsOf(p) {
+    if (!Array.isArray(p)) return "mixed";
+    return p.filter((x) => x.visible !== false).map((x) => x.type === "SOLID" ? { type: "solid", color: hexOf(x.color, x.opacity) } : { type: x.type === "IMAGE" ? "image" : x.type.toLowerCase() });
+  }
+  var isNum5 = (v) => typeof v === "number";
+  function oldOf(node, field, to) {
+    const r = node;
+    switch (field) {
+      case "name":
+        return node.name;
+      case "hidden":
+        return !node.visible;
+      case "opacity":
+        return isNum5(r.opacity) ? r.opacity : void 0;
+      case "text":
+        return node.type === "TEXT" ? node.characters : void 0;
+      case "fills":
+        return "fills" in node ? paintsOf(r.fills) : void 0;
+      case "strokes":
+        return "strokes" in node ? paintsOf(r.strokes) : void 0;
+      case "radius":
+        return isNum5(r.cornerRadius) ? r.cornerRadius : r.cornerRadius === figma.mixed ? "mixed" : void 0;
+      case "box":
+        return { w: Math.round(node.width), h: Math.round(node.height) };
+      case "widthMode":
+        return typeof r.layoutSizingHorizontal === "string" ? r.layoutSizingHorizontal.toLowerCase() : void 0;
+      case "heightMode":
+        return typeof r.layoutSizingVertical === "string" ? r.layoutSizingVertical.toLowerCase() : void 0;
+      case "autoResize":
+        return node.type === "TEXT" ? node.textAutoResize.toLowerCase() : void 0;
+      case "layout": {
+        if (typeof to !== "object" || to === null || !("layoutMode" in node)) return void 0;
+        const f = node;
+        const out = {};
+        for (const k of Object.keys(to)) {
+          if (k === "gap") out.gap = f.itemSpacing;
+          else if (k === "padding") out.padding = [f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft];
+          else return void 0;
+        }
+        return out;
+      }
+      default:
+        return void 0;
+    }
+  }
+  async function variableValue(v) {
+    if (v === void 0) return void 0;
+    if (typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS") {
+      let to = null;
+      try {
+        to = await figma.variables.getVariableByIdAsync(v.id);
+      } catch {
+        to = null;
+      }
+      return { aliasOf: to ? to.name : v.id };
+    }
+    if (typeof v === "object" && "r" in v) return hexOf(v);
+    return v;
+  }
+  async function readBatch(list, t) {
+    const warnings = [];
+    const warn = (m) => {
+      if (warnings.indexOf(m) < 0) warnings.push(m);
+    };
+    const ops = [];
+    for (const [i, op] of list.entries()) {
+      const read = {};
+      const ids = [];
+      let source = false;
+      let spot;
+      let counted;
+      const follow = async (from) => {
+        source = true;
+        const f = await followersOf(from, warn);
+        read.follows = countLayers(f, createdThisSession);
+        for (const id of f) {
+          ids.push(id);
+          if (counted) counted.push(id);
+        }
+      };
+      try {
+        switch (op.op) {
+          case "patch": {
+            const p = t.patches.get(i);
+            if (!p) break;
+            read.name = p.node.name;
+            ids.push(p.node.id);
+            const set = p.set;
+            const old = {};
+            for (const k of Object.keys(set)) {
+              const v = oldOf(p.node, k, set[k]);
+              if (v !== void 0) old[k] = v;
+            }
+            read.old = old;
+            const main = mainComponentOf(p.node);
+            if (main) {
+              read.component = main.name;
+              await follow({ component: main });
+            }
+            break;
+          }
+          case "setFill":
+          case "setText": {
+            const n = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+            if (!n || n.type === "PAGE" || n.type === "DOCUMENT") break;
+            read.name = n.name;
+            ids.push(n.id);
+            if (op.op === "setText" && n.type === "TEXT") read.old = { text: n.characters };
+            if (op.op === "setFill" && "fills" in n) {
+              const paints3 = paintsOf(n.fills);
+              const first2 = Array.isArray(paints3) ? paints3[0] : void 0;
+              read.old = { fill: first2 && first2.color ? first2.color : Array.isArray(paints3) && !paints3.length ? "none" : "mixed" };
+            }
+            break;
+          }
+          case "setVariableMode":
+          case "clearVariableMode": {
+            const m = t.modes.get(i);
+            if (m) {
+              read.name = m.node.name;
+              ids.push(m.node.id);
+            }
+            break;
+          }
+          case "setVariable": {
+            const v = t.variables.get(i);
+            if (!v) break;
+            read.name = v.variable.name;
+            const old = {};
+            for (const m of v.modes) old[m.name] = await variableValue(v.variable.valuesByMode[m.modeId]);
+            read.old = old;
+            await follow({ variable: v.variable });
+            break;
+          }
+          case "setStyle": {
+            const st = t.styles.get(i);
+            if (!st) break;
+            read.name = st.style.name;
+            const old = {};
+            for (const k of Object.keys(st.set)) {
+              if (k === "paints" && st.style.type === "PAINT") old.paints = paintsOf(st.style.paints);
+              else {
+                const v = Reflect.get(st.style, k);
+                if (typeof v === "string" || typeof v === "number") old[k] = v;
+              }
+            }
+            read.old = old;
+            await follow({ style: st.style });
+            break;
+          }
+          case "createTree": {
+            const tt = t.trees.get(i);
+            if (!tt) break;
+            if (tt.update) {
+              read.updates = tt.update.root.name;
+              const root = tt.update.root;
+              const changed2 = changedBy(tt.update.plan, tt.update.key);
+              ids.push(root.id);
+              for (const id of changed2) if (id !== root.id) ids.push(id);
+              counted = changed2;
+              if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
+              break;
+            }
+            const s = landingSpot(tt);
+            const page = s.page !== figma.currentPage ? " on page '" + s.page.name + "'" : "";
+            read.lands = (s.beside ? "right of the existing frames" : "at " + s.x + ", " + s.y) + page;
+            spot = { pageId: s.page.id, x: s.x, y: s.y };
+            break;
+          }
+          case "createFrame":
+          case "createText": {
+            const p = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+            if (p && p.type !== "PAGE" && p.type !== "DOCUMENT") {
+              read.parent = p.name;
+              ids.push(p.id);
+            }
+            break;
+          }
+          case "move": {
+            const m = t.moves.get(i);
+            if (m) {
+              read.name = m.node.name;
+              read.parent = m.parent.name;
+              ids.push(m.node.id);
+            }
+            break;
+          }
+          case "delete": {
+            const d = t.deletes.get(i);
+            if (d) {
+              read.name = d.node.name;
+              ids.push(d.node.id);
+            }
+            break;
+          }
+          // A create table makes new names and updates the ones the file has; its line says so. It reads nothing here: what
+          // follows an updated variable or style is not counted (the policy's source edits are setVariable, setStyle and a
+          // patch of a main component).
+          case "createVariables":
+          case "createStyles":
+            break;
+          default: {
+            const never = op.op;
+            void never;
+          }
+        }
+      } catch (e) {
+        warn("what op " + i + " changes could not all be read (" + errMsg(e) + ")");
+      }
+      ops.push({ read, ids, source, ...spot ? { spot } : {}, ...counted ? { counted } : {} });
+    }
+    const changed = [];
+    ops.forEach((o, i) => {
+      const op = list[i];
+      if (!op || op.op === "createFrame" || op.op === "createText") return;
+      for (const id of o.counted || o.ids) changed.push(id);
+    });
+    return { ops, layers: countLayers(changed, createdThisSession), sourceEdits: ops.filter((o) => o.source).length, warnings };
+  }
+  async function selectAndZoom(ids) {
+    const byPage = /* @__PURE__ */ new Map();
+    for (const id of ids.slice(0, SHOW_CAP)) {
+      let n = null;
+      try {
+        n = await figma.getNodeByIdAsync(id);
+      } catch {
+        n = null;
+      }
+      if (!n || n.type === "PAGE" || n.type === "DOCUMENT" || !("visible" in n)) continue;
+      let p = n.parent;
+      while (p && p.type !== "PAGE") p = p.parent;
+      if (!p || p.type !== "PAGE") continue;
+      const list = byPage.get(p) || [];
+      list.push(n);
+      byPage.set(p, list);
+    }
+    const here = byPage.get(figma.currentPage);
+    const first2 = here ? figma.currentPage : [...byPage.keys()][0];
+    if (!first2) return 0;
+    const nodes = byPage.get(first2) || [];
+    if (first2 !== figma.currentPage) await figma.setCurrentPageAsync(first2);
+    figma.currentPage.selection = nodes;
+    figma.viewport.scrollAndZoomIntoView(nodes);
+    return nodes.length;
+  }
+  async function panTo(spot) {
+    const page = await figma.getNodeByIdAsync(spot.pageId);
+    if (page && page.type === "PAGE" && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
+    figma.viewport.center = { x: spot.x + 200, y: spot.y + 200 };
+  }
+
+  // src/toast.ts
+  var lastError = null;
+  function toast(text, error) {
+    try {
+      const h = figma.notify(text, error ? { error: true } : void 0);
+      if (error) lastError = h && typeof h.cancel === "function" ? h : null;
+    } catch (e) {
+      console.error("[export] figma.notify failed:", e);
+    }
+  }
+  function clearErrorToast() {
+    const h = lastError;
+    lastError = null;
+    if (!h) return;
+    try {
+      h.cancel();
+    } catch (e) {
+      console.error("[export] could not take the toast down:", e);
+    }
+  }
+
+  // src/review.ts
+  var KEY2 = "reviewWrites";
+  var saved = null;
+  var loaded2 = (async () => {
+    try {
+      const v = await figma.clientStorage.getAsync(KEY2);
+      saved = typeof v === "boolean" ? v : null;
+    } catch (e) {
+      console.error("[export] could not read the 'Review each change first' setting; it reads as on:", e);
+      saved = null;
+    }
+  })();
+  async function reviewWrites() {
+    await loaded2;
+    return saved !== false;
+  }
+  async function setReviewWrites(value) {
+    await loaded2;
+    saved = value;
+    try {
+      await figma.clientStorage.setAsync(KEY2, value);
+    } catch (e) {
+      console.error("[export] could not save the 'Review each change first' setting:", e);
+    }
+    return value;
+  }
+  var sinceApproval = 0;
+  function layersSinceApproval() {
+    return sinceApproval;
+  }
+  function countUnreviewed(n) {
+    sinceApproval += n;
+  }
+  var current3 = null;
+  var seq = 0;
+  var FINISHED_KEEP = 20;
+  var FINISHED_MS = 30 * 6e4;
+  var finished = /* @__PURE__ */ new Map();
+  var last2 = null;
+  function lastWrite() {
+    return last2;
+  }
+  function waitingTicket() {
+    return current3 ? current3.ticket : null;
+  }
+  function remember(ticket, r, unseen) {
+    const outcome = r.refused ? r.refused : r.ok ? "applied" : "failed";
+    const text = r.ok ? r.applied.length + " op(s) applied" : r.error || "not applied";
+    last2 = { ...ticket ? { ticket } : {}, at: (/* @__PURE__ */ new Date()).toISOString(), outcome, text, ...unseen ? { unseen: true } : {} };
+    if (!ticket) return;
+    finished.set(ticket, { result: r, at: Date.now() });
+    while (finished.size > FINISHED_KEEP) {
+      const k = finished.keys().next().value;
+      if (k === void 0) break;
+      finished.delete(k);
+    }
+  }
+  function rememberWrite(r) {
+    remember(void 0, r, false);
+  }
+  var post2 = (m) => {
+    try {
+      figma.ui.postMessage(m);
+    } catch (e) {
+      console.error("[export] could not post to the window:", e);
+    }
+  };
+  function openCard(input) {
+    const ticket = "rv-" + ++seq + "-" + Math.random().toString(36).slice(2, 7);
+    let settle = () => {
+    };
+    const outcome = new Promise((res) => {
+      settle = res;
+    });
+    const card = { ticket, input, state: "waiting", previewed: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
+    current3 = card;
+    card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
+    const lines = input.lines.map((l, i) => {
+      const s = input.shows[i];
+      return { head: l.head, rows: l.rows, ...l.tail !== void 0 ? { tail: l.tail } : {}, ...s && s.ids.length ? { show: { n: s.ids.length, total: s.total } } : s && s.spot ? { show: { n: 0, total: 0, spot: true } } : {} };
+    });
+    post2({ type: "review", id: ticket, lines, details: input.details, why: input.why, previewable: input.previewable, waitMs: REVIEW_CARD_MAX_MS });
+    clearErrorToast();
+    toast("Design Twin: Claude Code wants to change this file \u2014 review it in the plugin window.");
+    last2 = { ticket, at: (/* @__PURE__ */ new Date()).toISOString(), outcome: "waiting", text: input.lines.map(lineText).join("; ") };
+    return card;
+  }
+  function act(card, step) {
+    card.chain = card.chain.then(async () => {
+      if (card.done) return;
+      try {
+        await step();
+      } catch (e) {
+        console.error("[export] a review step failed:", e);
+      }
+    });
+    return card.chain;
+  }
+  function setState(card, state, note) {
+    card.state = state;
+    post2({ type: "review-state", id: card.ticket, state, ...note ? { note } : {} });
+  }
+  function finish2(card, r) {
+    if (card.done) return;
+    card.done = true;
+    if (card.idle !== void 0) clearTimeout(card.idle);
+    if (card.cap !== void 0) clearTimeout(card.cap);
+    if (current3 === card) current3 = null;
+    const seen = card.waiters.length > 0;
+    remember(card.ticket, r, !seen);
+    for (const w of card.waiters.splice(0)) w(r);
+    card.settle(r);
+  }
+  async function end(card, e) {
+    if (card.done) return;
+    const msg = { type: "review-end", id: card.ticket, end: e.end };
+    if (e.end === "approved" || e.end === "kept") {
+      post2(msg);
+      sinceApproval = 0;
+      let r;
+      if (e.end === "kept" && card.previewed) {
+        r = card.previewed.result;
+        card.input.announce(r);
+      } else {
+        setState(card, "busy");
+        try {
+          r = await card.input.apply();
+        } catch (e2) {
+          r = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) };
+        }
+      }
+      finish2(card, r);
+      return;
+    }
+    const refusal = refusalFor(e);
+    const p = card.previewed;
+    if (p) {
+      if (e.end === "edits-off" || !editsAllowedNow()) {
+        post2(msg);
+        const r2 = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
+        card.input.announce(r2);
+        finish2(card, r2);
+        return;
+      }
+      setState(card, "busy", "Putting the preview back\u2026");
+      const failed = await p.putBack();
+      card.previewed = null;
+      post2(msg);
+      if (failed) {
+        card.input.announce(failed);
+        finish2(card, failed);
+        return;
+      }
+      const r = { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" };
+      card.input.announce(r);
+      finish2(card, r);
+      return;
+    }
+    post2(msg);
+    card.input.announce(refusal);
+    finish2(card, refusal);
+  }
+  function refusalFor(e) {
+    if (e.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(e.reason), ...e.reason !== void 0 ? { reason: e.reason } : {} };
+    if (e.end === "edits-off" || e.end === "approved" || e.end === "kept") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(e.end, e.end === "expired" ? REVIEW_IDLE_MS : REVIEW_CARD_MAX_MS) };
+  }
+  function answerReview(id, action, reason) {
+    const card = current3;
+    if (!card || card.ticket !== id) return;
+    void act(card, async () => {
+      if (action === "apply" || action === "keep") {
+        await end(card, card.previewed ? { end: "kept" } : { end: "approved" });
+        return;
+      }
+      if (action === "reject") {
+        const said = reviewReason(reason);
+        await end(card, { end: "rejected", ...said !== void 0 ? { reason: said } : {} });
+        return;
+      }
+      if (action === "preview") {
+        if (card.previewed || !card.input.previewable) {
+          setState(card, card.state);
+          return;
+        }
+        if (!editsAllowedNow()) {
+          await end(card, { end: "edits-off" });
+          return;
+        }
+        setState(card, "busy", "Putting it on the canvas\u2026");
+        const p = await card.input.preview();
+        if (!p.result.ok) {
+          post2({ type: "review-end", id: card.ticket, end: "failed" });
+          const r = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
+          card.input.announce(r);
+          finish2(card, r);
+          return;
+        }
+        card.previewed = p;
+        const ids = [];
+        for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);
+        for (const a of p.result.applied) if (a.id && ids.length < SHOW_CAP) ids.push(a.id);
+        try {
+          await selectAndZoom(ids);
+        } catch (e) {
+          console.error("[export] could not select the preview:", e);
+        }
+        setState(card, "previewing", "On the canvas now \u2014 everyone in this file can see it. Keep it, or put it back.");
+        return;
+      }
+      if (!card.previewed) {
+        setState(card, card.state);
+        return;
+      }
+      setState(card, "busy", "Putting it back\u2026");
+      const failed = await card.previewed.putBack();
+      card.previewed = null;
+      if (failed) {
+        post2({ type: "review-end", id: card.ticket, end: "failed" });
+        card.input.announce(failed);
+        finish2(card, failed);
+        return;
+      }
+      setState(card, "waiting", "Put back. It still waits for your answer.");
+    });
+  }
+  async function showLines(id, index) {
+    const card = current3;
+    if (!card || card.ticket !== id) return "That review has ended.";
+    const pick = index < 0 ? card.input.shows : card.input.shows.slice(index, index + 1);
+    const ids = [];
+    let total = 0;
+    for (const s of pick) {
+      for (const x of s.ids) if (ids.length < SHOW_CAP && ids.indexOf(x) < 0) ids.push(x);
+      total += s.total;
+    }
+    if (!ids.length) {
+      const spot = pick.map((s) => s.spot).find((s) => !!s);
+      if (!spot) return "Nothing to show: it changes no layer that exists yet.";
+      await panTo(spot);
+      return "Not built yet \u2014 this is where it will land.";
+    }
+    const n = await selectAndZoom(ids);
+    return n ? "Showing " + n + (total > n ? " of " + total : "") + " layer" + (n === 1 ? "" : "s") + "." : "Those layers are not in the file any more.";
+  }
+  function endReviews(e) {
+    const card = current3;
+    if (card) void act(card, () => end(card, { end: e }));
+  }
+  function holdOf(holdMs) {
+    return typeof holdMs === "number" && Number.isFinite(holdMs) ? Math.max(0, Math.min(REVIEW_HOLD_MAX_MS, holdMs)) : REVIEW_HOLD_MS;
+  }
+  function waited(card) {
+    const s = Math.round((Date.now() - card.opened) / 1e3);
+    return s >= 60 ? Math.round(s / 60) + " min" : s + " s";
+  }
+  function pending(card) {
+    return { pending: true, ticket: card.ticket, why: card.input.why, waited: waited(card), note: pendingNote(card.ticket, REVIEW_IDLE_MS) };
+  }
+  function hold(card, holdMs) {
+    if (card.idle !== void 0) {
+      clearTimeout(card.idle);
+      card.idle = void 0;
+    }
+    return new Promise((resolve) => {
+      let timer;
+      const got = (r) => {
+        if (timer !== void 0) clearTimeout(timer);
+        resolve(r);
+      };
+      card.waiters.push(got);
+      timer = setTimeout(() => {
+        const i = card.waiters.indexOf(got);
+        if (i >= 0) card.waiters.splice(i, 1);
+        if (!card.done && !card.waiters.length) card.idle = setTimeout(() => act(card, () => end(card, { end: "expired" })), REVIEW_IDLE_MS);
+        resolve(pending(card));
+      }, holdMs);
+    });
+  }
+  function holdNew(card, holdMs) {
+    return hold(card, holdMs);
+  }
+  function outcomeOf(card) {
+    return card.outcome;
+  }
+  async function answerTicket(ticket, holdMs, cancel) {
+    const card = current3 && current3.ticket === ticket ? current3 : null;
+    if (card && !card.done) {
+      if (cancel) void act(card, () => end(card, { end: "withdrawn" }));
+      return hold(card, holdMs);
+    }
+    const f = finished.get(ticket);
+    if (f && Date.now() - f.at <= FINISHED_MS) {
+      if (last2 && last2.ticket === ticket && last2.unseen) {
+        const seen = { ...last2 };
+        delete seen.unseen;
+        last2 = seen;
+      }
+      return f.result;
+    }
+    throw new Error("No write is waiting under ticket '" + ticket + "' in this file: it ended more than " + Math.round(FINISHED_MS / 6e4) + " min ago, or the plugin window was closed or reloaded since (that drops a waiting card and applies nothing \u2014 a preview that was on the canvas stays). Read the file before sending the ops again.");
+  }
+
+  // src/variable-modes.ts
+  var isModeOp = (op) => op.op === "setVariableMode" || op.op === "clearVariableMode";
+  async function resolveModeOps(ops) {
+    const targets = /* @__PURE__ */ new Map();
+    const problems = [];
+    let locals = null;
+    let library = null;
+    const localCollections = async () => {
+      if (!locals) locals = await figma.variables.getLocalVariableCollectionsAsync();
+      return locals;
+    };
+    const libraryCollections = async () => {
+      if (library) return library;
+      try {
+        library = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+      } catch {
+        library = [];
+      }
+      return library;
+    };
+    for (const [index, op] of ops.entries()) {
+      if (!isModeOp(op)) continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const nodeId = op.nodeId || "";
+      const ref2 = op.collection || "";
+      const nd = await figma.getNodeByIdAsync(nodeId);
+      let node = null;
+      if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
+      else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");
+      else node = nd;
+      const coll = await resolveCollection(ref2, localCollections, libraryCollections);
+      if ("error" in coll) {
+        bad(coll.error);
+        continue;
+      }
+      const collection = coll.ok;
+      let modeId = null;
+      if (op.op === "setVariableMode") {
+        const mode = resolveMode(op.mode || "", collection);
+        if ("error" in mode) {
+          bad(mode.error);
+          continue;
+        }
+        modeId = mode.ok;
+      }
+      if (node) targets.set(index, { node, collection, modeId });
+    }
+    return { targets, problems };
+  }
+  async function resolveCollection(ref2, localCollections, libraryCollections) {
+    let byId = null;
+    try {
+      byId = ref2 ? await figma.variables.getVariableCollectionByIdAsync(ref2) : null;
+    } catch {
+      byId = null;
+    }
+    if (byId) return { ok: byId };
+    const locals = await localCollections();
+    const m = matchByName(ref2, locals, (c) => c.name, (c) => [c.id, c.key]);
+    if (m.kind === "one") return { ok: m.item };
+    if (m.kind === "many") {
+      return { error: "collection '" + ref2 + "' matches " + m.matches.length + " local collections \u2014 pass one's id: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + ")").join(", ") };
+    }
+    const lib = (await libraryCollections()).filter((c) => c.name === ref2 || c.key === ref2);
+    if (lib.length) {
+      const from = [...new Set(lib.map((c) => c.libraryName))];
+      return { error: "collection '" + ref2 + "' is in the library " + quoteList(from) + ", and a library collection's mode can be set only once this file uses one of its variables (a write cannot import one yet) \u2014 use a local collection, or bind one of its variables in this file first" };
+    }
+    return { error: "collection '" + ref2 + "' matches no local variable collection" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "; this file has none") };
+  }
+  function resolveMode(ref2, collection) {
+    const m = matchByName(ref2, collection.modes, (md) => md.name, (md) => [md.modeId]);
+    if (m.kind === "one") return { ok: m.item.modeId };
+    if (m.kind === "many") {
+      return { error: "mode '" + ref2 + "' appears " + m.matches.length + " times in collection '" + collection.name + "' \u2014 pass its modeId: " + m.matches.slice(0, 3).map((md) => "'" + md.name + "' (" + md.modeId + ")").join(", ") };
+    }
+    return { error: "mode '" + ref2 + "' is not in collection '" + collection.name + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+  }
+  function modeName(collection, modeId) {
+    if (modeId === void 0 || modeId === null) return INHERITED;
+    const m = collection.modes.find((md) => md.modeId === modeId);
+    return m ? m.name : modeId;
+  }
+  function applyMode(t) {
+    const { node, collection, modeId } = t;
+    const prev = (node.explicitVariableModes || {})[collection.id];
+    if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
+    else node.setExplicitVariableModeForCollection(collection, modeId);
+    return {
+      applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
+      kind: "variable mode change",
+      what: "the '" + collection.name + "' mode on node " + node.id,
+      restore() {
+        if (prev === void 0) node.clearExplicitVariableModeForCollection(collection);
+        else node.setExplicitVariableModeForCollection(collection, prev);
+      }
+    };
   }
 
   // src/bind.ts
@@ -10674,8 +11493,8 @@
         else list.delete(ref2);
       }
     }
-    const named = /* @__PURE__ */ new Map();
-    for (const v of locals) if (!v.remote && byName(v.name, "VariableID:", localNames.get(v.name), plannedNames.get(v.name))) named.set(v.id, v.name);
+    const named2 = /* @__PURE__ */ new Map();
+    for (const v of locals) if (!v.remote && byName(v.name, "VariableID:", localNames.get(v.name), plannedNames.get(v.name))) named2.set(v.id, v.name);
     for (let hops = 0; pending2.length && hops < 200; hops++) {
       const id = pending2.shift();
       if (id === void 0 || colors.has(id) || numbers.has(id)) continue;
@@ -10757,7 +11576,7 @@
         }));
       }
     }
-    for (const st of fileStyles) if (byName(st.name, "S:", styleNames.get(st.name), plannedStyles2.get(st.name))) named.set(st.id, st.name);
+    for (const st of fileStyles) if (byName(st.name, "S:", styleNames.get(st.name), plannedStyles2.get(st.name))) named2.set(st.id, st.name);
     const editedVars = /* @__PURE__ */ new Set(), editedStyles = /* @__PURE__ */ new Set();
     for (const o of ops) {
       if (o.op === "setVariable" && typeof o.variable === "string") editedVars.add(o.variable);
@@ -10778,7 +11597,7 @@
       });
     }
     const out = (ref2) => {
-      const n = named.get(ref2);
+      const n = named2.get(ref2);
       return n === void 0 ? ref2 : n;
     };
     const renamed = (e) => e.aliasOf === void 0 ? { ...e, ref: out(e.ref) } : { ...e, ref: out(e.ref), aliasOf: out(e.aliasOf) };
@@ -10844,12 +11663,12 @@
         continue;
       }
       const name = summary.collection;
-      const named = collections.filter((c) => c.id === name || c.name === name);
-      if (named.length > 1) {
-        bad("collection '" + name + "' matches " + named.length + " local collections \u2014 pass one's id: " + named.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + ")").join(", "));
+      const named2 = collections.filter((c) => c.id === name || c.name === name);
+      if (named2.length > 1) {
+        bad("collection '" + name + "' matches " + named2.length + " local collections \u2014 pass one's id: " + named2.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + ")").join(", "));
         continue;
       }
-      const coll = named[0] || null;
+      const coll = named2[0] || null;
       if (coll && coll.isExtension) {
         bad("collection '" + coll.name + "' extends another collection, whose modes and variables it takes: create them in that one");
         continue;
@@ -11415,6 +12234,12 @@
     const components2 = await componentImpact(ops);
     const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
     const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds].sort((a, b) => a.index - b.index);
+    for (const k of await keyedImpact(ops, createdThisSession)) {
+      const at3 = steps2.filter((x) => x.index === k.index)[0];
+      if (at3 && k.changedLayers !== void 0) at3.changedLayers = k.changedLayers;
+      else steps2.push(k);
+    }
+    steps2.sort((a, b) => a.index - b.index);
     return sources.warnings ? { steps: steps2, warnings: sources.warnings } : { steps: steps2 };
   }
 
@@ -11757,12 +12582,26 @@
     }
   }
   async function applyWrites(ops, images) {
+    const s = await submitWrites(ops, images);
+    return "done" in s ? s.done : outcomeOf(s.card);
+  }
+  async function submitWrites(ops, images) {
     const list = Array.isArray(ops) ? ops : [];
+    const r = await runBatch(list, images, "submit");
+    return "card" in r ? r : { done: r.result };
+  }
+  async function runBatch(list, images, mode) {
+    const out = { changes: [], layers: 0 };
     if (list.length) commitUndo();
-    const r = await gatedWrites(list, images);
+    const r = await gatedWrites(list, images, mode, out);
     if (list.length) commitUndo();
-    announce(r);
-    return r;
+    if ("card" in r) return r;
+    if (mode !== "preview" && r.refused !== "waiting") announce(r);
+    if (mode === "submit" && list.length && r.refused !== "waiting") {
+      rememberWrite(r);
+      if (r.applied.length) countUnreviewed(out.layers);
+    }
+    return { result: r, changes: out.changes };
   }
   function commitUndo() {
     try {
@@ -11782,24 +12621,22 @@
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
     if (text === null) return;
-    try {
-      figma.notify(text, r.ok ? void 0 : { error: true });
-    } catch (e) {
-      console.error("[export] figma.notify failed:", e);
-    }
+    toast(text, !r.ok);
     const m = { type: "writes", applied: n, ok: r.ok, text };
     figma.ui.postMessage(m);
   }
-  async function gatedWrites(list, images) {
+  async function gatedWrites(list, images, mode, out) {
     try {
-      return await batchWrites(list, images);
+      return await batchWrites(list, images, mode, out);
     } finally {
       setBatchPlan(null);
       setBatchImages(null);
     }
   }
-  async function batchWrites(list, images) {
+  async function batchWrites(list, images, mode, out) {
     const applied = [];
+    const waiting = mode === "submit" && list.length ? waitingTicket() : null;
+    if (waiting !== null) return { ok: false, applied, refused: "waiting", error: waitingMessage(waiting) };
     if (list.length && !await editsAllowed()) {
       return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     }
@@ -11846,21 +12683,57 @@
       ].sort((a, b) => a.index - b.index);
       return { creates: creates2, modes: modes2, trees: trees2, patches: patches2, structure: structure2, sources: sources2, problems: problems2 };
     };
-    let { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
+    const { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
     const firstProblem = problems[0];
-    if (firstProblem) return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: batchRefusal(problems) };
-    if (list.length && await reviewWrites()) {
-      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const review = await awaitReview(list);
-      if (review.end !== "approved") return reviewRefusal(review);
-      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      ({ creates, modes, trees, patches, structure, sources, problems } = await resolveBatch());
-      const changed = problems[0];
-      if (changed) return { ok: false, applied, failedAt: changed.index, failedOp: changed.op, error: "the file changed while the write waited for review: " + batchRefusal(problems) };
-      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      commitUndo();
+    if (firstProblem) {
+      const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
+      return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
     }
-    const changes = [];
+    if (mode === "submit" && list.length) {
+      const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
+      out.layers = reads.layers;
+      const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, sinceApproval: layersSinceApproval() });
+      if (decision.wait) {
+        if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+        const lines = cardLines(list, reads.ops.map((o) => o.read));
+        const shows = lines.map((l) => {
+          const ids = [];
+          let total = 0;
+          let spot;
+          for (const i of l.ops) {
+            const o = reads.ops[i];
+            if (!o) continue;
+            total += o.ids.length;
+            for (const id of o.ids) if (ids.length < SHOW_CAP && ids.indexOf(id) < 0) ids.push(id);
+            if (!spot && o.spot) spot = o.spot;
+          }
+          return { ids, total: Math.max(total, ids.length), ...spot ? { spot } : {} };
+        });
+        const keyedResend = [...trees.targets.values()].some((t) => !!t.update);
+        const card = openCard({
+          ops: list,
+          lines,
+          shows,
+          details: reviewLines(list),
+          why: decision.reason,
+          previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
+          // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
+          apply: () => queueWork(async () => {
+            const r = await runBatch(list, images, "approved");
+            return "card" in r ? notApplied() : r.result;
+          }),
+          preview: () => queueWork(async () => {
+            const r = await runBatch(list, images, "preview");
+            if ("card" in r) return { result: notApplied(), putBack: async () => null };
+            const changes2 = r.changes;
+            return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)) };
+          }),
+          announce
+        });
+        return { card };
+      }
+    }
+    const changes = out.changes;
     countPropertySteps(changes);
     const rows = list.map(() => void 0);
     const fail = async (i, op, e) => {
@@ -12031,13 +12904,19 @@
     const undo = propertyUndoSteps();
     return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}, ...imgs.images.length ? { images: imgs.images } : {} };
   }
+  function notApplied() {
+    return { ok: false, applied: [], error: "the write could not run. Nothing was changed." };
+  }
+  async function putBack3(changes) {
+    commitUndo();
+    const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+    commitUndo();
+    if (!failed.length) return null;
+    const back = new Set(restored);
+    return { ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " \u2014 what stays is listed in `applied`." };
+  }
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
-  }
-  function reviewRefusal(o) {
-    if (o.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(o.reason), ...o.reason !== void 0 ? { reason: o.reason } : {} };
-    if (o.end === "edits-off" || o.end === "approved") return { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    return { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage(o.end, REVIEW_WAIT_MS) };
   }
   function keyedDeleteConflicts(targets, deletes, moves) {
     const out = [];
@@ -12104,7 +12983,15 @@
     const parsed = parseCommandRequest(cmd, args);
     if (!parsed.ok) throw new Error(parsed.error);
     const req = parsed.req;
+    if (req.cmd === "write") return bridgeWrite(req.args, id);
+    if (req.cmd === "writeTicket") return answerTicket(req.args.ticket, holdOf(req.args.holdMs), req.args.cancel === true);
     return scheduleRun(runKind(req.cmd), work(req), bridgeRun(req.cmd, id));
+  }
+  async function bridgeWrite(args, id) {
+    const waiting = waitingTicket();
+    if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+    const s = await scheduleRun(runKind("write"), () => submitWrites(args.ops, args.images), bridgeRun("write", id));
+    return "done" in s ? s.done : holdNew(s.card, holdOf(args.holdMs));
   }
   function work(req) {
     switch (req.cmd) {
@@ -12140,9 +13027,12 @@
             fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
             // So figma_write's dry run can say a real write would be refused before anyone sends one.
             editsAllowed: await editsAllowed(),
-            // …and that it would wait for the designer's Apply or Reject in the plugin window.
-            reviewWrites: await reviewWrites()
+            // …and whether it would wait for the designer's review in the plugin window (review-policy.ts reads these).
+            reviewWrites: await reviewWrites(),
+            reviewLayers: layersSinceApproval()
           };
+          const waiting = waitingTicket();
+          if (waiting !== null) r.reviewWaiting = waiting;
           return r;
         };
       case "ping":
@@ -12150,6 +13040,8 @@
           const r = { pong: true, page: figma.currentPage.name, file: figma.root.name };
           const fileKey = readFileKey();
           if (fileKey !== void 0) r.fileKey = fileKey;
+          const w = lastWrite();
+          if (w) r.lastFigmaWrite = w;
           return r;
         };
       // The extraction/write commands mutate shared per-run state (and the document): exclusive runs, on the
@@ -12203,12 +13095,12 @@
       // cost class as listPages depth 2, not that of an export.
       case "listLibraries":
         return () => listLibraries();
-      // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
-      // here, so no caller of it can skip it.
-      case "write": {
-        const { ops, images } = req.args;
-        return () => applyWrites(ops, images);
-      }
+      // handleBridge runs these two itself (bridgeWrite, answerTicket): a write's hold comes after its run.
+      case "write":
+      case "writeTicket":
+        return async () => {
+          throw new Error(req.cmd + " is answered by handleBridge");
+        };
       // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts), and what
       // a create table would make or update (creates.ts). Reads only, so it needs no "Allow edits"; a scene run, so it
       // waits for a write ahead of it.
@@ -12235,6 +13127,7 @@
     "get-review-writes",
     "set-review-writes",
     "review-answer",
+    "review-show",
     "cancel",
     "bridge"
   ]);
@@ -12248,17 +13141,17 @@
   globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel, assetRetention };
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
-  var post2 = (m) => figma.ui.postMessage(m);
+  var post3 = (m) => figma.ui.postMessage(m);
   async function runExport(label5, collect, toFiles) {
     let r;
     try {
       r = await serializeRun(collect, { source: "ui", label: label5 });
     } catch (e) {
-      post2({ type: "error", message: errMsg(e) });
+      post3({ type: "error", message: errMsg(e) });
       return;
     }
     const { files, layerFiles, summary, warnings } = toFiles(r);
-    post2({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
+    post3({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
   }
   var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [
@@ -12287,14 +13180,14 @@
   function notifySelection() {
     const sel = figma.currentPage.selection;
     const first2 = sel[0];
-    post2({ type: "selection", count: sel.length, name: first2 ? first2.name : null });
+    post3({ type: "selection", count: sel.length, name: first2 ? first2.name : null });
   }
   figma.ui.onmessage = async (raw) => {
     if (!isUIToMain(raw)) return;
     switch (raw.type) {
       case "get-token": {
         const token = await figma.clientStorage.getAsync("bridgeToken");
-        post2({ type: "token", token: typeof token === "string" ? token : "" });
+        post3({ type: "token", token: typeof token === "string" ? token : "" });
         break;
       }
       case "set-token": {
@@ -12308,29 +13201,42 @@
         } catch (e) {
           identity = { error: errMsg(e) };
         }
-        post2({ type: "identity", identity });
+        post3({ type: "identity", identity });
         break;
       }
       case "get-allow-edits": {
-        post2({ type: "allow-edits", allowed: await editsAllowed() });
+        post3({ type: "allow-edits", allowed: await editsAllowed() });
         break;
       }
       case "set-allow-edits": {
         const allowed2 = await setEditsAllowed(raw.allowed === true);
         if (!allowed2) endReviews("edits-off");
-        post2({ type: "allow-edits", allowed: allowed2 });
+        post3({ type: "allow-edits", allowed: allowed2 });
         break;
       }
       case "get-review-writes": {
-        post2({ type: "review-writes", on: await reviewWrites() });
+        post3({ type: "review-writes", on: await reviewWrites() });
         break;
       }
       case "set-review-writes": {
-        post2({ type: "review-writes", on: await setReviewWrites(raw.on === true) });
+        post3({ type: "review-writes", on: await setReviewWrites(raw.on !== false) });
         break;
       }
       case "review-answer": {
-        if (typeof raw.id === "string") answerReview(raw.id, raw.apply === true, raw.reason);
+        const a = raw.action;
+        if (typeof raw.id === "string" && (a === "apply" || a === "reject" || a === "preview" || a === "keep" || a === "put-back")) answerReview(raw.id, a, raw.reason);
+        break;
+      }
+      // A card's Show me / Show all: select and zoom (no undo step); the window says what it did.
+      case "review-show": {
+        if (typeof raw.id !== "string") break;
+        let text;
+        try {
+          text = await showLines(raw.id, typeof raw.index === "number" ? raw.index : -1);
+        } catch (e) {
+          text = "Could not show it: " + errMsg(e);
+        }
+        post3({ type: "review-shown", text });
         break;
       }
       case "run-selection": {
@@ -12351,7 +13257,7 @@
           break;
         }
         const hit = requestCancel();
-        post2({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
+        post3({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
         break;
       }
       case "bridge": {
@@ -12362,7 +13268,7 @@
         } catch (e) {
           error = errMsg(e);
         }
-        post2({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
+        post3({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
         break;
       }
       default: {

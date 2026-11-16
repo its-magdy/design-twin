@@ -16,9 +16,9 @@ import type { JSONRPCMessage, Progress } from "@modelcontextprotocol/sdk/types.j
 // The plugin stand-in — see fake-plugin.ts.
 import { fakePlugin, fail, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { malformed } from "./fixtures.ts";
-import { EDITS_OFF_MESSAGE, rejectedMessage, unreviewedMessage } from "../bridge/src/commands.ts";
-import { REVIEW_WAIT_MS } from "../bridge/src/timeouts.ts";
-import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply, WriteImpactReply, WriteResult } from "../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE, pendingNote, rejectedMessage, unreviewedMessage, waitingMessage } from "../bridge/src/commands.ts";
+import { REVIEW_CARD_MAX_MS, REVIEW_HOLD_MS, REVIEW_IDLE_MS } from "../bridge/src/timeouts.ts";
+import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply, WriteImpactReply, WritePending, WriteReply, WriteResult } from "../bridge/src/commands.ts";
 import type { BridgeFrame, CommandFrame } from "../bridge/src/server-core.ts";
 // Type-only: erased before Bun runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
@@ -52,7 +52,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; refusedByFile?: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }>; affects?: Record<string, number>; refusedByFile?: string; plan?: { create: string[]; update: string[] } }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; moves?: number; deletes?: number; invalid: number; refusedByFile?: number; steps: Array<{ target: string | null; effect?: string; invalid?: string; newMode?: string; change?: string; fields?: Array<{ field: string; to: string }>; affects?: Record<string, number>; refusedByFile?: string; plan?: { create: string[]; update: string[] } }>; editsAllowed: boolean | null; wouldRefuse?: string; wouldWait?: boolean; waitReason?: string; waitingTicket?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -380,11 +380,34 @@ void (async () => {
     let editsOn = false;
     let failWith: WriteResult | null = null; // set to make the next writes fail the way writes.ts reports it
     let lastWrite: unknown = null; // the args of the last write the plugin got
-    let reviewOn = false; // "Review each write" as whoami reports it
-    let holdWrite = false; // the write waits for a review nobody answers (review.ts)
+    let reviewOn = false; // "Review each change first" as whoami reports it
+    let reviewLayers = 0; // the layers changed since the designer's last approval, as whoami reports them
+    let holdWrite = false; // the next write waits for the designer: answered {pending, ticket} (review.ts)
+    let lastHold: unknown = undefined; // the holdMs the last write was sent with
+    // The plugin's side of the ticket: the write waiting now; its first poll is pending again, the next gets the result.
+    const TICKET = "rv-1-abcde";
+    let waitingTicket: string | null = null;
+    let ticketPolls = 0;
+    let ticketDone: WriteResult | null = null;
+    const pendingReply = (): WritePending => ({ pending: true, ticket: TICKET, why: "'Review each change first' is on", waited: "45 s", note: pendingNote(TICKET, REVIEW_IDLE_MS) });
     const editsPlugin = fakePlugin(8789, { token: "smoke-test-token", hello: { instanceId: "fig-edits", file: "Edits File" }, unhandled: HANG, on: {
-      whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn }),
-      write: (a): WriteResult | typeof HANG => { lastWrite = a; return holdWrite ? HANG : failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE }); },
+      whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn, reviewWrites: reviewOn, reviewLayers, ...(waitingTicket ? { reviewWaiting: waitingTicket } : {}) }),
+      write: (a): WriteReply => {
+        lastWrite = { ops: a.ops };
+        lastHold = a.holdMs;
+        if (waitingTicket) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waitingTicket) };
+        if (holdWrite) { waitingTicket = TICKET; return pendingReply(); }
+        return failWith ?? (editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE });
+      },
+      writeTicket: (a) => {
+        if (a.ticket !== TICKET) return fail("No write is waiting under ticket '" + a.ticket + "' in this file.");
+        if (ticketDone) return ticketDone;
+        if (a.cancel) { waitingTicket = null; ticketDone = { ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage("withdrawn", 0) }; return ticketDone; }
+        if (++ticketPolls < 2) return pendingReply();
+        waitingTicket = null;
+        ticketDone = { ok: true, applied: [{ id: "1:9" }] };
+        return ticketDone;
+      },
       // The dry run's count of what a source edit carries to (figma-plugin/src/sources.ts writeImpact).
       writeImpact: (a): WriteImpactReply => (a.ops[0]?.op === "createTree"
         // A component spec: whether the file makes it or updates its own (figma-plugin/src/component-build.ts componentImpact).
@@ -486,31 +509,64 @@ void (async () => {
     ok(`[WRITE-FAIL] ops that stay applied are still listed with their ids (got ${JSON.stringify(partialText)})`,
       /\n1 earlier op\(s\) stay applied \(not undone\):\n/.test(partialText) && partialText.includes('"id": "1:9"') && !/were undone/.test(partialText));
 
-    // ---- "Review each write" (figma-plugin/src/review.ts), as figma_write sees it.
+    // ---- The designer's review (figma-plugin/src/review.ts), as figma_write sees it: the dry run's wouldWait (the
+    // plugin's rule, review-policy.ts, over what whoami reports), and the ticket the agent waits with. The fake plays the
+    // plugin's side of the ticket: pending, pending again, then the result; a repeat; a withdrawal; one card at a time.
     reviewOn = true;
-    const dryReview = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview & { reviewWrites?: boolean };
-    ok("[REVIEW] dryRun with review on says a real write waits for the designer", dryReview.reviewWrites === true && /WAITS \(up to 5 min\) until the designer applies or rejects it/.test(dryReview.note));
+    const dryReview = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview;
+    ok("[REVIEW] dryRun with the box on: wouldWait, why, and how a real write answers (pending, then figma_write {ticket})",
+      dryReview.wouldWait === true && dryReview.waitReason === "'Review each change first' is on" && /returns \{pending, ticket\}/.test(dryReview.note) && /call figma_write \{ticket\}/.test(dryReview.note));
     reviewOn = false;
-    const dryNoReview = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview & { reviewWrites?: boolean };
-    ok("[REVIEW] …and with review off the dry run carries no review field or sentence", dryNoReview.reviewWrites === undefined && !/WAITS/.test(dryNoReview.note));
+    const dryNoReview = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview;
+    ok("[REVIEW] …with it clear a small batch would not wait, and the note says nothing of waiting", dryNoReview.wouldWait === false && dryNoReview.waitReason === undefined && !/WAITS/.test(dryNoReview.note));
+    const drySourceWait = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: sourceOps } }))) as WritePreview;
+    ok(`[REVIEW] …a source edit would wait whatever the box says (${String(drySourceWait.waitReason)})`, drySourceWait.wouldWait === true && /other layers follow/.test(drySourceWait.waitReason ?? ""));
+    reviewLayers = 20;
+    const sixFills = Array.from({ length: 6 }, (_, i) => ({ op: "setFill", nodeId: "5:" + (i + 1), color: "#ff0000" }));
+    const dryCount = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: sixFills } }))) as WritePreview;
+    ok(`[REVIEW] …and so would one that takes the layers changed since the last approval over 25 (${String(dryCount.waitReason)})`,
+      dryCount.wouldWait === true && /26 existing layers would have changed since your last approval \(over 25\)/.test(dryCount.waitReason ?? ""));
+    reviewLayers = 0;
     const reason = "Use the spacing token instead.";
     const rejectedText = await failText({ ok: false, applied: [], refused: "rejected", reason, error: rejectedMessage(reason) });
     ok(`[REVIEW] a rejected write is an error carrying the designer's reason, not a generic failure (got ${JSON.stringify(rejectedText)})`,
       rejectedText === rejectedMessage(reason) && rejectedText.includes('Their reason: "' + reason + '"') && !/Write failed at op/.test(rejectedText));
-    const timedOutText = await failText({ ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage("timed-out", REVIEW_WAIT_MS) });
+    const timedOutText = await failText({ ok: false, applied: [], refused: "unreviewed", error: unreviewedMessage("timed-out", REVIEW_CARD_MAX_MS) });
     ok(`[REVIEW] an unreviewed write says nobody answered and nothing changed (got ${JSON.stringify(timedOutText)})`,
-      timedOutText === unreviewedMessage("timed-out", REVIEW_WAIT_MS) && /Nothing in the file was changed/.test(timedOutText));
-    // An agent that gives up on a write still waiting for review withdraws it: the plugin is sent a cancel for it.
+      timedOutText === unreviewedMessage("timed-out", REVIEW_CARD_MAX_MS) && /Nothing in the file was changed/.test(timedOutText));
+
+    // The ticket.
     holdWrite = true;
-    const writesBefore = editsPlugin.commands("write").length;
-    const abort = new AbortController();
-    const waiting = client.callTool({ name: "figma_write", arguments: { ops: card } }, undefined, { signal: abort.signal }).then(() => "answered", () => "aborted");
-    for (let i = 0; i < 100 && editsPlugin.commands("write").length === writesBefore; i++) await sleep(20);
-    const heldId = editsPlugin.commands("write").at(-1)?.id;
-    abort.abort();
-    ok("[REVIEW] the cancelled call ends on the agent's side", (await waiting) === "aborted");
-    for (let i = 0; i < 100 && !editsPlugin.cancels.includes(String(heldId)); i++) await sleep(20);
-    ok("[REVIEW] …and the plugin is told to withdraw the waiting write (a cancel for its request id)", heldId !== undefined && editsPlugin.cancels.includes(heldId));
+    const held = await client.callTool({ name: "figma_write", arguments: { ops: card } });
+    const heldJson = JSON.parse(firstText(held)) as { pending?: boolean; ticket?: string; note?: string };
+    ok("[TICKET] a write that waits answers {pending, ticket} with what to do next (not an error), held for the default hold",
+      held.isError !== true && heldJson.pending === true && heldJson.ticket === TICKET && /do not re-send the ops/.test(heldJson.note ?? "") && lastHold === REVIEW_HOLD_MS);
+    const dryWaiting = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview;
+    ok("[TICKET] the dry run names the write waiting now, and says a real write is refused until it ends", dryWaiting.waitingTicket === TICKET && /refused until it ends/.test(dryWaiting.note));
+    const second = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "createFrame", name: "Other" }] } });
+    ok("[TICKET] a second batch while one waits is refused at once, naming the waiting ticket", second.isError === true && firstText(second) === waitingMessage(TICKET));
+    const poll1 = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { ticket: TICKET } }))) as { pending?: boolean };
+    const pollFrame = editsPlugin.commands("writeTicket").at(-1);
+    ok("[TICKET] figma_write {ticket} asks the plugin (writeTicket, the same hold): still pending", poll1.pending === true && JSON.stringify(pollFrame?.args) === JSON.stringify({ ticket: TICKET, holdMs: REVIEW_HOLD_MS }));
+    const poll2 = await client.callTool({ name: "figma_write", arguments: { ticket: TICKET } });
+    ok("[TICKET] …asked again once the designer applied it: the write's own result", poll2.isError !== true && (JSON.parse(firstText(poll2)) as WriteResult).applied[0]?.id === "1:9");
+    const repeat = await client.callTool({ name: "figma_write", arguments: { ticket: TICKET } });
+    ok("[TICKET] a repeat answers the same outcome", firstText(repeat) === firstText(poll2));
+    const unknownTicket = await client.callTool({ name: "figma_write", arguments: { ticket: "rv-404-x" } });
+    ok("[TICKET] an unknown ticket is an error saying nothing waits under it", unknownTicket.isError === true && /No write is waiting under ticket 'rv-404-x'/.test(firstText(unknownTicket)));
+    const both = await client.callTool({ name: "figma_write", arguments: { ticket: TICKET, ops: card } });
+    const cancelAlone = await client.callTool({ name: "figma_write", arguments: { cancel: true } });
+    const neither = await client.callTool({ name: "figma_write", arguments: {} });
+    ok("[TICKET] ops with a ticket, cancel without one, or neither: refused before the plugin is asked",
+      both.isError === true && /not both/.test(firstText(both)) && cancelAlone.isError === true && /with that write's `ticket`/.test(firstText(cancelAlone)) && neither.isError === true && /`ops` is missing/.test(firstText(neither)));
+    ticketDone = null;
+    ticketPolls = 0;
+    const heldAgain = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { ops: card } }))) as { pending?: boolean };
+    const cancelled = await client.callTool({ name: "figma_write", arguments: { ticket: TICKET, cancel: true } });
+    const cancelledJson = JSON.parse(firstText(cancelled)) as { cancelled?: boolean; note?: string };
+    ok("[TICKET] {ticket, cancel:true} withdraws it: said plainly, nothing changed",
+      heldAgain.pending === true && cancelled.isError !== true && cancelledJson.cancelled === true && cancelledJson.note === unreviewedMessage("withdrawn", 0)
+      && JSON.stringify(editsPlugin.commands("writeTicket").at(-1)?.args) === JSON.stringify({ ticket: TICKET, holdMs: REVIEW_HOLD_MS, cancel: true }) && waitingTicket === null);
     holdWrite = false;
     editsPlugin.close();
     await sleep(200);

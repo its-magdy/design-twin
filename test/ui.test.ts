@@ -9,6 +9,7 @@ import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
 import { PLUGIN_REDIAL_MS } from "../bridge/src/timeouts.ts";
 import { UI_HTML, renderUiHtml } from "../figma-plugin/build-options.ts";
+import type { ReviewCardLine } from "../figma-plugin/src/messages.ts";
 
 // The window as build.ts makes it from the current ui.template.html + src/relay.ts, so a stale committed ui.html
 // cannot pass here; the freshness check below fails on one instead.
@@ -35,7 +36,7 @@ interface FakeSocket {
   close(): void; send(d: string): void;
 }
 interface Timer { fn: (() => void) | null; ms: number }
-interface PluginMsg { type: string; allowed?: unknown; on?: unknown; apply?: unknown; reason?: unknown; lines?: string[]; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
+interface PluginMsg { type: string; allowed?: unknown; on?: unknown; action?: unknown; index?: unknown; state?: string; note?: string; reason?: unknown; lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
@@ -270,15 +271,23 @@ check("a write notice from the main thread lands on the status line (red when re
   return shown && /refused/.test(w.el("status").textContent) && w.el("status").className === "err";
 })());
 
-console.log("Review each write:");
+console.log("Review each change first:");
+/** An element's text with its children's (a card line is built of spans). */
+const textOf = (e: FakeEl): string => e.textContent + e.kids.map(textOf).join("");
+const LINES: ReviewCardLine[] = [
+  { head: "30 layers", rows: [{ field: "radius", from: "6", to: "20" }, { field: "fill", from: "#3b82f6", to: "#16a34a" }], show: { n: 30, total: 30 } },
+  { head: "<img src=x onerror=alert(1)>", rows: [] },
+  { head: "New frame 'Card', 320 wide, height hugs content", rows: [], tail: "lands right of the existing frames", show: { n: 0, total: 0, spot: true } },
+];
+const card = (id: string, previewable = false) => ({ type: "review", id, lines: LINES, details: ["patch: sets radius on 30 nodes"], why: "it changes 30 existing layers (over 25)", previewable, waitMs: 900000 });
 check("the review card and its controls are in the markup, hidden until a write waits; the checkbox sits under Allow edits", (() => {
-  const reviewIds = ["review", "review-lines", "review-wait", "review-reason", "review-apply", "review-reject", "review-writes"];
+  const reviewIds = ["review", "review-why", "review-lines", "review-show-all", "review-details", "review-wait", "review-reason", "review-apply", "review-reject", "review-preview", "review-keep", "review-putback", "review-writes"];
   const connectAt = html.indexOf('<details id="connect">');
-  return reviewIds.every((id) => new RegExp(`id="${id}"`).test(html)) && /<div id="review"[^>]*hidden/.test(html)
+  return reviewIds.every((id) => new RegExp(`id="${id}"`).test(html)) && /<div id="review"[^>]*hidden/.test(html) && /<details id="review-details">/.test(html)
     && /<input id="review-writes" type="checkbox" disabled/.test(html) && html.indexOf('id="review-writes"') > html.indexOf('id="allow-edits"')
-    && html.indexOf('id="review-writes"') < connectAt && /Review each write/.test(html);
+    && html.indexOf('id="review-writes"') < connectAt && /Review each change first/.test(html);
 })());
-check("the window asks for the saved Review setting on load; the main thread's answer drives the box; ticking it posts set-review-writes", (() => {
+check("the window asks for the saved Review setting on load; the main thread's answer drives the box; clearing it posts set-review-writes", (() => {
   const w = boot();
   const asked = w.posted.some((p) => p.type === "get-review-writes");
   w.msg({ type: "review-writes", on: true });
@@ -287,44 +296,76 @@ check("the window asks for the saved Review setting on load; the main thread's a
   const sent = w.posted.filter((p) => p.type === "set-review-writes");
   return asked && shown && sent.length === 1 && sent[0]?.on === false && box.disabled === true;
 })());
-check("a waiting write shows the card: one list item per line, as TEXT (never markup), Cancel hidden", (() => {
+check("a waiting write shows the card: why, one item per line as TEXT (never markup), colour swatches, Show me, Details; Cancel hidden", (() => {
   const w = boot();
   w.msg({ type: "run-begin", source: "bridge", label: "write" });
-  w.msg({ type: "review", id: "review-1", lines: ["creates a frame 'Card' — new node on the current page", "<img src=x onerror=alert(1)>"], waitMs: 300000 });
+  w.msg(card("rv-1-a"));
   const items = w.el("review-lines").kids;
-  return !w.el("review").hidden && items.length === 2 && items[0]?.textContent === "creates a frame 'Card' — new node on the current page"
-    && items[1]?.textContent === "<img src=x onerror=alert(1)>" && items.every((li) => li.innerHTML === "")
-    && w.el("cancel").hidden === true && /5 min/.test(w.el("review-wait").textContent) && /review it below/.test(w.el("status").textContent);
+  const swatches = (items[0]?.kids ?? []).flatMap((k) => k.kids).filter((k) => k.className === "rv-sw");
+  const shows = items.map((li) => li.kids.find((k) => k.className === "rv-show")?.textContent);
+  return !w.el("review").hidden && items.length === 3
+    && textOf(must(items[0], "line 0")).startsWith("30 layers: radius 6 → 20, fill #3b82f6 → #16a34a") && swatches.length === 2 && swatches[0]?.style.background === "#3b82f6"
+    && textOf(must(items[1], "line 1")).startsWith("<img src=x onerror=alert(1)>") && items.every((li) => li.innerHTML === "")
+    && shows[0] === "Show me" && shows[1] === undefined && shows[2] === "Show where" && !w.el("review-show-all").hidden
+    && w.el("review-detail-lines").kids[0]?.textContent === "patch: sets radius on 30 nodes" && /^Waiting because it changes 30 existing layers/.test(w.el("review-why").textContent)
+    && w.el("cancel").hidden === true && /15 min/.test(w.el("review-wait").textContent) && /review it below/.test(w.el("status").textContent) && w.el("review-preview").hidden;
 })());
-check("Apply posts review-answer {apply:true} with no reason, and disables both buttons", (() => {
+check("Show me / Show all post review-show with the line's index (-1 for all)", (() => {
   const w = boot();
-  w.msg({ type: "review", id: "review-2", lines: ["x"], waitMs: 300000 });
+  w.msg(card("rv-2-a"));
+  w.el("review-lines").kids[0]?.kids.find((k) => k.className === "rv-show")?.onclick?.();
+  w.el("review-show-all").onclick?.();
+  w.msg({ type: "review-shown", text: "Showing 30 layers." });
+  const sent = w.posted.filter((p) => p.type === "review-show");
+  return sent.length === 2 && sent[0]?.index === 0 && sent[1]?.index === -1 && sent[0]?.id === "rv-2-a" && w.el("review-shown").textContent === "Showing 30 layers.";
+})());
+check("Apply posts review-answer {action:'apply'} with no reason, and disables the buttons until the main thread says where the card is", (() => {
+  const w = boot();
+  w.msg(card("rv-3-a"));
   w.el("review-reason").value = "ignored on apply";
   w.el("review-apply").onclick?.();
   const sent = w.posted.filter((p) => p.type === "review-answer");
-  return sent.length === 1 && sent[0]?.id === "review-2" && sent[0]?.apply === true && sent[0]?.reason === undefined
+  return sent.length === 1 && sent[0]?.id === "rv-3-a" && sent[0]?.action === "apply" && sent[0]?.reason === undefined
     && w.el("review-apply").disabled && w.el("review-reject").disabled;
 })());
-check("Reject posts review-answer {apply:false} with the typed reason", (() => {
+check("Reject posts review-answer {action:'reject'} with the typed reason", (() => {
   const w = boot();
-  w.msg({ type: "review", id: "review-3", lines: ["x"], waitMs: 300000 });
+  w.msg(card("rv-4-a"));
   w.el("review-reason").value = "Use the token.";
   w.el("review-reject").onclick?.();
   const sent = w.posted.filter((p) => p.type === "review-answer");
-  return sent.length === 1 && sent[0]?.apply === false && sent[0]?.reason === "Use the token.";
+  return sent.length === 1 && sent[0]?.action === "reject" && sent[0]?.reason === "Use the token.";
 })());
-check("review-end takes the card down, and says why when no click ended it (timed out, withdrawn)", (() => {
+check("a previewable card: Preview on canvas, then the main thread's 'previewing' turns it to Keep / Put back, and 'waiting' back", (() => {
   const w = boot();
-  w.msg({ type: "review", id: "review-4", lines: ["x"], waitMs: 300000 });
+  w.msg(card("rv-5-a", true));
+  const offered = !w.el("review-preview").hidden && /everyone in this file sees it/.test(w.el("review-note").textContent);
+  w.el("review-preview").onclick?.();
+  const asked = w.posted.filter((p) => p.type === "review-answer").at(-1)?.action === "preview" && w.el("review-preview").disabled;
+  w.msg({ type: "review-state", id: "rv-5-a", state: "previewing", note: "On the canvas now" });
+  const previewing = w.el("review-ask").hidden && !w.el("review-previewing").hidden && !w.el("review-putback").disabled && w.el("review-note").textContent === "On the canvas now";
+  w.el("review-putback").onclick?.();
+  const putBack = w.posted.filter((p) => p.type === "review-answer").at(-1)?.action === "put-back";
+  w.msg({ type: "review-state", id: "rv-5-a", state: "waiting", note: "Put back." });
+  const back = !w.el("review-ask").hidden && w.el("review-previewing").hidden && !w.el("review-apply").disabled;
+  w.msg({ type: "review-state", id: "other", state: "previewing" });
+  return offered && asked && previewing && putBack && back && w.el("review-previewing").hidden;
+})());
+check("review-end takes the card down, and says why when no click ended it (out of time, expired, withdrawn)", (() => {
+  const w = boot();
+  w.msg(card("rv-6-a"));
   w.msg({ type: "review-end", id: "other", end: "timed-out" });
   const stillUp = !w.el("review").hidden;
-  w.msg({ type: "review-end", id: "review-4", end: "timed-out" });
+  w.msg({ type: "review-end", id: "rv-6-a", end: "timed-out" });
   const timedOut = w.el("review").hidden && /waited too long/.test(w.el("status").textContent) && w.el("status").className === "err";
-  w.msg({ type: "review", id: "review-5", lines: ["x"], waitMs: 300000 });
-  w.msg({ type: "review-end", id: "review-5", end: "withdrawn" });
-  const withdrawn = w.el("review").hidden && /withdrawn/.test(w.el("status").textContent);
+  w.msg(card("rv-7-a"));
+  w.msg({ type: "review-end", id: "rv-7-a", end: "expired" });
+  const expired = w.el("review").hidden && /the agent stopped waiting/.test(w.el("status").textContent);
+  w.msg(card("rv-8-a"));
+  w.msg({ type: "review-end", id: "rv-8-a", end: "withdrawn" });
+  const withdrawn = w.el("review").hidden && /withdrew/.test(w.el("status").textContent);
   w.el("review-apply").onclick?.();
-  return stillUp && timedOut && withdrawn && !w.posted.some((p) => p.type === "review-answer");
+  return stillUp && timedOut && expired && withdrawn && !w.posted.some((p) => p.type === "review-answer");
 })());
 
 report();

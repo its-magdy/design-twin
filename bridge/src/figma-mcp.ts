@@ -30,7 +30,7 @@ import { z } from "zod";
 import { createBridge } from "./server-core.ts";
 import { createRoute } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
-import { TIMEOUTS, NAMED_CLIENT_WAIT_MS, REVIEW_WAIT_MS } from "./timeouts.ts";
+import { TIMEOUTS, NAMED_CLIENT_WAIT_MS, REVIEW_HOLD_MAX_MS, REVIEW_HOLD_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { runRead, tickMessage } from "./read-run.ts";
 import type { ReadRun } from "./read-run.ts";
@@ -40,7 +40,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
 import { componentRootOf } from "./component-spec.ts";
-import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName } from "./commands.ts";
+import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, isPending, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName, type WriteReply, type WriteResult } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -154,6 +154,8 @@ import { findMapFile } from "./project-layout.ts";
 import { loadSpecFiles } from "./spec-file.ts";
 import { inputIndex, loadSeedTokens, MAX_WRITE_OPS, seededPreview, seededReply } from "./seed-file.ts";
 import { imagePreview, loadImageFiles } from "./image-file.ts";
+import { reviewDecision } from "./review-policy.ts";
+import type { SeedRecord } from "./seed-file.ts";
 import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
@@ -764,8 +766,13 @@ const writeOpShape = z.object({
 // `editsAllowed` is the plugin's "Allow edits" checkbox as its whoami reports it: false => a real write would be
 // refused (and `wouldRefuse` says what to ask the designer); null => unknown (no plugin reachable, or one built
 // before the opt-in).
-// `reviewWrites` is its "Review each write" checkbox: true => a real write waits for the designer's Apply or Reject.
-function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWriteSettings, impact: ImpactRead) {
+// `wouldWait` / `waitReason`: whether a real write would wait for the designer's review, by review-policy.ts — the rule
+// the plugin applies — over what the dry run can see (only with a plugin that reports its review state). It cannot
+// tell the layers this plugin session created (the plugin does not count them), so it may say a write waits that the
+// plugin then applies at once; never the other way round. A keyed re-send counts the existing layers the plugin says it
+// changes (writeImpact `changedLayers`, the session's own already left out), planned against the spec as sent.
+function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: ImpactRead) {
+  const { editsAllowed } = settings;
   const steps = ops.map(writeOpPreview);
   // A source edit's counts (and a refusal only the file can give) come from the plugin, when one answered.
   if (impact.reply) {
@@ -779,11 +786,22 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
       if (s.bind) step.bind = s.bind;
       // A component spec: the file says whether it is made or updated in place (with how many instances follow).
       if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");
+      // A keyed re-send: the existing layers it changes, for wouldWait.
+      if (s.changedLayers !== undefined) step.changedLayers = s.changedLayers;
     }
   }
+  const review = settings.review;
+  const wait = review ? (() => {
+    // A source edit: a variable or style edit, a patch the plugin counted followers for, a component re-sent in place.
+    const sourceEdits = steps.filter((s, i) => { const o = ops[i]; return !!o && (o.op === "setVariable" || o.op === "setStyle" || (!!s.affects && (o.op === "patch" || o.op === "createTree"))); }).length;
+    const ids = new Set<string>();
+    let follows = 0;
+    steps.forEach((s, i) => { const o = ops[i]; if (o && o.nodeId && s.effect !== "creates") ids.add(o.nodeId); if (s.affects) follows += (s.affects.nodes || 0) + (s.affects.instances || 0); if (s.changedLayers) follows += s.changedLayers; });
+    return reviewDecision({ checkbox: review.checkbox, sourceEdits, bulkByRule: false, layers: ids.size + follows, sinceApproval: review.layers });
+  })() : null;
   const sourceNote = impact.asked
     ? impact.reply
-      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind. " +
+      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind; a keyed re-send's `changedLayers` counts the existing layers it would change. " +
         (impact.reply.warnings && impact.reply.warnings.length ? "Some pages could not be read, so a count may be low: " + impact.reply.warnings.join("; ") + ". " : "")
       : "How much a source edit carries to (which names of a create table the file has already, what a `bind: true` spec binds) is read by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see it. "
     : "";
@@ -799,9 +817,11 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites }: PluginWri
     steps,
     editsAllowed,
     ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
-    ...(reviewWrites ? { reviewWrites: true } : {}),
+    ...(wait ? { wouldWait: wait.wait, ...(wait.wait ? { waitReason: wait.reason } : {}) } : {}),
+    ...(review && review.waiting ? { waitingTicket: review.waiting } : {}),
     note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch, except that each component property it declares, edits or deletes ends a step: the reply's undoSteps says how many). " + sourceNote +
-      (reviewWrites ? `A real write WAITS (up to ${Math.round(REVIEW_WAIT_MS / 60000)} min) until the designer applies or rejects it in the plugin window. ` : "") +
+      (wait && wait.wait ? "A real write WAITS for the designer's answer in the plugin window (" + wait.reason + "): the call returns {pending, ticket} if they have not answered within " + Math.round(REVIEW_HOLD / 1000) + " s — then call figma_write {ticket} until it answers, and tell the user it waits for them. " : "") +
+      (review && review.waiting ? "Another write is waiting for the designer now (ticket '" + review.waiting + "'): a real write is refused until it ends. " : "") +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
         : editsAllowed === null
@@ -822,7 +842,8 @@ interface ImpactRead { asked: boolean; reply: WriteImpactReply | null; why: stri
 async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | undefined, extra: ToolExtra): Promise<ImpactRead> {
   // A component spec asks too: only the file knows whether it makes the component or updates the one it has.
   // So does a `bind: true` spec: only the file knows what its values bind to.
-  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true)))) return { asked: false, reply: null, why: "" };
+  // So does a keyed spec: only the file knows which of its layers a re-send changes (the review's count).
+  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true || (!!o.tree && typeof o.tree.key === "string"))))) return { asked: false, reply: null, why: "" };
   // Only a patch that changes a main component is a source edit: the plugin says which, so every patch asks.
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
@@ -833,21 +854,80 @@ async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | u
   }
 }
 
-// The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
-// with none): no connected file that `client` names (or none at all), several it could mean, or any failure, is
-// `null` (unknown) — so a named file not connected yet is not waited for.
-interface PluginWriteSettings { editsAllowed: boolean | null; reviewWrites: boolean }
+// The dry run's read of the "Allow edits" checkbox and of the review state (whoami). Never waits for a plugin to connect
+// (the preview must answer with none): no connected file that `client` names (or none at all), several it could mean,
+// or any failure, is `null` (unknown) — so a named file not connected yet is not waited for. `review` is null from a
+// plugin that does not report it.
+interface PluginWriteSettings { editsAllowed: boolean | null; review: { checkbox: boolean; layers: number; waiting: string | null } | null }
 async function readWriteSettings(a: { client?: string | undefined } | undefined): Promise<PluginWriteSettings> {
-  const unknown: PluginWriteSettings = { editsAllowed: null, reviewWrites: false };
+  const unknown: PluginWriteSettings = { editsAllowed: null, review: null };
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
     if (p.kind !== "one") return unknown;
     const who = await ask("whoami", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client });
-    return { editsAllowed: typeof who.editsAllowed === "boolean" ? who.editsAllowed : null, reviewWrites: who.reviewWrites === true };
+    return {
+      editsAllowed: typeof who.editsAllowed === "boolean" ? who.editsAllowed : null,
+      review: typeof who.reviewWrites === "boolean" ? { checkbox: who.reviewWrites, layers: typeof who.reviewLayers === "number" ? who.reviewLayers : 0, waiting: typeof who.reviewWaiting === "string" ? who.reviewWaiting : null } : null,
+    };
   } catch {
     return unknown;
   }
 }
+
+// How the agent waits for a write held for the designer's review (figma-plugin/src/review.ts): the PLUGIN owns the
+// ticket and the outcome. A write that waits is answered after the hold — under the 60 s an MCP client built on the
+// TypeScript SDK gives a tool call by default — with `{pending, ticket}`; `figma_write {ticket}` sends `writeTicket`,
+// which the plugin answers with the result once there is one (pending again after the hold), and `{ticket, cancel}`
+// withdraws it. Nothing about it lives here but each ticket's seeded rows (seed-file.ts cuts a seeded table's reply to
+// what changed), so a restarted server still gets every answer (uncut, for a seeded table). DTWIN_REVIEW_HOLD_MS
+// overrides the hold (tests), within 0…REVIEW_HOLD_MAX_MS.
+const REVIEW_HOLD = ((): number => {
+  const raw = process.env.DTWIN_REVIEW_HOLD_MS;
+  const n = Number(raw);
+  return raw !== undefined && raw !== "" && Number.isFinite(n) ? Math.max(0, Math.min(REVIEW_HOLD_MAX_MS, n)) : REVIEW_HOLD_MS;
+})();
+const ticketSeeds = new Map<string, readonly SeedRecord[]>();
+
+/** A write's answer as the agent reads it: pending (its ticket remembered with its seeds), or the result. */
+function writeAnswer(sent: WriteReply, seeds: readonly SeedRecord[]) {
+  if (isPending(sent)) {
+    if (seeds.length) { ticketSeeds.set(sent.ticket, seeds); while (ticketSeeds.size > 50) { const k = ticketSeeds.keys().next().value; if (k === undefined) break; ticketSeeds.delete(k); } }
+    return textResult(sent);
+  }
+  return writeReply(sent, seeds);
+}
+
+/** A write's reply as the agent reads it (refused, failed partway, or applied). */
+function writeReply(sent: WriteResult, seeds: readonly SeedRecord[]) {
+  // A seeded table's reply is cut to what changed, at the seedTokens op's own index (seed-file.ts).
+  const r = seededReply(sent, seeds);
+  // Refused whole — the designer has not consented ("Allow edits" off), rejected the batch on the review card, or
+  // nobody reviewed it: nothing was tried, so there is no op index and nothing to clean up. The answer is the
+  // PERSON's, so say exactly what they did or must do (and pass on their reason) rather than "write failed".
+  if (r.refused && !r.applied.length) return errorResult(r.error || EDITS_OFF_MESSAGE);
+  // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
+  // exist in the document and the agent needs their ids to continue or undo. A section with nothing in it
+  // (no mode put back, no op left applied) is left out rather than printed as an empty list.
+  if (!r.ok) {
+    const applied = r.applied;
+    const restored = r.restored ?? [];
+    // No op index when the batch stopped for no op of its own ('Allow edits' turned off once the create tables ran).
+    const at = r.failedAt !== undefined ? ` at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}` : "";
+    const lines = [`Write failed${at}: ${r.error}`];
+    if (restored.length) lines.push(`${restored.length} earlier change(s) were undone (values put back, created nodes removed, moved nodes returned):\n` + JSON.stringify(restored, null, 2));
+    if (applied.length) lines.push(`${applied.length} earlier op(s) stay applied (not undone):\n` + JSON.stringify(applied, null, 2));
+    return errorResult(lines.join("\n"));
+  }
+  return textResult(r);
+}
+
+// Constrain `op` to the ops the plugin actually implements — reject unknown ops at the
+// boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
+const writeOpsSchema = z.array(writeOpShape)
+  // Writes are not transactional and cannot be undone from here, so a runaway batch is bounded:
+  // 50 ops is several screens' worth of frames/text, and a larger job is simply several calls.
+  .max(MAX_WRITE_OPS, `at most ${MAX_WRITE_OPS} ops per call — split a larger job into several calls (writes cannot be undone from here)`)
+  .describe(`Ordered list of write operations (each must have an \`op\` field). At most ${MAX_WRITE_OPS} per call.`);
 
 registerTool(
   "figma_write",
@@ -867,16 +947,14 @@ registerTool(
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
       "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
-      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed); with 'Review each write' on, a write waits (≤5 min) for their Apply/Reject.",
+      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed). A write may wait for their review (dry run: wouldWait): on {pending, ticket}, call figma_write {ticket} (not the ops) until it answers; cancel:true withdraws it.",
     inputSchema: {
       ...clientShape,
-      // Constrain `op` to the ops the plugin actually implements — reject unknown ops at the
-      // boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
-      ops: z.array(writeOpShape)
-        // Writes are not transactional and cannot be undone from here, so a runaway batch is bounded:
-        // 50 ops is several screens' worth of frames/text, and a larger job is simply several calls.
-        .max(MAX_WRITE_OPS, `at most ${MAX_WRITE_OPS} ops per call — split a larger job into several calls (writes cannot be undone from here)`)
-        .describe(`Ordered list of write operations (each must have an \`op\` field). At most ${MAX_WRITE_OPS} per call.`),
+      // Constrain `op` to the ops the plugin actually implements (writeOpsSchema). Optional only for a ticket poll.
+      ops: writeOpsSchema.optional(),
+      // A write waiting for the designer's review, asked about again (or withdrawn): figma-plugin/src/review.ts.
+      ticket: z.string().optional(),
+      cancel: z.boolean().optional(),
       dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection; when one is connected it also reports editsAllowed — false means a real write would be refused)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
@@ -888,8 +966,18 @@ registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   guarded(async (a, extra) => {
+    if (a.ticket !== undefined) {
+      if (a.ops !== undefined) return errorResult("Send either `ops` (a new batch) or `ticket` (a write already waiting for the designer), not both. Nothing was changed.");
+      const sent = await ask("writeTicket", { ticket: a.ticket, holdMs: REVIEW_HOLD, ...(a.cancel ? { cancel: true } : {}) }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+      const seeds = ticketSeeds.get(a.ticket) || [];
+      // A withdrawal that took: say so plainly (it is what was asked, not a failure).
+      if (a.cancel && !isPending(sent) && sent.refused === "unreviewed") return textResult({ cancelled: true, ticket: a.ticket, note: sent.error || "Withdrawn. Nothing in the file was changed." });
+      return writeAnswer(sent, seeds);
+    }
+    if (a.cancel) return errorResult("`cancel` withdraws a write waiting for review: send it with that write's `ticket`.");
+    if (!a.ops) return errorResult("`ops` is missing: send the batch to apply (or `ticket`, to ask again about a write waiting for the designer's review).");
     // A spec given by path is read into the op first, so it meets every check below exactly as the same spec inline.
-    const loaded = loadSpecFiles(a.ops || [], (p, what) => assertInsideCwd(p, what));
+    const loaded = loadSpecFiles(a.ops, (p, what) => assertInsideCwd(p, what));
     if ("error" in loaded) return errorResult(loaded.error + ". Nothing was changed.");
     // …and so is a token file: seedTokens becomes its create tables in place (seed-file.ts).
     const seeded = loadSeedTokens(loaded.ops, (p, what) => assertInsideCwd(p, what));
@@ -904,31 +992,11 @@ registerTool(
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
     if (a.dryRun) return textResult(seededPreview(imagePreview(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)), imaged.records, imaged.hashes), seeds));
-    // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
-    // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
-    // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write
-    // nobody is waiting for. A batch already running is not stopped by it (writes have no cancel point).
-    const sent = await ask("write", { ops, ...(images ? { images } : {}) }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
-    // A seeded table's reply is cut to what changed, at the seedTokens op's own index (seed-file.ts).
-    const r = seededReply(sent, seeds);
-    // Refused whole — the designer has not consented ("Allow edits" off), rejected the batch on the review card, or
-    // nobody reviewed it: nothing was tried, so there is no op index and nothing to clean up. The answer is the
-    // PERSON's, so say exactly what they did or must do (and pass on their reason) rather than "write failed".
-    if (r.refused && !r.applied.length) return errorResult(r.error || EDITS_OFF_MESSAGE);
-    // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
-    // exist in the document and the agent needs their ids to continue or undo. A section with nothing in it
-    // (no mode put back, no op left applied) is left out rather than printed as an empty list.
-    if (!r.ok) {
-      const applied = r.applied;
-      const restored = r.restored ?? [];
-      // No op index when the batch stopped for no op of its own ('Allow edits' turned off once the create tables ran).
-      const at = r.failedAt !== undefined ? ` at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}` : "";
-      const lines = [`Write failed${at}: ${r.error}`];
-      if (restored.length) lines.push(`${restored.length} earlier change(s) were undone (values put back, created nodes removed, moved nodes returned):\n` + JSON.stringify(restored, null, 2));
-      if (applied.length) lines.push(`${applied.length} earlier op(s) stay applied (not undone):\n` + JSON.stringify(applied, null, 2));
-      return errorResult(lines.join("\n"));
-    }
-    return textResult(r);
+    // The write's own budget (TIMEOUTS.write): the hold for the designer's review plus the batch itself. The plugin
+    // answers within the hold either way — the result, or `{pending, ticket}` with the card still up — so ending this
+    // call (the agent's cancel) does not withdraw the card: only {ticket, cancel} does, or the agent not asking again.
+    const sent = await ask("write", { ops, ...(images ? { images } : {}), holdMs: REVIEW_HOLD }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    return writeAnswer(sent, seeds);
   })
 );
 

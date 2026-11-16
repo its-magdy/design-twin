@@ -29,6 +29,8 @@ import type { SourceValue } from "../../bridge/src/source-spec.ts";
 import type { BatchPlan, Planned } from "./batch-plan";
 import { applyStyle, fontAfter, styleSnapshot, styleUses, writeImpact, type StyleTarget } from "./sources";
 import { componentImpact } from "./component-build";
+import { keyedImpact } from "./keyed";
+import { createdThisSession } from "./session";
 import { bindImpact } from "./bind";
 import { resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
@@ -670,5 +672,13 @@ export async function designImpact(ops: readonly WriteOp[]): Promise<WriteImpact
   // A `bind: true` spec: what the file would bind (bind.ts), against the file and the batch's create tables.
   const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
   const steps = [...sources.steps, ...creates.steps, ...components, ...binds].sort((a, b) => a.index - b.index);
+  // A keyed re-send: how many existing layers it changes (keyed.ts), for the review's count — on the op's step when it
+  // has one (a component spec's), else a step of its own.
+  for (const k of await keyedImpact(ops, createdThisSession)) {
+    const at = steps.filter((x) => x.index === k.index)[0];
+    if (at && k.changedLayers !== undefined) at.changedLayers = k.changedLayers;
+    else steps.push(k);
+  }
+  steps.sort((a, b) => a.index - b.index);
   return sources.warnings ? { steps, warnings: sources.warnings } : { steps };
 }

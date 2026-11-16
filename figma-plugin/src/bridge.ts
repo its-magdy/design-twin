@@ -1,19 +1,19 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
-import { applyWrites } from "./writes";
+import { submitWrites } from "./writes";
 import { designImpact } from "./creates";
 import { editsAllowed } from "./edits";
-import { reviewWrites } from "./review";
+import { answerTicket, holdNew, holdOf, lastWrite, layersSinceApproval, reviewWrites, waitingTicket } from "./review";
 import { listLibraries } from "./libraries";
 import { scheduleRun } from "./state";
 import { type RunInfo } from "./progress";
 // The command/reply contract shared with the bridge (bridge/src/commands.ts): the switch below is
 // exhaustive over `Cmd`, each branch sees that command's own `args`, and its reply type is what the
 // bridge's `request()` promises its callers. esbuild inlines the module like read-opts.ts.
-import { parseCommandRequest, runKind } from "../../bridge/src/commands.ts";
+import { parseCommandRequest, runKind, waitingMessage } from "../../bridge/src/commands.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import type {
-  Cmd, CommandRequest, Commands, PingReply, WhoamiReply,
+  Cmd, CommandRequest, Commands, PingReply, WhoamiReply, WriteArgs, WriteReply,
 } from "../../bridge/src/commands.ts";
 
 // Every command announces itself to the plugin window under the SAME label the caller used, so
@@ -55,7 +55,23 @@ export async function handleBridge(cmd: string, args: unknown, id?: string): Pro
   // the one scheduler (state.ts scheduleRun). A branch below only says WHAT runs, so a new command cannot
   // forget to queue, and no caller — this window's buttons, a daemon, an MCP server — can bypass the order.
   const req = parsed.req;
+  // A write may wait for the designer's review (review.ts): its run only checks, resolves and decides, and the hold for
+  // the designer's answer comes after it, so a write waiting for review never holds up the runs behind it.
+  if (req.cmd === "write") return bridgeWrite(req.args, id);
+  // A poll of a waiting write (figma_write {ticket}): answered from the card, whatever runs (an identity command).
+  if (req.cmd === "writeTicket") return answerTicket(req.args.ticket, holdOf(req.args.holdMs), req.args.cancel === true);
   return scheduleRun(runKind(req.cmd), work(req), bridgeRun(req.cmd, id));
+}
+
+// applyWrites' first half (writes.ts submitWrites) refuses the batch whole while "Allow edits" is off (edits.ts) — the
+// gate lives there, not here, so no caller of it can skip it. A batch that waits for review is answered after the hold:
+// its result if the designer answered by then, else `{pending, ticket}` (review.ts).
+async function bridgeWrite(args: WriteArgs, id: string | undefined): Promise<WriteReply> {
+  // One card at a time: refused before a run starts (the window keeps showing the card that waits).
+  const waiting = waitingTicket();
+  if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+  const s = await scheduleRun(runKind("write"), () => submitWrites(args.ops, args.images), bridgeRun("write", id));
+  return "done" in s ? s.done : holdNew(s.card, holdOf(args.holdMs));
 }
 
 // The collectors return their own typed envelopes (collect.ts ScreenResult/FullResult/…), which are
@@ -93,15 +109,21 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
         fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
         // So figma_write's dry run can say a real write would be refused before anyone sends one.
         editsAllowed: await editsAllowed(),
-        // …and that it would wait for the designer's Apply or Reject in the plugin window.
+        // …and whether it would wait for the designer's review in the plugin window (review-policy.ts reads these).
         reviewWrites: await reviewWrites(),
+        reviewLayers: layersSinceApproval(),
       };
+      const waiting = waitingTicket();
+      if (waiting !== null) r.reviewWaiting = waiting;
       return r;
     };
     case "ping": return async () => {
       const r: PingReply = { pong: true, page: figma.currentPage.name, file: figma.root.name };
       const fileKey = readFileKey();
       if (fileKey !== undefined) r.fileKey = fileKey;
+      // figma_status: how the last write ended (one its agent stopped asking about included), or the one waiting now.
+      const w = lastWrite();
+      if (w) r.lastFigmaWrite = w;
       return r;
     };
     // The extraction/write commands mutate shared per-run state (and the document): exclusive runs, on the
@@ -156,12 +178,10 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
     // cost class as listPages depth 2, not that of an export.
     case "listLibraries":
       return () => listLibraries();
-    // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
-    // here, so no caller of it can skip it.
-    case "write": {
-      const { ops, images } = req.args;
-      return () => applyWrites(ops, images);
-    }
+    // handleBridge runs these two itself (bridgeWrite, answerTicket): a write's hold comes after its run.
+    case "write":
+    case "writeTicket":
+      return async () => { throw new Error(req.cmd + " is answered by handleBridge"); };
     // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts), and what
     // a create table would make or update (creates.ts). Reads only, so it needs no "Allow edits"; a scene run, so it
     // waits for a write ahead of it.

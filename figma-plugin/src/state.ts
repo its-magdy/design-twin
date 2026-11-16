@@ -53,6 +53,13 @@ export function scheduleRun<T>(kind: RunKind, fn: () => Promise<T>, run: RunInfo
   return enqueue(fn, run, kind === "exclusive");
 }
 
+/** Run `fn` on the run chain — after every run ahead of it, before any after — unbracketed: no run-begin/run-end, so
+ *  the window shows none of a run's chrome for it. For the work a review card starts (review.ts): the batch the designer
+ *  approved, a preview of it, its put-back. The card is the window's chrome for those. */
+export function queueWork<T>(fn: () => Promise<T>): Promise<T> {
+  return enqueue(fn, { source: "ui", label: "review" }, false);
+}
+
 function enqueue<T>(fn: () => Promise<T>, run: RunInfo, bracketed: boolean): Promise<T> {
   const ticket: QueuedRun = { run, abandoned: false };
   queuedRuns.add(ticket);

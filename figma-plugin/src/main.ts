@@ -26,7 +26,7 @@ import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
 import { editsAllowed, setEditsAllowed } from "./edits";
-import { answerReview, endReviews, reviewWrites, setReviewWrites } from "./review";
+import { answerReview, endReviews, reviewWrites, setReviewWrites, showLines } from "./review";
 import { isUIToMain, type ExportFile, type ExportLayerFile, type MainToUI } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
@@ -168,13 +168,22 @@ figma.ui.onmessage = async (raw: unknown) => {
       break;
     }
     case "set-review-writes": {
-      // Only `on: true` turns review on. Turning it off does not apply a write already waiting: that card still
-      // needs its Apply.
-      post({ type: "review-writes", on: await setReviewWrites(raw.on === true) });
+      // Only `on: false` clears it (it reads ON until the designer clears it). Clearing it does not apply a write
+      // already waiting: that card still needs its answer.
+      post({ type: "review-writes", on: await setReviewWrites(raw.on !== false) });
       break;
     }
     case "review-answer": {
-      if (typeof raw.id === "string") answerReview(raw.id, raw.apply === true, raw.reason);
+      const a = raw.action;
+      if (typeof raw.id === "string" && (a === "apply" || a === "reject" || a === "preview" || a === "keep" || a === "put-back")) answerReview(raw.id, a, raw.reason);
+      break;
+    }
+    // A card's Show me / Show all: select and zoom (no undo step); the window says what it did.
+    case "review-show": {
+      if (typeof raw.id !== "string") break;
+      let text: string;
+      try { text = await showLines(raw.id, typeof raw.index === "number" ? raw.index : -1); } catch (e) { text = "Could not show it: " + errMsg(e); }
+      post({ type: "review-shown", text });
       break;
     }
     case "run-selection": {

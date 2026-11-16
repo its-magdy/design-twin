@@ -196,7 +196,7 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     root.visible = false; // built to the side: nothing shows until the whole tree is in place
     if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
     await finish(made, 0, 0, consent);
-    const { x, y } = placement(t.page, root, t.spec);
+    const { x, y } = placement(t.page, root.id, t.spec);
     t.page.appendChild(root);
     root.x = x;
     root.y = y;
@@ -270,7 +270,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     await finish(made, 0, 0, consent);
     const keys = addDefs(root, fileDefs(t.spec, t.refs));
     wireAll(made.pairs, keys);
-    const { x, y } = placement(t.page, root, t.spec);
+    const { x, y } = placement(t.page, root.id, t.spec);
     t.page.appendChild(root);
     root.x = x;
     root.y = y;
@@ -393,13 +393,21 @@ function occupied(c: SceneNode): { x: number; y: number; width: number; height: 
   return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
 }
 
+/** Where a new tree's root will land, before it is built (the review card says it, and its Show me pans there):
+ *  `beside` when it goes right of the frames already on the page, false when the spec placed it or the page is empty. */
+export function landingSpot(t: TreeTarget): { page: PageNode; x: number; y: number; beside: boolean } {
+  const at = placement(t.page, "", t.spec);
+  const beside = !(t.spec.x !== undefined && t.spec.y !== undefined) && t.page.children.length > 0;
+  return { page: t.page, x: at.x, y: at.y, beside };
+}
+
 /** Where the root lands: its own x/y, else right of everything already on the page, top-aligned with it. */
-function placement(page: PageNode, root: SceneNode, spec: TreeNodeSpec): { x: number; y: number } {
+function placement(page: PageNode, rootId: string, spec: TreeNodeSpec): { x: number; y: number } {
   if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
   let right: number | null = null;
   let top: number | null = null;
   for (const c of page.children) {
-    if (c.id === root.id) continue; // built on the current page, which may be this one
+    if (c.id === rootId) continue; // built on the current page, which may be this one
     const b = occupied(c);
     right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
     top = top === null ? b.y : Math.min(top, b.y);
