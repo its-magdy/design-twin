@@ -75,7 +75,7 @@ check("values in a few words", valueText("hidden", true) === "hidden" && valueTe
 
 console.log("\nthe size of a new frame (shared with the dry run):");
 check("both sides: W×H", sizePhrase({ box: { w: 320, h: 200 } }) === "320×200");
-check("a width only never reads '×undefined'", sizePhrase({ layout: { width: 320 } }) === "320 wide, height as Figma makes a new frame" && sizePhrase({ layout: { width: 320 }, heightMode: "hug" }) === "320 wide, height hugs content");
+check("a width only never reads '×undefined'", sizePhrase({ layout: { width: 320 } }) === "320 wide, height left at Figma's default" && sizePhrase({ layout: { width: 320 }, heightMode: "hug" }) === "320 wide, height hugs content");
 const spec = { name: "Card", layout: { display: "flex" as const, width: 320 }, heightMode: "hug" as const };
 const { summary } = checkTree(spec);
 check("the dry run's sentence says it the same way", /creates frame 'Card' 320 wide, height hugs content, horizontal auto-layout with/.test(describeTree(spec, undefined, summary)) && !/undefined/.test(String(writeOpPreview({ op: "createTree", tree: spec }, 0).change)));

@@ -820,7 +820,7 @@ function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: Im
     ...(wait ? { wouldWait: wait.wait, ...(wait.wait ? { waitReason: wait.reason } : {}) } : {}),
     ...(review && review.waiting ? { waitingTicket: review.waiting } : {}),
     note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch, except that each component property it declares, edits or deletes ends a step: the reply's undoSteps says how many). " + sourceNote +
-      (wait && wait.wait ? "A real write WAITS for the designer's answer in the plugin window (" + wait.reason + "): the call returns {pending, ticket} if they have not answered within " + Math.round(REVIEW_HOLD_MS / 1000) + " s — then call figma_write {ticket} until it answers, and tell the user it waits for them. " : "") +
+      (wait && wait.wait ? "A real write WAITS for the designer's answer in the plugin window (" + wait.reason + "): the call returns {pending, ticket} if they have not answered within " + Math.round(REVIEW_HOLD / 1000) + " s — then call figma_write {ticket} until it answers, and tell the user it waits for them. " : "") +
       (review && review.waiting ? "Another write is waiting for the designer now (ticket '" + review.waiting + "'): a real write is refused until it ends. " : "") +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."

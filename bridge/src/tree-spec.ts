@@ -860,7 +860,7 @@ export function sizePhrase(spec: TreeNodeSpec): string {
   const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
   const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
   const other = (mode: "fill" | "hug" | undefined, side: string): string =>
-    side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " as Figma makes a new frame");
+    side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
   if (typeof w === "number" && typeof h === "number") return w + "×" + h;
   if (typeof w === "number") return w + " wide, " + other(spec.heightMode, "height");
   if (typeof h === "number") return h + " tall, " + other(spec.widthMode, "width");

@@ -2123,7 +2123,7 @@
   function sizePhrase(spec) {
     const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
     const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
-    const other = (mode, side) => side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " as Figma makes a new frame");
+    const other = (mode, side) => side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
     if (typeof w === "number" && typeof h === "number") return w + "\xD7" + h;
     if (typeof w === "number") return w + " wide, " + other(spec.heightMode, "height");
     if (typeof h === "number") return h + " tall, " + other(spec.widthMode, "width");

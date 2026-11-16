@@ -459,7 +459,10 @@ var DesignTwinRelay = (() => {
       var card = $("review"); if (card) card.hidden = false;
       // A new card replaces whatever the last write said, a red refusal included.
       setStatus("Claude Code wants to change this file — review it below.");
-      var apply = $("review-apply"); if (apply && apply.focus) apply.focus();
+      // Focus Apply without scrolling to it, and start the card at its heading: a window scrolled for the last card
+      // must not open this one halfway down.
+      var apply = $("review-apply"); if (apply && apply.focus) apply.focus({ preventScroll: true });
+      if (card && card.scrollIntoView) card.scrollIntoView(true);
     }
     function hideReview() {
       reviewId = null;
