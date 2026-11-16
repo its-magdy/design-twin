@@ -6213,7 +6213,7 @@
             lines.push({ head: "Layer change", rows: [], ops: [i] });
             return;
           }
-          const set = o.set;
+          const set = { ...o.set };
           const checked = checkPatch(o.set).summary.fields;
           const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
           if (r && r.component !== void 0) {
@@ -6261,7 +6261,7 @@
           return;
         }
         case "setStyle": {
-          const set = isStyleSet(o.set) ? o.set : {};
+          const set = isStyleSet(o.set) ? { ...o.set } : {};
           const fields = isStyleSet(o.set) ? checkStyleSet(o.set).summary.fields : [];
           const tail = followTail(r);
           lines.push({ head: "Style '" + String(o.style) + "'", rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
@@ -10471,8 +10471,16 @@
             }
             break;
           }
-          default:
+          // A create table makes new names and updates the ones the file has; its line says so. It reads nothing here: what
+          // follows an updated variable or style is not counted (the policy's source edits are setVariable, setStyle and a
+          // patch of a main component).
+          case "createVariables":
+          case "createStyles":
             break;
+          default: {
+            const never = op.op;
+            void never;
+          }
         }
       } catch (e) {
         warn("what op " + i + " changes could not all be read (" + errMsg(e) + ")");

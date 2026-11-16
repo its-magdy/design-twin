@@ -130,7 +130,7 @@ export function cardLines(ops: readonly WriteOp[], reads: ReadonlyArray<OpRead |
     switch (o.op) {
       case "patch": {
         if (!isPatchSet(o.set)) { lines.push({ head: "Layer change", rows: [], ops: [i] }); return; }
-        const set = o.set as unknown as Record<string, unknown>;
+        const set: Record<string, unknown> = { ...o.set };
         // In the order the agent wrote them (the checked list says which count).
         const checked = checkPatch(o.set).summary.fields as string[];
         const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
@@ -180,7 +180,7 @@ export function cardLines(ops: readonly WriteOp[], reads: ReadonlyArray<OpRead |
         return;
       }
       case "setStyle": {
-        const set = isStyleSet(o.set) ? (o.set as unknown as Record<string, unknown>) : {};
+        const set: Record<string, unknown> = isStyleSet(o.set) ? { ...o.set } : {};
         const fields = isStyleSet(o.set) ? (checkStyleSet(o.set).summary.fields as string[]) : [];
         const tail = followTail(r);
         lines.push({ head: "Style '" + String(o.style) + "'", rows: fieldRows(set, fields, [r]), ...(tail ? { tail } : {}), ops: [i] });

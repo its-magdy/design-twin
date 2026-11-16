@@ -3,7 +3,7 @@
 //   bun test/review-policy.test.ts
 import { check, report } from "./assert.ts";
 import { countLayers, previewOffered, REVIEW_LAYER_LIMIT, reviewDecision, type ReviewFacts } from "../bridge/src/review-policy.ts";
-import { cardLines, lineText, valueText } from "../bridge/src/review-card.ts";
+import { cardLines, lineText, valueText, type CardLine } from "../bridge/src/review-card.ts";
 import { describeTree, sizePhrase } from "../bridge/src/tree-spec.ts";
 import { checkTree } from "../bridge/src/tree-check.ts";
 import { writeOpPreview, type WriteOp } from "../bridge/src/commands.ts";
@@ -30,30 +30,32 @@ check("not a small change", !previewOffered({ ...pv, layers: 25 }));
 check("never with a delete or a keyed re-send (they cannot be put back)", !previewOffered({ ...pv, sourceEdits: 1, deletes: true }) && !previewOffered({ ...pv, layers: 40, keyedResend: true }));
 
 console.log("\nthe card's lines:");
+/** The first line of a card, as text ("(no line)" when there is none). */
+const firstLine = (ls: readonly CardLine[]): string => { const l = ls[0]; return l ? lineText(l) : "(no line)"; };
 const patch = (id: string, set: Record<string, unknown>): WriteOp => ({ op: "patch", nodeId: id, set });
 const many = Array.from({ length: 30 }, (_, i) => patch("1:" + i, { radius: 20, opacity: 0.8 }));
 const grouped = cardLines(many, many.map(() => ({ name: "Card", old: { radius: 6, opacity: 1 } })));
 check("30 layers patched alike are one line, old → new, opacity as a percentage",
-  grouped.length === 1 && lineText(grouped[0]!) === "30 layers: radius 6 → 20, opacity 100% → 80%" && grouped[0]?.ops.length === 30);
+  grouped.length === 1 && firstLine(grouped) === "30 layers: radius 6 → 20, opacity 100% → 80%" && grouped[0]?.ops.length === 30);
 const mixed = cardLines([patch("1:1", { radius: 20 }), patch("1:2", { radius: 20 })], [{ old: { radius: 4 } }, { old: { radius: 6 } }]);
-check("old values that differ read 'mixed'", lineText(mixed[0]!) === "2 layers: radius mixed → 20");
+check("old values that differ read 'mixed'", firstLine(mixed) === "2 layers: radius mixed → 20");
 const unread = cardLines([patch("1:1", { radius: 20 })], []);
-check("a value the plugin could not read shows only the new one, and no id stands in for a name it read", lineText(unread[0]!) === "A layer: radius → 20");
+check("a value the plugin could not read shows only the new one, and no id stands in for a name it read", firstLine(unread) === "A layer: radius → 20");
 const one = cardLines([patch("1:1", { name: "Title", fills: [{ type: "solid", color: "#16a34a" }] })], [{ name: "Heading", old: { name: "Heading", fills: [{ type: "solid", color: "#3b82f6" }] } }]);
-check("one layer is named; a fill reads as its colour", lineText(one[0]!) === "Layer 'Heading': name Heading → Title, fills #3b82f6 → #16a34a");
+check("one layer is named; a fill reads as its colour", firstLine(one) === "Layer 'Heading': name Heading → Title, fills #3b82f6 → #16a34a");
 const v = cardLines([{ op: "setVariable", variable: "demo/accent", value: "#16a34a" }], [{ name: "demo/accent", old: { Default: "#3b82f6" }, follows: 40 }]);
-check("a variable: its value old → new, and how many layers follow", lineText(v[0]!) === "Variable 'demo/accent': #3b82f6 → #16a34a — 40 layers follow");
+check("a variable: its value old → new, and how many layers follow", firstLine(v) === "Variable 'demo/accent': #3b82f6 → #16a34a — 40 layers follow");
 const vm = cardLines([{ op: "setVariable", variable: "bg", values: { Light: "#ffffff", Dark: "#111111" } }], [{ old: { Light: "#fafafa", Dark: "#000000" }, follows: 1 }]);
-check("…by mode when it sets several", lineText(vm[0]!) === "Variable 'bg': Light #fafafa → #ffffff, Dark #000000 → #111111 — 1 layer follows");
+check("…by mode when it sets several", firstLine(vm) === "Variable 'bg': Light #fafafa → #ffffff, Dark #000000 → #111111 — 1 layer follows");
 const main = cardLines([patch("5:1", { radius: 8 })], [{ name: "Base", component: "Button", old: { radius: 4 }, follows: 12 }]);
-check("a patch inside a main component is its own line, with the instances that follow", lineText(main[0]!) === "Main component 'Button', layer 'Base': radius 4 → 8 — 12 layers follow");
+check("a patch inside a main component is its own line, with the instances that follow", firstLine(main) === "Main component 'Button', layer 'Base': radius 4 → 8 — 12 layers follow");
 const tree: WriteOp = { op: "createTree", tree: { name: "Settings card", layout: { display: "flex", flexDirection: "column", width: 320 }, heightMode: "hug", children: [{ text: "Hi" }] } };
 const created = cardLines([tree], [{ lands: "right of the existing frames" }]);
 check("a new frame: its name, its size (a width only: height hugs content), what is inside, where it lands",
-  lineText(created[0]!) === "New frame 'Settings card', 320 wide, height hugs content, 1 layer inside — lands right of the existing frames");
-check("a keyed re-send says it updates in place", lineText(cardLines([tree], [{ updates: "Settings card" }])[0]!) === "Updates 'Settings card' in place");
+  firstLine(created) === "New frame 'Settings card', 320 wide, height hugs content, 1 layer inside — lands right of the existing frames");
+check("a keyed re-send says it updates in place", firstLine(cardLines([tree], [{ updates: "Settings card" }])) === "Updates 'Settings card' in place");
 check("no line carries a node id or the dry run's check details", ![...grouped, ...v, ...created].some((l) => /\d+:\d+|checked against|put back if/.test(lineText(l))));
-check("a delete says it cannot be put back", /cannot be put back/.test(lineText(cardLines([{ op: "delete", nodeId: "3:3" }], [{ name: "Old" }])[0]!)));
+check("a delete says it cannot be put back", /cannot be put back/.test(firstLine(cardLines([{ op: "delete", nodeId: "3:3" }], [{ name: "Old" }]))));
 check("values in a few words", valueText("hidden", true) === "hidden" && valueText("text", "x".repeat(60)).length === 42 && valueText("box", { w: 320, h: 200 }) === "320×200" && valueText("fills", []) === "none");
 
 console.log("\nthe size of a new frame (shared with the dry run):");

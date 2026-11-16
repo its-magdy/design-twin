@@ -3,7 +3,7 @@
 // card it waits on (plain lines, Show me, a preview on the canvas with Keep / Put back), and the ticket the agent waits
 // with (pending after the hold, asked again, withdrawn, expired when the agent stops asking). Every way a card ends
 // without an Apply refuses the batch with nothing changed.
-import { EDITS_OFF_MESSAGE, rejectedMessage, reviewLines, REVIEW_REASON_MAX, unreviewedMessage, type LastFigmaWrite, type WriteOp, type WritePending, type WriteReply, type WriteResult } from "../../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE, rejectedMessage, reviewLines, REVIEW_REASON_MAX, unreviewedMessage, type WriteOp, type WritePending, type WriteReply, type WriteResult } from "../../bridge/src/commands.ts";
 import { lineText } from "../../bridge/src/review-card.ts";
 import { REVIEW_CARD_MAX_MS, REVIEW_IDLE_MS } from "../../bridge/src/timeouts.ts";
 import { ok } from "../assert.ts";
@@ -79,8 +79,13 @@ const answer = (w: ReviewWorld, card: PostedMessage | undefined, action: string,
   w.send({ type: "review-answer", id: String(card?.id), action, ...(reason !== undefined ? { reason } : {}) });
 
 const untouched = (w: ReviewWorld): boolean => w.created.length === 0 && w.label.characters === "old";
-const whoami = async (w: ReviewWorld): Promise<Record<string, unknown>> => ((await bridge(w, "who" + w.posted.length, "whoami", {})).result ?? {}) as unknown as Record<string, unknown>;
-const lastWrite = async (w: ReviewWorld): Promise<LastFigmaWrite | undefined> => ((await bridge(w, "ping" + w.posted.length, "ping", {})).result as unknown as { lastFigmaWrite?: LastFigmaWrite }).lastFigmaWrite;
+const rec = (x: unknown): Record<string, unknown> => (typeof x === "object" && x !== null ? { ...x } : {});
+const whoami = async (w: ReviewWorld): Promise<Record<string, unknown>> => rec((await bridge(w, "who" + w.posted.length, "whoami", {})).result);
+/** figma_status's ping: the plugin's lastFigmaWrite (commands.ts LastFigmaWrite), read field by field. */
+const lastWrite = async (w: ReviewWorld): Promise<Record<string, unknown> | undefined> => {
+  const lw = rec((await bridge(w, "ping" + w.posted.length, "ping", {})).result).lastFigmaWrite;
+  return lw === undefined ? undefined : rec(lw);
+};
 
 export const cases: Case[] = [{
   name: "Review each change first (review.ts): ON by default — a write waits on a plain card, and Apply lands it",

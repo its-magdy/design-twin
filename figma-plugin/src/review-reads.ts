@@ -215,8 +215,16 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           if (d) { read.name = d.node.name; ids.push(d.node.id); }
           break;
         }
-        default:
+        // A create table makes new names and updates the ones the file has; its line says so. It reads nothing here: what
+        // follows an updated variable or style is not counted (the policy's source edits are setVariable, setStyle and a
+        // patch of a main component).
+        case "createVariables":
+        case "createStyles":
           break;
+        default: {
+          const never: never = op.op;
+          void never;
+        }
       }
     } catch (e) {
       warn("what op " + i + " changes could not all be read (" + errMsg(e) + ")");
