@@ -431,7 +431,12 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    `claude-plugin/scripts/capture-page.js`) renders it in the project's Playwright like the verify probe (the same
    resolution and launch, `probe-browser.ts`; the same init script and reader, `measureElements`, plus a walker of its
    own for layout facts, `probe-capture.ts`), converts it with the pure `capture-spec.ts` and writes the spec and its
-   images to disk — files only, never a write; the agent lands them with `treeFile` ops. The design record is `docs/write-plane-spec.md`; the
+   images to disk — files only, never a write; the agent lands them with `treeFile` ops. Those ops carry `bind: true`:
+   before the batch resolves, the plugin binds the spec's raw values to the file's variables and text styles where
+   exactly one equals them (`figma-plugin/src/bind.ts` gathers the file's and the batch's, the pure
+   `bridge/src/bind-values.ts` decides), so the bound names then resolve like any; and an element the component map
+   names is captured as an instance, the map read in the write direction (`design-to-code/code-usage.ts` `figmaUsageOf`).
+   The design record is `docs/write-plane-spec.md`; the
    token cost of each route is measured by `test/write-cost.test.ts`.
 
 ## Security posture

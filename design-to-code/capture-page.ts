@@ -12,6 +12,12 @@
 // <out>/images/<sha256>.<ext>, named by their bytes. The converter (capture-spec.ts) turns it into a spec, which must pass
 // the tree spec's own check before anything is written. Nothing is written unless every width converted.
 //
+// The component map (design/codeconnect.local.json, or --map) is read in the write direction (code-usage.ts
+// figmaUsageOf): an element whose code component it names (data-component, else a React dev build's fibers: the walker
+// reads them) lands as an instance with its props. The ops it prints carry `bind: true` (the plugin binds raw values to
+// the file's variables and text styles), and every part repeated with no component is written as a candidate
+// component spec beside the screen's.
+//
 // Writes stay on the MCP server: this script writes files only (the specs, their images, a report); it is not a write
 // command. A font the Figma file lacks is never swapped: the plugin's createTree check refuses the batch, listing every
 // missing font with the closest names the file has, and the report lists every family and style up front.
@@ -26,11 +32,16 @@ import { measureElements, type MeasureItem, type MeasureResult, type PValue } fr
 import { byPath } from "./page-runtime.ts";
 import { contextOptions } from "./probe-session.ts";
 import { STYLE_KEYS } from "./verify-shared.ts";
-import { captureSpec, checkCaptured, firstFamily, type CapBorder, type CapEl, type CapFont, type CapImage, type CapText, type CaptureDoc, type CaptureStats } from "./capture-spec.ts";
+import { captureSpec, checkCaptured, firstFamily, type CapBorder, type CapEl, type CapFont, type CapImage, type CapText, type Candidate, type CaptureDoc, type CaptureStats } from "./capture-spec.ts";
+import { figmaUsageOf, mapEntriesByCode, type CodeIndex } from "./code-usage.ts";
+import { isCodeConnectMap } from "./map-validate-core.ts";
+import { readJson } from "../bridge/src/read-json.ts";
+import { findMapFile } from "../bridge/src/project-layout.ts";
 import { sniffImage, MAX_BATCH_IMAGE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE } from "../bridge/src/image-file.ts";
 import { MAX_TREE_NODES } from "../bridge/src/tree-spec.ts";
 import type { TreeNodeSpec } from "../bridge/src/tree-spec.ts";
 import { sha256Hex } from "../bridge/src/hash.ts";
+import { nullProto } from "../bridge/src/json-util.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind } from "./pw-errors.ts";
@@ -42,6 +53,7 @@ const USAGE =
   "usage:\n" +
   `  ${scriptCmd(TOOL)} --url <url> [--width 1280[,390,…]] [--height 800] [--root <css selector>] [--name <slug>]\n` +
   "      [--out design/capture] [--project <dir>] [--ready <selector> | none] [--timeout <ms>] [--browser-path <executable>]\n" +
+  "      [--map <codeconnect.local.json>] [--no-instances] [--no-bind]\n" +
   "      opens <url> (local or remote) in the PROJECT's Playwright (chromium) at each --width (px; default 1280) with a\n" +
   "      --height px viewport (default 800), waits for its load, its fonts, --ready (a selector that must be visible; default\n" +
   "      none) and a quiet DOM, and captures the whole document's height — or only the --root element's box. It writes, under\n" +
@@ -49,13 +61,22 @@ const USAGE =
   "        <name>@<width>.json   a tree spec per width, for figma_write {op:\"createTree\", treeFile:\"…\"}\n" +
   "        images/<sha256>.<ext> every image the spec paints (PNG, JPEG or GIF as the page loaded it; anything else as a PNG\n" +
   "                              screenshot of that element)\n" +
-  "        <name>.capture.json   the report: per width the node count, frames / texts / images, every font (family + style)\n" +
-  "                              the spec uses, what was dropped or approximated (counts and sample paths), and the ops\n" +
+  "        <name>.capture.json   the report: per width the node count, frames / texts / instances / images, every font\n" +
+  "                              (family + style) the spec uses, what was dropped or approximated (counts and sample paths),\n" +
+  "                              the instances by component (and what their props could not say), the code components the\n" +
+  "                              map does not name, the candidate components, and the ops\n" +
+  "        <name>@<width>.candidates/<n>-<tag>.tree.json   a COMPONENT spec per part repeated with no component (a card, a\n" +
+  "                              row), a TEXT property per text that differs; making it does not replace the occurrences (map\n" +
+  "                              the new component to its code, then capture again)\n" +
   "      and prints one summary line, then the figma_write ops as JSON (several widths: one batch, all or nothing).\n" +
   "      --name: the files' slug (letters, digits, . _ -; default from the URL's path, else its host). The root of each spec\n" +
   "      is the frame '<name> @<width>' keyed capture:<name>@<width>, so sending it again updates that frame in place.\n" +
-  "      Faithful but plain: raw values, no components or variables. Flex and grid become auto-layout, text real text in\n" +
-  "      the font Chromium drew it with (a font the Figma file lacks is refused when the spec lands, never swapped).\n" +
+  "      Flex and grid become auto-layout, text real text in the font Chromium drew it with (a font the Figma file lacks is\n" +
+  "      refused when the spec lands, never swapped). An element the component map names (its data-component, \"Export\" or\n" +
+  "      \"module#Export\" with its props in data-props JSON, else a React dev build's component) lands as an instance of the\n" +
+  "      Figma component, its props read back through the map. --map: the map (default design/codeconnect.local.json, then\n" +
+  "      ./codeconnect.local.json; none: no instances); --no-instances reads none. The ops carry bind:true, so the file's\n" +
+  "      variables and text styles that equal a raw value are bound when the spec lands; --no-bind leaves it off.\n" +
   "      Shadows, gradients, pseudo-element content, transforms and filters are not written (the tree spec has no effects).\n" +
   `      A capture over ${MAX_TREE_NODES} nodes is refused (exit 5): capture part of the page with --root <selector>.\n` +
   "      --browser-path: launch this Chromium executable instead of the one Playwright installed (a cached browser).\n" +
@@ -348,8 +369,19 @@ function bgFitOf(size: string, repeat: string, img: Kept, box: { w: number; h: n
 }
 
 // ---------------------------------------------------------------- one width
-export interface WidthResult { doc: CaptureDoc; spec: TreeNodeSpec; stats: CaptureStats; images: Kept[]; skipped: Record<string, number>; notes: string[]; outRel: string }
-export interface CaptureOptions { url: string; name: string; root: string | null; height: number; ready: string | null; timeout: number; outRel: string; budget: ImageBudget }
+/** What one width's instances say: how many by component, and what their props could not say (the first few). */
+export interface InstanceReport { count: number; byComponent: Record<string, number>; warnings: string[]; moreWarnings: number }
+export interface WidthResult {
+  doc: CaptureDoc; spec: TreeNodeSpec; stats: CaptureStats; images: Kept[]; skipped: Record<string, number>; notes: string[]; outRel: string;
+  instances: InstanceReport; namedUnmapped: Record<string, number>; candidates: Candidate[];
+}
+export interface CaptureOptions {
+  url: string; name: string; root: string | null; height: number; ready: string | null; timeout: number; outRel: string; budget: ImageBudget;
+  /** the component map by code component (null: no instances) */
+  map: CodeIndex | null;
+}
+/** How many instance warnings a report keeps per width (the rest are counted). */
+const MAX_INSTANCE_WARNINGS = 10;
 
 export async function captureWidth(browser: Browser, width: number, o: CaptureOptions): Promise<WidthResult> {
   const context = await browser.newContext(contextOptions({ w: width, h: o.height }));
@@ -364,7 +396,7 @@ export async function captureWidth(browser: Browser, width: number, o: CaptureOp
     await settle(page, o.url, o.ready, o.timeout);
     // reading it — the walk, the measurement, the fonts drawn, the images — gets one --timeout of its own
     const deadline = Date.now() + o.timeout;
-    const walked: WalkOutput = await within(page.evaluate(walkCapture, { root: o.root, maxElements: MAX_WALK }), deadline, `reading the page's elements (${o.timeout} ms)`);
+    const walked: WalkOutput = await within(page.evaluate(walkCapture, { root: o.root, maxElements: MAX_WALK, identity: o.map !== null, components: o.map ? o.map.names : [] }), deadline, `reading the page's elements (${o.timeout} ms)`);
     if (!walked.root) throw new CaptureError(walked.missing ?? "nothing to capture", 4);
     if (walked.elements > MAX_WALK) throw new CaptureError(`the page at ${width} px shows more than ${MAX_WALK} elements (${walked.elements}); one spec holds ${MAX_TREE_NODES} nodes — capture part of it with --root <selector>`, 5);
 
@@ -414,6 +446,11 @@ export async function captureWidth(browser: Browser, width: number, o: CaptureOp
       return { widths, color, from, align: align === "outside" || align === "center" ? align : "inside" };
     };
     const runText = (r: WalkRun, parent: WalkEl): CapText => ({ kind: "text", text: r.text, rect: r.rect, lines: r.lines, font: fontOf(parent) });
+    // the instances: the component map read in the write direction (code-usage.ts figmaUsageOf)
+    // counts by user names: prototype-free records (a component called `constructor` counts from zero)
+    const instances: InstanceReport = { count: 0, byComponent: nullProto<number>(), warnings: [], moreWarnings: 0 };
+    const namedUnmapped = nullProto<number>();
+    const noteInstance = (msg: string): void => { if (instances.warnings.length < MAX_INSTANCE_WARNINGS) instances.warnings.push(msg); else instances.moreWarnings++; };
 
     const convert = async (e: WalkEl, isRoot: boolean): Promise<CapEl> => {
       const s = styleOf(e);
@@ -431,6 +468,25 @@ export async function captureWidth(browser: Browser, width: number, o: CaptureOp
         opacity: num(s.opacity, 1), clip: e.clip,
         media: e.media, image: null, backgroundImage: null, text: null, dropped, children: [],
       };
+      if (e.component && o.map) {
+        const hit = o.map.get(e.component.name);
+        if (hit && "entry" in hit) {
+          // the props as own keys of a prototype-free record (`__proto__`, `constructor` are props like any other)
+          const codeProps = nullProto<string | number | boolean>();
+          for (const [k, v] of e.component.props) Object.defineProperty(codeProps, k, { value: v, enumerable: true, writable: true, configurable: true });
+          const u = figmaUsageOf(hit.entry, codeProps, e.component.text, e.component.name);
+          el.instance = { component: u.component, props: u.props, name: hit.entry.figma.name };
+          instances.count++;
+          instances.byComponent[hit.entry.figma.name] = (instances.byComponent[hit.entry.figma.name] ?? 0) + 1;
+          for (const w of u.warnings) noteInstance(`${e.path}: ${w.message}`);
+          return el;
+        }
+      }
+      if (e.codeName !== undefined && o.map) {
+        const hit = o.map.get(e.codeName);
+        if (hit && "ambiguous" in hit) noteInstance(`${e.path}: ${e.codeName} is the code target of ${hit.ambiguous.length} map entries (${hit.ambiguous.slice(0, 3).map((x) => x.figma.name).join(", ")}): captured as plain layers, not an instance; give each its own export in the map`);
+        else namedUnmapped[e.codeName] = (namedUnmapped[e.codeName] ?? 0) + 1;
+      }
       if (e.text) {
         // the walk's drawn characters when part of the content is not drawn (the measured text counts it), else the measured text
         el.text = { kind: "text", text: e.text.drawn ?? (str(s.text) || ""), rect: e.text.rect, lines: e.text.lines, font: fontOf(e), ...(e.text.mixed ? { mixed: true } : {}) };
@@ -473,7 +529,11 @@ export async function captureWidth(browser: Browser, width: number, o: CaptureOp
     const ids = new Map<string, string>([...images.kept.values()].map((k) => [images.fileOf(k), k.sha]));
     const problems = checkCaptured(r.spec, (f) => ids.get(f) ?? null);
     if (problems.length) throw new Error(`the spec for ${width} px fails the tree spec's own check — a bug in the capture, nothing written:\n${problems.slice(0, 10).join("\n")}`);
-    return { doc, spec: r.spec, stats: r.stats, images: [...images.kept.values()], skipped: walked.skipped, notes, outRel: o.outRel };
+    for (const c of r.candidates) {
+      const bad = checkCaptured(c.spec, (f) => ids.get(f) ?? null);
+      if (bad.length) throw new Error(`the candidate component ${c.name} for ${width} px fails the tree spec's own check — a bug in the capture, nothing written:\n${bad.slice(0, 10).join("\n")}`);
+    }
+    return { doc, spec: r.spec, stats: r.stats, images: [...images.kept.values()], skipped: walked.skipped, notes, outRel: o.outRel, instances, namedUnmapped, candidates: r.candidates };
   } finally {
     // bounded too: a page stuck in a script must not keep the capture from returning
     await within(context.close(), Date.now() + CLOSE_MS, "closing the page").catch(() => undefined);
@@ -487,6 +547,7 @@ export async function main(argv: string[]): Promise<number> {
   const OPTIONS = {
     url: { type: "string" }, width: { type: "string" }, height: { type: "string" }, root: { type: "string" }, name: { type: "string" },
     out: { type: "string" }, project: { type: "string" }, ready: { type: "string" }, timeout: { type: "string" }, "browser-path": { type: "string" },
+    map: { type: "string" }, "no-instances": { type: "boolean" }, "no-bind": { type: "boolean" },
     check: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: f } = cliParse(TOOL, argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: false }));
@@ -496,7 +557,7 @@ export async function main(argv: string[]): Promise<number> {
   const timeout = f.timeout === undefined ? 30_000 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) return usage("--timeout must be a positive number of milliseconds");
   if (f.check) {
-    for (const k of ["url", "width", "height", "root", "name", "out", "ready"] as const) if (f[k] !== undefined) return usage(`--${k} does not apply to --check`);
+    for (const k of ["url", "width", "height", "root", "name", "out", "ready", "map", "no-instances", "no-bind"] as const) if (f[k] !== undefined) return usage(`--${k} does not apply to --check`);
   } else if (!f.url) return usage("--url is required");
   const widths = (f.width ?? "1280").split(",").map((w) => w.trim());
   if (!widths.every((w) => /^\d+$/.test(w) && Number(w) >= 100 && Number(w) <= 4096)) return usage(`--width must be one width or a comma list, each a whole number of px from 100 to 4096 (got '${f.width ?? ""}')`);
@@ -525,6 +586,22 @@ export async function main(argv: string[]): Promise<number> {
     url = "file://" + file.split(path.sep).join("/").replace(/^([A-Za-z]):/, "/$1:");
   }
 
+  if (f.map !== undefined && f["no-instances"]) return usage("--map and --no-instances: give one (--no-instances reads no component)");
+  // The component map, read in the write direction: --map, else the project's own (design/, then the legacy root file).
+  let map: CodeIndex | null = null;
+  let mapRel: string | null = null;
+  if (!f.check && !f["no-instances"]) {
+    const found = findMapFile(project);
+    const file = f.map !== undefined ? path.resolve(project, f.map) : found.missing ? null : found.file;
+    if (file !== null) {
+      if (!fs.existsSync(file)) return usage(`--map ${f.map ?? file} is not a file`);
+      const m = readJson(file, isCodeConnectMap);
+      if (!("doc" in m)) return usage(`cannot read the component map ${file}: ${m.error}`);
+      map = mapEntriesByCode(m.doc);
+      mapRel = path.relative(project, file).split(path.sep).join("/");
+    }
+  }
+
   const browserPath = f["browser-path"];
   if (browserPath !== undefined) { const bad = browserPathError(browserPath); if (bad !== null) return rendererUnavailable(bad, null, TOOL, "captured or written"); }
   const res = resolvePlaywright(project);
@@ -540,7 +617,7 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     const ready = f.ready === undefined || f.ready === "none" ? null : f.ready;
-    for (const w of widthList) results.push(await captureWidth(browser, w, { url, name, root: f.root ?? null, height, ready, timeout, outRel, budget }));
+    for (const w of widthList) results.push(await captureWidth(browser, w, { url, name, root: f.root ?? null, height, ready, timeout, outRel, budget, map }));
   } catch (e) {
     if (e instanceof CaptureError) { console.error(`${TOOL}: ${e.message} — nothing written.`); return e.exit; }
     if (pwErrorKind(e) === "gone") { console.error(`${TOOL}: the page or browser closed or crashed (${firstLine(e)}) — nothing written. Run again; if it recurs, run --check.`); return 4; }
@@ -553,30 +630,47 @@ export async function main(argv: string[]): Promise<number> {
   // every width converted: write the images, the specs, the report — once the files are checked again, all of them
   const images = new Map<string, Kept>();
   for (const r of results) for (const k of r.images) images.set(r.outRel + "/images/" + k.sha + "." + k.ext, k);
-  const ops = results.map((r) => ({ op: "createTree", treeFile: specRel(r.doc.width) }));
-  const late = outputEscape(project, outDirs, [...[...images.keys(), ...ops.map((o) => o.treeFile), reportRel].map(fileOf)]);
+  // bind: the file's variables and text styles that equal a raw value are bound when the spec lands (bind-values.ts)
+  const ops = results.map((r) => ({ op: "createTree", treeFile: specRel(r.doc.width), ...(f["no-bind"] ? {} : { bind: true }) }));
+  const candidateRel = (w: number, c: Candidate): string => `${outRel}/${name}@${w}.candidates/${c.slug}.tree.json`;
+  const candidateDirs = results.map((r) => path.join(outAbs, `${name}@${r.doc.width}.candidates`));
+  const candidateFiles = results.flatMap((r) => r.candidates.map((c) => candidateRel(r.doc.width, c)));
+  const late = outputEscape(project, [...outDirs, ...candidateDirs], [...[...images.keys(), ...ops.map((o) => o.treeFile), ...candidateFiles, reportRel].map(fileOf)]);
   if (late !== null) return usage(`--out must stay inside --project on disk: ${late} — nothing written`);
   fs.mkdirSync(path.join(outAbs, "images"), { recursive: true });
   for (const [rel, k] of images) if (!fs.existsSync(fileOf(rel))) writeFileAtomic(fileOf(rel), k.bytes);
   const imageFiles = new Set(images.keys());
   results.forEach((r, i) => writeFileAtomic(fileOf(ops[i]?.treeFile ?? ""), JSON.stringify(r.spec, null, 1) + "\n"));
+  // each width's candidate components, in a directory of their own: one an earlier capture wrote is not left beside them
+  results.forEach((r, i) => {
+    const dirAbs = candidateDirs[i] ?? "";
+    for (const old of fs.existsSync(dirAbs) ? fs.readdirSync(dirAbs) : []) if (old.endsWith(".tree.json")) fs.rmSync(path.join(dirAbs, old), { force: true });
+    if (!r.candidates.length) return;
+    fs.mkdirSync(dirAbs, { recursive: true });
+    for (const c of r.candidates) writeFileAtomic(fileOf(candidateRel(r.doc.width, c)), JSON.stringify(c.spec, null, 1) + "\n");
+  });
   const fonts: Array<{ family: string; style: string }> = [];
   for (const r of results) for (const ft of r.stats.fonts) if (!fonts.some((x) => x.family === ft.family && x.style === ft.style)) fonts.push(ft);
   const report = {
     url: f.url, name,
     fonts,
     fontsNote: "every family and style the specs use; a font the Figma file lacks is refused when the spec lands (with the closest names it has), never swapped",
+    map: mapRel,
     widths: results.map((r, i) => ({
       width: r.doc.width, height: r.doc.root.rect.h, spec: ops[i]?.treeFile,
       nodes: r.stats.nodes, frames: r.stats.frames, texts: r.stats.texts, images: r.stats.images, depth: r.stats.depth,
       fonts: r.stats.fonts, dropped: r.stats.dropped, approximated: r.stats.approximated, skipped: r.skipped, notes: r.notes,
+      instances: { count: r.instances.count, byComponent: r.instances.byComponent, warnings: r.instances.warnings, ...(r.instances.moreWarnings ? { moreWarnings: r.instances.moreWarnings } : {}) },
+      namedUnmapped: r.namedUnmapped,
+      candidates: r.candidates.map((c) => ({ name: c.name, count: c.count, nodes: c.nodes, paths: c.paths, specFile: candidateRel(r.doc.width, c) })),
     })),
+    candidatesNote: "a candidate is a part repeated with no component: send its specFile as figma_write {op:\"createTree\", treeFile} to make it a component. That does not replace its occurrences in the screen: map the new component to its code component (design/codeconnect.local.json), then capture again",
     images: [...imageFiles],
     notWritten: "shadows, gradients, pseudo-element content (::before/::after), transforms and filters: the tree spec has no effects",
     ops,
   };
   writeFileAtomic(fileOf(reportRel), JSON.stringify(report, null, 2) + "\n");
-  const per = results.map((r) => `${r.doc.width}: ${r.stats.nodes} nodes (${r.stats.frames} frames, ${r.stats.texts} texts, ${r.stats.images} images)`).join(" · ");
+  const per = results.map((r) => `${r.doc.width}: ${r.stats.nodes} nodes (${r.stats.frames} frames, ${r.stats.texts} texts, ${r.stats.instances} instances, ${r.stats.images} images, ${r.candidates.length} candidate components)`).join(" · ");
   console.log(`${TOOL}: ${name} — ${per}; ${fonts.length} font${fonts.length === 1 ? "" : "s"} → ${reportRel}`);
   console.log(JSON.stringify({ ops }));
   return 0;

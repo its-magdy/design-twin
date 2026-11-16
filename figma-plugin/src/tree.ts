@@ -42,6 +42,8 @@ import { markCreated } from "./session";
 import { readIndex, stampNode, writeIndex } from "./keyed-store";
 import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
+import type { BoundSpec } from "./bind";
+import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
@@ -56,6 +58,8 @@ export interface TreeTarget {
   refs: ResolvedRefs;
   /** set when the spec's key names a result the file already holds: the op updates it in place (keyed.ts) */
   update?: KeyedUpdate | undefined;
+  /** a `bind: true` op: what binding its values to the file did (bind.ts), for the reply */
+  bind?: BindCounts | undefined;
 }
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
@@ -66,7 +70,7 @@ export const PLACE_GAP = 100;
  * refusal lists every bad page name and every missing font at once. The available-font list is read only when a font
  * fails to load (for its candidates).
  */
-export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, TreeTarget>; problems: OpProblem[]; imports: RefResolution["imports"]; importCount: number }> {
+export async function resolveTreeOps(ops: readonly WriteOp[], bound: ReadonlyMap<number, BoundSpec> = new Map()): Promise<{ targets: Map<number, TreeTarget>; problems: OpProblem[]; imports: RefResolution["imports"]; importCount: number }> {
   const targets = new Map<number, TreeTarget>();
   const specs = new Map<number, { spec: TreeNodeSpec; labels: ReadonlyMap<object, string> }>();
   const cloneRefs: Use[] = [];
@@ -106,7 +110,9 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
     // Checked by writeOpError already; this is the narrowing, and a last line. What is built is the spec with its
     // fragments placed and its row tables spread.
-    const { problems: invalid, summary, expanded: spec, labels } = checkTree(op.tree);
+    // A `bind: true` op builds its spec as bound to the file (bind.ts): that spec is the one checked and resolved.
+    const b = bound.get(index);
+    const { problems: invalid, summary, expanded: spec, labels } = checkTree(b ? b.spec : op.tree);
     if (invalid.length || !spec) { bad("the tree spec did not pass its check"); continue; }
     const page = resolvePage(op.page);
     if ("error" in page) bad(page.error);
@@ -124,7 +130,7 @@ export async function resolveTreeOps(ops: readonly WriteOp[]): Promise<{ targets
     for (const c of clones.values()) cloneTargets.push(c);
     if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
     await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
-    targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs() });
+    targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...(b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {}) });
   }
   // Every op's references, resolved together (one lookup per name across the batch), into one shared map.
   const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));

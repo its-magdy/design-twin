@@ -1,0 +1,17 @@
+{
+  "color": {
+    "white": { "$type": "color", "$value": "#ffffff" },
+    "bg": { "$type": "color", "$value": "{color.white}" },
+    "text": { "$type": "color", "$value": "#18181b" },
+    "muted": { "$type": "color", "$value": "#71717a" },
+    "surface": { "$type": "color", "$value": "#f4f4f5" },
+    "border": { "$type": "color", "$value": "#e4e4e7" }
+  },
+  "space": {
+    "md": { "$type": "dimension", "$value": "16px" },
+    "lg": { "$type": "dimension", "$value": "24px" }
+  },
+  "radius": {
+    "md": { "$type": "dimension", "$value": "8px" }
+  }
+}

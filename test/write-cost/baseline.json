@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 1229,
+  "toolDefinition": 1257,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -72,6 +72,13 @@
         "out": 1035,
         "in": 1149,
         "total": 2184
+      },
+      "capture-bind": {
+        "calls": 5,
+        "ops": 9,
+        "out": 299,
+        "in": 399,
+        "total": 698
       }
     },
     "tree-spec": {
@@ -190,6 +197,15 @@
         "out": 28,
         "in": 156,
         "total": 184
+      }
+    },
+    "capture-bind": {
+      "capture-bind": {
+        "calls": 1,
+        "ops": 2,
+        "out": 43,
+        "in": 153,
+        "total": 196
       }
     }
   }

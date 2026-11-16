@@ -108,6 +108,8 @@ const SUITE_FILES: readonly string[] = [
   "write-images.test.ts",
   // a rendered page captured to a tree spec (the converter, pure; the built script in chromium; the spec landed by treeFile)
   "capture-page.test.ts",
+  // a captured page bound to the file: the binder and the map's write direction (pure), the plugin on a fake file
+  "write-bind.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];

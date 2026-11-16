@@ -25,7 +25,7 @@ the file; `client` names the file when several are connected (a connId, fileKey 
 
 | `op` | Required | Optional |
 |---|---|---|
-| `createTree` | `tree` (a spec, below) or `treeFile` (a path to the same spec as JSON) | `page` (a page's exact name or id; the current page by default) |
+| `createTree` | `tree` (a spec, below) or `treeFile` (a path to the same spec as JSON) | `page` (a page's exact name or id; the current page by default), `bind` (`true`: bind raw values to the file's variables and text styles, [below](#binding-to-the-file)) |
 | `patch` | `nodeId`, `set` (the fields to change) | — |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a one-mode collection) | — |
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` | — |
@@ -53,6 +53,9 @@ calls and can bind variables. A create with no `parentId` lands on the current p
     could stand, and texts with no text style.
   - a keyed re-send: `{id, key, changed?: [{id, handle?, fields}], created?, removed?, reordered?, handles?}`, or
     `{id, key, unchanged: true}`.
+  - with `bind: true`, either one also carries `bind: {bound, instanced, unbound, ambiguous?}` (and no `unbound` of its
+    own): the raw values bound, the instances the spec places, the raw values left, and `ambiguous: {count, samples:
+    [{path, field, value, candidates}]}` (at most 5 samples) for values several variables or styles matched.
   - a component: `{id, component, created: {frames, texts, instances?, clones?, variants?}, props?, handles?, unbound?}`;
     `props` maps each declared property's name to the key Figma gave it (`"Label#12:0"`). Sent again: the keyed
     re-send's reply with `component` in place of `key`, plus `props?` (the properties added or changed),
@@ -261,7 +264,36 @@ instead of building a second one:
 `treeFile` is a path to a JSON file holding the spec, relative to the directory the MCP server runs in and inside it,
 at most 2 MB. The server reads it into `tree` before anything else, so it is checked, previewed and applied exactly
 like the same spec inline. Only a `createTree` takes it, and never beside `tree`. `capture-page` writes its specs for
-this path (SKILL.md, Capture a page): send them as it prints them.
+this path (SKILL.md, Capture a page): send them as it prints them (with `bind: true`). Its candidate components
+(`design/capture/<name>@<width>.candidates/*.tree.json`) are `COMPONENT` specs for the same path.
+
+## Binding to the file
+
+`{op: "createTree", treeFile, bind: true}` (what `capture-page` prints) binds the spec's raw values to the file before
+anything resolves, then builds the bound spec as if it had been written so:
+
+- **What binds.** A solid paint's colour (a frame's, a text's, and a text's `font.color` through `tokens.fills`), each
+  stroke colour (all of a node's, or none), `layout.gap`, the wrapped tracks' gap, each `layout.padding` side, a radius
+  (one number: all four corners) — to a colour or number variable; a text's font to a text style whose family, style,
+  size, line height, letter spacing, case and decoration all equal it and which sets no paragraph indent, paragraph or
+  list spacing, leading trim or variable-font axis value (the fields the style sets are then dropped from
+  `font`). Not bound: sizes, opacity, stroke weights, pictures, a paint with its own `opacity`, anything inside a copy
+  or an instance — nor a paint style (a spec has no fill style), nor a variable or style a `setVariable` / `setStyle` of
+  the batch changes (or a variable aliasing one; and while the batch changes a variable, no text style bound to one).
+- **Equal.** A colour by its 8-bit RGBA (the read's hex), a number within 0.01. A variable's value is the one in its
+  collection's default mode, through its aliases (a broken or looping chain has none). A variable or style is named by
+  its name when nothing else in the file or the batch has that name, else (the file's) by its id; one a create table
+  earlier in the batch makes (`seedTokens`, `createVariables`, `createStyles`) must be new and made once. So the same
+  seed-and-capture batch sent again names each one as the first send did. One whose name reads as an id
+  (`VariableID:…`, `S:…`) or a 40-hex key is never bound to: its values stay raw.
+- **Several equal.** In order: drop a variable whose `scopes` leave the field out; keep those whose name has a word for
+  the field (fill: bg, background, surface, fill; text: text, fg, foreground, content; stroke: border, stroke, outline,
+  divider; spacing: space, spacing, gap, padding, inset, gutter; radius: radius, radii, round, corner) when any has; drop
+  one another candidate aliases (the semantic name over the primitive). Still several, or several text styles: the
+  value stays raw and is listed in `bind.ambiguous` — never guessed.
+- A keyed re-send binds the same way, so only a real change shows; the batch is one Undo step as any `createTree` is.
+  A dry run a plugin answers carries the same `bind` counts on the step; with no plugin, binding is the file's to
+  decide when the write applies.
 
 ## Patch
 

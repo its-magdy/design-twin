@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`, the images made from files (`images`: file, hash, size); with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, and what a create table would make or update: `plan`) |
+| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count, or with `bind` what was bound, instanced and left raw; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`, the images made from files (`images`: file, hash, size); with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, what a create table would make or update: `plan`, and what a `bind` spec would bind: `bind`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -956,7 +956,7 @@ the current page):
 | `setText` | `nodeId`, `text` | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
-| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent) |
+| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
 | `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
 | `delete` | `nodeId` (a node this plugin session created) | — |
@@ -1065,6 +1065,27 @@ read node can be fed back in: what the read writes on an ordinary frame or text 
 the node counts, where it lands, the handles, the fonts, the components, variables and text styles it names, and how
 many raw values stay unbound (it does not read the file, so the names are checked when applied). A spec holds at most 500 nodes.
 
+**Binding to the file (`bind: true`).** The plugin rewrites the spec's raw values into references before anything
+resolves (`bridge/src/bind-values.ts`, its table gathered by `figma-plugin/src/bind.ts`), then builds it like any spec: a
+solid paint's colour (a text's `font.color` through `tokens.fills`), the stroke colours (all of a node's or none), the gap,
+the wrapped tracks' gap, each padding side and a radius bind to the one colour or number variable equal to them, and a
+text's font to the one text style whose family, style, size, line height, letter spacing, case and decoration all equal
+it and which sets no paragraph indent, paragraph or list spacing, leading trim or variable-font axis value. A colour is
+equal by its 8-bit RGBA, a number within 0.01; a variable's value is its collection's default mode's, through its
+aliases (a broken or looping chain has none). Candidates are the file's local variables and text styles (by name when
+the name is theirs alone, else by id) and what a create table earlier in the batch makes (by name: `seedTokens` then
+the spec in one call works); a variable or style a `setVariable` or `setStyle` of the batch changes is not one, nor a
+variable aliasing such a variable, nor (when the batch changes a variable) a text style with a field bound to one. Several
+equal: a variable whose `scopes` leave the field out is dropped, then those whose name has no word for the field (fill:
+bg, background, surface, fill; text: text, fg, foreground, content; stroke: border, stroke, outline, divider; spacing:
+space, spacing, gap, padding, inset, gutter; radius: radius, radii, round, corner) when one has, then one another
+candidate aliases; still several, the value stays raw and is listed. Sizes, opacity, stroke weights, pictures, a paint
+with its own opacity and everything inside a copy or an instance stay raw; a paint style is never bound (the spec has no
+fill style: a follow-up). The reply carries `bind: {bound, instanced, unbound, ambiguous?: {count, samples: [{path,
+field, value, candidates}]}}` (at most 5 samples) in place of `unbound`; a dry run with a plugin connected carries the
+same on the step, and without one says the file decides when the write applies. A keyed re-send binds the same way, so
+an unchanged file replies `unchanged`. No Figma call is added, so the batch stays one Undo step.
+
 **Copies, rows and fragments** (all three are checked whole before anything is built, like the rest of a spec):
 
 - **A copy with its differences.** A node `{clone: "12:34", …}` is a copy of the existing node with that id, with every
@@ -1100,8 +1121,17 @@ and the plugin never sees the path. A missing file, one that is not JSON, a path
 beside a `tree`, or one on another op refuses the whole call with nothing changed. A spec a script produced costs the
 model nothing to send, and a corrected one is sent again by the same path. The CLI has no write command: writes stay on
 the MCP server. One such script ships with the Claude Code plugin: `<scripts>/capture-page.js --url <url> [--width
-1280,390]` renders a page in the project's Playwright and writes a spec per width (and its images) under
-`design/capture/`, printing the `treeFile` ops that land it (the design-in-figma skill, Capture a page).
+1280,390] [--map <codeconnect.local.json>] [--no-instances] [--no-bind]` renders a page in the project's Playwright and
+writes a spec per width (and its images) under `design/capture/`, printing the `treeFile` ops that land it, each with
+`bind: true` (`--no-bind`: without). An element the component map names (`design/codeconnect.local.json`, a root
+`codeconnect.local.json`, or `--map`; by its `data-component` — `Export` or `module#Export`, its props in `data-props`
+JSON — else the component a React development build rendered it with) is an instance of the map's Figma component (by
+its key, else its id, else its name), its props read back through the map's `props` and `variantOverrides`. The report
+(`<name>.capture.json`) adds per width `instances {count, byComponent, warnings}`, `namedUnmapped` (code components the
+map does not name, with counts) and `candidates [{name, count, nodes, paths, specFile}]`: each part repeated with no
+component, written as a `COMPONENT` spec (a TEXT property per text that differs) under
+`design/capture/<name>@<width>.candidates/`; making one does not replace its occurrences (map it, then capture again).
+The design-in-figma skill, Capture a page.
 
 **Re-send updates in place.** A root `key` is stored on the result (as this plugin's own plugin data: the key and each
 node's own spec fields on every node it builds, and the root's id under the key on the document). When a spec with the

@@ -74,6 +74,13 @@ export interface WalkEl {
   /** what the capture cannot write on this element (a shadow, a gradient, ::before/::after content, a transform, a filter,
    *  the paint of an inline child flattened into the text) */
   dropped: string[];
+  /** the code component this element renders, when the component map names it (WalkInput.components): its name as it
+   *  matched ("Export" or "module#Export"), its props as rendered (strings, numbers, booleans; a string `children`), and
+   *  its rendered text. Nothing inside it is walked: it lands as an instance. The props are [name, value] pairs: an
+   *  object would lose a prop named `__proto__` on its way out of the page. */
+  component?: { name: string; props: Array<[string, string | number | boolean]>; text: string };
+  /** the code component the element renders when the map names none of its candidates (the outermost one) */
+  codeName?: string;
   children: Array<WalkEl | WalkRun>;
 }
 export interface WalkInput {
@@ -81,6 +88,10 @@ export interface WalkInput {
   root: string | null;
   /** the most elements walked; past it the walk stops and says how many it saw */
   maxElements: number;
+  /** read each element's code component (its `data-component`, else a React dev build's fibers); absent: not read */
+  identity?: boolean;
+  /** the code components the component map names ("Export", "module#Export"): an element that renders one is not walked */
+  components?: string[];
 }
 export interface WalkOutput {
   root: WalkEl | null;
@@ -123,7 +134,8 @@ export function walkCapture(input: WalkInput): WalkOutput {
     if (known !== undefined) return known;
     const tag = e.tagName.toLowerCase();
     let ok = tag === "br" || tag === "wbr";
-    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag)) {
+    // an element the map names is never folded into a text (nor is one holding it): it is visited, and lands as an instance
+    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag) && !mapped(e)) {
       const d = getComputedStyle(e).getPropertyValue("display").trim();
       ok = (d === "inline" || d === "contents") && Array.from(e.children).every((c) => isInline(c));
     }
@@ -213,6 +225,73 @@ export function walkCapture(input: WalkInput): WalkOutput {
     return (bg !== "" && !transparent(bg)) || s.getPropertyValue("border-top-style").trim() !== "none" && parseFloat(s.getPropertyValue("border-top-width")) > 0;
   });
 
+  // An element's code component (WalkEl.component): `data-component` ("Export" or "module#Export") with `data-props` (a
+  // JSON object), else a React dev build's fibers — the composite components (function, class, forwardRef, memo) whose
+  // first host node is this element, outermost first; the first the map names wins, else the outermost is `codeName`.
+  const known = new Set(input.components || []);
+  const getK = (o: unknown, k: string): unknown => ((typeof o === "object" && o !== null) || typeof o === "function" ? Reflect.get(o, k) : undefined);
+  const nameOf = (t: unknown, depth: number): string | null => {
+    if (depth > 4 || !t || (typeof t !== "object" && typeof t !== "function")) return null;
+    const d = getK(t, "displayName");
+    if (typeof d === "string" && d) return d;
+    if (typeof t === "function") { const n = getK(t, "name"); return typeof n === "string" && n ? n : null; }
+    return nameOf(getK(t, "render"), depth + 1) || nameOf(getK(t, "type"), depth + 1);
+  };
+  // the string, number and boolean entries (a `children` that is a string included; elements, functions, objects not)
+  // (own keys only, as [name, value] pairs: `__proto__` or `constructor` is a prop like any other)
+  type Props = Array<[string, string | number | boolean]>;
+  const plainProps = (o: unknown): Props => {
+    const out: Props = [];
+    if (!o || typeof o !== "object" || Array.isArray(o)) return out;
+    for (const k of Object.keys(o)) {
+      const v = getK(o, k);
+      if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) || typeof v === "boolean") out.push([k, v]);
+    }
+    return out;
+  };
+  type Identity = { hit: { name: string; props: Props } | null; codeName: string | null };
+  const identityMemo = new Map<PageElement, Identity>();
+  const identityOf = (e: PageElement): Identity => {
+    const seen = identityMemo.get(e);
+    if (seen !== undefined) return seen;
+    const id = readIdentity(e);
+    identityMemo.set(e, id);
+    return id;
+  };
+  /** The element renders a code component the map names (identity read only when asked). */
+  const mapped = (e: PageElement): boolean => input.identity === true && identityOf(e).hit !== null;
+  const readIdentity = (e: PageElement): Identity => {
+    const dc = (e.getAttribute("data-component") || "").trim();
+    if (dc) {
+      let props: Props = [];
+      const raw = e.getAttribute("data-props");
+      if (raw) { try { const parsed: unknown = JSON.parse(raw); props = plainProps(parsed); } catch { props = []; } }
+      return known.has(dc) ? { hit: { name: dc, props }, codeName: null } : { hit: null, codeName: dc };
+    }
+    const fk = Object.keys(e).find((k) => k.indexOf("__reactFiber$") === 0);
+    if (!fk) return { hit: null, codeName: null };
+    const composites: unknown[] = [];
+    let cur: unknown = getK(e, fk);
+    // up from the element's own fiber while each step is its parent's only child: host component, root, text, singleton
+    // end it. A step with a sibling ends it too: a component above it renders several roots (a fragment), so this element
+    // is only part of it and is never taken for the whole.
+    for (let p = getK(cur, "return"), n = 0; p && getK(p, "child") === cur && !getK(cur, "sibling") && n < 50; cur = p, p = getK(p, "return"), n++) {
+      const tag = getK(p, "tag");
+      if (tag === 3 || tag === 5 || tag === 6 || tag === 26 || tag === 27) break;
+      if (tag === 0 || tag === 1 || tag === 11 || tag === 14 || tag === 15) composites.push(p);
+    }
+    let outer: string | null = null;
+    for (const f of composites.reverse()) {
+      const name = nameOf(getK(f, "type"), 0);
+      if (!name) continue;
+      if (outer === null) outer = name;
+      if (known.has(name)) return { hit: { name, props: plainProps(getK(f, "memoizedProps")) }, codeName: null };
+    }
+    return { hit: null, codeName: outer };
+  };
+  // the element's rendered text, for a `children` string prop the code did not pass as a string
+  const childrenText = (e: PageElement): string => collapse(dt.shownText(e)).trim();
+
   const rootEl = input.root ? document.querySelector(input.root) : document.body;
   const htmlPath = pathOf(document.documentElement);
   const bodyPath = document.body ? pathOf(document.body) : null;
@@ -286,7 +365,12 @@ export function walkCapture(input: WalkInput): WalkOutput {
     count++;
     if (count > input.maxElements) return;
     const el = element(e, cs);
-    if (!el.media) {
+    if (input.identity) {
+      const id = identityOf(e);
+      if (id.hit) el.component = { name: id.hit.name, props: id.hit.props, text: childrenText(e) };
+      else if (id.codeName) el.codeName = id.codeName;
+    }
+    if (!el.media && !el.component) {
       // inline-only content with text: the element is a text
       const nodes = Array.from(e.childNodes);
       const inlineOnly = Array.from(e.children).every(isInline);
@@ -348,7 +432,13 @@ export function walkCapture(input: WalkInput): WalkOutput {
   count++;
   const root = element(rootEl, rootCs);
   if (!input.root) { root.rect = rootBox; root.clip = true; }
-  kids(rootEl, root.children);
+  // the root's code component too (a --root on a component the map names: nothing inside it is walked)
+  if (input.identity) {
+    const id = identityOf(rootEl);
+    if (id.hit) root.component = { name: id.hit.name, props: id.hit.props, text: childrenText(rootEl) };
+    else if (id.codeName) root.codeName = id.codeName;
+  }
+  if (!root.component) kids(rootEl, root.children);
   return { root, doc, elements: count, skipped, htmlPath, bodyPath };
 }
 

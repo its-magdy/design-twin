@@ -247,6 +247,11 @@ export const fourOp: Route = {
       const [root] = await buildLevels(s, [{ want: wantOfSpec(b.spec) }]);
       if (root !== undefined) await readOutline(s, root, "verify");
     },
+    // The same, bound: the four ops can make no variable, bind none and place no instance — the page typed node by node.
+    "capture-bind": async (s, b) => {
+      const [root] = await buildLevels(s, [{ want: wantOfSpec(b.spec) }]);
+      if (root !== undefined) await readOutline(s, root, "verify");
+    },
   },
 };
 
@@ -569,6 +574,30 @@ export const captureRoute: Route = {
   },
 };
 
+// ---- the whole route from an app (#187): the project's code tokens and the captured page are on disk (put there
+// unmeasured: the project's own file and the script's work). One figma_write: seedTokens names the token file (its
+// tables come first in the batch), then the page by treeFile with bind:true — the plugin binds each raw value that
+// equals exactly one of the new variables, and the elements the component map named arrive as instances. The reply
+// counts what was bound, instanced and left raw; the check of the file is the job's.
+export const captureBindRoute: Route = {
+  name: "capture-bind",
+  ticket: "#187",
+  jobs: {
+    "capture-bind": async (s, b) => {
+      const at = path.join(s.dir, ...b.capture.specFile.split("/"));
+      fs.mkdirSync(path.dirname(at), { recursive: true });
+      fs.copyFileSync(path.join(b.capture.fixtureDir, path.basename(at)), at);
+      fs.copyFileSync(b.tokens, path.join(s.dir, "tokens.dtcg.json"));
+      const r = must(await s.call("figma_write", { ops: [{ op: "seedTokens", file: "tokens.dtcg.json" }, { op: "createTree", treeFile: b.capture.specFile, bind: true }] }, "write"), "figma_write");
+      appliedIds(r);
+      // the reply says what was bound, instanced and left raw (the file itself is the job's check)
+      const instances = (n: CapturedNode): number => (n.component !== undefined ? 1 : (n.children ?? []).reduce((a, k) => a + instances(k), 0));
+      const bind = (JSON.parse(r) as { applied: Array<{ bind?: { bound: number; instanced: number; unbound: number } }> }).applied[1]?.bind;
+      if (!bind || bind.instanced !== instances(b.spec) || bind.bound === 0) throw new Error(`the reply does not count the binding: ${r.slice(0, 300)}`);
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -584,5 +613,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents, captureRoute];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents, captureRoute, captureBindRoute];
 export const BASELINE = fourOp.name;

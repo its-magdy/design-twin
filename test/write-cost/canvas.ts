@@ -108,6 +108,12 @@ export function canvas(): Canvas {
     return { getPluginData: (k: string) => data.get(k) ?? "", setPluginData: (k: string, v: string) => { if (v === "") data.delete(k); else data.set(k, v); } };
   };
   const box = (n: CNode) => ({ x: Number(n.x), y: Number(n.y), width: Number(n.width), height: Number(n.height) });
+  // A number field bound to a variable (node.setBoundVariable): the binding recorded as Figma's boundVariables (null unbinds).
+  const binder = (n: CNode) => (field: string, v: FakeVariable | null): void => {
+    const b: Record<string, unknown> = typeof n.boundVariables === "object" && n.boundVariables !== null ? { ...(n.boundVariables as Record<string, unknown>) } : {};
+    if (v === null) delete b[field]; else b[field] = { type: "VARIABLE_ALIAS", id: v.id };
+    n.boundVariables = b;
+  };
   // What every node carries for the read: no dev resources, and a reference render that is one fixed tiny byte string.
   const common = { visible: true, strokes: [], effects: [], opacity: 1, rotation: 0, blendMode: "NORMAL", isMask: false, x: 0, y: 0, componentPropertyReferences: null, layoutPositioning: "AUTO",
     getDevResourcesAsync: async () => [], exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
@@ -133,6 +139,7 @@ export function canvas(): Canvas {
       get absoluteBoundingBox() { return box(n); },
       clone() { return cloneOf(n); },
     };
+    n.setBoundVariable = binder(n);
     nodes[id] = n;
     return n;
   };
@@ -161,6 +168,7 @@ export function canvas(): Canvas {
       clone() { return cloneOf(n); },
     });
     Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter
+    n.setBoundVariable = binder(n);
     textRuns(n); // the run API a write keeps a text with, to put it back if its batch fails
     nodes[id] = n;
     return n;

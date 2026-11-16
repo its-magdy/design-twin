@@ -2,8 +2,8 @@
 
 
 // design-to-code/capture-page.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
+import fs8 from "node:fs";
+import path6 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -56,11 +56,11 @@ function installPageRuntime() {
       return base;
     };
   };
-  const find = (path6) => {
-    const steps = /^html((?: > | )[^\s>]+:nth-child\(\d+\))*$/.test(path6) ? Array.from(path6.slice(4).matchAll(/( > | )([^\s>]+):nth-child\((\d+)\)/g)) : null;
+  const find = (path7) => {
+    const steps = /^html((?: > | )[^\s>]+:nth-child\(\d+\))*$/.test(path7) ? Array.from(path7.slice(4).matchAll(/( > | )([^\s>]+):nth-child\((\d+)\)/g)) : null;
     if (steps === null) {
       try {
-        return document.querySelector(path6);
+        return document.querySelector(path7);
       } catch {
         return null;
       }
@@ -528,7 +528,7 @@ async function registerPathEngine(selectors) {
     if (e instanceof Error && /already registered/.test(e.message)) pathEngine = true;
   }
 }
-var byPath = (page, path6) => page.locator(pathEngine ? `${PATH_ENGINE}=${path6}` : path6);
+var byPath = (page, path7) => page.locator(pathEngine ? `${PATH_ENGINE}=${path7}` : path7);
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -696,11 +696,11 @@ function walkCapture(input) {
   const TEXT_FIELD = /^(text|search|email|url|tel|number|password)$/;
   const inlineMemo = /* @__PURE__ */ new Map();
   const isInline = (e) => {
-    const known = inlineMemo.get(e);
-    if (known !== void 0) return known;
+    const known2 = inlineMemo.get(e);
+    if (known2 !== void 0) return known2;
     const tag = e.tagName.toLowerCase();
     let ok = tag === "br" || tag === "wbr";
-    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag)) {
+    if (!ok && !REPLACED.test(tag) && !NO_BOX.test(tag) && !mapped(e)) {
       const d = getComputedStyle(e).getPropertyValue("display").trim();
       ok = (d === "inline" || d === "contents") && Array.from(e.children).every((c) => isInline(c));
     }
@@ -787,6 +787,70 @@ function walkCapture(input) {
     const bg = s.getPropertyValue("background-color").trim();
     return bg !== "" && !transparent(bg) || s.getPropertyValue("border-top-style").trim() !== "none" && parseFloat(s.getPropertyValue("border-top-width")) > 0;
   });
+  const known = new Set(input.components || []);
+  const getK = (o, k) => typeof o === "object" && o !== null || typeof o === "function" ? Reflect.get(o, k) : void 0;
+  const nameOf = (t, depth) => {
+    if (depth > 4 || !t || typeof t !== "object" && typeof t !== "function") return null;
+    const d = getK(t, "displayName");
+    if (typeof d === "string" && d) return d;
+    if (typeof t === "function") {
+      const n = getK(t, "name");
+      return typeof n === "string" && n ? n : null;
+    }
+    return nameOf(getK(t, "render"), depth + 1) || nameOf(getK(t, "type"), depth + 1);
+  };
+  const plainProps = (o) => {
+    const out = [];
+    if (!o || typeof o !== "object" || Array.isArray(o)) return out;
+    for (const k of Object.keys(o)) {
+      const v = getK(o, k);
+      if (typeof v === "string" || typeof v === "number" && Number.isFinite(v) || typeof v === "boolean") out.push([k, v]);
+    }
+    return out;
+  };
+  const identityMemo = /* @__PURE__ */ new Map();
+  const identityOf = (e) => {
+    const seen = identityMemo.get(e);
+    if (seen !== void 0) return seen;
+    const id = readIdentity(e);
+    identityMemo.set(e, id);
+    return id;
+  };
+  const mapped = (e) => input.identity === true && identityOf(e).hit !== null;
+  const readIdentity = (e) => {
+    const dc = (e.getAttribute("data-component") || "").trim();
+    if (dc) {
+      let props = [];
+      const raw = e.getAttribute("data-props");
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          props = plainProps(parsed);
+        } catch {
+          props = [];
+        }
+      }
+      return known.has(dc) ? { hit: { name: dc, props }, codeName: null } : { hit: null, codeName: dc };
+    }
+    const fk = Object.keys(e).find((k) => k.indexOf("__reactFiber$") === 0);
+    if (!fk) return { hit: null, codeName: null };
+    const composites = [];
+    let cur = getK(e, fk);
+    for (let p = getK(cur, "return"), n = 0; p && getK(p, "child") === cur && !getK(cur, "sibling") && n < 50; cur = p, p = getK(p, "return"), n++) {
+      const tag = getK(p, "tag");
+      if (tag === 3 || tag === 5 || tag === 6 || tag === 26 || tag === 27) break;
+      if (tag === 0 || tag === 1 || tag === 11 || tag === 14 || tag === 15) composites.push(p);
+    }
+    let outer = null;
+    for (const f of composites.reverse()) {
+      const name = nameOf(getK(f, "type"), 0);
+      if (!name) continue;
+      if (outer === null) outer = name;
+      if (known.has(name)) return { hit: { name, props: plainProps(getK(f, "memoizedProps")) }, codeName: null };
+    }
+    return { hit: null, codeName: outer };
+  };
+  const childrenText = (e) => collapse(dt.shownText(e)).trim();
   const rootEl = input.root ? document.querySelector(input.root) : document.body;
   const htmlPath = pathOf(document.documentElement);
   const bodyPath = document.body ? pathOf(document.body) : null;
@@ -893,7 +957,12 @@ function walkCapture(input) {
     count2++;
     if (count2 > input.maxElements) return;
     const el = element(e, cs);
-    if (!el.media) {
+    if (input.identity) {
+      const id = identityOf(e);
+      if (id.hit) el.component = { name: id.hit.name, props: id.hit.props, text: childrenText(e) };
+      else if (id.codeName) el.codeName = id.codeName;
+    }
+    if (!el.media && !el.component) {
       const nodes = Array.from(e.childNodes);
       const inlineOnly = Array.from(e.children).every(isInline);
       const drawn = !el.control && inlineOnly && hidesSome(e) ? drawnText(e) : null;
@@ -966,7 +1035,12 @@ function walkCapture(input) {
     root.rect = rootBox;
     root.clip = true;
   }
-  kids(rootEl, root.children);
+  if (input.identity) {
+    const id = identityOf(rootEl);
+    if (id.hit) root.component = { name: id.hit.name, props: id.hit.props, text: childrenText(rootEl) };
+    else if (id.codeName) root.codeName = id.codeName;
+  }
+  if (!root.component) kids(rootEl, root.children);
   return { root, doc, elements: count2, skipped, htmlPath, bodyPath };
 }
 function eagerImages() {
@@ -1423,9 +1497,9 @@ function measureElements(input) {
       if (tt) styles.textTransform = tt;
     }
     if (input.capture) {
-      const tt = typoCs.getPropertyValue("text-transform").trim(), fs7 = typoCs.getPropertyValue("font-style").trim(), td = typoCs.getPropertyValue("text-decoration-line").trim();
+      const tt = typoCs.getPropertyValue("text-transform").trim(), fs9 = typoCs.getPropertyValue("font-style").trim(), td = typoCs.getPropertyValue("text-decoration-line").trim();
       if (tt) styles.textTransform = tt;
-      if (fs7) styles.fontStyle = fs7;
+      if (fs9) styles.fontStyle = fs9;
       if (td) styles.textDecoration = td;
     }
     return res;
@@ -2056,7 +2130,7 @@ var PROP_REF_TYPES = {
 var PROP_REF_FIELDS = ["characters", "visible", "mainComponent"];
 var RESERVED_KEY_PREFIX = "dtwin/";
 var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-var at = (path6, name) => path6 + "[" + JSON.stringify(name) + "]";
+var at = (path7, name) => path7 + "[" + JSON.stringify(name) + "]";
 function componentRootOf(spec) {
   if (!isObj(spec) || spec.type !== "COMPONENT" && spec.type !== "COMPONENT_SET") return null;
   return { type: spec.type, name: typeof spec.name === "string" ? spec.name : "" };
@@ -2088,15 +2162,15 @@ function propDefComponents(spec) {
 }
 var DEF_FIELDS = ["type", "default", "preferredValues"];
 var PROTO_NAME = "'__proto__' cannot be a property name (Figma's message passing drops that key); pick another name";
-function propDefsProblems(v, path6, columns) {
+function propDefsProblems(v, path7, columns) {
   const out = [];
-  if (!isObj(v)) return [path6 + ": on a component, `props` declares its properties \u2014 an object of property name \u2192 {type, default}"];
+  if (!isObj(v)) return [path7 + ": on a component, `props` declares its properties \u2014 an object of property name \u2192 {type, default}"];
   for (const name of Object.keys(v)) {
     const d = v[name];
     if (d === void 0) continue;
-    const p = at(path6, name);
+    const p = at(path7, name);
     if (!name.trim()) {
-      out.push(path6 + ": has an empty property name");
+      out.push(path7 + ": has an empty property name");
       continue;
     }
     if (name === "__proto__") {
@@ -2237,14 +2311,14 @@ function expandTree(spec, maxNodes) {
   const used = /* @__PURE__ */ new Set();
   let count2 = 0;
   let tooMany = false;
-  const applyEdits = (layers, edits, path6, of, inWhat) => {
+  const applyEdits = (layers, edits, path7, of, inWhat) => {
     if (!isObj2(edits)) {
-      say(path6 + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
+      say(path7 + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
       return;
     }
     for (const layer of Object.keys(edits)) {
       const fields = edits[layer];
-      const at2 = path6 + "[" + JSON.stringify(layer) + "]";
+      const at2 = path7 + "[" + JSON.stringify(layer) + "]";
       if (!isObj2(fields)) {
         say(at2 + ": must be an object of the fields to change");
         continue;
@@ -2268,19 +2342,19 @@ function expandTree(spec, maxNodes) {
       }
     }
   };
-  const expand = (n, path6, stack, isRoot) => {
+  const expand = (n, path7, stack, isRoot) => {
     if (tooMany) return [];
     if (!isObj2(n)) return [n];
-    if (!isRoot && n.fragments !== void 0) say(path6 + ".fragments: fragments are defined once, on the spec's root");
-    if (isRoot && n.type === "COMPONENT_SET") return variants(n, path6, stack);
+    if (!isRoot && n.fragments !== void 0) say(path7 + ".fragments: fragments are defined once, on the spec's root");
+    if (isRoot && n.type === "COMPONENT_SET") return variants(n, path7, stack);
     if (isRoot && n.type === "COMPONENT" && (n.variant !== void 0 || n.rows !== void 0 || n.columns !== void 0)) {
-      say(path6 + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
+      say(path7 + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
       return [];
     }
-    if (n.variant !== void 0) say(path6 + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
-    if (n.use !== void 0) return place(n, path6, stack, isRoot);
-    if (n.rows !== void 0) return spread(n, path6);
-    if (n.columns !== void 0) say(path6 + ".columns: names the values of each row in `rows`, which this node does not have");
+    if (n.variant !== void 0) say(path7 + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
+    if (n.use !== void 0) return place(n, path7, stack, isRoot);
+    if (n.rows !== void 0) return spread(n, path7);
+    if (n.columns !== void 0) say(path7 + ".columns: names the values of each row in `rows`, which this node does not have");
     if (++count2 > maxNodes) {
       tooMany = true;
       return [];
@@ -2290,79 +2364,79 @@ function expandTree(spec, maxNodes) {
     if (Array.isArray(n.children)) {
       const kids = [];
       n.children.forEach((c, i) => {
-        for (const x of expand(c, path6 + ".children[" + i + "]", stack, false)) kids.push(x);
+        for (const x of expand(c, path7 + ".children[" + i + "]", stack, false)) kids.push(x);
       });
       out.children = kids;
     } else if (n.children !== void 0) out.children = copy(n.children);
-    labels.set(out, path6);
+    labels.set(out, path7);
     return [out];
   };
-  const place = (n, path6, stack, isRoot) => {
+  const place = (n, path7, stack, isRoot) => {
     const name = n.use;
     if (typeof name !== "string" || !name.trim()) {
-      say(path6 + ".use: must be a fragment's name");
+      say(path7 + ".use: must be a fragment's name");
       return [];
     }
     if (!own(fragments, name)) {
       const near2 = nearestNames(name, Object.keys(fragments));
-      say(path6 + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
+      say(path7 + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
       return [];
     }
     if (stack.indexOf(name) >= 0) {
-      say(path6 + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
+      say(path7 + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
       return [];
     }
     used.add(name);
-    if (n.children !== void 0) say(path6 + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
-    if (n.rows !== void 0 || n.columns !== void 0) say(path6 + ": `rows` is on an instance (a node with `component`), not on a fragment");
+    if (n.children !== void 0) say(path7 + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
+    if (n.rows !== void 0 || n.columns !== void 0) say(path7 + ": `rows` is on an instance (a node with `component`), not on a fragment");
     const body = copy(fragments[name]);
     if (!isObj2(body)) return [];
-    if (n.edits !== void 0) applyEdits(layersOf(body, []), n.edits, path6 + ".edits", "fragment '" + name + "'", "in the fragment");
+    if (n.edits !== void 0) applyEdits(layersOf(body, []), n.edits, path7 + ".edits", "fragment '" + name + "'", "in the fragment");
     for (const k of Object.keys(n)) {
       if (k === "use" || k === "edits" || k === "children" || k === "fragments" && isRoot) continue;
       if (n[k] !== void 0) put(body, k, copy(n[k]));
     }
     if (isRoot && (body.type === "COMPONENT" || body.type === "COMPONENT_SET")) {
-      say(path6 + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
+      say(path7 + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
       return [];
     }
-    return expand(body, path6 + " (fragment '" + name + "')", stack.concat(name), isRoot);
+    return expand(body, path7 + " (fragment '" + name + "')", stack.concat(name), isRoot);
   };
-  const variants = (n, path6, stack) => {
+  const variants = (n, path7, stack) => {
     const before = problems.length;
     const base = n.variant;
     const cols = n.columns;
     const rows = n.rows;
-    if (n.children !== void 0) say(path6 + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
-    if (n.use !== void 0) say(path6 + ".use: a component set is not a fragment");
-    if (!isObj2(base)) say(path6 + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
+    if (n.children !== void 0) say(path7 + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
+    if (n.use !== void 0) say(path7 + ".use: a component set is not a fragment");
+    if (!isObj2(base)) say(path7 + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
     else {
-      if (base.type !== void 0 && base.type !== "COMPONENT") say(path6 + ".variant.type: every variant is a COMPONENT, so the field is not needed");
-      if (base.name !== void 0) say(path6 + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
-      if (base.handle !== void 0) say(path6 + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
+      if (base.type !== void 0 && base.type !== "COMPONENT") say(path7 + ".variant.type: every variant is a COMPONENT, so the field is not needed");
+      if (base.name !== void 0) say(path7 + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+      if (base.handle !== void 0) say(path7 + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
       for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
         const why = VARIANT_FIXED[k];
-        if (base[k] !== void 0 && why !== void 0) say(path6 + ".variant." + k + ": not on a variant \u2014 " + why);
+        if (base[k] !== void 0 && why !== void 0) say(path7 + ".variant." + k + ": not on a variant \u2014 " + why);
       }
     }
-    if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path6 + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
+    if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path7 + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
     else {
-      if (new Set(cols).size !== cols.length) say(path6 + ".columns: names a property twice");
+      if (new Set(cols).size !== cols.length) say(path7 + ".columns: names a property twice");
       const padded = cols.findIndex((c) => String(c).trim() !== c);
-      if (padded >= 0) say(path6 + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
+      if (padded >= 0) say(path7 + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
       const proto = cols.indexOf("__proto__");
-      if (proto >= 0) say(path6 + ".columns[" + proto + "]: " + PROTO_NAME);
+      if (proto >= 0) say(path7 + ".columns[" + proto + "]: " + PROTO_NAME);
       const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
-      if (odd >= 0) say(path6 + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
+      if (odd >= 0) say(path7 + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
     }
-    if (!Array.isArray(rows) || !rows.length) say(path6 + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
+    if (!Array.isArray(rows) || !rows.length) say(path7 + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
     if (problems.length !== before || !isObj2(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
     const names = cols.map(String);
     const seen = /* @__PURE__ */ new Map();
     const kids = [];
     const table = rows;
     table.forEach((row, i) => {
-      const r = path6 + ".rows[" + i + "]";
+      const r = path7 + ".rows[" + i + "]";
       const shape = "a list of " + names.length + " value" + (names.length === 1 ? "" : "s") + ", one per column (" + quoteList(names) + "), then optionally an object of the fields this variant changes";
       if (!Array.isArray(row)) {
         say(r + ": must be " + shape);
@@ -2416,24 +2490,24 @@ function expandTree(spec, maxNodes) {
     const out = {};
     for (const k of Object.keys(n)) if (k !== "variant" && k !== "rows" && k !== "columns" && k !== "children" && k !== "fragments") put(out, k, copy(n[k]));
     out.children = kids;
-    labels.set(out, path6);
+    labels.set(out, path7);
     return [out];
   };
-  const spread = (n, path6) => {
-    const at2 = path6 + ".rows";
+  const spread = (n, path7) => {
+    const at2 = path7 + ".rows";
     if (n.component === void 0 || n.type !== void 0 && n.type !== "INSTANCE") {
       say(at2 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
       return [];
     }
-    if (n.handle !== void 0) say(path6 + ".handle: a handle names one node, and a row table makes several; leave it out");
-    if (n.children !== void 0) say(path6 + ".children: an instance's layers come from its component");
+    if (n.handle !== void 0) say(path7 + ".handle: a handle names one node, and a row table makes several; leave it out");
+    if (n.children !== void 0) say(path7 + ".children: an instance's layers come from its component");
     const cols = n.columns;
     if (cols !== void 0 && (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0))) {
-      say(path6 + ".columns: must be a non-empty list of property names");
+      say(path7 + ".columns: must be a non-empty list of property names");
       return [];
     }
     if (Array.isArray(cols) && new Set(cols).size !== cols.length) {
-      say(path6 + ".columns: names a property twice");
+      say(path7 + ".columns: names a property twice");
       return [];
     }
     const rows = n.rows;
@@ -2442,7 +2516,7 @@ function expandTree(spec, maxNodes) {
       return [];
     }
     if (n.props !== void 0 && !isObj2(n.props)) {
-      say(path6 + ".props: must be an object of property name \u2192 value (the values every row shares)");
+      say(path7 + ".props: must be an object of property name \u2192 value (the values every row shares)");
       return [];
     }
     const base = isObj2(n.props) ? n.props : {};
@@ -2904,11 +2978,11 @@ var settable = (rules, k) => {
   const r = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
   return r !== void 0 && !isRefuse(r);
 };
-function objectProblems(o, rules, path6) {
+function objectProblems(o, rules, path7) {
   const out = [];
   for (const [k, v] of Object.entries(o)) {
     if (v === void 0) continue;
-    const at2 = path6 + "." + k;
+    const at2 = path7 + "." + k;
     const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
     if (rule === void 0) {
       const near2 = nearestNames(k, Object.keys(rules).filter((r) => {
@@ -3081,26 +3155,26 @@ function checkTreeWith(spec, patch) {
     if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
     seenHandles.add(n.handle);
   };
-  const cloneNode = (n, path6, parentFlex) => {
+  const cloneNode = (n, path7, parentFlex) => {
     const before = problems.length;
     const say = (msg) => {
-      problems.push(path6 + ": " + msg);
+      problems.push(path7 + ": " + msg);
     };
     const own2 = {};
     const set = {};
     for (const k of Object.keys(n)) {
       const v = n[k];
       if (v === void 0) continue;
-      if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path6 + "." + k + ": not on a copy \u2014 " + NOT_ON_CLONE[k]);
+      if (Object.prototype.hasOwnProperty.call(NOT_ON_CLONE, k)) problems.push(path7 + "." + k + ": not on a copy \u2014 " + NOT_ON_CLONE[k]);
       else Object.defineProperty(Object.prototype.hasOwnProperty.call(CLONE_RULES, k) ? own2 : set, k, { value: v, enumerable: true, writable: true, configurable: true });
     }
-    problems.push(...objectProblems(own2, CLONE_RULES, path6));
-    const self = Object.keys(set).length ? patch(set, path6) : null;
+    problems.push(...objectProblems(own2, CLONE_RULES, path7));
+    const self = Object.keys(set).length ? patch(set, path7) : null;
     if (self) problems.push(...self.problems);
     if (parentFlex !== null && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
     else if (n.key !== void 0) say("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
     if (parentFlex === null && n.hidden !== void 0) say("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
-    placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path6 + ": " + m));
+    placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path7 + ": " + m));
     const edits = [];
     if (isObj4(n.edits)) {
       const keys = Object.keys(n.edits).filter((k) => isObj4(n.edits) && n.edits[k] !== void 0);
@@ -3114,7 +3188,7 @@ function checkTreeWith(spec, patch) {
           say("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields");
           continue;
         }
-        const r = patch(n.edits[k], path6 + ".edits[" + JSON.stringify(k) + "]");
+        const r = patch(n.edits[k], path7 + ".edits[" + JSON.stringify(k) + "]");
         problems.push(...r.problems);
         edits.push(r);
       }
@@ -3136,17 +3210,17 @@ function checkTreeWith(spec, patch) {
       return;
     }
     const label = isObj4(n) ? ex.labels.get(n) : void 0;
-    const path6 = label !== void 0 ? label : at2;
+    const path7 = label !== void 0 ? label : at2;
     if (!isObj4(n)) {
-      problems.push(path6 + ": must be a node object");
+      problems.push(path7 + ": must be a node object");
       return;
     }
     if (depth > MAX_TREE_DEPTH) {
-      problems.push(path6 + ": nested deeper than " + MAX_TREE_DEPTH + " levels");
+      problems.push(path7 + ": nested deeper than " + MAX_TREE_DEPTH + " levels");
       return;
     }
     if (n.clone !== void 0) {
-      cloneNode(n, path6, parentFlex);
+      cloneNode(n, path7, parentFlex);
       return;
     }
     const before = problems.length;
@@ -3156,12 +3230,12 @@ function checkTreeWith(spec, patch) {
     const isVariant = depth === 1 && comp2 !== null && comp2.type === "COMPONENT_SET";
     const fields = {};
     for (const k of Object.keys(n)) if (!(isCompRoot && k === "props")) Object.defineProperty(fields, k, { value: n[k], enumerable: true, writable: true, configurable: true });
-    problems.push(...objectProblems(fields, NODE_RULES, path6));
+    problems.push(...objectProblems(fields, NODE_RULES, path7));
     const kind = nodeKind(n);
-    if (kind === null) problems.push(path6 + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
+    if (kind === null) problems.push(path7 + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
     const flex = isFlex(n);
     const say = (msg) => {
-      problems.push(path6 + ": " + msg);
+      problems.push(path7 + ": " + msg);
     };
     if (compType !== null && !isRoot && !(isVariant && compType === "COMPONENT")) {
       say('`type: "' + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
@@ -3171,7 +3245,7 @@ function checkTreeWith(spec, patch) {
       if (typeof n.name !== "string" || !n.name.trim()) say("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
       if (n.key !== void 0) say("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
       if (n.component !== void 0 && n.component !== n.name) say("`component` on a component root is only the read's echo of its own `name`; leave it out");
-      if (n.props !== void 0) problems.push(...propDefsProblems(n.props, path6 + ".props", columns));
+      if (n.props !== void 0) problems.push(...propDefsProblems(n.props, path7 + ".props", columns));
     }
     if (isVariant && n.props !== void 0) say("a variant's properties are the set's: declare them in the root's `props`");
     if (isVariant && n.key !== void 0) say("a component's name is its key: leave `key` out");
@@ -3204,7 +3278,7 @@ function checkTreeWith(spec, patch) {
     if (kind === "TEXT") {
       if (typeof n.text !== "string") say("a TEXT node needs `text`");
       for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
-      if (n.maxLines !== void 0 && n.truncate !== true) summary.warnings.push(path6 + ": `maxLines` has no effect without `truncate: true`, so it is not set");
+      if (n.maxLines !== void 0 && n.truncate !== true) summary.warnings.push(path7 + ": `maxLines` has no effect without `truncate: true`, so it is not set");
     } else if (kind === "FRAME") {
       for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say("`" + k + "` is only on a TEXT node (give the node `text`)");
     } else if (kind === "INSTANCE") {
@@ -3219,9 +3293,9 @@ function checkTreeWith(spec, patch) {
       if (n[axis] === "hug" && !flex && kind === "FRAME") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
     }
     if (isObj4(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
-    placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path6 + ": " + m));
+    placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path7 + ": " + m));
     if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
-    if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path6 + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
+    if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path7 + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
     if (isObj4(n.layout) && n.layout.display === "flex") {
       const l = n.layout;
       const column = l.flexDirection === "column";
@@ -3252,7 +3326,7 @@ function checkTreeWith(spec, patch) {
         summary.texts++;
         if (styled) {
           const set = isObj4(n.font) ? STYLE_FONT_FIELDS.filter((k) => isObj4(n.font) && n.font[k] !== void 0) : [];
-          if (set.length) summary.warnings.push(path6 + ": " + set.map((k) => "`font." + k + "`").join(", ") + " " + (set.length === 1 ? "is" : "are") + " set by the text style, so " + (set.length === 1 ? "it is" : "they are") + " not set");
+          if (set.length) summary.warnings.push(path7 + ": " + set.map((k) => "`font." + k + "`").join(", ") + " " + (set.length === 1 ? "is" : "are") + " set by the text style, so " + (set.length === 1 ? "it is" : "they are") + " not set");
         } else {
           const f = fontOf(isObj4(n.font) ? n.font : void 0);
           const key = f.family + "|" + f.weight;
@@ -3273,7 +3347,7 @@ function checkTreeWith(spec, patch) {
       if (isObj4(n.tokens)) for (const v of Object.values(n.tokens)) for (const name of nameList(v)) addRef(summary.refs.variables, name);
       summary.unbound += unboundOf(n, kind);
     }
-    if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path6 + ".children[" + i + "]", depth + 1, flex));
+    if (Array.isArray(n.children)) n.children.forEach((c, i) => walk(c, path7 + ".children[" + i + "]", depth + 1, flex));
   };
   if (!isObj4(tree)) problems.push("tree: must be a node object (the root frame)");
   else {
@@ -3375,16 +3449,16 @@ var settableIn = (rules) => Object.keys(rules).filter((k) => {
   const r = rules[k];
   return r !== void 0 && !isRefuse(r);
 });
-function checkPatch(set, path6 = "set") {
+function checkPatch(set, path7 = "set") {
   const summary = { fields: [], refs: { variables: [], textStyles: [] }, unbound: 0 };
-  if (!isObj4(set)) return { problems: [path6 + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
+  if (!isObj4(set)) return { problems: [path7 + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
   const problems = [];
   const say = (m) => {
-    problems.push(path6 + ": " + m);
+    problems.push(path7 + ": " + m);
   };
   for (const [k, v] of Object.entries(set)) {
     if (v === void 0) continue;
-    const at2 = path6 + "." + k;
+    const at2 = path7 + "." + k;
     if (Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k)) continue;
     const why = Object.prototype.hasOwnProperty.call(NOT_PATCHED, k) ? NOT_PATCHED[k] : void 0;
     const tree = Object.prototype.hasOwnProperty.call(NODE_RULES, k) ? NODE_RULES[k] : void 0;
@@ -3395,7 +3469,7 @@ function checkPatch(set, path6 = "set") {
       problems.push(at2 + ": not a field a patch sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
     }
   }
-  problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path6));
+  problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path7));
   const fields = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
   if (!fields.length && !problems.length) say("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
   if (problems.length) return { problems, summary };
@@ -3500,7 +3574,7 @@ function firstFamily(stack) {
   return fams.find((f) => !GENERIC.test(f)) || fams[0] || "";
 }
 function captureSpec(doc) {
-  const stats = { nodes: 0, frames: 0, texts: 0, images: 0, depth: 0, fonts: [], dropped: /* @__PURE__ */ Object.create(null), approximated: /* @__PURE__ */ Object.create(null) };
+  const stats = { nodes: 0, frames: 0, texts: 0, instances: 0, images: 0, depth: 0, fonts: [], dropped: /* @__PURE__ */ Object.create(null), approximated: /* @__PURE__ */ Object.create(null) };
   const tally = (into, kind, at2) => {
     const t = into[kind] || (into[kind] = { count: 0, samples: [] });
     t.count++;
@@ -3509,6 +3583,7 @@ function captureSpec(doc) {
   const drop = (kind, at2) => tally(stats.dropped, kind, at2);
   const approx = (kind, at2) => tally(stats.approximated, kind, at2);
   const fontSeen = /* @__PURE__ */ new Set();
+  const pagePaths = /* @__PURE__ */ new Map();
   const contentBox = (el) => {
     const [pt, pr, pb, pl] = el.padding;
     const b = el.border && el.border.from === "border" ? el.border.widths : [0, 0, 0, 0];
@@ -3823,6 +3898,21 @@ function captureSpec(doc) {
     const inFlex = pf !== null && !/absolute|fixed/.test(outer.position);
     const grows = inFlex && pf !== null && outer.flexGrow > 0 && pf.grow === true && pf.dir === "row";
     const stretched = inFlex && parent !== null && pf !== null && pf.dir === "column" && near(outer.rect.w, contentBox(parent.el).w) && (outer.alignSelf === "stretch" || (outer.alignSelf === "auto" || outer.alignSelf === "normal") && (pf.align === "normal" || pf.align === "stretch"));
+    if (el.instance) {
+      stats.instances++;
+      const n2 = { component: el.instance.component, name: el.instance.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) } };
+      if (Object.keys(el.instance.props).length) n2.props = { ...el.instance.props };
+      if (el.opacity < 1) n2.opacity = r2(Math.max(0, el.opacity));
+      pagePaths.set(n2, at2);
+      if (parent) {
+        place(n2, outer, parent, false);
+        return n2;
+      }
+      n2.x = 0;
+      n2.y = 0;
+      stats.frames++;
+      return { name: el.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) }, children: [n2] };
+    }
     if (parent && asText(el) && el.text) {
       const wider = inFlex && el.rect.w > el.text.rect.w + 1;
       const n2 = textNode(el.text, el.rect, inFlex ? null : parent.el.rect, inFlex, grows || stretched || wider, at2);
@@ -3833,6 +3923,7 @@ function captureSpec(doc) {
     }
     const n = { name: el.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) } };
     stats.frames++;
+    pagePaths.set(n, at2);
     look(n, el, at2);
     if (el.media && !el.image) drop("image", at2);
     const none = { layout: null, dir: null, reverse: false, grid: false };
@@ -3900,7 +3991,93 @@ function captureSpec(doc) {
   stats.nodes = countNodes(root);
   if (stats.nodes > MAX_TREE_NODES) return { ok: false, error: `the capture at ${doc.width} px is ${stats.nodes} nodes, more than the ${MAX_TREE_NODES} one spec may hold`, stats };
   if (stats.depth > MAX_TREE_DEPTH) return { ok: false, error: `the capture at ${doc.width} px nests ${stats.depth} levels deep, more than the ${MAX_TREE_DEPTH} one spec may`, stats };
-  return { ok: true, spec: root, stats };
+  return { ok: true, spec: root, stats, candidates: candidatesOf(root, doc.name, (n) => pagePaths.get(n)) };
+}
+var MAX_CANDIDATES2 = 20;
+function signatureOf(n, memo) {
+  const known = memo.get(n);
+  if (known !== void 0) return known;
+  let sig;
+  if (n.component !== void 0) sig = "I(" + n.component + ")";
+  else if (n.text !== void 0) {
+    const f = n.font || {};
+    sig = "T(" + [f.family || "", f.weight || "", f.size !== void 0 ? String(f.size) : ""].join("|") + ")";
+  } else {
+    const l = n.layout;
+    const lay = l && l.display === "flex" ? (l.flexDirection === "column" ? "col" : "row") + (l.flexWrap ? "+wrap" : "") : "none";
+    const paints = (n.fills || []).map((p) => p.type).join(",");
+    const look = [lay, paints, n.strokes ? "s" : "", n.radius !== void 0 ? "r" : "", n.clip ? "c" : ""].join(";");
+    sig = "F(" + look + ")[" + (n.children || []).map((c) => signatureOf(c, memo)).join(",") + "]";
+  }
+  memo.set(n, sig);
+  return sig;
+}
+function candidatesOf(root, page, pathOf) {
+  const memo = /* @__PURE__ */ new Map();
+  const parentOf = /* @__PURE__ */ new Map();
+  const order = [];
+  const bySig = /* @__PURE__ */ new Map();
+  const visit = (n) => {
+    order.push(n);
+    for (const c of n.children || []) {
+      parentOf.set(c, n);
+      visit(c);
+    }
+  };
+  visit(root);
+  for (const n of order) {
+    if (n === root || n.component !== void 0 || n.text !== void 0 || !(n.children || []).length) continue;
+    const sig = signatureOf(n, memo);
+    const list = bySig.get(sig) || [];
+    list.push(n);
+    bySig.set(sig, list);
+  }
+  const repeated = [...bySig.values()].filter((l) => l.length >= 2).map((l) => ({ occ: l, nodes: countNodes(l[0] || {}) })).filter((c) => c.nodes >= 2);
+  repeated.sort((a, b) => b.nodes - a.nodes || order.indexOf(a.occ[0] || {}) - order.indexOf(b.occ[0] || {}));
+  const kept = [];
+  const inside = (n, of) => {
+    for (let p = parentOf.get(n); p; p = parentOf.get(p)) if (of.has(p)) return true;
+    return false;
+  };
+  for (const c of repeated) {
+    const bigger = new Set(kept.flatMap((k) => k.occ));
+    if (c.occ.every((n) => inside(n, bigger))) continue;
+    kept.push(c);
+  }
+  kept.sort((a, b) => b.nodes * b.occ.length - a.nodes * a.occ.length || order.indexOf(a.occ[0] || {}) - order.indexOf(b.occ[0] || {}));
+  return kept.slice(0, MAX_CANDIDATES2).map((c, i) => {
+    const first = c.occ[0] || {};
+    const label = (first.name || "frame").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "frame";
+    const name = page + " " + (first.name || "frame") + " " + (i + 1);
+    const paths = c.occ.map(pathOf).filter((p) => p !== void 0).slice(0, SAMPLES);
+    return { name, slug: i + 1 + "-" + label, count: c.occ.length, nodes: c.nodes, paths, spec: componentSpecOf(c.occ, name) };
+  });
+}
+function componentSpecOf(occ, name) {
+  const first = occ[0] || {};
+  const spec = JSON.parse(JSON.stringify(first));
+  for (const k of ["x", "y", "absolute", "grow", "alignSelf", "key", "handle"]) delete spec[k];
+  if (spec.widthMode === "fill") delete spec.widthMode;
+  if (spec.heightMode === "fill") delete spec.heightMode;
+  spec.type = "COMPONENT";
+  spec.name = name;
+  const props = {};
+  let n = 0;
+  const walk = (copy2, all) => {
+    if (copy2.text !== void 0) {
+      if (all.some((o) => o.text !== copy2.text)) {
+        const prop = "Text " + ++n;
+        props[prop] = { type: "TEXT", default: copy2.text };
+        copy2.name = prop;
+        copy2.propRefs = { characters: prop };
+      }
+      return;
+    }
+    (copy2.children || []).forEach((c, i) => walk(c, all.map((o) => (o.children || [])[i] || {})));
+  };
+  walk(spec, occ);
+  if (n) spec.props = props;
+  return spec;
 }
 function depthOf(n) {
   return (n.children || []).reduce((d, c) => Math.max(d, 1 + depthOf(c)), 0);
@@ -3914,6 +4091,338 @@ function checkCaptured(spec, idOf) {
     return id ? { ...p, image: id } : null;
   });
   return checkTree(filled).problems;
+}
+
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/map-props.ts
+var propBase = (k) => String(k).split("#")[0] ?? "";
+function propsByBase(raw) {
+  const props = nullProto(), collisions = [];
+  for (const [orig, value] of Object.entries(raw || {})) {
+    const base = propBase(orig), prev = props[base];
+    if (prev !== void 0 && prev.orig !== orig) collisions.push({ base, first: prev.orig, second: orig });
+    props[base] = { orig, value };
+  }
+  return { props, collisions, ambiguous: new Set(collisions.map((c) => c.base)) };
+}
+
+// design-to-code/code-usage.ts
+var isPlaceholderModule = (module) => !module || /^TODO/.test(module);
+var KEY_40_HEX = /^[0-9a-f]{40}$/i;
+function componentRef(entry) {
+  const f = entry.figma;
+  if (f.key && KEY_40_HEX.test(f.key)) return f.key;
+  return f.id || f.name;
+}
+function figmaUsageOf(entry, codeProps, text, codeName) {
+  const warnings = [];
+  const warn = (w) => {
+    warnings.push(w);
+  };
+  const name = entry.figma.name;
+  const props = nullProto();
+  const mapIdx = propsByBase(entry.props);
+  for (const c of mapIdx.collisions) warn({ code: "ambiguous-prop", prop: c.base, message: `'${name}' has two props with base name '${c.base}' ('${c.first}', '${c.second}'): not written` });
+  const has = (k) => Object.prototype.hasOwnProperty.call(codeProps, k);
+  const fromCode = /* @__PURE__ */ new Set();
+  for (const [base, { value: p }] of Object.entries(mapIdx.props)) {
+    if (mapIdx.ambiguous.has(base)) continue;
+    if (p.kind === "instance") {
+      warn({ code: "slot-not-written", prop: base, message: `'${name}'.${base} is an instance prop (a slot): a capture does not write what fills it yet` });
+      continue;
+    }
+    const given = has(p.codeProp) ? codeProps[p.codeProp] : void 0;
+    if (p.kind === "enum") {
+      const table = p.values || {};
+      const options = Object.keys(table);
+      if (given === void 0) {
+        const silent = options.filter((o) => table[o] === null || p.omitDefault === true && p.default !== void 0 && String(p.default) === o);
+        const one = silent[0];
+        if (silent.length === 1 && one !== void 0) props[base] = one;
+        else if (silent.length > 1) warn({ code: "ambiguous-variant-value", prop: base, message: `'${name}'.${base}: no code prop ${p.codeProp} is what ${silent.length} options stand for (${silent.slice(0, 3).join(", ")}): not written, the component's default shows` });
+        continue;
+      }
+      const hits = options.filter((o) => table[o] === given);
+      if (hits.length === 1 && hits[0] !== void 0) {
+        props[base] = hits[0];
+        fromCode.add(base);
+        continue;
+      }
+      if (hits.length > 1) {
+        warn({ code: "ambiguous-variant-value", prop: base, message: `'${name}'.${base}: the code value ${JSON.stringify(given)} is what ${hits.length} options map to (${hits.slice(0, 3).join(", ")}): not written, the component's default shows` });
+        continue;
+      }
+      warn({ code: "unmapped-variant-value", prop: base, message: `'${name}'.${base}: the code value ${JSON.stringify(given)} is in none of the map's values: not written, the component's default shows` });
+      continue;
+    }
+    if (p.kind === "boolean") {
+      if (given === void 0) {
+        if (p.omitDefault === true && p.default !== void 0) props[base] = p.default;
+        continue;
+      }
+      if (typeof given !== "boolean") {
+        warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a boolean but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` });
+        continue;
+      }
+      props[base] = given;
+      fromCode.add(base);
+      continue;
+    }
+    if (given === void 0) {
+      if (p.codeProp === "children" && text !== void 0 && text !== "") props[base] = text;
+      continue;
+    }
+    if (typeof given === "boolean") {
+      warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a string but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` });
+      continue;
+    }
+    props[base] = String(given);
+    fromCode.add(base);
+  }
+  if (codeName !== void 0) {
+    const bare = codeName.indexOf("#") >= 0 ? codeName.slice(codeName.lastIndexOf("#") + 1) : codeName;
+    const mod = codeName.indexOf("#") >= 0 ? codeName.slice(0, codeName.lastIndexOf("#")) : null;
+    const names = (c) => c.export === bare && (mod === null || c.module === mod);
+    const hits = (entry.variantOverrides || []).filter((o) => names(o.code));
+    const first = hits[0];
+    if (hits.length > 1) warn({ code: "ambiguous-variant-override", message: `${hits.length} variantOverrides of '${name}' name the code target ${codeName}: their variant values are not written` });
+    else if (first && !names(entry.code)) {
+      for (const [k, v] of Object.entries(propsByBase(first.when).props)) {
+        const had = Object.prototype.hasOwnProperty.call(props, k) ? props[k] : void 0;
+        if (fromCode.has(k) && had !== void 0 && String(had) !== v.value) {
+          warn({ code: "conflicting-code-prop", prop: k, message: `'${name}'.${k}: the element's code props say '${String(had)}', the variantOverride for ${codeName} says '${v.value}': the code props' value is written` });
+          continue;
+        }
+        props[k] = v.value;
+      }
+    }
+  }
+  return { component: componentRef(entry), props, warnings };
+}
+function mapEntriesByCode(map) {
+  const by = /* @__PURE__ */ new Map();
+  const put2 = (k, e) => {
+    const list = by.get(k) ?? [];
+    if (list.indexOf(e) < 0) list.push(e);
+    by.set(k, list);
+  };
+  for (const e of Object.values(map.components || {})) {
+    if (e.status === "deprecated") continue;
+    for (const t of [e.code, ...(e.variantOverrides || []).map((o) => o.code)]) {
+      if (isPlaceholderModule(t.module) || !t.export) continue;
+      put2(t.export, e);
+      put2(`${t.module}#${t.export}`, e);
+    }
+  }
+  return {
+    get(name) {
+      const list = by.get(name);
+      const one = list && list.length === 1 ? list[0] : void 0;
+      if (one) return { entry: one };
+      return list && list.length > 1 ? { ambiguous: list } : null;
+    },
+    names: [...by].filter(([, l]) => l.length === 1).map(([k]) => k).sort()
+  };
+}
+
+// design-to-code/map-validate-core.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at2, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at2}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at2, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at2}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path7, message) => errors.push({ path: path7, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at2 = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at2, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at2, err);
+    if (!isRecord(e.figma)) err(`${at2}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at2}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at2}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at2}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at2}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at2}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at2}.code`, err);
+      if (!isStr(e.code.module)) err(`${at2}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at2}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at2}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at2}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at2}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at2, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at2}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at2}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at2}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at2}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at2}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at2}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at2}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at2, err) {
+  if (!isRecord(p)) {
+    err(at2, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at2}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at2, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at2}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at2}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at2}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at2}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at2}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at2}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at2}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at2}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+
+// bridge/src/read-json.ts
+import fs4 from "node:fs";
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
+  try {
+    buf = fs4.readFileSync(file);
+  } catch (e) {
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+
+// bridge/src/project-layout.ts
+import fs5 from "node:fs";
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path3.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+function findMapFile(cwd) {
+  const modern = path3.join(cwd, MAP_FILE);
+  if (fs5.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy2 = path3.join(cwd, LEGACY_MAP_FILE);
+  if (fs5.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
 // bridge/src/hash.ts
@@ -3931,8 +4440,8 @@ var MAX_DECODE_SIDE = 4096;
 var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
 
 // bridge/src/project-file.ts
-import fs4 from "node:fs";
-var OPEN_FLAGS = fs4.constants.O_RDONLY | (fs4.constants.O_NOFOLLOW ?? 0) | (fs4.constants.O_NONBLOCK ?? 0);
+import fs6 from "node:fs";
+var OPEN_FLAGS = fs6.constants.O_RDONLY | (fs6.constants.O_NOFOLLOW ?? 0) | (fs6.constants.O_NONBLOCK ?? 0);
 
 // bridge/src/image-file.ts
 var MiB = 1024 * 1024;
@@ -3999,8 +4508,8 @@ function otherKind(b) {
 
 // bridge/src/atomic-write.ts
 import crypto2 from "node:crypto";
-import fs5 from "node:fs";
-import path3 from "node:path";
+import fs7 from "node:fs";
+import path4 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
 var RENAME_RETRY_MS = 2e3;
 var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
@@ -4009,14 +4518,14 @@ function renameOver(from, to) {
   const t0 = Date.now();
   for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
     try {
-      fs5.renameSync(from, to);
+      fs7.renameSync(from, to);
       return;
     } catch (e) {
       const code = errCode(e);
       if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
       let dir = false;
       try {
-        dir = fs5.statSync(to).isDirectory();
+        dir = fs7.statSync(to).isDirectory();
       } catch {
       }
       if (dir) throw e;
@@ -4027,36 +4536,36 @@ function renameOver(from, to) {
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs5.openSync(dir, "r");
+    const fd = fs7.openSync(dir, "r");
     try {
-      fs5.fsyncSync(fd);
+      fs7.fsyncSync(fd);
     } finally {
-      fs5.closeSync(fd);
+      fs7.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
-  const dir = path3.dirname(path3.resolve(file));
-  fs5.mkdirSync(dir, { recursive: true });
+  const dir = path4.dirname(path4.resolve(file));
+  fs7.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs5.openSync(tmp, "wx", opts.mode);
+      const fd = fs7.openSync(tmp, "wx", opts.mode);
       try {
-        fs5.writeFileSync(fd, data);
-        fs5.fsyncSync(fd);
+        fs7.writeFileSync(fd, data);
+        fs7.fsyncSync(fd);
       } finally {
-        fs5.closeSync(fd);
+        fs7.closeSync(fd);
       }
     } else {
-      fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs7.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
+    if (opts.mode !== void 0) fs7.chmodSync(tmp, opts.mode);
     renameOver(tmp, file);
   } catch (e) {
     try {
-      fs5.rmSync(tmp, { force: true });
+      fs7.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -4078,13 +4587,13 @@ function pwErrorKind(e, page) {
 }
 
 // design-to-code/cli-args.ts
-import path4 from "node:path";
+import path5 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path5.join(path5.dirname(SELF), name + path5.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -4174,6 +4683,7 @@ var TOOL = "capture-page";
 var USAGE = `usage:
   ${scriptCmd(TOOL)} --url <url> [--width 1280[,390,\u2026]] [--height 800] [--root <css selector>] [--name <slug>]
       [--out design/capture] [--project <dir>] [--ready <selector> | none] [--timeout <ms>] [--browser-path <executable>]
+      [--map <codeconnect.local.json>] [--no-instances] [--no-bind]
       opens <url> (local or remote) in the PROJECT's Playwright (chromium) at each --width (px; default 1280) with a
       --height px viewport (default 800), waits for its load, its fonts, --ready (a selector that must be visible; default
       none) and a quiet DOM, and captures the whole document's height \u2014 or only the --root element's box. It writes, under
@@ -4181,13 +4691,22 @@ var USAGE = `usage:
         <name>@<width>.json   a tree spec per width, for figma_write {op:"createTree", treeFile:"\u2026"}
         images/<sha256>.<ext> every image the spec paints (PNG, JPEG or GIF as the page loaded it; anything else as a PNG
                               screenshot of that element)
-        <name>.capture.json   the report: per width the node count, frames / texts / images, every font (family + style)
-                              the spec uses, what was dropped or approximated (counts and sample paths), and the ops
+        <name>.capture.json   the report: per width the node count, frames / texts / instances / images, every font
+                              (family + style) the spec uses, what was dropped or approximated (counts and sample paths),
+                              the instances by component (and what their props could not say), the code components the
+                              map does not name, the candidate components, and the ops
+        <name>@<width>.candidates/<n>-<tag>.tree.json   a COMPONENT spec per part repeated with no component (a card, a
+                              row), a TEXT property per text that differs; making it does not replace the occurrences (map
+                              the new component to its code, then capture again)
       and prints one summary line, then the figma_write ops as JSON (several widths: one batch, all or nothing).
       --name: the files' slug (letters, digits, . _ -; default from the URL's path, else its host). The root of each spec
       is the frame '<name> @<width>' keyed capture:<name>@<width>, so sending it again updates that frame in place.
-      Faithful but plain: raw values, no components or variables. Flex and grid become auto-layout, text real text in
-      the font Chromium drew it with (a font the Figma file lacks is refused when the spec lands, never swapped).
+      Flex and grid become auto-layout, text real text in the font Chromium drew it with (a font the Figma file lacks is
+      refused when the spec lands, never swapped). An element the component map names (its data-component, "Export" or
+      "module#Export" with its props in data-props JSON, else a React dev build's component) lands as an instance of the
+      Figma component, its props read back through the map. --map: the map (default design/codeconnect.local.json, then
+      ./codeconnect.local.json; none: no instances); --no-instances reads none. The ops carry bind:true, so the file's
+      variables and text styles that equal a raw value are bound when the spec lands; --no-bind leaves it off.
       Shadows, gradients, pseudo-element content, transforms and filters are not written (the tree spec has no effects).
       A capture over ${MAX_TREE_NODES} nodes is refused (exit 5): capture part of the page with --root <selector>.
       --browser-path: launch this Chromium executable instead of the one Playwright installed (a cached browser).
@@ -4254,35 +4773,35 @@ async function keptShot(take, keep, deadline = Infinity) {
   return keep(b);
 }
 function outputEscape(project, dirs, files) {
-  const real = fs6.realpathSync(project);
+  const real = fs8.realpathSync(project);
   const inside = (p) => {
-    const r = path5.relative(real, p);
-    return r === "" || !r.startsWith("..") && !path5.isAbsolute(r);
+    const r = path6.relative(real, p);
+    return r === "" || !r.startsWith("..") && !path6.isAbsolute(r);
   };
   const lexists = (p) => {
     try {
-      fs6.lstatSync(p);
+      fs8.lstatSync(p);
       return true;
     } catch {
       return false;
     }
   };
   for (const d of dirs) {
-    let at2 = path5.resolve(d);
-    while (!lexists(at2) && path5.dirname(at2) !== at2) at2 = path5.dirname(at2);
+    let at2 = path6.resolve(d);
+    while (!lexists(at2) && path6.dirname(at2) !== at2) at2 = path6.dirname(at2);
     let r;
     try {
-      r = fs6.realpathSync(at2);
+      r = fs8.realpathSync(at2);
     } catch {
       return `${at2} is a link that leads nowhere`;
     }
     if (!inside(r)) return `${at2} leads out of --project (${project}) to ${r}`;
-    if (lexists(d) && !fs6.statSync(d).isDirectory()) return `${d} is not a directory`;
+    if (lexists(d) && !fs8.statSync(d).isDirectory()) return `${d} is not a directory`;
   }
   for (const f of files) {
     let st = null;
     try {
-      st = fs6.lstatSync(f);
+      st = fs8.lstatSync(f);
     } catch {
       st = null;
     }
@@ -4492,6 +5011,7 @@ function bgFitOf(size2, repeat, img, box) {
   const exact = Math.abs(img.w - box.w) < 1 && Math.abs(img.h - box.h) < 1;
   return exact ? { scaleMode: "fill" } : { scaleMode: "fill", note: `background-size ${s} / ${r} \u2192 fill` };
 }
+var MAX_INSTANCE_WARNINGS = 10;
 async function captureWidth(browser, width, o) {
   const context = await browser.newContext(contextOptions({ w: width, h: o.height }));
   try {
@@ -4504,7 +5024,7 @@ async function captureWidth(browser, width, o) {
     });
     await settle(page, o.url, o.ready, o.timeout);
     const deadline = Date.now() + o.timeout;
-    const walked = await within(page.evaluate(walkCapture, { root: o.root, maxElements: MAX_WALK }), deadline, `reading the page's elements (${o.timeout} ms)`);
+    const walked = await within(page.evaluate(walkCapture, { root: o.root, maxElements: MAX_WALK, identity: o.map !== null, components: o.map ? o.map.names : [] }), deadline, `reading the page's elements (${o.timeout} ms)`);
     if (!walked.root) throw new CaptureError(walked.missing ?? "nothing to capture", 4);
     if (walked.elements > MAX_WALK) throw new CaptureError(`the page at ${width} px shows more than ${MAX_WALK} elements (${walked.elements}); one spec holds ${MAX_TREE_NODES} nodes \u2014 capture part of it with --root <selector>`, 5);
     const els = [];
@@ -4555,6 +5075,12 @@ async function captureWidth(browser, width, o) {
       return { widths, color, from, align: align === "outside" || align === "center" ? align : "inside" };
     };
     const runText = (r3, parent) => ({ kind: "text", text: r3.text, rect: r3.rect, lines: r3.lines, font: fontOf2(parent) });
+    const instances = { count: 0, byComponent: nullProto(), warnings: [], moreWarnings: 0 };
+    const namedUnmapped = nullProto();
+    const noteInstance = (msg) => {
+      if (instances.warnings.length < MAX_INSTANCE_WARNINGS) instances.warnings.push(msg);
+      else instances.moreWarnings++;
+    };
     const convert = async (e, isRoot) => {
       const s = styleOf(e);
       const radius = s.borderRadius;
@@ -4594,6 +5120,24 @@ async function captureWidth(browser, width, o) {
         dropped,
         children: []
       };
+      if (e.component && o.map) {
+        const hit = o.map.get(e.component.name);
+        if (hit && "entry" in hit) {
+          const codeProps = nullProto();
+          for (const [k, v] of e.component.props) Object.defineProperty(codeProps, k, { value: v, enumerable: true, writable: true, configurable: true });
+          const u = figmaUsageOf(hit.entry, codeProps, e.component.text, e.component.name);
+          el.instance = { component: u.component, props: u.props, name: hit.entry.figma.name };
+          instances.count++;
+          instances.byComponent[hit.entry.figma.name] = (instances.byComponent[hit.entry.figma.name] ?? 0) + 1;
+          for (const w of u.warnings) noteInstance(`${e.path}: ${w.message}`);
+          return el;
+        }
+      }
+      if (e.codeName !== void 0 && o.map) {
+        const hit = o.map.get(e.codeName);
+        if (hit && "ambiguous" in hit) noteInstance(`${e.path}: ${e.codeName} is the code target of ${hit.ambiguous.length} map entries (${hit.ambiguous.slice(0, 3).map((x) => x.figma.name).join(", ")}): captured as plain layers, not an instance; give each its own export in the map`);
+        else namedUnmapped[e.codeName] = (namedUnmapped[e.codeName] ?? 0) + 1;
+      }
       if (e.text) {
         el.text = { kind: "text", text: e.text.drawn ?? (str2(s.text) || ""), rect: e.text.rect, lines: e.text.lines, font: fontOf2(e), ...e.text.mixed ? { mixed: true } : {} };
         if (!el.text.text) el.text = null;
@@ -4637,7 +5181,12 @@ async function captureWidth(browser, width, o) {
     const problems = checkCaptured(r.spec, (f) => ids.get(f) ?? null);
     if (problems.length) throw new Error(`the spec for ${width} px fails the tree spec's own check \u2014 a bug in the capture, nothing written:
 ${problems.slice(0, 10).join("\n")}`);
-    return { doc, spec: r.spec, stats: r.stats, images: [...images.kept.values()], skipped: walked.skipped, notes, outRel: o.outRel };
+    for (const c of r.candidates) {
+      const bad = checkCaptured(c.spec, (f) => ids.get(f) ?? null);
+      if (bad.length) throw new Error(`the candidate component ${c.name} for ${width} px fails the tree spec's own check \u2014 a bug in the capture, nothing written:
+${bad.slice(0, 10).join("\n")}`);
+    }
+    return { doc, spec: r.spec, stats: r.stats, images: [...images.kept.values()], skipped: walked.skipped, notes, outRel: o.outRel, instances, namedUnmapped, candidates: r.candidates };
   } finally {
     await within(context.close(), Date.now() + CLOSE_MS, "closing the page").catch(() => void 0);
   }
@@ -4662,6 +5211,9 @@ async function main(argv) {
     ready: { type: "string" },
     timeout: { type: "string" },
     "browser-path": { type: "string" },
+    map: { type: "string" },
+    "no-instances": { type: "boolean" },
+    "no-bind": { type: "boolean" },
     check: { type: "boolean" },
     help: { type: "boolean", short: "h" }
   };
@@ -4671,12 +5223,12 @@ async function main(argv) {
 ${USAGE}`);
     return 2;
   };
-  const project = path5.resolve(f.project ?? ".");
-  if (!fs6.existsSync(project) || !fs6.statSync(project).isDirectory()) return usage(`--project ${project} is not a directory`);
+  const project = path6.resolve(f.project ?? ".");
+  if (!fs8.existsSync(project) || !fs8.statSync(project).isDirectory()) return usage(`--project ${project} is not a directory`);
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) return usage("--timeout must be a positive number of milliseconds");
   if (f.check) {
-    for (const k of ["url", "width", "height", "root", "name", "out", "ready"]) if (f[k] !== void 0) return usage(`--${k} does not apply to --check`);
+    for (const k of ["url", "width", "height", "root", "name", "out", "ready", "map", "no-instances", "no-bind"]) if (f[k] !== void 0) return usage(`--${k} does not apply to --check`);
   } else if (!f.url) return usage("--url is required");
   const widths = (f.width ?? "1280").split(",").map((w) => w.trim());
   if (!widths.every((w) => /^\d+$/.test(w) && Number(w) >= 100 && Number(w) <= 4096)) return usage(`--width must be one width or a comma list, each a whole number of px from 100 to 4096 (got '${f.width ?? ""}')`);
@@ -4687,20 +5239,34 @@ ${USAGE}`);
   if (f.root !== void 0 && f.root.trim() === "") return usage("--root must be a CSS selector");
   const name = f.name ?? nameFromUrl(f.url ?? "");
   if (!/^[a-z0-9][a-z0-9._-]{0,79}$/i.test(name)) return usage(`--name must be letters, digits, . _ - (at most 80, starting with a letter or digit), got '${name}'`);
-  const outAbs = path5.resolve(project, f.out ?? path5.join("design", "capture"));
-  const outRel = path5.relative(project, outAbs).split(path5.sep).join("/");
-  if (outRel === "" || outRel.startsWith("..") || path5.isAbsolute(outRel)) return usage(`--out must be a directory inside --project (${project}), where the MCP server reads it from`);
-  const fileOf = (rel) => path5.join(project, ...rel.split("/"));
+  const outAbs = path6.resolve(project, f.out ?? path6.join("design", "capture"));
+  const outRel = path6.relative(project, outAbs).split(path6.sep).join("/");
+  if (outRel === "" || outRel.startsWith("..") || path6.isAbsolute(outRel)) return usage(`--out must be a directory inside --project (${project}), where the MCP server reads it from`);
+  const fileOf = (rel) => path6.join(project, ...rel.split("/"));
   const specRel = (w) => `${outRel}/${name}@${w}.json`;
   const reportRel = `${outRel}/${name}.capture.json`;
-  const outDirs = [outAbs, path5.join(outAbs, "images")];
+  const outDirs = [outAbs, path6.join(outAbs, "images")];
   const escaped = f.check ? null : outputEscape(project, outDirs, [...widthList.map((w) => fileOf(specRel(w))), fileOf(reportRel)]);
   if (escaped !== null) return usage(`--out must stay inside --project on disk: ${escaped} \u2014 nothing written`);
   let url = f.url ?? "";
   if (!f.check && !/^[a-z][a-z0-9+.-]*:/i.test(url)) {
-    const file = path5.resolve(url);
-    if (!fs6.existsSync(file)) return usage(`--url ${url} is not a URL, and no file is there`);
-    url = "file://" + file.split(path5.sep).join("/").replace(/^([A-Za-z]):/, "/$1:");
+    const file = path6.resolve(url);
+    if (!fs8.existsSync(file)) return usage(`--url ${url} is not a URL, and no file is there`);
+    url = "file://" + file.split(path6.sep).join("/").replace(/^([A-Za-z]):/, "/$1:");
+  }
+  if (f.map !== void 0 && f["no-instances"]) return usage("--map and --no-instances: give one (--no-instances reads no component)");
+  let map = null;
+  let mapRel = null;
+  if (!f.check && !f["no-instances"]) {
+    const found = findMapFile(project);
+    const file = f.map !== void 0 ? path6.resolve(project, f.map) : found.missing ? null : found.file;
+    if (file !== null) {
+      if (!fs8.existsSync(file)) return usage(`--map ${f.map ?? file} is not a file`);
+      const m = readJson(file, isCodeConnectMap);
+      if (!("doc" in m)) return usage(`cannot read the component map ${file}: ${m.error}`);
+      map = mapEntriesByCode(m.doc);
+      mapRel = path6.relative(project, file).split(path6.sep).join("/");
+    }
   }
   const browserPath = f["browser-path"];
   if (browserPath !== void 0) {
@@ -4716,11 +5282,11 @@ ${USAGE}`);
   const budget = new ImageBudget();
   try {
     if (f.check) {
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path5.relative(project, res.file) || res.file}) \xB7 chromium ${browser.version()}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""} \u2014 ready to capture`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path6.relative(project, res.file) || res.file}) \xB7 chromium ${browser.version()}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""} \u2014 ready to capture`);
       return 0;
     }
     const ready = f.ready === void 0 || f.ready === "none" ? null : f.ready;
-    for (const w of widthList) results.push(await captureWidth(browser, w, { url, name, root: f.root ?? null, height, ready, timeout, outRel, budget }));
+    for (const w of widthList) results.push(await captureWidth(browser, w, { url, name, root: f.root ?? null, height, ready, timeout, outRel, budget, map }));
   } catch (e) {
     if (e instanceof CaptureError) {
       console.error(`${TOOL}: ${e.message} \u2014 nothing written.`);
@@ -4740,13 +5306,23 @@ ${USAGE}`);
   }
   const images = /* @__PURE__ */ new Map();
   for (const r of results) for (const k of r.images) images.set(r.outRel + "/images/" + k.sha + "." + k.ext, k);
-  const ops = results.map((r) => ({ op: "createTree", treeFile: specRel(r.doc.width) }));
-  const late = outputEscape(project, outDirs, [...[...images.keys(), ...ops.map((o) => o.treeFile), reportRel].map(fileOf)]);
+  const ops = results.map((r) => ({ op: "createTree", treeFile: specRel(r.doc.width), ...f["no-bind"] ? {} : { bind: true } }));
+  const candidateRel = (w, c) => `${outRel}/${name}@${w}.candidates/${c.slug}.tree.json`;
+  const candidateDirs = results.map((r) => path6.join(outAbs, `${name}@${r.doc.width}.candidates`));
+  const candidateFiles = results.flatMap((r) => r.candidates.map((c) => candidateRel(r.doc.width, c)));
+  const late = outputEscape(project, [...outDirs, ...candidateDirs], [...[...images.keys(), ...ops.map((o) => o.treeFile), ...candidateFiles, reportRel].map(fileOf)]);
   if (late !== null) return usage(`--out must stay inside --project on disk: ${late} \u2014 nothing written`);
-  fs6.mkdirSync(path5.join(outAbs, "images"), { recursive: true });
-  for (const [rel, k] of images) if (!fs6.existsSync(fileOf(rel))) writeFileAtomic(fileOf(rel), k.bytes);
+  fs8.mkdirSync(path6.join(outAbs, "images"), { recursive: true });
+  for (const [rel, k] of images) if (!fs8.existsSync(fileOf(rel))) writeFileAtomic(fileOf(rel), k.bytes);
   const imageFiles = new Set(images.keys());
   results.forEach((r, i) => writeFileAtomic(fileOf(ops[i]?.treeFile ?? ""), JSON.stringify(r.spec, null, 1) + "\n"));
+  results.forEach((r, i) => {
+    const dirAbs = candidateDirs[i] ?? "";
+    for (const old of fs8.existsSync(dirAbs) ? fs8.readdirSync(dirAbs) : []) if (old.endsWith(".tree.json")) fs8.rmSync(path6.join(dirAbs, old), { force: true });
+    if (!r.candidates.length) return;
+    fs8.mkdirSync(dirAbs, { recursive: true });
+    for (const c of r.candidates) writeFileAtomic(fileOf(candidateRel(r.doc.width, c)), JSON.stringify(c.spec, null, 1) + "\n");
+  });
   const fonts = [];
   for (const r of results) for (const ft of r.stats.fonts) if (!fonts.some((x) => x.family === ft.family && x.style === ft.style)) fonts.push(ft);
   const report = {
@@ -4754,6 +5330,7 @@ ${USAGE}`);
     name,
     fonts,
     fontsNote: "every family and style the specs use; a font the Figma file lacks is refused when the spec lands (with the closest names it has), never swapped",
+    map: mapRel,
     widths: results.map((r, i) => ({
       width: r.doc.width,
       height: r.doc.root.rect.h,
@@ -4767,14 +5344,18 @@ ${USAGE}`);
       dropped: r.stats.dropped,
       approximated: r.stats.approximated,
       skipped: r.skipped,
-      notes: r.notes
+      notes: r.notes,
+      instances: { count: r.instances.count, byComponent: r.instances.byComponent, warnings: r.instances.warnings, ...r.instances.moreWarnings ? { moreWarnings: r.instances.moreWarnings } : {} },
+      namedUnmapped: r.namedUnmapped,
+      candidates: r.candidates.map((c) => ({ name: c.name, count: c.count, nodes: c.nodes, paths: c.paths, specFile: candidateRel(r.doc.width, c) }))
     })),
+    candidatesNote: 'a candidate is a part repeated with no component: send its specFile as figma_write {op:"createTree", treeFile} to make it a component. That does not replace its occurrences in the screen: map the new component to its code component (design/codeconnect.local.json), then capture again',
     images: [...imageFiles],
     notWritten: "shadows, gradients, pseudo-element content (::before/::after), transforms and filters: the tree spec has no effects",
     ops
   };
   writeFileAtomic(fileOf(reportRel), JSON.stringify(report, null, 2) + "\n");
-  const per = results.map((r) => `${r.doc.width}: ${r.stats.nodes} nodes (${r.stats.frames} frames, ${r.stats.texts} texts, ${r.stats.images} images)`).join(" \xB7 ");
+  const per = results.map((r) => `${r.doc.width}: ${r.stats.nodes} nodes (${r.stats.frames} frames, ${r.stats.texts} texts, ${r.stats.instances} instances, ${r.stats.images} images, ${r.candidates.length} candidate components)`).join(" \xB7 ");
   console.log(`${TOOL}: ${name} \u2014 ${per}; ${fonts.length} font${fonts.length === 1 ? "" : "s"} \u2192 ${reportRel}`);
   console.log(JSON.stringify({ ops }));
   return 0;

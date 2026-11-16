@@ -1,0 +1,170 @@
+{
+ "name": "settings @1280",
+ "box": {
+  "w": 1280,
+  "h": 400
+ },
+ "fills": [
+  {
+   "type": "solid",
+   "color": "#ffffff"
+  }
+ ],
+ "clip": true,
+ "children": [
+  {
+   "name": "main",
+   "box": {
+    "w": 600,
+    "h": 352
+   },
+   "fills": [
+    {
+     "type": "solid",
+     "color": "#f4f4f5"
+    }
+   ],
+   "strokes": {
+    "colors": [
+     "#e4e4e7"
+    ],
+    "align": "inside",
+    "weight": 1
+   },
+   "radius": 8,
+   "layout": {
+    "display": "flex",
+    "flexDirection": "column",
+    "gap": 16,
+    "padding": [
+     24,
+     24,
+     24,
+     24
+    ]
+   },
+   "strokesInLayout": true,
+   "children": [
+    {
+     "text": "Account settings",
+     "font": {
+      "family": "Inter",
+      "weight": "Bold",
+      "size": 24,
+      "color": "#18181b",
+      "lineHeight": {
+       "unit": "px",
+       "value": 32
+      }
+     },
+     "box": {
+      "w": 220,
+      "h": 32
+     },
+     "autoResize": "width_and_height"
+    },
+    {
+     "text": "Manage your profile and notifications.",
+     "font": {
+      "family": "Inter",
+      "weight": "Regular",
+      "size": 14,
+      "color": "#71717a",
+      "lineHeight": {
+       "unit": "px",
+       "value": 20
+      }
+     },
+     "box": {
+      "w": 260,
+      "h": 20
+     },
+     "autoResize": "width_and_height"
+    },
+    {
+     "name": "div",
+     "box": {
+      "w": 552,
+      "h": 40
+     },
+     "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "gap": 16
+     },
+     "children": [
+      {
+       "component": "Button",
+       "name": "Button",
+       "box": {
+        "w": 120,
+        "h": 40
+       },
+       "props": {
+        "Label": "Save"
+       }
+      },
+      {
+       "component": "Button",
+       "name": "Button",
+       "box": {
+        "w": 120,
+        "h": 40
+       },
+       "props": {
+        "Label": "Cancel"
+       }
+      }
+     ]
+    },
+    {
+     "name": "span",
+     "box": {
+      "w": 52,
+      "h": 24
+     },
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#dc2626"
+      }
+     ],
+     "radius": 12,
+     "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "padding": [
+       4,
+       12,
+       4,
+       12
+      ]
+     },
+     "children": [
+      {
+       "text": "Beta",
+       "font": {
+        "family": "Inter",
+        "weight": "Regular",
+        "size": 12,
+        "color": "#ffffff",
+        "lineHeight": {
+         "unit": "px",
+         "value": 16
+        }
+       },
+       "box": {
+        "w": 28,
+        "h": 16
+       },
+       "autoResize": "width_and_height"
+      }
+     ]
+    }
+   ],
+   "x": 24,
+   "y": 24
+  }
+ ],
+ "key": "capture:settings@1280"
+}
