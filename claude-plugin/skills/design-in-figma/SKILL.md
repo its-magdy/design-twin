@@ -131,8 +131,9 @@ drops against the one you sent last time; the real reply then lists `changed`, `
   what it would create and which names the file has already (`update`), changed in place. `refusedByFile` means the
   file refuses it as it is (a library's source, a name that matches nothing): a real write would be refused.
 - `editsAllowed: false` → ask the designer to tick **Allow edits** in the plugin window in the same message as the
-  preview. `reviewWrites: true` → the real write waits (up to 5 minutes) for their Apply or Reject in that window;
-  say so.
+  preview. `wouldWait: true` → the real write waits for the designer's review in that window (`waitReason` says
+  why); say so. A reply `{pending, ticket}` means call `figma_write {ticket}` again — not the ops — until it answers
+  (references/grammar.md, The call).
 
 ## Write, check, fix
 

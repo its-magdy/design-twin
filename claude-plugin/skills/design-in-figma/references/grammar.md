@@ -21,6 +21,18 @@ file or the spec instead. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbb
 `figma_write {ops: [...], dryRun?, client?}` — `ops` in order, at most 50; `dryRun: true` previews without touching
 the file; `client` names the file when several are connected (a connId, fileKey or part of the file name).
 
+A write may wait for the designer's review in the plugin window: always while **Review each change first** is on (the
+default), and even with it off for a source edit (`setVariable`, `setStyle`, a `patch` of a main component) or when the
+layers changed since their last approval would pass 25. The dry run says so (`wouldWait`, `waitReason`). A call holds
+at most 45 s; if they have not answered by then it returns `{pending: true, ticket, why, waited, note}`:
+
+- Call `figma_write {ticket}` again — not the ops — until it returns the write's result or a refusal. Tell the user
+  the change waits for them in the Design Twin plugin window.
+- Keep asking: with no call for 2 min the card is withdrawn and nothing is applied (15 min at most in all).
+- `figma_write {ticket, cancel: true}` withdraws it. Nothing is applied.
+- One write waits at a time: a new batch meanwhile is refused (`refused: "waiting"`) naming the ticket to finish first.
+- Lost track? `figma_status` reports `lastFigmaWrite`: the last outcome, or the ticket waiting now.
+
 ## The ops
 
 | `op` | Required | Optional |
@@ -67,14 +79,14 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   - `patch` `{id, unbound?}` · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
     the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
 - Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
-  edits off, rejected with the designer's reason, nobody reviewed it, Dev Mode, or every problem of the batch with its
+  edits off, rejected with the designer's reason, withdrawn or not reviewed in time, another write still waiting, Dev Mode, or every problem of the batch with its
   path and up to three candidates).
 - Failed partway: `Write failed at op N`, with what was put back (`restored`) and what stays (`applied`). Not all of it
   may come back: with Allow edits turned off mid-batch nothing is put back; a value that cannot be restored is named in
   the error; a node already deleted stays deleted; an imported library item stays, and is not listed in `applied`.
   Read `applied` before a retry, so nothing is made twice.
 - A dry run: `{dryRun: true, creates, overwrites, moves?, deletes?, invalid, refusedByFile?, steps, editsAllowed,
-  reviewWrites?, note}`; each step has `effect`, `target`, a one-sentence `change`, `fields` (one row per field of a
+  wouldWait?, waitReason?, waitingTicket?, note}`; each step has `effect`, `target`, a one-sentence `change`, `fields` (one row per field of a
   patch or a style), `warnings`, `invalid` (every problem), for a source edit `affects` and `refusedByFile`, and for a
   create table `plan: {create, update}` (the names it would make, and the ones the file has, updated in place). A
   `createTree` dry run reads nothing from the file: a keyed one is a `creates` step whose `change` says an existing
@@ -425,7 +437,8 @@ mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree la
   trees.
 - `treeFile` at most 2 MB; `key` at most 200 characters.
 - An image file at most 8 MB and 4096 px a side (PNG, JPEG or GIF); a batch's images at most 32 MB together.
-- A review card waits 5 minutes; a rejection reason is cut at 500 characters.
+- A call holds 45 s for the designer; a waiting card is withdrawn 2 min after the last poll, 15 min at most; a
+  rejection reason is cut at 500 characters.
 - Names resolve against the file as it was before the batch, except what the batch's create tables make (a component
   the batch makes is used in a later call).
 - A create table takes at most 1,000 rows.

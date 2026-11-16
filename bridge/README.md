@@ -941,7 +941,7 @@ booleans `css`, `measurements`, `pluginData`, `motion`, `sharedData`, `variantVi
 | `figma_export_selection` | — | `format` (`outline` default, `json`), walk options | the selection's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_export_url` | `url` (a figma.com URL with `?node-id=`, or a bare id) | `format` (`outline` default, `json`), walk options | that node's outline; with `format: "json"`, its node JSON, variables, assets |
 | `figma_screenshot` | `nodeId` (an id or a URL) | `scale` (> 0) | a PNG of one node (the bytes only with `writeToDisk`) |
-| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be) | `dryRun` | the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count, or with `bind` what was bound, instanced and left raw; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`, the images made from files (`images`: file, hash, size); with `dryRun`, a preview and `editsAllowed` (and, with a plugin connected, what a source edit carries to: `affects`, what a create table would make or update: `plan`, and what a `bind` spec would bind: `bind`) |
+| `figma_write` | `ops` (at most 50, applied in order, checked whole and put back on a failure as far as it can be), or `ticket` (a write waiting for the designer's review) | `dryRun`; with `ticket`, `cancel` | `{pending, ticket}` while the designer has not answered (see the designer's review below), else the ids of applied ops (a `createTree`: the root id, counts, the ids of nodes with a `handle` and the `unbound` count, or with `bind` what was bound, instanced and left raw; a component: its name and its properties' keys; a keyed or component re-send: only what changed), any `warnings`, the images made from files (`images`: file, hash, size); with `dryRun`, a preview, `editsAllowed`, `wouldWait` / `waitReason` (and, with a plugin connected, what a source edit carries to: `affects`, what a create table would make or update: `plan`, and what a `bind` spec would bind: `bind`) |
 | `design_get_component` | `handle` (publish key, node id or exact name) | `exportDir` | one catalog entry and its variant node trees |
 | `design_drift_lint` | — | `map`, `maxAgeHours`, `catalogs`, `screens`, `exportDir` | drift findings, snapshot age, and `screenCoverage` with `screens` |
 
@@ -1395,32 +1395,58 @@ the bridge side can turn it on.
   private plugins, and file names repeat), and a per-file flag stored in the document would itself be an edit.
   Untick it when you are done.
 
-### "Review each write" — the designer applies or rejects each batch
-Under **Allow edits** the plugin window has a second checkbox, **Review each write**, also **off by default** (off,
-writes apply at once). When it is on, a `figma_write` batch that resolves against the file does not run: the window
-shows a card listing what the batch would do, one plain line per op (the same description the dry run gives), with
-**Apply**, **Reject** and a box for a reason. The tool call waits for the answer.
+### The designer's review — a write may wait for the designer
+Under **Allow edits** the plugin window has a second checkbox, **Review each change first**, **on by default** (on until
+the designer clears it; saved per user like Allow edits, and only the window can set it). A `figma_write` batch that
+resolves against the file then waits on a card in the window instead of running. Even with the box clear, a batch
+**always** waits when it:
 
-- **Apply** runs the batch as usual (one Cmd-Z step).
+- edits a source — `setVariable`, `setStyle`, or a `patch` of a main component (or a layer inside one): other layers follow it;
+- is a bulk change by rule (reserved for #171; no op does it yet);
+- takes the existing layers changed since the designer's last approval over **25** (patched, moved or deleted, plus the
+  layers and instances that follow a source edit; layers this plugin session created do not count; an approval starts
+  the count again).
+
+The card lists the batch in plain words with old → new values ("30 layers: radius 6 → 20", "Variable 'color/accent':
+#3b82f6 → #16a34a — 40 layers follow"), says why it waited, and has **Show me** per line, **Details** (the dry run's
+sentences), **Apply**, and **Reject** with an optional reason. For a source edit or a large batch it also offers
+**Preview on canvas**: the batch is applied for real (everyone in the file sees it), then **Keep** leaves it applied and
+**Put back** restores it (that leaves two undo entries); a preview left up when the plugin window closes cannot be put
+back. A dry run reports `wouldWait` and `waitReason` (and `waitingTicket` if another write is waiting).
+
+**How the call waits — a ticket.** A call holds at most 45 s (MCP clients time a tool call out at 60 s by default).
+If the designer has not answered by then, it returns:
+
+```json
+{ "pending": true, "ticket": "rv-3-k2x9q", "why": "'Review each change first' is on", "waited": "45 s", "note": "…" }
+```
+
+- Call `figma_write {ticket: "rv-3-k2x9q"}` again — **not** the ops — until it answers with the write's normal
+  result (or a refusal). Tell the user the change waits for them in the plugin window.
+- `figma_write {ticket, cancel: true}` withdraws it: the card comes down, nothing is applied (a preview is put back).
+- If no call asks within **2 min** of the last pending answer, the card is withdrawn ("the agent stopped waiting");
+  no card stays up longer than **15 min**. A late poll is answered with that refusal, which says nothing changed.
+- The plugin keeps the ticket and the outcome, so asking again after an answer, or after the MCP server restarted,
+  answers at once. An unknown ticket is an error (closing the plugin window or reloading Figma drops a waiting card
+  and applies nothing).
+- One card at a time: a new batch while one waits is refused at once (`refused: "waiting"`), naming its ticket.
+- `figma_status` reports `lastFigmaWrite`: how the last write ended, or the ticket waiting now; `unseen: true` when the
+  designer answered after the agent stopped asking.
+
+How a card ends:
+
+- **Apply** (or **Keep** on a preview) runs the batch as usual (one Cmd-Z step), resolved again against the file as it is then.
 - **Reject** refuses it with nothing changed. The error carries the reason the designer typed (up to 500 characters):
 
   > The designer rejected this write in the Design Twin plugin window. Nothing in the file was changed. Their reason: "…"
 
   Act on the reason; don't resend the same batch.
-- **Nobody answers within 5 minutes**: refused with nothing changed ("Nobody applied or rejected this write …").
-  The write's bridge budget is 6 minutes, so this reply always comes first.
-- **The call is cancelled, or the bridge drops** while the card is up: the card is withdrawn, so a designer can never
-  apply a write nobody is waiting for. Closing the plugin window stops the plugin, and the bridge rejects the call on
-  the disconnect; nothing was applied.
+- **Withdrawn, expired or out of time**: refused `unreviewed`, nothing changed.
 - **"Allow edits" is unticked while the card is up**: refused at once as edits-off. "Allow edits" off is still checked
   first, before any card.
 
-A dry run reports `reviewWrites: true` when it is on, and its note says a real write will wait. Only the window's
-checkbox can set it (saved per user, like Allow edits); nothing on the bridge side can turn it off or answer a card.
-This is the plainest form of the review: how a richer review is shown, when it applies and how the agent waits is
-still being prototyped.
 - **No write is silent.** Each applied batch (and each refused one) shows a Figma toast and a line in the plugin
-  window, e.g. "Design Twin applied 3 edits to this file."
+  window, e.g. "Design Twin applied 3 edits to this file."; a new card takes a stale red toast down.
 - `dtwin whoami` prints the state (`edits: off — …` / `edits: ALLOWED — …`) and `editsAllowed` is in its JSON.
 
 ### The screen outline — the default inline answer for one screen
@@ -1478,7 +1504,8 @@ with its warnings, `catalogs: string[]` (the CLI's `--catalog`) adds catalogs th
 working directory. A file the CLI would refuse (exit 2: a missing or non-catalog file, a broken `catalogs` entry, a
 non-screen) is a tool error with the CLI's message; an unreadable discovered catalog is a `catalog-unreadable` warning. An interrupted tool call (Claude Code's cancel,
 or the session ending) cancels the in-flight read in the plugin; `figma_write` is never cancelled, since a
-write cannot be un-applied.
+write cannot be un-applied (a write waiting for the designer is withdrawn only by `figma_write {ticket, cancel: true}`, or
+by nobody asking about its ticket for 2 min).
 
 `outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
 building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/export/`, the same var `figma_status` reads. The `design_*` tools'

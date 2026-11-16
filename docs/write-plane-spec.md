@@ -203,13 +203,50 @@ screens.
     calls, plus one if the batch changed the file after the last) and `undoNote`.
 17. **Limited destruction.** Create anywhere; overwrite properties of existing nodes; delete and reparent
     only nodes created in the same session.
-18. **Consent.** "Allow edits" stays the master switch. A designer review step (approve or reject each
-    change in the plugin window, with an optional reason that goes back to the agent) sits on top of it.
-    Its exact form, when it applies and how the agent waits are **not decided**: they are to be
-    prototyped. The write path only produces a plain description of the change, which the dry run needs
-    anyway, so every candidate form displays the same data. The plainest form is built: "Review each write" in the
-    plugin window holds a batch on a card of those lines until the designer applies or rejects it
-    (`figma-plugin/src/review.ts`).
+18. **Consent.** "Allow edits" stays the master switch: with it off a batch is refused before it is ever reviewed. On top
+    of it the designer reviews the agent's writes in the plugin window (`figma-plugin/src/review.ts`). As built (#174):
+    - **The card** lists the batch in plain words, grouped: "30 layers: radius 6 → 20, opacity 100% → 80%", "Variable
+      'color/accent': #3b82f6 → #16a34a — 40 layers follow", "New frame 'Settings card', 320 wide, height hugs content —
+      lands right of the existing frames". Old → new values, with a colour swatch for a colour; no node ids, no
+      schematic or thumbnail. The lines come from `bridge/src/review-card.ts` (pure) over what the plugin reads of the
+      resolved batch (`figma-plugin/src/review-reads.ts`: names, current values, followers, landing spot); the dry run's
+      `change` sentences (`commands.ts` `reviewLines`) sit behind a collapsed **Details**. The card says why the batch
+      waited. **Show me** on a line selects and zooms to its layers (or pans to where a new frame lands), **Show all**
+      to every line's; selection and viewport are not undo history, so neither adds an undo step. Apply, or Reject with
+      an optional reason that goes back to the agent (`refused: "rejected"`, `reason`).
+    - **Preview on canvas**, offered for a source edit or a batch over the layer limit by itself (and #171's bulk change
+      by rule): the batch is applied as it would be on Apply and the card turns to **Keep** / **Put back**. Keep leaves it
+      as an applied write; Put back restores it (the put-back a failed batch uses) and the card waits again. Every action
+      on a card runs after the one before it, and the window enables its buttons only when the main thread says where
+      the card is, so a Put back clicked while the preview is still landing is done, not dropped. Limits: a preview is in
+      the file, so everyone in it sees it (the card says so); a preview that is put back leaves **two** undo entries (the
+      preview, then the put-back — a Cmd-Z after Put back brings the preview back; a plugin cannot drop a step); not
+      offered when the batch deletes or re-sends a keyed tree, which cannot be put back; and if the plugin window
+      closes or Figma reloads while a preview is up, nothing can put it back — it stays as applied. A card that ends
+      while previewing (withdrawn, expired, out of time) puts the preview back first, unless "Allow edits" was turned
+      off, after which the plugin changes nothing and the reply lists the preview as applied.
+    - **When a write waits** (`bridge/src/review-policy.ts`, pure): "Review each change first" is ticked — on when
+      never set, saved per user, set only from the window — or, whatever the box says, the batch edits a source
+      (setVariable, setStyle, a patch of a main component or a layer in one: a change other layers follow), or it is a
+      bulk change by rule (#171 sets `bulkByRule`; nothing does yet), or the existing layers changed since the
+      designer's last approval exceed 25 (fixed). Counted: existing layers a batch patches, moves or deletes plus the
+      layers and instances that follow its source edits, each once; layers this plugin session created do not count.
+      The count is per plugin session and goes back to 0 when the designer approves a batch or keeps a preview. The dry
+      run reports `wouldWait` and `waitReason` (and `waitingTicket` when one waits) by the same rule over what it can
+      see. On approval the batch is resolved again against the file as it is then; #171 must recount a rule's matches
+      there and refuse on drift (a hook comment in `figma-plugin/src/writes.ts`).
+    - **How the agent waits — a ticket the plugin owns.** MCP clients built on the TypeScript SDK time a tool call out
+      at 60 s by default, so one call holds at most 45 s (`REVIEW_HOLD_MS`; `DTWIN_REVIEW_HOLD_MS` overrides it for
+      tests, within 0…50 s): then the plugin answers `{pending, ticket, why, waited, note}` and keeps the card up.
+      `figma_write {ticket}` sends `writeTicket`, which the plugin answers with the result once there is one, or
+      pending again after the hold; `{ticket, cancel: true}` withdraws it (card down, nothing applied, a preview put
+      back). Finished outcomes are kept a while (the newest 20, 30 min), so a repeat answers at once, and an MCP server
+      restart loses nothing. A card whose ticket is not asked about within 2 min of its last pending answer ends
+      "withdrawn — the agent stopped waiting"; no card stays up longer than 15 min. One waiting card at a time: a second
+      batch is refused at once, naming the waiting ticket (`refused: "waiting"`). A late poll gets a refusal that says
+      nothing changed. `figma_status` reports the last write's outcome (`lastFigmaWrite`), including one the designer
+      answered after the agent stopped asking (`unseen`). A card going up also shows a Figma toast and takes down a
+      stale red one. Closing the plugin window or reloading Figma drops a waiting card, applying nothing.
 
 ### Cost control
 

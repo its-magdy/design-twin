@@ -943,7 +943,7 @@ registerTool(
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
       "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
-      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed). A write may wait for their review there (dry run: wouldWait): a reply {pending, ticket} means call figma_write {ticket} again, not the ops, until it answers; {ticket, cancel:true} withdraws it.",
+      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed). A write may wait for their review (dry run: wouldWait): on {pending, ticket}, call figma_write {ticket} (not the ops) until it answers; cancel:true withdraws it.",
     inputSchema: {
       ...clientShape,
       // Constrain `op` to the ops the plugin actually implements (writeOpsSchema). Optional only for a ticket poll.
