@@ -656,7 +656,7 @@ async function consumersOf(style: BaseStyle, nodes: Set<string>, warn: (m: strin
 
 /** What follows a change of the variable `v`: the variables that alias it (through any chain), the local styles bound to
  *  any of those, and every layer bound to one of them or using such a style. `warn` gets pages that could not be read. */
-async function variableImpact(v: Variable, lookups: Lookups, graph: AliasGraph, warn: (m: string) => void): Promise<WriteImpactCounts> {
+async function variableImpact(v: Variable, lookups: Lookups, graph: AliasGraph, warn: (m: string) => void, keep?: Set<string>): Promise<WriteImpactCounts> {
   const ids = new Set<string>([v.id]);
   const locals = await lookups.localVariables();
   // The aliases as the batch's earlier variable edits leave them (`graph`), else as the file has them.
@@ -670,7 +670,7 @@ async function variableImpact(v: Variable, lookups: Lookups, graph: AliasGraph, 
   for (const st of local) {
     for (const id of styleBoundIds(st)) if (ids.has(id)) { styles.push(st); break; }
   }
-  const nodes = new Set<string>();
+  const nodes = keep || new Set<string>();
   for (const page of figma.root.children) {
     try {
       await page.loadAsync();
@@ -700,15 +700,45 @@ async function projectAliases(op: WriteOp, v: Variable, lookups: Lookups, graph:
 }
 
 /** The instances that follow a change of `c` (every variant's, for a component set). */
-async function instancesOf(c: ComponentNode | ComponentSetNode, warn: (m: string) => void): Promise<number> {
+async function instancesOf(c: ComponentNode | ComponentSetNode, warn: (m: string) => void, keep?: Set<string>): Promise<number> {
   const mains = c.type === "COMPONENT_SET" ? c.children.filter((k): k is ComponentNode => k.type === "COMPONENT") : [c];
   let n = 0;
   for (const m of mains) {
-    try { n += (await m.getInstancesAsync()).length; } catch (e) {
+    try { const found = await m.getInstancesAsync(); n += found.length; if (keep) for (const x of found) keep.add(x.id); } catch (e) {
       warn("the instances of '" + m.name + "' could not be read (" + errMsg(e) + "), so they are not counted");
     }
   }
   return n;
+}
+
+/** PROTOTYPE (#174): the layers that follow a source edit, by id — writeImpact's own walk, the ids kept (a variable's
+ *  layers, a style's users, a main component's instances). Null when `op` edits no source. The batch's earlier alias
+ *  edits are not projected here (the dry run's count does that). */
+export async function followersOf(op: WriteOp): Promise<Set<string> | null> {
+  const warn = (): void => { /* a prototype: a page that cannot be read just counts low */ };
+  const keep = new Set<string>();
+  if (op.op === "patch") {
+    let nd: BaseNode | null = null;
+    try { nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null; } catch { nd = null; }
+    const c = nd ? componentOf(nd) : null;
+    if (!c) return null;
+    await instancesOf(c, warn, keep);
+    return keep;
+  }
+  const lookups = sourceLookups();
+  if (op.op === "setVariable" && op.variable) {
+    const found = await lookups.variable(op.variable);
+    if ("error" in found) return keep;
+    await variableImpact(found.ok, lookups, new Map(), warn, keep);
+    return keep;
+  }
+  if (op.op === "setStyle" && op.style) {
+    const kind = isStyleSet(op.set) ? checkStyleSet(op.set).summary.kind : null;
+    const found = await lookups.style(op.style, kind);
+    if (!("error" in found)) await consumersOf(found.ok, keep, warn);
+    return keep;
+  }
+  return null;
 }
 
 /** The dry run's file-side half (the `writeImpact` command): for each source edit of the batch, how much follows, or

@@ -227,4 +227,54 @@ export const cases: Case[] = [{
     const r = await pending;
     ok("[REVIEW] …and a Reject refuses it the same way", r.refused === "rejected" && r.reason === "not now" && untouched(w));
   },
+}, {
+  // PROTOTYPE (#174): the review switches (review-proto.ts, bridge/src/review-policy.ts).
+  name: "Review prototype: the window's switches are saved, and a draft is applied first, then kept or put back",
+  async run() {
+    const w = reviewWorld({ clientStorage: { reviewWrites: true } });
+    await w.allowEdits();
+    const set = await w.send({ type: "set-review-proto", proto: { display: "draft", when: "today", threshold: 10 } });
+    ok("[REVIEW-PROTO] set-review-proto is echoed and saved", set.some((m) => m.type === "review-proto") && JSON.stringify(w.storage.get("reviewProto")) === JSON.stringify({ display: "draft", when: "today", threshold: 10 }));
+    const kept = await writeAwaitingReview(w, "d1");
+    ok("[REVIEW-PROTO] draft: the card is up with the batch already applied", kept.card?.form === "draft" && w.created.length === 1 && w.label.characters === "new");
+    await w.send({ type: "review-answer", id: String(kept.card?.id), apply: true });
+    const rk = await kept.reply;
+    ok("[REVIEW-PROTO] Keep: the normal success reply, the draft stays", rk?.ok === true && rk.applied.length === 2 && w.label.characters === "new");
+    w.label.characters = "old";
+    w.created.splice(0);
+    const back = await writeAwaitingReview(w, "d2");
+    await w.send({ type: "review-answer", id: String(back.card?.id), apply: false, reason: "not this" });
+    const rb = await back.reply;
+    ok("[REVIEW-PROTO] Put back: refused 'rejected' with the reason, the draft put back", rb?.refused === "rejected" && rb.reason === "not this" && /put back/.test(rb.error ?? "") && untouched(w));
+  },
+}, {
+  name: "Review prototype: when a write waits (checkbox-forced, overwrites) and a longer ticket-mode wait",
+  async run() {
+    const w = reviewWorld({ clientStorage: { reviewProto: { display: "list", when: "checkbox-forced", threshold: 25 } } });
+    await w.allowEdits();
+    const box = await w.send({ type: "get-review-writes" });
+    ok("[REVIEW-PROTO] checkbox-forced: a box never set reads as ON", box.some((m) => m.type === "review-writes" && m.on === true));
+    const forced = await writeAwaitingReview(w, "f1", [{ op: "createFrame", name: "Card" }]);
+    ok("[REVIEW-PROTO] …so even a create waits, saying why", /Review each change first/.test(String(forced.card?.why)));
+    await w.send({ type: "review-answer", id: String(forced.card?.id), apply: false });
+    await forced.reply;
+    await w.send({ type: "set-review-writes", on: false });
+    await w.send({ type: "set-review-proto", proto: { display: "list", when: "overwrites", threshold: 25 } });
+    const create = await w.api.applyWrites([{ op: "createFrame", name: "Card" }]);
+    ok("[REVIEW-PROTO] overwrites: a pure create goes straight through", create.ok === true && !w.posted.some((m) => m.type === "review" && m.id !== forced.card?.id));
+    const over = await writeAwaitingReview(w, "o1", [{ op: "setText", nodeId: "t:1", text: "new" }]);
+    const shows = over.card?.shows as Array<{ n: number } | null> | undefined;
+    ok("[REVIEW-PROTO] …an overwrite waits, with a Show me for its layer", /overwrite/.test(String(over.card?.why)) && shows?.[0]?.n === 1);
+    const shown = await w.send({ type: "review-show", id: String(over.card?.id), index: 0 });
+    ok("[REVIEW-PROTO] Show me answers in the window (never throws)", shown.some((m) => m.type === "review-shown"));
+    await w.send({ type: "review-answer", id: String(over.card?.id), apply: false });
+    await over.reply;
+    const from = w.posted.length;
+    const long = w.send({ type: "bridge", id: "t1", cmd: "write", args: { ops: [{ op: "setText", nodeId: "t:1", text: "x" }], reviewWaitMs: 99 * 60000 } });
+    await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
+    const card = w.posted.slice(from).find((m) => m.type === "review");
+    ok("[REVIEW-PROTO] a ticket-mode write's longer wait is capped at 30 min", card?.waitMs === 30 * 60000);
+    await w.send({ type: "review-answer", id: String(card?.id), apply: false });
+    await long;
+  },
 }];

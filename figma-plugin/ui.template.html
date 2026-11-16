@@ -76,6 +76,20 @@
   #review-reason { width: 100%; box-sizing: border-box; min-height: 40px; margin-bottom: 8px; font: inherit; resize: vertical; }
   #review-wait { font-size: 11px; color: var(--figma-color-text-secondary, #555); margin-bottom: 6px; }
   #review-apply { border-color: var(--figma-color-border-brand-strong, #0d99ff); }
+  /* PROTOTYPE (#174): the review switches and what the card adds (Show me, why it waited, drawings). */
+  #review-proto-box { font-size: 11px; margin: 4px 0 6px 22px; }
+  #review-proto-box select, #review-proto-box input { font: inherit; margin: 2px 4px 2px 0; }
+  #review-proto-box input { width: 48px; }
+  #review-why { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+  #review-shown { font-size: 11px; color: var(--figma-color-text-secondary, #555); margin-bottom: 6px; }
+  .rv-show { font-size: 10px; padding: 0 6px; margin-left: 6px; width: auto; display: inline-block; }
+  .rv-draw { margin: 4px 0; }
+  .rv-fit { width: 300px; overflow: hidden; border: 1px solid var(--figma-color-border, #ddd); background: var(--figma-color-bg, #fff); }
+  .rv-box { box-sizing: border-box; border: 1px dashed var(--figma-color-border-strong, #bbb); min-width: 8px; min-height: 8px; font-size: 11px; color: var(--figma-color-text, #222); overflow: hidden; }
+  .rv-inst { border: 1px solid var(--figma-color-border-component, #9747ff); color: var(--figma-color-text-component, #9747ff); padding: 2px; }
+  .rv-thumb { max-width: 96px; max-height: 96px; margin: 2px; border: 1px solid var(--figma-color-border, #ddd); background: var(--figma-color-bg, #fff); }
+  .rv-row { font-size: 11px; overflow-wrap: anywhere; }
+  .rv-sw { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--figma-color-border-strong, #888); margin: 0 3px -1px 0; }
   #cancel { border-color: var(--figma-color-border-danger-strong, #c0362c); color: var(--figma-color-text-danger, #c0362c); }
   /* Bo, the brand mark (assets/logo-16.svg), in front of the status line: it "says" the status. It sits in the
      line's own height, so no control moves and the window keeps its size. The frame and eyes are currentColor
@@ -93,7 +107,10 @@
      here goes back to Claude Code with the refusal. Nothing in the file changes until Apply. -->
 <div id="review" role="alertdialog" aria-labelledby="review-title" hidden>
   <div id="review-title">Claude Code wants to change this file</div>
+  <div id="review-why" hidden></div>
   <ol id="review-lines"></ol>
+  <button id="review-show-all" class="rv-show" hidden>Show all</button>
+  <div id="review-shown"></div>
   <div id="review-wait"></div>
   <textarea id="review-reason" maxlength="500" placeholder="Reason, if you reject (sent to Claude Code)"></textarea>
   <div class="row">
@@ -130,8 +147,15 @@
 </label>
 <label id="review-row" for="review-writes">
   <input id="review-writes" type="checkbox" disabled />
-  <span>Review each write</span>
+  <span id="review-label">Review each write</span>
 </label>
+<!-- PROTOTYPE (#174, throwaway): the three review questions the owner tries live. Defaults are today's behaviour. -->
+<details id="review-proto-box">
+  <summary>Review prototype (dev)</summary>
+  <label>Display <select id="rp-display"><option value="list">list</option><option value="draft">draft</option><option value="drawing">drawing</option></select></label><br />
+  <label>When <select id="rp-when"><option value="today">today</option><option value="checkbox-forced">checkbox-forced</option><option value="overwrites">overwrites</option></select></label>
+  <label>over <input id="rp-threshold" type="number" min="0" value="25" /> layers</label>
+</details>
 <div class="hint" id="edits-hint" style="margin-top:2px">Lets Claude Code change this file over the bridge (add frames and text, set fills and text). Off: it can only read. Every change is announced here. Review each write: every change waits here until you apply or reject it.</div>
 
 <div class="sep"></div>
@@ -250,19 +274,110 @@
     // The review card (review.ts). One at a time: writes run one after another, so a second card cannot arrive while
     // one waits. Its lines are text, never markup (they quote names and text from the request).
     var reviewId = null;
+    // PROTOTYPE (#174): Show me / Show all ask the main thread to select and zoom (index -1 = all).
+    function showMe(index) {
+      if (!reviewId) return;
+      parent.postMessage({ pluginMessage: { type: "review-show", id: reviewId, index: index } }, "*");
+    }
+    function showButton(index, sh) {
+      var b = document.createElement("button");
+      b.className = "rv-show";
+      b.textContent = sh.spot ? "Show where" : sh.total > sh.n ? "Show me (" + sh.n + " of " + sh.total + ")" : "Show me";
+      b.onclick = function () { showMe(index); };
+      return b;
+    }
+    function swatchText(el, s) {
+      var t = String(s);
+      var hex = /^"?(#[0-9a-fA-F]{3,8})"?$/.exec(t);
+      if (hex) { var sw = document.createElement("span"); sw.className = "rv-sw"; sw.style.background = hex[1]; el.appendChild(sw); }
+      var tx = document.createElement("span"); tx.textContent = t; el.appendChild(tx);
+    }
+    // A new tree's schematic: nested boxes, auto-layout as flex, drawn at its own size then scaled to fit 300px.
+    function drawBox(b) {
+      var d = document.createElement("div");
+      d.className = "rv-box" + (b.inst ? " rv-inst" : "");
+      var st = d.style;
+      if (b.dir) { st.display = "flex"; st.flexDirection = b.dir; }
+      if (b.gap != null) st.gap = b.gap + "px";
+      if (b.pad) st.padding = b.pad.map(function (v) { return v + "px"; }).join(" ");
+      if (b.w != null) st.width = b.w + "px";
+      if (b.h != null) st.height = b.h + "px";
+      if (b.radius != null) st.borderRadius = b.radius + "px";
+      if (b.text != null) { d.textContent = String(b.text); st.border = "none"; if (b.fill) st.color = b.fill; if (b.size) st.fontSize = b.size + "px"; }
+      else if (b.fill) st.background = b.fill;
+      if (b.inst) { d.textContent = "\u25C7 " + b.inst; }
+      (b.kids || []).forEach(function (k) { d.appendChild(drawBox(k)); });
+      if (b.more) { var more = document.createElement("div"); more.textContent = "… (more not drawn)"; d.appendChild(more); }
+      if (b.name && !b.text && !b.inst) d.title = b.name;
+      return d;
+    }
+    function drawing(dr) {
+      var wrap = document.createElement("div");
+      wrap.className = "rv-draw";
+      if (dr.tree) {
+        var fit = document.createElement("div");
+        fit.className = "rv-fit";
+        var inner = drawBox(dr.tree);
+        inner.style.transformOrigin = "0 0";
+        fit.appendChild(inner);
+        wrap.appendChild(fit);
+        // Measured once it is in the document (showReview appends it), then scaled down to the 300px column.
+        setTimeout(function () {
+          var w = inner.scrollWidth || 300, h = inner.scrollHeight || 0;
+          var k = w > 300 ? 300 / w : 1;
+          inner.style.transform = "scale(" + k + ")";
+          fit.style.height = Math.ceil(h * k) + "px";
+        }, 0);
+      }
+      (dr.thumbs || []).forEach(function (bytes) {
+        if (typeof Blob === "undefined" || typeof URL === "undefined") return;
+        var img = document.createElement("img");
+        img.className = "rv-thumb";
+        img.src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+        img.alt = "before";
+        wrap.appendChild(img);
+      });
+      if (dr.thumbs && dr.thumbs.length) { var cap = document.createElement("div"); cap.className = "rv-row"; cap.textContent = "before (after not drawn)"; wrap.appendChild(cap); }
+      (dr.rows || []).forEach(function (r) {
+        var row = document.createElement("div");
+        row.className = "rv-row";
+        var f = document.createElement("span"); f.textContent = r.field + ": "; row.appendChild(f);
+        swatchText(row, r.old);
+        var arrow = document.createElement("span"); arrow.textContent = " \u2192 "; row.appendChild(arrow);
+        swatchText(row, r.now);
+        wrap.appendChild(row);
+      });
+      return wrap;
+    }
     function showReview(m) {
       reviewId = m.id;
       var list = $("review-lines");
+      var shows = m.shows || null, draws = m.drawings || null;
       if (list) {
         list.innerHTML = "";
-        (m.lines || []).forEach(function (line) {
+        (m.lines || []).forEach(function (line, i) {
           var li = document.createElement("li");
-          li.textContent = String(line);
+          var sh = shows && shows[i], dr = draws && draws[i];
+          if (!sh && !dr) li.textContent = String(line);
+          else {
+            var tx = document.createElement("span"); tx.textContent = String(line); li.appendChild(tx);
+            if (sh) li.appendChild(showButton(i, sh));
+            if (dr) li.appendChild(drawing(dr));
+          }
           list.appendChild(li);
         });
       }
+      var why = $("review-why");
+      if (why) { why.textContent = m.why ? "Waiting because: " + m.why : ""; why.hidden = !m.why; }
+      var all = $("review-show-all");
+      if (all) all.hidden = !(shows && shows.some(function (x) { return x && x.n > 0; }));
+      var shown = $("review-shown"); if (shown) shown.textContent = m.form === "draft" ? "Applied as a draft and selected. Keep it, or put it back." : "";
+      var ra = $("review-apply"); if (ra) ra.textContent = m.form === "draft" ? "Keep" : "Apply";
+      var rj = $("review-reject"); if (rj) rj.textContent = m.form === "draft" ? "Put back" : "Reject";
       var wait = $("review-wait");
-      if (wait) wait.textContent = "Nothing changes until you apply it. It is refused on its own after " + Math.round((m.waitMs || 0) / 60000) + " min.";
+      if (wait) wait.textContent = m.form === "draft"
+        ? "It is already in the file. It is put back on its own after " + Math.round((m.waitMs || 0) / 60000) + " min."
+        : "Nothing changes until you apply it. It is refused on its own after " + Math.round((m.waitMs || 0) / 60000) + " min.";
       var reason = $("review-reason"); if (reason) reason.value = "";
       setReviewButtons(false);
       // A write in review is not running yet: its Cancel button would only duplicate Reject.
@@ -434,6 +549,18 @@
       }
       if (m.type === "review") {
         showReview(m);
+        return;
+      }
+      if (m.type === "review-shown") {
+        var rs = $("review-shown"); if (rs) rs.textContent = String(m.text || "");
+        return;
+      }
+      if (m.type === "review-proto") {
+        var p = m.proto || {};
+        var d = $("rp-display"); if (d) d.value = p.display;
+        var wn = $("rp-when"); if (wn) wn.value = p.when;
+        var th = $("rp-threshold"); if (th) th.value = String(p.threshold);
+        var lab = $("review-label"); if (lab) lab.textContent = p.when === "checkbox-forced" ? "Review each change first" : "Review each write";
         return;
       }
       if (m.type === "review-end") {
@@ -684,6 +811,14 @@
           parent.postMessage({ pluginMessage: { type: "set-review-writes", on: !!rw.checked } }, "*");
         };
         parent.postMessage({ pluginMessage: { type: "get-review-writes" } }, "*");
+        // PROTOTYPE (#174): the review switches, saved by the main thread (review-proto.ts).
+        var sendProto = function () {
+          var d = $("rp-display"), wn = $("rp-when"), th = $("rp-threshold");
+          parent.postMessage({ pluginMessage: { type: "set-review-proto", proto: { display: d && d.value, when: wn && wn.value, threshold: th ? Number(th.value) : 25 } } }, "*");
+        };
+        ["rp-display", "rp-when", "rp-threshold"].forEach(function (id) { var e = $(id); if (e) e.onchange = sendProto; });
+        parent.postMessage({ pluginMessage: { type: "get-review-proto" } }, "*");
+        var sa = $("review-show-all"); if (sa) sa.onclick = function () { showMe(-1); };
         var ra = $("review-apply"); if (ra) ra.onclick = function () { answerReview(true); };
         var rj = $("review-reject"); if (rj) rj.onclick = function () { answerReview(false); };
         // Ask code.js for the stored token; connect() runs once it replies. Also proves the round-trip.

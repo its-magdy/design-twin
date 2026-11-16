@@ -23,18 +23,23 @@ import { reviewLines, reviewReason, type WriteOp } from "../../bridge/src/comman
 import { REVIEW_WAIT_MS } from "../../bridge/src/timeouts.ts";
 import { activeRun } from "./run";
 import type { ReviewEnd, ReviewEndMsg, ReviewMsg } from "./messages";
+import { forgetCard, rememberCard, reviewProto, type OpLayers } from "./review-proto";
 
 export type { ReviewEnd };
 
 const KEY = "reviewWrites";
 
 let on = false;
+// PROTOTYPE (#174): whether the box was ever set — "checkbox-forced" reads a box never set as ON.
+let set = false;
 
 // Read once, when the bundle is evaluated (as edits.ts does). Until it settles review reads as OFF, but no write runs
 // before it settles: writes.ts awaits reviewWrites().
 const loaded: Promise<void> = (async () => {
   try {
-    on = (await figma.clientStorage.getAsync(KEY)) === true;
+    const v: unknown = await figma.clientStorage.getAsync(KEY);
+    on = v === true;
+    set = typeof v === "boolean";
   } catch (e) {
     console.error("[export] could not read the Review each write setting; review stays off:", e);
     on = false;
@@ -44,13 +49,20 @@ const loaded: Promise<void> = (async () => {
 /** Whether a write waits for the designer's Apply/Reject (after the saved setting has been read). */
 export async function reviewWrites(): Promise<boolean> {
   await loaded;
+  if (!set && (await reviewProto()).when === "checkbox-forced") return true;
   return on;
+}
+/** PROTOTYPE (#174): the box as saved, undefined when never set (review-policy.ts reviewDecision reads it). */
+export async function reviewCheckbox(): Promise<boolean | undefined> {
+  await loaded;
+  return set ? on : undefined;
 }
 
 /** The designer ticked or cleared "Review each write". Takes effect for the next batch, then is saved. */
 export async function setReviewWrites(value: boolean): Promise<boolean> {
   await loaded;
   on = value;
+  set = true;
   try {
     await figma.clientStorage.setAsync(KEY, value);
   } catch (e) {
@@ -67,8 +79,12 @@ interface Pending { settle(o: ReviewOutcome): void }
 const pending = new Map<string, Pending>();
 let seq = 0;
 
+/** PROTOTYPE (#174): what a card adds to the plain lines (all optional; none = today's card), the Show me targets the
+ *  main thread keeps while it is up, and how long it waits (a ticket-mode write sends a longer one). */
+export interface CardExtras { form?: ReviewMsg["form"]; why?: string; shows?: ReviewMsg["shows"]; drawings?: ReviewMsg["drawings"]; layers?: readonly OpLayers[]; waitMs?: number }
+
 /** Show the card for `ops` and wait for the designer. Resolves once — never rejects. */
-export function awaitReview(ops: readonly WriteOp[]): Promise<ReviewOutcome> {
+export function awaitReview(ops: readonly WriteOp[], extras: CardExtras = {}): Promise<ReviewOutcome> {
   const id = "review-" + ++seq;
   const run = activeRun();
   return new Promise<ReviewOutcome>((resolve) => {
@@ -78,6 +94,7 @@ export function awaitReview(ops: readonly WriteOp[]): Promise<ReviewOutcome> {
     const onCancel = (): void => settle({ end: run && run.cancel === "designer" ? "cancelled" : "withdrawn" });
     const settle = (o: ReviewOutcome): void => {
       if (!pending.delete(id)) return; // already ended: one outcome per card
+      forgetCard(id);
       if (timer !== undefined) clearTimeout(timer);
       if (run && run.onCancel === onCancel) run.onCancel = null;
       // The window takes the card down whatever ended it, and says why when no click of the designer's did.
@@ -87,8 +104,14 @@ export function awaitReview(ops: readonly WriteOp[]): Promise<ReviewOutcome> {
     };
     pending.set(id, { settle });
     if (run) run.onCancel = onCancel;
-    timer = setTimeout(() => settle({ end: "timed-out" }), REVIEW_WAIT_MS);
-    const card: ReviewMsg = { type: "review", id, lines: reviewLines(ops), waitMs: REVIEW_WAIT_MS };
+    const waitMs = extras.waitMs !== undefined ? extras.waitMs : REVIEW_WAIT_MS;
+    timer = setTimeout(() => settle({ end: "timed-out" }), waitMs);
+    if (extras.layers) rememberCard(id, extras.layers);
+    const card: ReviewMsg = { type: "review", id, lines: reviewLines(ops), waitMs };
+    if (extras.form !== undefined) card.form = extras.form;
+    if (extras.why !== undefined) card.why = extras.why;
+    if (extras.shows !== undefined) card.shows = extras.shows;
+    if (extras.drawings !== undefined) card.drawings = extras.drawings;
     figma.ui.postMessage(card);
   });
 }

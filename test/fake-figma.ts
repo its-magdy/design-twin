@@ -65,6 +65,8 @@ export interface PostedMessage {
   id?: string; ok?: boolean; result?: unknown; error?: string;
   /** review.ts `review` (id, lines, waitMs) / `review-end` (id, end); main.ts `review-writes` (on) */
   lines?: string[]; waitMs?: number; end?: string; on?: boolean;
+  /** PROTOTYPE (#174): a card's form, why it waited, its Show me rows */
+  form?: string; why?: string; shows?: unknown;
 }
 export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;

@@ -3,7 +3,8 @@ import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelect
 import { applyWrites } from "./writes";
 import { designImpact } from "./creates";
 import { editsAllowed } from "./edits";
-import { reviewWrites } from "./review";
+import { reviewCheckbox, reviewWrites } from "./review";
+import { reviewProto } from "./review-proto";
 import { listLibraries } from "./libraries";
 import { scheduleRun } from "./state";
 import { type RunInfo } from "./progress";
@@ -74,6 +75,7 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
     //     a locally-imported plugin, so routing must fall back to a server-minted connection id.
     //   file / page                      — human labels for a connection listing, never routing keys.
     case "whoami": return async () => {
+      const boxOrNull = (b: boolean | undefined): boolean | null => (b === undefined ? null : b);
       const fileKey = readFileKey();
       const r: WhoamiReply = {
         instanceId: INSTANCE_ID,
@@ -95,6 +97,8 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
         editsAllowed: await editsAllowed(),
         // …and that it would wait for the designer's Apply or Reject in the plugin window.
         reviewWrites: await reviewWrites(),
+        // PROTOTYPE (#174): the review switches, so the dry run can say whether a real write would wait and why.
+        reviewProto: { ...(await reviewProto()), checkbox: boxOrNull(await reviewCheckbox()) },
       };
       return r;
     };
@@ -159,8 +163,8 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
     // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
     // here, so no caller of it can skip it.
     case "write": {
-      const { ops, images } = req.args;
-      return () => applyWrites(ops, images);
+      const { ops, images, reviewWaitMs } = req.args;
+      return () => applyWrites(ops, images, reviewWaitMs);
     }
     // figma_write's dry run, the half only the file can answer: how much a source edit carries to (sources.ts), and what
     // a create table would make or update (creates.ts). Reads only, so it needs no "Allow edits"; a scene run, so it

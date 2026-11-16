@@ -5,6 +5,7 @@
 // A leaf: type imports of bridge/src only, so the window's relay (relay.ts) and the tests can import it without the
 // main thread's modules (which need the Figma globals).
 import type { Asset } from "../../bridge/src/doc-types.ts";
+import type { ReviewDisplay, ReviewProto } from "../../bridge/src/review-policy.ts";
 
 // ---------- UI -> main ----------
 
@@ -23,6 +24,11 @@ export interface SetReviewWritesMsg { type: "set-review-writes"; on: boolean; }
 // The designer's answer on review card `id`: Apply (`apply: true`) or Reject, with the reason they typed. The window's
 // buttons only — relay.ts never turns a socket frame into it.
 export interface ReviewAnswerMsg { type: "review-answer"; id: string; apply: boolean; reason?: string; }
+// PROTOTYPE (#174): the window's "Review prototype (dev)" block (review-proto.ts), and a card's Show me (`index` an op,
+// -1 all). The window's controls only, like the checkboxes.
+export interface GetReviewProtoMsg { type: "get-review-proto"; }
+export interface SetReviewProtoMsg { type: "set-review-proto"; proto: unknown; }
+export interface ReviewShowMsg { type: "review-show"; id: string; index: number; }
 // Three meanings, one message type (main.ts `case "cancel"`):
 //   no `id`, no `scope` — the designer's Cancel button (answered with `cancel-ack`, unchanged);
 //   `id`                — the bridge gave up on request <id> (relay.ts forwards the socket's
@@ -44,12 +50,15 @@ export type UIToMain =
   | GetReviewWritesMsg
   | SetReviewWritesMsg
   | ReviewAnswerMsg
+  | GetReviewProtoMsg
+  | SetReviewProtoMsg
+  | ReviewShowMsg
   | CancelMsg
   | BridgeMsg;
 
 const UI_TO_MAIN_TYPES: ReadonlySet<UIToMain["type"]> = new Set([
   "get-token", "set-token", "get-identity", "run-selection", "run-full", "get-allow-edits", "set-allow-edits",
-  "get-review-writes", "set-review-writes", "review-answer", "cancel", "bridge",
+  "get-review-writes", "set-review-writes", "review-answer", "get-review-proto", "set-review-proto", "review-show", "cancel", "bridge",
 ]);
 
 export function isUIToMain(x: unknown): x is UIToMain {
@@ -119,7 +128,23 @@ export interface WritesMsg { type: "writes"; applied: number; ok: boolean; text:
 export interface ReviewWritesMsg { type: "review-writes"; on: boolean; }
 /** A write batch waits for the designer (review.ts): one plain line per op (commands.ts reviewLines, the dry run's
  *  description), and how long the card waits before the batch is refused unreviewed. */
-export interface ReviewMsg { type: "review"; id: string; lines: string[]; waitMs: number; }
+export interface ReviewMsg {
+  type: "review"; id: string; lines: string[]; waitMs: number;
+  // PROTOTYPE (#174), all absent on today's card: the form, why it waited, each line's Show me, each line's drawing.
+  form?: ReviewDisplay; why?: string; shows?: Array<ReviewShow | null>; drawings?: Array<ReviewDrawing | null>;
+}
+/** A line's Show me: `n` layers it selects of `total`; `spot`: none yet, it pans to where a new tree lands. */
+export interface ReviewShow { n: number; total: number; spot?: true }
+/** A schematic box of a new tree (review-proto.ts schematic): auto-layout → flex. */
+export interface ReviewBox {
+  name?: string; dir?: "row" | "column"; gap?: number; pad?: number[]; w?: number; h?: number; fill?: string;
+  text?: string; size?: number; inst?: string; radius?: number; kids?: ReviewBox[]; more?: true;
+}
+export interface ReviewRow { field: string; old: string; now: string }
+/** A line's drawing: a new tree's schematic, or "before" thumbnails (PNG bytes) beside field rows. */
+export interface ReviewDrawing { tree?: ReviewBox; thumbs?: Uint8Array[]; rows?: ReviewRow[] }
+export interface ReviewProtoMsg { type: "review-proto"; proto: ReviewProto; }
+export interface ReviewShownMsg { type: "review-shown"; text: string; }
 /** How a review card ended: applied by the designer, rejected, nobody answered in time, withdrawn by the bridge (its
  *  caller gave up or disconnected), stopped with Cancel, or ended because "Allow edits" was unticked. */
 export type ReviewEnd = "approved" | "rejected" | "timed-out" | "withdrawn" | "cancelled" | "edits-off";
@@ -139,6 +164,8 @@ export type MainToUI =
   | ReviewWritesMsg
   | ReviewMsg
   | ReviewEndMsg
+  | ReviewProtoMsg
+  | ReviewShownMsg
   | BridgeResultMsg
   // run-begin / progress / run-end, posted by progress.ts
   | ProgressPost;

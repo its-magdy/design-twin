@@ -30,6 +30,7 @@ import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
 import { imageTableError, type ImageTable } from "./image-spec.ts";
+import type { ReviewProto } from "./review-policy.ts";
 import type { BindCounts } from "./bind-values.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -135,6 +136,9 @@ export interface WriteArgs {
    *  paint's `image`) → base64 (image-spec.ts). Put here by figma_write on the MCP server (image-file.ts), never by the
    *  spec's author; absent when no paint names a file. */
   images?: ImageTable | undefined;
+  /** PROTOTYPE (#174): how long a review card waits for this batch (a ticket-mode figma_write asks for a longer wait);
+   *  the plugin caps it at 30 min. Absent: REVIEW_WAIT_MS. */
+  reviewWaitMs?: number | undefined;
 }
 
 /** A WriteOp field that holds a string. */
@@ -348,6 +352,8 @@ export interface WhoamiReply {
   /** Whether the designer has ticked "Review each write" in the plugin window (figma-plugin/src/review.ts): a write
    *  then waits until they apply or reject it there. Absent from a plugin built before the review card existed. */
   reviewWrites?: boolean;
+  /** PROTOTYPE (#174): the window's review switches (review-policy.ts) and the box as saved (null: never set). */
+  reviewProto?: ReviewProto & { checkbox: boolean | null };
 }
 
 /** One selected node (figma.currentPage.selection, summarised). */
@@ -870,7 +876,7 @@ export function writeOpError(o: unknown, i: number): string | null {
 }
 const writeArgs: ArgsCheck = (a) => {
   if (!Array.isArray(a.ops)) return a.ops === undefined ? "`ops` is missing" : "`ops` is not an array";
-  return first([...a.ops.map(writeOpError), imageTableError(a.images)]);
+  return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "reviewWaitMs", isNum, "a number")]);
 };
 
 /** NoArgs: nothing is read, so nothing can be wrong (see the undeclared-key rule above). */
