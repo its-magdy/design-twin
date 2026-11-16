@@ -109,7 +109,7 @@ export function canvas(): Canvas {
   };
   const box = (n: CNode) => ({ x: Number(n.x), y: Number(n.y), width: Number(n.width), height: Number(n.height) });
   // What every node carries for the read: no dev resources, and a reference render that is one fixed tiny byte string.
-  const common = { visible: true, strokes: [], effects: [], opacity: 1, rotation: 0, blendMode: "NORMAL", isMask: false, x: 0, y: 0, componentPropertyReferences: null,
+  const common = { visible: true, strokes: [], effects: [], opacity: 1, rotation: 0, blendMode: "NORMAL", isMask: false, x: 0, y: 0, componentPropertyReferences: null, layoutPositioning: "AUTO",
     getDevResourcesAsync: async () => [], exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
   // A page's components, as findAllWithCriteria finds them (every level).
   const findAll = (root: CNode, types: readonly string[]): CNode[] =>
@@ -154,6 +154,8 @@ export function canvas(): Canvas {
       textAutoResize: "WIDTH_AND_HEIGHT", textAlignHorizontal: "LEFT", textAlignVertical: "TOP",
       lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE",
       getRangeAllFontNames: () => Object.freeze([FONT]), // frozen, as Figma's
+      // a text a spec sizes (a captured page's: a box, then how it follows its text)
+      resize(w: number, h: number) { n.width = w; n.height = h; },
       ...pluginData(),
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
       clone() { return cloneOf(n); },

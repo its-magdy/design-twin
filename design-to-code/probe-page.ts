@@ -241,6 +241,9 @@ export interface MeasureInput {
   /** every key each node's styles must carry (verify-shared.ts STYLE_KEYS) */
   keys: readonly string[];
   items: MeasureItem[];
+  /** the page capture (capture-page.ts) asks for the text style bits a Figma text needs beyond its font: optional keys
+   *  `fontStyle`, `textDecoration`, `textTransform` on every item, read on the text's owner (never set by verify) */
+  capture?: boolean;
 }
 export type PValue = string | number | boolean | null | PValue[] | { [k: string]: PValue };
 export interface MeasureResult {
@@ -620,6 +623,12 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     // the computed text-transform of the text's owner (inherited) — the rendered string is `text` under it.
     // Optional (not a STYLE_KEY): absent when unreadable, never a null to explain.
     if (item.isText && !item.isPlaceholder) { const tt = typoCs.getPropertyValue("text-transform").trim(); if (tt) styles.textTransform = tt; }
+    if (input.capture) {
+      const tt = typoCs.getPropertyValue("text-transform").trim(), fs = typoCs.getPropertyValue("font-style").trim(), td = typoCs.getPropertyValue("text-decoration-line").trim();
+      if (tt) styles.textTransform = tt;
+      if (fs) styles.fontStyle = fs;
+      if (td) styles.textDecoration = td;
+    }
     return res;
   });
 }

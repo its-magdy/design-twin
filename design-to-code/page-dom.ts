@@ -1,5 +1,5 @@
 // page-dom.ts — the page, as far as the probe's page-side functions use it: the types of the DOM that
-// page-runtime.ts, probe-page.ts, probe-drive.ts, probe-behaviour.ts and probe-visual.ts read inside page.evaluate.
+// page-runtime.ts, probe-page.ts, probe-drive.ts, probe-behaviour.ts, probe-visual.ts and probe-capture.ts read inside page.evaluate.
 //
 // Types only, imported with `import type`: the design-to-code tsconfig has no DOM lib (the rest of this layer runs in Node,
 // where `document` does not exist), and a page-side function is serialised with Function.prototype.toString() and run as
@@ -60,6 +60,10 @@ export interface PageElement extends PageNode {
   currentSrc?: string;
   src?: string;
   outerHTML?: string;
+  /** an <img>'s load state (HTMLImageElement.complete) */
+  complete?: boolean;
+  /** a <slot>'s assigned elements (HTMLSlotElement.assignedElements) */
+  assignedElements?(): PageElement[];
   /** an <input>'s type (lower case; "text" when absent or unknown) */
   type?: string;
   /** a <select>'s multiple / size: either makes it a list box showing every option */
@@ -108,7 +112,14 @@ export interface PageElement extends PageNode {
   prepend(node: PageElement): void;
   remove(): void;
 }
-export interface PageRange { selectNodeContents(node: PageNode): void; getBoundingClientRect(): PageRect; getClientRects(): ArrayLike<PageRect> }
+export interface PageRange {
+  selectNodeContents(node: PageNode): void;
+  /** the page capture's Range over a run of sibling nodes (probe-capture.ts) */
+  setStartBefore(node: PageNode): void;
+  setEndAfter(node: PageNode): void;
+  getBoundingClientRect(): PageRect;
+  getClientRects(): ArrayLike<PageRect>;
+}
 export interface PageCanvasContext {
   fillStyle: string;
   clearRect(x: number, y: number, w: number, h: number): void;
@@ -226,5 +237,8 @@ export interface PageWindow {
   __dtBeh?: BehState;
   /** the measurement pass's document token (an init script sets it per document) */
   __dtProbeDoc?: string;
+  /** hideChildren's undo list (probe-capture.ts): per element hidden for a screenshot, the style attribute of every
+   *  element it changed as it was (null: none) */
+  __dtHidden?: WeakMap<PageElement, Array<[PageElement, string | null]>>;
   scrollTo(opts: { top: number; left: number; behavior: string }): void;
 }

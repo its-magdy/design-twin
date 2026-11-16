@@ -32,6 +32,18 @@ list of merged PRs.
 
 ### Added
 
+- The Claude Code plugin ships `scripts/capture-page.js`, which captures a rendered page as a Figma screen: it opens a
+  page URL (a dev server, a deployed page or an HTML file) in the project's own Playwright chromium at one or several
+  viewport widths, reads what rendered with the probe the verify step uses, and writes a tree spec per width, its
+  images and a report under `design/capture/`, then prints the `figma_write` ops that land them by `treeFile` (several
+  widths in one batch, all or nothing). The model types no node. Flex and grid become auto-layout, block layout keeps
+  each child's position, text is real text in the font the browser drew it with (a font the file lacks refuses the
+  batch, naming it, and is never swapped), and pictures land as image fills (a format Figma does not take, an inline
+  SVG or a canvas as a PNG of the element). The result has raw values only, no components or variables. Shadows,
+  gradients, `::before`/`::after` content, transforms and filters are not written; the report counts them. A capture
+  over 500 nodes is refused with a hint to capture part of the page with `--root`; `--check` says whether Playwright
+  and chromium are usable. The design-in-figma skill has a "Capture a page" section, and the write-cost suite records a
+  capture job: one captured 39-node screen costs one call and about 184 tokens, against about 2,184 typed node by node.
 - `figma_write` can paint images. Any `fills` (a `createTree` node, a patch's `set.fills`, a paint style's `paints`)
   takes `{type: "image", file}` (a PNG, JPEG or GIF in the project) or `{type: "image", hash}` (an image the file
   already has), with `scaleMode` `fill`, `fit` or `tile`, a tile's `scale` and `opacity`. The MCP server reads each file

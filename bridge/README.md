@@ -1099,7 +1099,9 @@ else looks at the batch, so a spec given by path is checked, previewed and appli
 and the plugin never sees the path. A missing file, one that is not JSON, a path outside the project, a `treeFile`
 beside a `tree`, or one on another op refuses the whole call with nothing changed. A spec a script produced costs the
 model nothing to send, and a corrected one is sent again by the same path. The CLI has no write command: writes stay on
-the MCP server.
+the MCP server. One such script ships with the Claude Code plugin: `<scripts>/capture-page.js --url <url> [--width
+1280,390]` renders a page in the project's Playwright and writes a spec per width (and its images) under
+`design/capture/`, printing the `treeFile` ops that land it (the design-in-figma skill, Capture a page).
 
 **Re-send updates in place.** A root `key` is stored on the result (as this plugin's own plugin data: the key and each
 node's own spec fields on every node it builds, and the root's id under the key on the document). When a spec with the

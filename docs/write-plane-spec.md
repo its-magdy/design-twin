@@ -18,7 +18,9 @@ in place, both first in a batch so the specs and patches after them name what th
 code tokens — `seedTokens`, a project's `tokens.dtcg.json` or `tokens.resolver.json` read by the MCP server into those
 tables, modes included, the tokens it cannot map listed — is built; creating components — a `createTree` root of type
 `COMPONENT`, or `COMPONENT_SET` from a variant table, its TEXT, BOOLEAN and INSTANCE_SWAP properties declared and its
-layers wired to them, named by later specs and updated in place when its name is sent again — is built)
+layers wired to them, named by later specs and updated in place when its name is sent again — is built; images — a
+paint `{type: "image", file}` or `{type: "image", hash}` — are built; capturing a rendered page as a screen —
+`capture-page`, which writes a tree spec per viewport width and its images to disk for `treeFile` ops — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -61,6 +63,31 @@ prototype, their own product. The route is mechanical, so the model types none o
 1. A script opens the running page, reads what was rendered with the probe the verify step already uses,
    and writes a tree spec to disk. Flex and grid arrive as auto-layout, text as real text.
 2. `figma_write` lands the spec from disk. The result is faithful but plain: raw values, no components.
+
+As built (steps 1 and 2): `claude-plugin/scripts/capture-page.js` (`design-to-code/capture-page.ts`) opens a page URL
+in the project's own Playwright chromium, resolved and launched as the verify probe does (`probe-browser.ts`), at one
+or several `--width`s, each in a fresh context with the probe's init script; it waits for the load, the fonts, an
+optional `--ready` selector and a quiet DOM, and captures the whole document's height (or one `--root` element). A
+walker (`probe-capture.ts`) reads which elements show and their layout facts; the probe's reader (`measureElements`)
+every visual value; CDP says which font family Chromium drew each text with. The pure converter (`capture-spec.ts`)
+maps flex to auto-layout (a reversed direction reverses the children, stretch and grow become `alignSelf` and
+`grow`), a grid of one column or one row to a column or a row and one of several columns to a wrapping row of
+fixed-width cells (an irregular grid keeps its children's positions, noted); every such auto-layout is checked
+against where the page put the children (gap, padding, justify, alignment, Figma's line breaks, to the px) and one that
+does not reproduce them — a margin, `margin: auto`, a grid row taller than its items, a reversed flex wrapping onto
+several lines — is not written, its children keeping their x/y (counted as approximated); block flow to a frame whose children keep
+their x/y, absolute children of an auto-layout frame to `absolute: true`, an element of inline text to one TEXT
+(inline styles flattened, counted) and text beside blocks to a TEXT per run; borders and rings to strokes, radius,
+opacity and clipping as they are; an element with no paint and one child of its box collapses into it. A weight is
+named by Figma's common style names (400 italic is "Italic"); a font the file lacks is refused by the plugin's own
+check, which lists every missing font with the closest the file has, and is never swapped. Pictures the page loaded
+are saved as they are when Figma takes them, anything else (WebP, AVIF, SVG, an inline `<svg>`, a `<canvas>`) as a
+PNG of that element, under `design/capture/images/<sha256>.<ext>`, and painted by `file`. Each spec must pass the tree
+spec's own check before anything is written; one over 500 nodes or 40 levels, or pictures over all widths (one batch) past the
+32 MB batch cap, is refused (capture part of the page with `--root`). Its root is keyed `capture:<name>@<width>`, so
+a re-capture sent again updates the screen in place. The report (`<name>.capture.json`) lists every font up front and
+counts, with sample paths, what was dropped (shadows, gradients, pseudo-element content, transforms, filters: the
+tree spec has no effects) or approximated, and the ops to send (several widths: one batch, all or nothing).
 3. Values that equal a variable or style in the file are bound to it, and an element the component map
    names arrives as an instance. The component map is used in the write direction: a code component and
    its props resolve to the Figma component and its property values.
@@ -169,7 +196,11 @@ screens.
     it); its ninth (`create-components` / `blank-file`) starts from a blank file: 7 colour tokens in light and dark, a
     5-component kit (two icons, a 4-variant Button set with TEXT, BOOLEAN and INSTANCE_SWAP properties, an Input, a
     Card), then a sign-up screen of their instances — recorded at 4 calls, 7 ops, about 2,171 tokens (1,023 out, 1,148
-    in; the replies' `undoSteps` / `undoNote` count toward the input).
+    in; the replies' `undoSteps` / `undoNote` count toward the input). Its tenth (`capture-page`) lands one captured
+    page: a generic 39-node dashboard captured at 1280 px with three images (`test/fixtures/capture/sample`, the
+    converter's output from a committed capture), sent by `treeFile` — recorded at 1 call, 1 op, about 184 tokens
+    (28 out, 156 in), against 6 calls, 39 ops and about 2,184 tokens for the four-op route typing it node by node
+    (which cannot place its images).
 
 ## Build order
 

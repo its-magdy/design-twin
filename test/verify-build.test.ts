@@ -1663,11 +1663,12 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 }
 // The ONE explicit exception (an owner decision): verify-probe.js loads the PROJECT's Playwright — and
 // the project's axe-core when it has one — at run time through createRequire(<project>/package.json), a computed
-// specifier the literal-import check above cannot see. Both packages go through that one call site. So: exactly
-// one createRequire( call site, in that bundle only, and no bundle names a Playwright package or axe-core in a
-// literal import/require (axe-core is never bundled).
+// specifier the literal-import check above cannot see. Both packages go through that one call site
+// (design-to-code/probe-browser.ts), which capture-page.js (the page capture, #175) inlines too for the project's
+// Playwright. So: exactly one createRequire( call site, in those two bundles only, and no bundle names a Playwright
+// package or axe-core in a literal import/require (axe-core is never bundled).
 {
-  const DYNAMIC_REQUIRE_ALLOWED: Record<string, number> = { "verify-probe": 1 };
+  const DYNAMIC_REQUIRE_ALLOWED: Record<string, number> = { "verify-probe": 1, "capture-page": 1 };
   const wrong: string[] = [];
   for (const n of ENTRIES) {
     const text = fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8");
@@ -1676,7 +1677,7 @@ check("bundles are self-contained — no require() that leaves the plugin direct
     if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["'](?:playwright|playwright-core|@playwright\/test)(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports a Playwright package literally`);
     if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["']axe-core(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports axe-core literally`);
   }
-  check("dynamic require only where allowed: verify-probe.js has exactly one createRequire( (the project's Playwright and axe-core both go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
+  check("dynamic require only where allowed: verify-probe.js and capture-page.js have exactly one createRequire( each (the project's Playwright, and verify-probe's axe-core, go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
   // …and that one call site resolves a package only once the project has it on disk (under Bun, resolving a package the
   // project lacks downloads it from npm into Bun's global cache — auto-install — so the look comes first:
   // packageDirInProject), and what it resolves is loaded only from the project's own node_modules (installedInProject).
@@ -1687,6 +1688,11 @@ check("bundles are self-contained — no require() that leaves the plugin direct
     guards === 3 && /resolved outside the project's node_modules/.test(vp));
   check(`verify-probe.js resolves Playwright and axe-core only after finding them on disk in the project (packageDirInProject: ${looks} mentions — its definition and the two call sites, want 3)`,
     looks === 3 && vp.indexOf("packageDirInProject(abs, name)") < vp.indexOf("file = req.resolve(name)") && vp.indexOf("packageDirInProject(dir, \"axe-core\")") < vp.indexOf("file = req.resolve(\"axe-core\")"));
+  // the page capture resolves the project's Playwright the same way (no axe-core: its definition and one call site each)
+  const cp = fs.readFileSync(path.join(SCRIPTS, "capture-page.js"), "utf8");
+  const cpGuards = [...cp.matchAll(/\binstalledInProject\(/g)].length, cpLooks = [...cp.matchAll(/\bpackageDirInProject\(/g)].length;
+  check(`capture-page.js resolves the project's Playwright only after finding it on disk, and loads it only from the project's node_modules (packageDirInProject ${cpLooks}, installedInProject ${cpGuards} mentions, want 2 each)`,
+    cpGuards === 2 && cpLooks === 2 && cp.indexOf("packageDirInProject(abs, name)") < cp.indexOf("file = req.resolve(name)") && /resolved outside the project's node_modules/.test(cp));
 }
 // the visual diff ports pixelmatch v6.0.0 (ISC) — its licence notice must ship with the code: visual-diff.ts carries it
 // as a `/*! … */` legal comment, which esbuild keeps (moved to the end of the file, legalComments "eof" when bundling)
@@ -1699,7 +1705,7 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
 {
-  const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate", "plan-skeleton", "verify-probe"];
+  const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate", "plan-skeleton", "verify-probe", "capture-page"];
   const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
   const bare: string[] = [];

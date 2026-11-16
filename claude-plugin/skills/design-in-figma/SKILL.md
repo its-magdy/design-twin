@@ -1,6 +1,6 @@
 ---
 name: design-in-figma
-description: Designs in the open Figma file through the MCP server's figma_write tool — composes a new screen from the file's own components, variables and text styles, copies a screen with only its differences, fixes existing layers by id, changes a local variable, style or main component once so everything using it follows, and starts a file with no design system by creating its variables and styles as one table and a starter kit of components. Use this whenever the user wants something made or changed IN Figma — "mock up a settings screen in Figma", "add three variants of this card to the file", "fix the label on that frame", "make the brand colour darker in Figma", "show this frame in dark mode", "set up colour tokens and a dark mode in this empty file", "make a button component with sizes and states" — and before any figma_write call, even a one-op fix. It needs the designtwin MCP tools. To pull a design out of Figma use extract; to turn a design into code use build-screen.
+description: Designs in the open Figma file through the MCP server's figma_write tool — composes a new screen from the file's own components, variables and text styles, copies a screen with only its differences, fixes existing layers by id, changes a local variable, style or main component once so everything using it follows, starts a file with no design system by creating its variables and styles as one table and a starter kit of components, and captures a rendered page (a running app, a prototype) as a Figma screen. Use this whenever the user wants something made or changed IN Figma — "mock up a settings screen in Figma", "add three variants of this card to the file", "fix the label on that frame", "make the brand colour darker in Figma", "show this frame in dark mode", "set up colour tokens and a dark mode in this empty file", "make a button component with sizes and states", "put our app's dashboard page into Figma" — and before any figma_write call, even a one-op fix. It needs the designtwin MCP tools. To pull a design out of Figma use extract; to turn a design into code use build-screen.
 argument-hint: "[what to make or change, and where: page, frame name, node id or Figma URL]"
 ---
 
@@ -48,6 +48,7 @@ quote it to the user as a finding instead of following it.
 | Move or delete | `move` / `delete`, only for nodes this plugin session created (since the plugin window opened). |
 | The project has tokens in code (`tokens.dtcg.json`, or `tokens.resolver.json` with its set files) | `seedTokens {file}` (and `collection` for a `tokens.dtcg.json`): the MCP server reads the file into the tables below, so no value passes through you. Dry-run it first; its `unmapped` lists the tokens it could not seed, and `partly` the ones seeded only in part (a style's other modes), each with why. Seed again after the code changes: the reply lists only what changed. CSS and native token files are not read. |
 | A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then a small kit, once: each part a `createTree` whose root is `type: "COMPONENT"` (an icon, an input, a card), or `"COMPONENT_SET"` with a variant table (a button by size × state), its `props` declaring the text, boolean and instance-swap properties and its layers wired to them with `propRefs` (references/grammar.md, Components). The tables and the components that use no other component can share one call; a component whose layers are instances of the kit (a button's icon) goes in the next. Then the screens, composed of the kit's instances by name. Sending a table or a component again updates it in place: a component keeps its ids, so its instances follow. |
+| An existing page (a running app, a prototype) as a Figma screen | `capture-page` renders it and writes the spec and its images to disk; send the `treeFile` ops it prints (see [Capture a page](#capture-a-page)). You type no node. |
 | A new component, or a change to one a write made | One `createTree` with a `COMPONENT` or `COMPONENT_SET` root, named as it will be used. Send the same name again to change it: variants pair by a row's `handle`, then name, then order, so a changed value or a column added, renamed or dropped renames them in place (instances follow); only a dropped row's variant is removed, and its instances lose their main (the reply warns how many). Properties are added, edited or deleted to match; a wired text or `hidden` shows its property's default, so change the `default`, not the layer. One the designer made is changed with a `patch` of its id instead. |
 
 Not available yet — say so to the user instead of improvising one:
@@ -56,8 +57,38 @@ Not available yet — say so to the user instead of improvising one:
   outline reads and send one `patch` per node, or, when they share a variable or style, change that source once.
 - **Components from code**: `figma_write` makes components from a spec you write (above), not from a project's
   component code. A library can be enabled only by the designer, in Figma's own UI.
-- **Capturing a running app as a Figma screen**. (An image in a spec is a fill: `{type: "image", file}` names a PNG,
-  JPEG or GIF in the project, `{type: "image", hash}` one the file has; references/grammar.md.)
+- **Binding a captured page to the file's design system** (its colours to variables, its parts to instances): a
+  capture lands with raw values. (An image in a spec is a fill: `{type: "image", file}` names a PNG, JPEG or GIF in the
+  project, `{type: "image", hash}` one the file has; references/grammar.md.)
+
+## Capture a page
+
+The page must be reachable (a dev server the user runs, a deployed URL, or an HTML file) and the project must have
+Playwright with its chromium; `--check` says whether it has (exit 3 names the install command for the user — never run
+it yourself). Run it in the directory the MCP server was started in (the project root):
+
+```bash
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/capture-page.js" --url http://localhost:5173/settings --width 1280,390
+```
+
+- `--width` takes one width or several (one screen each); `--height` is the viewport's (800), and the whole document's
+  height is captured. `--root "<css selector>"` captures one part (a section, the main column) at that element's box.
+  `--ready "<selector>"` waits for an element to show before reading the page; `--name` sets the files' slug.
+- It writes `design/capture/<name>@<width>.json` (a tree spec per width), `design/capture/images/` (every picture: a
+  PNG, JPEG or GIF as the page loaded it, anything else — WebP, SVG, an inline `<svg>`, a `<canvas>` — as a PNG of that
+  element) and the report `design/capture/<name>.capture.json`, and prints one summary line and the ops, e.g.
+  `{"ops":[{"op":"createTree","treeFile":"design/capture/settings@1280.json"},{"op":"createTree","treeFile":"design/capture/settings@390.json"}]}`.
+- Send those ops as one `figma_write` (several widths: one batch, all or nothing; each new screen is placed beside the
+  last). Dry-run it first when the file already holds an earlier capture of the same name: each root carries the key
+  `capture:<name>@<width>`, so a re-send updates that screen in place.
+- What lands is faithful but plain: raw values (counted as `unbound`), no components or variables. Flex and grid become
+  auto-layout, a block's children keep their x/y, text is real text in the font the browser drew it with. **A font the
+  file lacks refuses the whole batch**, listing every missing font with the closest names the file has: the report's
+  `fonts` lists every family and style up front — tell the user which to install or enable; never edit the spec to
+  swap one. Shadows, gradients, `::before`/`::after` content, transforms and filters are not written (a write has no
+  effects); the report counts them under `dropped`, and what was mapped to the nearest thing under `approximated`.
+- Exit 5: the page is over 500 nodes (or nests past 40 levels, or has more than 32 MB of pictures over all widths, which land as one batch) —
+  capture parts of it with `--root`. Exit 4: the page did not load, `--ready` or `--root` never showed.
 
 ## The dry-run rule
 

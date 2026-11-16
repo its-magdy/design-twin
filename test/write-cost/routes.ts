@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Phase } from "./meter.ts";
-import { isFrame, type Briefs, type JobId, type Kit, type KitScreen, type StarterKit, type Token, type Want, type WantFill } from "./jobs.ts";
+import { isFrame, type Briefs, type CapturedNode, type JobId, type Kit, type KitScreen, type StarterKit, type Token, type Want, type WantFill } from "./jobs.ts";
 import { BRAND } from "./jobs.ts";
 
 export interface Reply { text: string; isError: boolean }
@@ -166,6 +166,25 @@ function screenWant(sc: KitScreen): Want {
   };
 }
 
+/** A captured page's spec as the four ops can build it: frames with their size, auto-layout direction, gap, padding and
+ *  colour, texts with their size and colour (an image cannot be placed). */
+function wantOfSpec(n: CapturedNode): Want {
+  const solid = (n.fills ?? []).find((p) => p.type === "solid")?.color;
+  if (n.text !== undefined) {
+    return { text: n.text, ...(n.font?.size !== undefined ? { size: n.font.size } : {}), ...(n.font?.color !== undefined ? { fill: n.font.color } : {}) };
+  }
+  const l = n.layout?.display === "flex" ? n.layout : undefined;
+  const p = l?.padding;
+  return {
+    frame: n.name ?? "Frame", ...(n.box ? { w: n.box.w, h: n.box.h } : {}),
+    ...(l ? { layout: l.flexDirection === "column" ? "VERTICAL" as const : "HORIZONTAL" as const } : {}),
+    ...(l?.gap !== undefined ? { gap: l.gap } : {}),
+    ...(p && p.length === 4 ? { padding: [p[0] ?? 0, p[1] ?? 0, p[2] ?? 0, p[3] ?? 0] as const } : {}),
+    ...(solid !== undefined ? { fill: solid } : {}),
+    ...(n.children?.length ? { children: n.children.map(wantOfSpec) } : {}),
+  };
+}
+
 export const fourOp: Route = {
   name: "four-op",
   ticket: "baseline",
@@ -221,6 +240,12 @@ export const fourOp: Route = {
       if (!inst?.mainId) throw new Error(`no instance on the screen holds a "${b.part}"`);
       const inMain = (await readOutline(s, inst.mainId, "find")).filter((n) => n.name === b.part);
       await patch(s, inMain.map((n) => ({ op: "setFill", nodeId: n.id, color: b.to })));
+    },
+    // The agent types the captured page node by node (what it would do reading the page itself), level by level, in
+    // raw colours; its pictures cannot be placed.
+    "capture-page": async (s, b) => {
+      const [root] = await buildLevels(s, [{ want: wantOfSpec(b.spec) }]);
+      if (root !== undefined) await readOutline(s, root, "verify");
     },
   },
 };
@@ -527,6 +552,23 @@ export const createComponents: Route = {
   },
 };
 
+// ---- capture a page (#175): capture-page rendered the page and wrote its spec and images to disk (the script's work,
+// not the agent's: put there unmeasured). The agent sends the spec's path: one figma_write whose call names a file and
+// whose reply is the root id and counts. No node is typed.
+export const captureRoute: Route = {
+  name: "capture-page",
+  ticket: "#175",
+  jobs: {
+    "capture-page": async (s, b) => {
+      const at = path.join(s.dir, ...b.capture.specFile.split("/"));
+      fs.mkdirSync(path.join(path.dirname(at), "images"), { recursive: true });
+      fs.copyFileSync(path.join(b.capture.fixtureDir, path.basename(at)), at);
+      for (const f of b.capture.images) fs.copyFileSync(path.join(b.capture.fixtureDir, "images", f), path.join(path.dirname(at), "images", f));
+      appliedIds(must(await s.call("figma_write", { ops: [{ op: "createTree", treeFile: b.capture.specFile }] }, "write"), "figma_write"));
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -542,5 +584,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents, captureRoute];
 export const BASELINE = fourOp.name;

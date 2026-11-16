@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sample dashboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f4f5; color: #18181b; font-family: Arial, Helvetica, sans-serif; font-size: 16px; line-height: 24px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; background: #ffffff; border-bottom: 1px solid #e4e4e7; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+  nav { display: flex; gap: 12px; }
+  nav a { color: #4f46e5; text-decoration: underline; }
+  main { padding: 24px; }
+  h1 { margin: 0 0 8px; font-size: 28px; line-height: 36px; font-weight: 700; }
+  .lead { margin: 0 0 24px; color: #52525b; }
+  .lead em { font-style: italic; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { background: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 16px; }
+  .card h2 { margin: 0 0 4px; font-size: 18px; line-height: 28px; font-weight: 600; }
+  .card p { margin: 0; color: #71717a; font-size: 14px; line-height: 20px; }
+  .photo { display: block; width: 120px; height: 80px; object-fit: cover; border-radius: 8px; margin-top: 12px; }
+  .row { display: flex; flex-direction: row-reverse; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+  .chip { padding: 4px 10px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; line-height: 16px; text-transform: uppercase; }
+  .panel { position: relative; margin-top: 24px; height: 120px; background: #ffffff; border-radius: 8px; overflow: hidden; }
+  .badge { position: absolute; top: 12px; right: 12px; width: 24px; height: 24px; background: #ef4444; border-radius: 12px; }
+  .panel p { margin: 0; padding: 16px; width: 320px; }
+  .hidden { display: none; }
+  .note { margin-top: 24px; } .note .muted { color: #a1a1aa; }
+  @media (max-width: 600px) { .cards { grid-template-columns: 1fr; } nav { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#4f46e5"/></svg><span>Sample</span></div>
+  <nav><a href="#">Overview</a><a href="#">Reports</a><a href="#">Settings</a></nav>
+</header>
+<main>
+  <h1>Welcome back</h1>
+  <p class="lead">Here is what changed <em>this week</em> across your projects.</p>
+  <section class="cards">
+    <div class="card"><h2>Projects</h2><p>Twelve active, three due this week.</p><img class="photo" src="photo.png" alt="Project photo"></div>
+    <div class="card"><h2>Tasks</h2><p>Forty open tasks, of which nine are overdue and need someone to pick them up.</p></div>
+    <div class="card"><h2>Team</h2><p>Eight people, two away.</p><img class="photo" src="mark.svg" alt="Team mark"></div>
+  </section>
+  <div class="row"><span class="chip">First</span><span class="chip">Second</span><span class="chip">Third</span></div>
+  <div class="panel"><p>A panel with a badge placed in its corner.</p><span class="badge"></span></div>
+  <div class="hidden">Not shown</div>
+  <div class="note">Plain text beside a block <div class="muted">a muted block</div> and a tail.</div>
+</main>
+</body>
+</html>

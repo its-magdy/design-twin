@@ -1,0 +1,738 @@
+{
+ "name": "sample @1280",
+ "box": {
+  "w": 1280,
+  "h": 800
+ },
+ "clip": true,
+ "children": [
+  {
+   "name": "header",
+   "box": {
+    "w": 1280,
+    "h": 49
+   },
+   "fills": [
+    {
+     "type": "solid",
+     "color": "#ffffff"
+    }
+   ],
+   "strokes": {
+    "colors": [
+     "#e4e4e7"
+    ],
+    "align": "inside",
+    "weights": {
+     "top": 0,
+     "right": 0,
+     "bottom": 1,
+     "left": 0
+    }
+   },
+   "layout": {
+    "display": "flex",
+    "flexDirection": "row",
+    "gap": 16,
+    "padding": [
+     12,
+     24,
+     12,
+     24
+    ],
+    "justifyContent": "space-between",
+    "alignItems": "center"
+   },
+   "strokesInLayout": true,
+   "children": [
+    {
+     "name": "div",
+     "box": {
+      "w": 88.92,
+      "h": 24
+     },
+     "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "gap": 8,
+      "alignItems": "center"
+     },
+     "children": [
+      {
+       "name": "svg",
+       "box": {
+        "w": 24,
+        "h": 24
+       },
+       "fills": [
+        {
+         "type": "image",
+         "file": "design/capture/images/2c66f953ea96426a8d70b54ca99698f90d74cdea2c222d8071907c3877c7624f.png",
+         "scaleMode": "fill"
+        }
+       ],
+       "clip": true
+      },
+      {
+       "text": "Sample",
+       "font": {
+        "family": "Arial",
+        "weight": "Bold",
+        "size": 16,
+        "color": "#18181b",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        }
+       },
+       "box": {
+        "w": 56.92,
+        "h": 24
+       },
+       "autoResize": "width_and_height"
+      }
+     ]
+    },
+    {
+     "name": "nav",
+     "box": {
+      "w": 204.53,
+      "h": 24
+     },
+     "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "gap": 12
+     },
+     "children": [
+      {
+       "text": "Overview",
+       "font": {
+        "family": "Arial",
+        "weight": "Regular",
+        "size": 16,
+        "color": "#4f46e5",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        },
+        "decoration": "underline"
+       },
+       "box": {
+        "w": 66.69,
+        "h": 24
+       },
+       "autoResize": "width_and_height"
+      },
+      {
+       "text": "Reports",
+       "font": {
+        "family": "Arial",
+        "weight": "Regular",
+        "size": 16,
+        "color": "#4f46e5",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        },
+        "decoration": "underline"
+       },
+       "box": {
+        "w": 56.03,
+        "h": 24
+       },
+       "autoResize": "width_and_height"
+      },
+      {
+       "text": "Settings",
+       "font": {
+        "family": "Arial",
+        "weight": "Regular",
+        "size": 16,
+        "color": "#4f46e5",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        },
+        "decoration": "underline"
+       },
+       "box": {
+        "w": 57.81,
+        "h": 24
+       },
+       "autoResize": "width_and_height"
+      }
+     ]
+    }
+   ],
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "main",
+   "box": {
+    "w": 1280,
+    "h": 606
+   },
+   "children": [
+    {
+     "text": "Welcome back",
+     "font": {
+      "family": "Arial",
+      "weight": "Bold",
+      "size": 28,
+      "color": "#18181b",
+      "lineHeight": {
+       "unit": "px",
+       "value": 36
+      }
+     },
+     "box": {
+      "w": 194.03,
+      "h": 36
+     },
+     "autoResize": "width_and_height",
+     "x": 24,
+     "y": 24
+    },
+    {
+     "text": "Here is what changed this week across your projects.",
+     "font": {
+      "family": "Arial",
+      "weight": "Regular",
+      "size": 16,
+      "color": "#52525b",
+      "lineHeight": {
+       "unit": "px",
+       "value": 24
+      }
+     },
+     "box": {
+      "w": 377.97,
+      "h": 24
+     },
+     "autoResize": "width_and_height",
+     "x": 24,
+     "y": 68
+    },
+    {
+     "name": "section",
+     "box": {
+      "w": 1232,
+      "h": 178
+     },
+     "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "gap": 16
+     },
+     "children": [
+      {
+       "name": "div",
+       "box": {
+        "w": 400,
+        "h": 178
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#ffffff"
+        }
+       ],
+       "strokes": {
+        "colors": [
+         "#e4e4e7"
+        ],
+        "align": "inside",
+        "weight": 1
+       },
+       "radius": 12,
+       "children": [
+        {
+         "text": "Projects",
+         "font": {
+          "family": "Arial",
+          "weight": "Bold",
+          "size": 18,
+          "color": "#18181b",
+          "lineHeight": {
+           "unit": "px",
+           "value": 28
+          }
+         },
+         "box": {
+          "w": 71.05,
+          "h": 28
+         },
+         "autoResize": "width_and_height",
+         "x": 17,
+         "y": 17
+        },
+        {
+         "text": "Twelve active, three due this week.",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 14,
+          "color": "#71717a",
+          "lineHeight": {
+           "unit": "px",
+           "value": 20
+          }
+         },
+         "box": {
+          "w": 217.11,
+          "h": 20
+         },
+         "autoResize": "width_and_height",
+         "x": 17,
+         "y": 49
+        },
+        {
+         "name": "Project photo",
+         "box": {
+          "w": 120,
+          "h": 80
+         },
+         "fills": [
+          {
+           "type": "image",
+           "file": "design/capture/images/33baa276843441fb8f371ca29b366bba0f21bb0a0de69835918f2427fbc89985.png",
+           "scaleMode": "fill"
+          }
+         ],
+         "radius": 8,
+         "clip": true,
+         "x": 17,
+         "y": 81
+        }
+       ]
+      },
+      {
+       "name": "div",
+       "box": {
+        "w": 400,
+        "h": 178
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#ffffff"
+        }
+       ],
+       "strokes": {
+        "colors": [
+         "#e4e4e7"
+        ],
+        "align": "inside",
+        "weight": 1
+       },
+       "radius": 12,
+       "children": [
+        {
+         "text": "Tasks",
+         "font": {
+          "family": "Arial",
+          "weight": "Bold",
+          "size": 18,
+          "color": "#18181b",
+          "lineHeight": {
+           "unit": "px",
+           "value": 28
+          }
+         },
+         "box": {
+          "w": 49.7,
+          "h": 28
+         },
+         "autoResize": "width_and_height",
+         "x": 17,
+         "y": 17
+        },
+        {
+         "text": "Forty open tasks, of which nine are overdue and need someone to pick them up.",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 14,
+          "color": "#71717a",
+          "lineHeight": {
+           "unit": "px",
+           "value": 20
+          }
+         },
+         "box": {
+          "w": 366,
+          "h": 40
+         },
+         "autoResize": "height",
+         "x": 17,
+         "y": 49
+        }
+       ]
+      },
+      {
+       "name": "div",
+       "box": {
+        "w": 400,
+        "h": 178
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#ffffff"
+        }
+       ],
+       "strokes": {
+        "colors": [
+         "#e4e4e7"
+        ],
+        "align": "inside",
+        "weight": 1
+       },
+       "radius": 12,
+       "children": [
+        {
+         "text": "Team",
+         "font": {
+          "family": "Arial",
+          "weight": "Bold",
+          "size": 18,
+          "color": "#18181b",
+          "lineHeight": {
+           "unit": "px",
+           "value": 28
+          }
+         },
+         "box": {
+          "w": 45.69,
+          "h": 28
+         },
+         "autoResize": "width_and_height",
+         "x": 17,
+         "y": 17
+        },
+        {
+         "text": "Eight people, two away.",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 14,
+          "color": "#71717a",
+          "lineHeight": {
+           "unit": "px",
+           "value": 20
+          }
+         },
+         "box": {
+          "w": 146.84,
+          "h": 20
+         },
+         "autoResize": "width_and_height",
+         "x": 17,
+         "y": 49
+        },
+        {
+         "name": "Team mark",
+         "box": {
+          "w": 120,
+          "h": 80
+         },
+         "fills": [
+          {
+           "type": "image",
+           "file": "design/capture/images/82374b79c45009609105c435433a3933ddf8821ab630e9a149f4decaf6eed32a.png",
+           "scaleMode": "fill"
+          }
+         ],
+         "radius": 8,
+         "clip": true,
+         "x": 17,
+         "y": 81
+        }
+       ]
+      }
+     ],
+     "x": 24,
+     "y": 116
+    },
+    {
+     "name": "div",
+     "box": {
+      "w": 1232,
+      "h": 24
+     },
+     "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "gap": 8
+     },
+     "children": [
+      {
+       "name": "span",
+       "box": {
+        "w": 56.67,
+        "h": 24
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#eef2ff"
+        }
+       ],
+       "radius": 12,
+       "children": [
+        {
+         "text": "Third",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 12,
+          "color": "#3730a3",
+          "lineHeight": {
+           "unit": "px",
+           "value": 16
+          },
+          "case": "upper"
+         },
+         "box": {
+          "w": 36.67,
+          "h": 16
+         },
+         "autoResize": "width_and_height",
+         "x": 10,
+         "y": 4
+        }
+       ],
+       "alignSelf": "stretch"
+      },
+      {
+       "name": "span",
+       "box": {
+        "w": 71.34,
+        "h": 24
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#eef2ff"
+        }
+       ],
+       "radius": 12,
+       "children": [
+        {
+         "text": "Second",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 12,
+          "color": "#3730a3",
+          "lineHeight": {
+           "unit": "px",
+           "value": 16
+          },
+          "case": "upper"
+         },
+         "box": {
+          "w": 51.34,
+          "h": 16
+         },
+         "autoResize": "width_and_height",
+         "x": 10,
+         "y": 4
+        }
+       ],
+       "alignSelf": "stretch"
+      },
+      {
+       "name": "span",
+       "box": {
+        "w": 54.67,
+        "h": 24
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#eef2ff"
+        }
+       ],
+       "radius": 12,
+       "children": [
+        {
+         "text": "First",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 12,
+          "color": "#3730a3",
+          "lineHeight": {
+           "unit": "px",
+           "value": 16
+          },
+          "case": "upper"
+         },
+         "box": {
+          "w": 34.67,
+          "h": 16
+         },
+         "autoResize": "width_and_height",
+         "x": 10,
+         "y": 4
+        }
+       ],
+       "alignSelf": "stretch"
+      }
+     ],
+     "x": 24,
+     "y": 318
+    },
+    {
+     "name": "div",
+     "box": {
+      "w": 1232,
+      "h": 72
+     },
+     "children": [
+      {
+       "text": "Plain text beside a block",
+       "font": {
+        "family": "Arial",
+        "weight": "Regular",
+        "size": 16,
+        "color": "#18181b",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        }
+       },
+       "box": {
+        "w": 172.55,
+        "h": 24
+       },
+       "autoResize": "width_and_height",
+       "x": 0,
+       "y": -0.5
+      },
+      {
+       "text": "a muted block",
+       "font": {
+        "family": "Arial",
+        "weight": "Regular",
+        "size": 16,
+        "color": "#a1a1aa",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        }
+       },
+       "box": {
+        "w": 99.61,
+        "h": 24
+       },
+       "autoResize": "width_and_height",
+       "x": 0,
+       "y": 24
+      },
+      {
+       "text": "and a tail.",
+       "font": {
+        "family": "Arial",
+        "weight": "Regular",
+        "size": 16,
+        "color": "#18181b",
+        "lineHeight": {
+         "unit": "px",
+         "value": 24
+        }
+       },
+       "box": {
+        "w": 69.39,
+        "h": 24
+       },
+       "autoResize": "width_and_height",
+       "x": 0,
+       "y": 47.5
+      }
+     ],
+     "x": 24,
+     "y": 510
+    },
+    {
+     "name": "div",
+     "box": {
+      "w": 1232,
+      "h": 120
+     },
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#ffffff"
+      }
+     ],
+     "radius": 8,
+     "clip": true,
+     "children": [
+      {
+       "name": "p",
+       "box": {
+        "w": 320,
+        "h": 80
+       },
+       "children": [
+        {
+         "text": "A panel with a badge placed in its corner.",
+         "font": {
+          "family": "Arial",
+          "weight": "Regular",
+          "size": 16,
+          "color": "#18181b",
+          "lineHeight": {
+           "unit": "px",
+           "value": 24
+          }
+         },
+         "box": {
+          "w": 288,
+          "h": 48
+         },
+         "autoResize": "height",
+         "x": 16,
+         "y": 16
+        }
+       ],
+       "x": 0,
+       "y": 0
+      },
+      {
+       "name": "span",
+       "box": {
+        "w": 24,
+        "h": 24
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#ef4444"
+        }
+       ],
+       "radius": 12,
+       "x": 1196,
+       "y": 12
+      }
+     ],
+     "x": 24,
+     "y": 366
+    }
+   ],
+   "x": 0,
+   "y": 49
+  }
+ ],
+ "key": "capture:sample@1280",
+ "fills": [
+  {
+   "type": "solid",
+   "color": "#f4f4f5"
+  }
+ ]
+}
