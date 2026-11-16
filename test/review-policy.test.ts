@@ -45,8 +45,23 @@ const one = cardLines([patch("1:1", { name: "Title", fills: [{ type: "solid", co
 check("one layer is named; a fill reads as its colour", firstLine(one) === "Layer 'Heading': name Heading → Title, fills #3b82f6 → #16a34a");
 const v = cardLines([{ op: "setVariable", variable: "demo/accent", value: "#16a34a" }], [{ name: "demo/accent", old: { Default: "#3b82f6" }, follows: 40 }]);
 check("a variable: its value old → new, and how many layers follow", firstLine(v) === "Variable 'demo/accent': #3b82f6 → #16a34a — 40 layers follow");
-const vm = cardLines([{ op: "setVariable", variable: "bg", values: { Light: "#ffffff", Dark: "#111111" } }], [{ old: { Light: "#fafafa", Dark: "#000000" }, follows: 1 }]);
+const vm = cardLines([{ op: "setVariable", variable: "bg", values: { Light: "#ffffff", Dark: "#111111" } }], [{ name: "bg", old: { Light: "#fafafa", Dark: "#000000" }, follows: 1 }]);
 check("…by mode when it sets several", firstLine(vm) === "Variable 'bg': Light #fafafa → #ffffff, Dark #000000 → #111111 — 1 layer follows");
+// Selected by id or key: the heading is the name the file resolved; the selector stays in Details (reviewLines).
+const byId = cardLines([{ op: "setVariable", variable: "VariableID:123:4", value: "#16a34a" }], [{ name: "demo/accent", old: { Default: "#3b82f6" }, follows: 2 }]);
+check(`a variable by id: headed by its name, no id on the card (got ${firstLine(byId)})`, firstLine(byId) === "Variable 'demo/accent': #3b82f6 → #16a34a — 2 layers follow");
+const byKey = cardLines([{ op: "setVariable", variable: "0123456789abcdef0123456789abcdef01234567", value: 8 }], [{ name: "space/md", old: { Default: 4 }, follows: 0 }]);
+check(`a variable by key: headed by its name (got ${firstLine(byKey)})`, firstLine(byKey) === "Variable 'space/md': 4 → 8 — nothing uses it yet");
+const styleId = cardLines([{ op: "setStyle", style: "S:abc123,", set: { paints: [{ type: "solid", color: "#16a34a" }] } }], [{ name: "Brand/Primary", old: { paints: [{ type: "solid", color: "#3b82f6" }] }, follows: 3 }]);
+check(`a style by id: headed by its name, no id on the card (got ${firstLine(styleId)})`, firstLine(styleId) === "Style 'Brand/Primary': paints #3b82f6 → #16a34a — 3 layers follow" && !/S:abc123/.test(firstLine(styleId)));
+const styleKey = cardLines([{ op: "setStyle", style: "fedcba9876543210fedcba9876543210fedcba98", set: { paints: [{ type: "solid", color: "#16a34a" }] } }], [{ name: "Brand/Accent" }]);
+check(`a style by key: headed by its name (got ${firstLine(styleKey)})`, /^Style 'Brand\/Accent'/.test(firstLine(styleKey)) && !/fedcba/.test(firstLine(styleKey)));
+const unreadSource = cardLines([{ op: "setVariable", variable: "VariableID:123:4", value: "#16a34a" }], []);
+check(`unread, a selector is never the heading (got ${firstLine(unreadSource)})`, firstLine(unreadSource) === "A variable: → #16a34a");
+const compById = cardLines([patch("5:1", { radius: 8 })], [{ name: "Base", component: "Button", old: { radius: 4 }, follows: 12 }]);
+check(`a main component patched by node id: headed by the component's name, no id (got ${firstLine(compById)})`, /^Main component 'Button', layer 'Base'/.test(firstLine(compById)) && !/5:1/.test(firstLine(compById)));
+const compResend = cardLines([{ op: "createTree", tree: { type: "COMPONENT", name: "Button", children: [] } }], [{ updates: "Button", component: "Button", follows: 2 }]);
+check(`a component re-sent: headed by its name (got ${firstLine(compResend)})`, firstLine(compResend) === "Updates component 'Button' in place — 2 layers follow");
 const main = cardLines([patch("5:1", { radius: 8 })], [{ name: "Base", component: "Button", old: { radius: 4 }, follows: 12 }]);
 check("a patch inside a main component is its own line, with the instances that follow", firstLine(main) === "Main component 'Button', layer 'Base': radius 4 → 8 — 12 layers follow");
 const tree: WriteOp = { op: "createTree", tree: { name: "Settings card", layout: { display: "flex", flexDirection: "column", width: 320 }, heightMode: "hug", children: [{ text: "Hi" }] } };

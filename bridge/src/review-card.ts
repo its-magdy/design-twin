@@ -176,14 +176,15 @@ export function cardLines(ops: readonly WriteOp[], reads: ReadonlyArray<OpRead |
           return { field: mode, to: valueText("", v), ...(was !== undefined ? { from: valueText("", was) } : {}) };
         });
         const tail = followTail(r);
-        lines.push({ head: "Variable '" + String(o.variable) + "'", rows, ...(tail ? { tail } : {}), ops: [i] });
+        // By the name the file resolved (the op may select it by id or key: those stay in Details).
+        lines.push({ head: named("Variable", r), rows, ...(tail ? { tail } : {}), ops: [i] });
         return;
       }
       case "setStyle": {
         const set: Record<string, unknown> = isStyleSet(o.set) ? { ...o.set } : {};
         const fields = isStyleSet(o.set) ? (checkStyleSet(o.set).summary.fields as string[]) : [];
         const tail = followTail(r);
-        lines.push({ head: "Style '" + String(o.style) + "'", rows: fieldRows(set, fields, [r]), ...(tail ? { tail } : {}), ops: [i] });
+        lines.push({ head: named("Style", r), rows: fieldRows(set, fields, [r]), ...(tail ? { tail } : {}), ops: [i] });
         return;
       }
       case "createTree": {

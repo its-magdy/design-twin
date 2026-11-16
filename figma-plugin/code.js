@@ -6257,14 +6257,14 @@
             return { field: mode, to: valueText("", v), ...was !== void 0 ? { from: valueText("", was) } : {} };
           });
           const tail = followTail(r);
-          lines.push({ head: "Variable '" + String(o.variable) + "'", rows, ...tail ? { tail } : {}, ops: [i] });
+          lines.push({ head: named("Variable", r), rows, ...tail ? { tail } : {}, ops: [i] });
           return;
         }
         case "setStyle": {
           const set = isStyleSet(o.set) ? { ...o.set } : {};
           const fields = isStyleSet(o.set) ? checkStyleSet(o.set).summary.fields : [];
           const tail = followTail(r);
-          lines.push({ head: "Style '" + String(o.style) + "'", rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
+          lines.push({ head: named("Style", r), rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
           return;
         }
         case "createTree": {
