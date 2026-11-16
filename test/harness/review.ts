@@ -13,7 +13,7 @@ import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
 const textNode = (id: string, name: string, characters: string): FakeNode =>
-  textRuns({ id, type: "TEXT", name, characters, fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
+  textRuns({ id, type: "TEXT", name, visible: true, characters, fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
 
 /** A writable file, reviewed for real (nobody answers a card unless the case does): one text node ("t:1", "old"); 30
  *  more ("n:1"…"n:30") for counts; a main component "Row" (c:1) holding a layer (c:2) with 2 instances. Frames the
@@ -39,6 +39,11 @@ function reviewWorld(extra: Scene = {}) {
   w.figma.currentPage.appendChild = () => {};
   w.figma.currentPage.loadAsync = async () => {};
   w.figma.viewport = { scrollAndZoomIntoView: () => {} };
+  // The layers sit on the current page, so Show me finds the page they are on.
+  const page = w.figma.currentPage;
+  page.type = "PAGE";
+  page.id = "0:1";
+  for (const n of [label, row, ...Object.values(many)]) n.parent = page;
   return { ...w, created, label, many, divider };
 }
 type ReviewWorld = ReturnType<typeof reviewWorld>;
@@ -98,7 +103,9 @@ export const cases: Case[] = [{
     ok("[REVIEW] …a small batch offers no preview, and Figma's toast says a write waits", card?.previewable === false && w.notified.some((t) => /wants to change this file/.test(t)));
     ok("[REVIEW] whoami names the waiting ticket", (await whoami(w)).reviewWaiting === card?.id);
     const shown = await w.send({ type: "review-show", id: String(card?.id), index: 1 });
-    ok("[REVIEW] Show me selects the layer (no undo step) and says so", /Showing 1 layer/.test(String(shown.find((m) => m.type === "review-shown")?.text)) && w.figma.currentPage.selection.length === 1 && w.undo.commits === commitsBefore + 2);
+    const shownText = String(shown.find((m) => m.type === "review-shown")?.text);
+    ok(`[REVIEW] Show me selects the layer (no undo step) and says so (got ${JSON.stringify(shownText)}, ${w.figma.currentPage.selection.length} selected, ${w.undo.commits - commitsBefore} commits)`,
+      /Showing 1 layer/.test(shownText) && w.figma.currentPage.selection.length === 1 && w.undo.commits === commitsBefore + 2);
     await answer(w, { type: "review", id: "rv-nope" }, "apply");
     ok("[REVIEW] an answer naming another card changes nothing", untouched(w));
     await answer(w, card, "apply");
@@ -118,6 +125,7 @@ export const cases: Case[] = [{
     ok("[REVIEW] clearing it is echoed and saved", set[0]?.on === false && w.storage.get("reviewWrites") === false);
     const { reply, card } = await writeAwaitingReview(w, "s1");
     ok("[REVIEW] cleared: a small write applies at once, no card", card === undefined && asResult(await reply)?.ok === true && w.label.characters === "new");
+    ok("[REVIEW] …and the existing layer it changed is counted (the frame it made is not)", (await whoami(w)).reviewLayers === 1);
     // A patch of a layer inside a main component carries to its instances: it waits whatever the box says.
     const src = await writeAwaitingReview(w, "s2", [{ op: "patch", nodeId: "c:2", set: { opacity: 0.5 } }]);
     const srcLine = src.card?.lines?.[0];
@@ -131,12 +139,12 @@ export const cases: Case[] = [{
     const own = await writeAwaitingReview(w, "s3", [{ op: "createFrame", name: "Mine" }]);
     const mineId = asResult(await own.reply)?.applied[0]?.id;
     for (let i = 0; i < 30; i++) await w.api.applyWrites([{ op: "setFill", nodeId: String(mineId), color: "#00ff00" }]);
-    ok("[REVIEW] a layer this session created is never counted, however often it changes", (await whoami(w)).reviewLayers === 0 && !w.posted.some((m) => m.type === "review" && m.id !== src.card?.id));
+    ok("[REVIEW] a layer this session created is never counted, however often it changes", (await whoami(w)).reviewLayers === 1 && !w.posted.some((m) => m.type === "review" && m.id !== src.card?.id));
     const first = await writeAwaitingReview(w, "s4", TEN(1));
     const second = await writeAwaitingReview(w, "s5", TEN(11));
-    ok("[REVIEW] 20 existing layers in two batches: no card, and the count is 20", first.card === undefined && second.card === undefined && (await whoami(w)).reviewLayers === 20);
+    ok("[REVIEW] 20 more existing layers in two batches: no card, and the count is 21", first.card === undefined && second.card === undefined && (await whoami(w)).reviewLayers === 21);
     const third = await writeAwaitingReview(w, "s6", TEN(21));
-    ok(`[REVIEW] the batch that takes it to 30 waits, saying so (${String(third.card?.why)})`, /30 existing layers would have changed since your last approval \(over 25\)/.test(String(third.card?.why)));
+    ok(`[REVIEW] the batch that takes it over 25 waits, saying so (${String(third.card?.why)})`, /31 existing layers would have changed since your last approval \(over 25\)/.test(String(third.card?.why)));
     await answer(w, third.card, "apply");
     ok("[REVIEW] …approved, it lands, and the count starts again", asResult(await third.reply)?.ok === true && (await whoami(w)).reviewLayers === 0);
   },
@@ -177,9 +185,7 @@ export const cases: Case[] = [{
     const cancelled = asResult((await bridge(w, "p2c", "writeTicket", { ticket: isPending(pend) ? pend.ticket : "", cancel: true })).result);
     ok("[PREVIEW] withdrawn while previewing: put back, refused unreviewed, saying the preview was put back",
       cancelled?.refused === "unreviewed" && /it was put back/.test(cancelled.error ?? "") && changedNow() === 0 && lastOf(w, "review-end")?.end === "withdrawn");
-    // A batch with a delete is never offered a preview (a delete cannot be put back).
-    const made = asResult(await (await writeAwaitingReview(w, "p3", [{ op: "createFrame", name: "Tmp" }])).reply);
-    void made;
+    // A batch with a delete or a keyed re-send is never offered a preview (neither can be put back): review-policy.test.ts.
   },
 }, {
   name: "Review: the ticket — pending after the hold, asked again, a repeat answers at once, unknown is refused",

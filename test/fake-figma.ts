@@ -22,7 +22,7 @@ import { CODE_JS, pluginBuildOptions } from "../figma-plugin/build-options.ts";
 import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc, Asset,
 } from "../bridge/src/doc-types.ts";
-import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, WriteResult } from "../bridge/src/commands.ts";
+import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, WriteResult, WriteOp as ContractWriteOp } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { sniffImage } from "../bridge/src/image-file.ts";
 import type { ReviewCardLine } from "../figma-plugin/src/messages.ts";
@@ -200,7 +200,7 @@ export interface DesignExportApi {
   listChildren(rawId: string): Promise<ListChildrenResult>;
   listLibraries(): Promise<ListLibrariesReply>;
   collectLibraryComponents(sink?: (m: string) => void): Promise<CatalogComponent[]>;
-  applyWrites(ops?: WriteOp[], images?: Record<string, string>): Promise<WriteResult>;
+  applyWrites(ops?: ReadonlyArray<WriteOp | ContractWriteOp>, images?: Record<string, string>): Promise<WriteResult>;
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
   collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
