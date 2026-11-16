@@ -1070,9 +1070,12 @@ resolves (`bridge/src/bind-values.ts`, its table gathered by `figma-plugin/src/b
 solid paint's colour (a text's `font.color` through `tokens.fills`), the stroke colours (all of a node's or none), the gap,
 the wrapped tracks' gap, each padding side and a radius bind to the one colour or number variable equal to them, and a
 text's font to the one text style whose family, style, size, line height, letter spacing, case and decoration all equal
-it and which sets no paragraph indent, paragraph or list spacing or leading trim. A colour is equal by its 8-bit RGBA, a number within 0.01; a variable's value is its collection's default mode's,
-through its aliases (a broken or looping chain has none). Candidates are the file's local variables and text styles (by
-id) and what a create table earlier in the batch makes (by name: `seedTokens` then the spec in one call works). Several
+it and which sets no paragraph indent, paragraph or list spacing, leading trim or variable-font axis value. A colour is
+equal by its 8-bit RGBA, a number within 0.01; a variable's value is its collection's default mode's, through its
+aliases (a broken or looping chain has none). Candidates are the file's local variables and text styles (by name when
+the name is theirs alone, else by id) and what a create table earlier in the batch makes (by name: `seedTokens` then
+the spec in one call works); a variable or style a `setVariable` or `setStyle` of the batch changes is not one, nor a
+variable aliasing such a variable. Several
 equal: a variable whose `scopes` leave the field out is dropped, then those whose name has no word for the field (fill:
 bg, background, surface, fill; text: text, fg, foreground, content; stroke: border, stroke, outline, divider; spacing:
 space, spacing, gap, padding, inset, gutter; radius: radius, radii, round, corner) when one has, then one another

@@ -202,6 +202,10 @@ void (async () => {
     const spaced: FakeNode = { ...h2, id: "S:sp,", name: "Heading/Spaced", key: "local-sp", paragraphSpacing: 32 };
     w.scene.localStyles.text.push(spaced);
     w.scene.styles["S:sp,"] = spaced;
+    // the same font with a variable-font axis value: it draws differently from a text with none, so it never competes either
+    const axes: FakeNode = { ...h2, id: "S:ax,", name: "Heading/Axes", key: "local-ax", fontName: { family: "Inter", style: "Bold", variationSettings: { opsz: 32 } } };
+    w.scene.localStyles.text.push(axes);
+    w.scene.styles["S:ax,"] = axes;
 
     const impact = async (ops: ReadonlyArray<Record<string, unknown>>): Promise<WriteImpactReply | null> => {
       const posted = await w.send({ type: "bridge", id: "imp", cmd: "writeImpact", args: { ops } });
@@ -222,7 +226,7 @@ void (async () => {
     const paintVar = (n: FakeNode | undefined): unknown => ((n?.fills as Array<{ boundVariables?: { color?: { id: string } } }> | undefined)?.[0]?.boundVariables?.color?.id);
     check("the root's paint is bound to the semantic variable (its alias of the primitive)", paintVar(root) === "VariableID:50:2");
     check("gap and padding are bound to the GAP-scoped variable", same(root?.boundVariables, { itemSpacing: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingTop: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingRight: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingBottom: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" }, paddingLeft: { type: "VARIABLE_ALIAS", id: "VariableID:50:4" } }));
-    check("the title's colour (TEXT_FILL) and text style are bound (a style with paragraph spacing is not a candidate)", paintVar(title) === "VariableID:50:3" && title?.textStyleId === "S:h2,");
+    check("the title's colour (TEXT_FILL) and text style are bound (a style with paragraph spacing or axis values is not a candidate)", paintVar(title) === "VariableID:50:3" && title?.textStyleId === "S:h2,");
     check("the panel's radius is bound; its grey, equal only in a mode that is not the default, stays raw",
       (panel?.boundVariables as Record<string, unknown> | undefined)?.topLeftRadius !== undefined && paintVar(panel) === undefined);
     check("the instance is an instance of the kit's component with its props", inst?.type === "INSTANCE" && same(inst?.props, { Size: "Large", "Label#1:0": "Save" }));
@@ -260,6 +264,16 @@ void (async () => {
     const paraRoot = w5.alive().find((n) => n.name === "Para");
     check(`a text style the batch makes with paragraph spacing or an indent is not bound (${JSON.stringify(para.applied[1] ?? para.error)})`,
       para.ok && para.applied[1]?.bind?.bound === 0 && !kids(paraRoot)[0]?.textStyleId && !kids(paraRoot)[1]?.textStyleId);
+    // a variable a source edit of the batch changes shows its new value: never bound to (nor what aliases it)
+    const w6 = await treeWorld();
+    const made6: WriteResult = await w6.api.applyWrites([{ op: "createVariables", collection: "Edit", modes: ["Light"], variables: [["space/test", "number", 8], ["space/alias", "number", { aliasOf: "space/test" }]] }]);
+    const edited: WriteResult = await w6.api.applyWrites([
+      { op: "setVariable", variable: "space/test", value: 16 },
+      { op: "createTree", bind: true, tree: { name: "Edited", box: { w: 300, h: 200 }, layout: { display: "flex", gap: 8 }, children: [{ text: "x" }] } },
+    ]);
+    const editedRoot = w6.alive().find((n) => n.name === "Edited");
+    check(`a variable the batch's setVariable changes (8 → 16), and one aliasing it, are not bound to a gap of 8 (${JSON.stringify(edited.applied[1] ?? edited.error)})`,
+      made6.ok && edited.ok && edited.applied[1]?.bind?.bound === 0 && (editedRoot?.boundVariables as Record<string, unknown> | undefined)?.itemSpacing === undefined);
     // names the resolver reads as a ref (a 40-hex key, an id): never bound to, on the send that makes them or after
     const w4 = await treeWorld();
     const pre: WriteResult = await w4.api.applyWrites([{ op: "createVariables", collection: "Base", modes: ["Light"], variables: [["color/base", "color", "#222222"]] }]);

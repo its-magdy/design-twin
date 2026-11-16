@@ -10567,7 +10567,7 @@
     const out = /* @__PURE__ */ new Map();
     const todo = bindsOf(ops);
     if (!todo.length) return out;
-    const table = await bindTable(creates);
+    const table = await bindTable(creates, ops);
     for (const [i, spec] of todo) out.set(i, bindSpec(spec, table));
     return out;
   }
@@ -10601,7 +10601,7 @@
     }
     return typeof x === "number" ? { ...base, value: x } : null;
   }
-  async function bindTable(creates) {
+  async function bindTable(creates, ops) {
     const colors = /* @__PURE__ */ new Map();
     const numbers = /* @__PURE__ */ new Map();
     const listFor = (t) => t === "COLOR" ? colors : t === "FLOAT" ? numbers : null;
@@ -10688,7 +10688,11 @@
       if (v) await add(v, false);
     }
     const styles = /* @__PURE__ */ new Map();
-    const plainParagraph = (st) => !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === void 0 || st.leadingTrim === "NONE");
+    const hasAxes = (st) => {
+      const vs = getF3(st.fontName, "variationSettings");
+      return !!vs && typeof vs === "object" && Object.keys(vs).length > 0;
+    };
+    const plainParagraph = (st) => !hasAxes(st) && !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === void 0 || st.leadingTrim === "NONE");
     const fileStyles = await figma.getLocalTextStylesAsync();
     const styleNames = /* @__PURE__ */ new Map();
     for (const st of fileStyles) {
@@ -10729,7 +10733,7 @@
         const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
         const paraSpacing = set.paragraphSpacing !== void 0 ? set.paragraphSpacing : was ? was.paragraphSpacing : 0;
         const paraIndent = set.paragraphIndent !== void 0 ? set.paragraphIndent : was ? was.paragraphIndent : 0;
-        const restPlain = !was || !was.listSpacing && (was.leadingTrim === void 0 || was.leadingTrim === "NONE");
+        const restPlain = !was || !hasAxes(was) && !was.listSpacing && (was.leadingTrim === void 0 || was.leadingTrim === "NONE");
         if (paraSpacing || paraIndent || !restPlain) {
           styles.delete(ref2);
           continue;
@@ -10748,6 +10752,25 @@
       }
     }
     for (const st of fileStyles) if (byName(st.name, "S:", styleNames.get(st.name), plannedStyles2.get(st.name))) named.set(st.id, st.name);
+    const editedVars = /* @__PURE__ */ new Set(), editedStyles = /* @__PURE__ */ new Set();
+    for (const o of ops) {
+      if (o.op === "setVariable" && typeof o.variable === "string") editedVars.add(o.variable);
+      if (o.op === "setStyle" && typeof o.style === "string") editedStyles.add(o.style);
+    }
+    if (editedVars.size) {
+      const drop = (ref2) => {
+        colors.delete(ref2);
+        numbers.delete(ref2);
+      };
+      for (const v of locals) if (editedVars.has(v.id) || editedVars.has(v.name) || editedVars.has(v.key)) drop(v.id);
+      editedVars.forEach(drop);
+    }
+    if (editedStyles.size) {
+      for (const st of fileStyles) if (editedStyles.has(st.id) || editedStyles.has(st.name) || editedStyles.has(st.key)) styles.delete(st.id);
+      editedStyles.forEach((ref2) => {
+        styles.delete(ref2);
+      });
+    }
     const out = (ref2) => {
       const n = named.get(ref2);
       return n === void 0 ? ref2 : n;

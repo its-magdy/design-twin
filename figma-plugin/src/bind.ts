@@ -39,7 +39,7 @@ export async function bindTreeOps(ops: readonly WriteOp[], creates: CreateResolu
   const out = new Map<number, BoundSpec>();
   const todo = bindsOf(ops);
   if (!todo.length) return out;
-  const table = await bindTable(creates);
+  const table = await bindTable(creates, ops);
   for (const [i, spec] of todo) out.set(i, bindSpec(spec, table));
   return out;
 }
@@ -80,7 +80,7 @@ function entryOf(ref: string, name: string, type: VariableResolvedDataType, x: u
 }
 
 /** The table the binder matches against: the file's, with the batch's create tables laid over it. */
-async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
+async function bindTable(creates: CreateResolution | null, ops: readonly WriteOp[]): Promise<BindTable> {
   const colors = new Map<string, BindVariable>();
   const numbers = new Map<string, BindVariable>();
   const listFor = (t: VariableResolvedDataType): Map<string, BindVariable> | null => (t === "COLOR" ? colors : t === "FLOAT" ? numbers : null);
@@ -165,10 +165,16 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
 
   // ---- text styles: the file's, then what a createStyles table makes or changes
   const styles = new Map<string, BindTextStyle>();
+  // A style with variable-font axis values (fontName.variationSettings) draws differently from a text with none, and a
+  // captured text with axes is never bound: such a style is never matched.
+  const hasAxes = (st: TextStyle): boolean => {
+    const vs = getF(st.fontName, "variationSettings");
+    return !!vs && typeof vs === "object" && Object.keys(vs).length > 0;
+  };
   // A captured text has no paragraph settings (the tree spec writes none): a style with an indent, paragraph or list
   // spacing, or a leading trim would add them, so it is never matched.
   const plainParagraph = (st: TextStyle): boolean =>
-    !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === undefined || st.leadingTrim === "NONE");
+    !hasAxes(st) && !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === undefined || st.leadingTrim === "NONE");
   const fileStyles = await figma.getLocalTextStylesAsync();
   const styleNames = new Map<string, number>();
   for (const st of fileStyles) {
@@ -201,7 +207,7 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
       // spacing and leading trim a table cannot set)
       const paraSpacing = set.paragraphSpacing !== undefined ? set.paragraphSpacing : was ? was.paragraphSpacing : 0;
       const paraIndent = set.paragraphIndent !== undefined ? set.paragraphIndent : was ? was.paragraphIndent : 0;
-      const restPlain = !was || (!was.listSpacing && (was.leadingTrim === undefined || was.leadingTrim === "NONE"));
+      const restPlain = !was || (!hasAxes(was) && !was.listSpacing && (was.leadingTrim === undefined || was.leadingTrim === "NONE"));
       if (paraSpacing || paraIndent || !restPlain) { styles.delete(ref); continue; }
       const lh = set.lineHeight;
       const ls = set.letterSpacing;
@@ -217,6 +223,22 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
     }
   }
   for (const st of fileStyles) if (byName(st.name, "S:", styleNames.get(st.name), plannedStyles.get(st.name))) named.set(st.id, st.name);
+  // ---- what a source edit of the batch changes (setVariable, setStyle, wherever it stands: the screen shows the value
+  // the batch leaves): never bound to, and a variable aliasing a changed one, its value then unknown here, neither
+  const editedVars = new Set<string>(), editedStyles = new Set<string>();
+  for (const o of ops) {
+    if (o.op === "setVariable" && typeof o.variable === "string") editedVars.add(o.variable);
+    if (o.op === "setStyle" && typeof o.style === "string") editedStyles.add(o.style);
+  }
+  if (editedVars.size) {
+    const drop = (ref: string): void => { colors.delete(ref); numbers.delete(ref); };
+    for (const v of locals) if (editedVars.has(v.id) || editedVars.has(v.name) || editedVars.has(v.key)) drop(v.id);
+    editedVars.forEach(drop);
+  }
+  if (editedStyles.size) {
+    for (const st of fileStyles) if (editedStyles.has(st.id) || editedStyles.has(st.name) || editedStyles.has(st.key)) styles.delete(st.id);
+    editedStyles.forEach((ref) => { styles.delete(ref); });
+  }
   const out = (ref: string): string => { const n = named.get(ref); return n === undefined ? ref : n; };
   const renamed = (e: BindVariable): BindVariable => (e.aliasOf === undefined ? { ...e, ref: out(e.ref) } : { ...e, ref: out(e.ref), aliasOf: out(e.aliasOf) });
   return {
