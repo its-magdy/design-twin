@@ -1,66 +1,84 @@
-// PROTOTYPE (#174, throwaway): the switches the owner tries in live Figma before one form of the designer's review is
-// picked (docs/write-plane-spec.md decision 18). Pure: the plugin (figma-plugin/src/review-proto.ts) and figma_write's
-// dry run (figma-mcp.ts previewWrites) both ask reviewDecision() whether a batch waits, so the two cannot disagree.
-//   display — what the card adds to the plain lines: "list" (Show me buttons), "draft" (applied first, then Keep or
-//             Put back), "drawing" (a schematic of a new tree, a thumbnail of what a patch or source edit touches).
-//   when    — which batches wait: "today" (the checkbox, off by default), "checkbox-forced" (the checkbox reads ON when
-//             never set, and even off a source edit or a batch over `threshold` layers waits), "overwrites" (everything
-//             but a pure create waits; the checkbox is ignored).
-// Defaults reproduce today's behaviour: display "list", when "today".
-import type { WriteEffect } from "./commands.ts";
+// When a write waits for the designer's review (docs/write-plane-spec.md decision 18), and when its card offers a
+// preview on the canvas. Pure: the plugin (figma-plugin/src/writes.ts) decides with it before a batch runs, and
+// figma_write's dry run (figma-mcp.ts previewWrites) asks it the same question from what it can see, so the two say
+// the same thing.
+//
+// A batch waits when
+//   - "Review each change first" is ticked in the plugin window (on by default: a box never set reads ON), or, whatever
+//     the box says,
+//   - it edits a source: a variable, a style, or a main component through `patch` — one change other layers follow;
+//   - it is a bulk change by rule (#171: the op that selects its nodes by a rule sets `bulkByRule`; none does yet);
+//   - the existing layers changed since the designer's last approval, this batch included, exceed REVIEW_LAYER_LIMIT.
+// The layers counted are the existing ones a batch patches, moves or deletes plus the layers and instances that
+// follow its source edits, each once; the layers this plugin session created do not count (the designer is watching
+// them appear). The count is kept per plugin session and goes back to 0 when the designer approves a batch (or keeps
+// its preview), so a large change sent in chunks of 25 still stops at the chunk that crosses the line.
+//
+// The preview ("Preview on canvas") is offered for what is hard to judge from words: a source edit, a bulk change by
+// rule, a batch over the limit by itself. Not for a batch with a delete or a keyed re-send: those cannot be put back.
 
-export const REVIEW_DISPLAYS = ["list", "draft", "drawing"] as const;
-export const REVIEW_WHENS = ["today", "checkbox-forced", "overwrites"] as const;
-export type ReviewDisplay = (typeof REVIEW_DISPLAYS)[number];
-export type ReviewWhen = (typeof REVIEW_WHENS)[number];
-export interface ReviewProto { display: ReviewDisplay; when: ReviewWhen; threshold: number }
-export const REVIEW_PROTO_DEFAULT: ReviewProto = { display: "list", when: "today", threshold: 25 };
+/** The most existing layers that change between two of the designer's approvals before a write must wait. Fixed. */
+export const REVIEW_LAYER_LIMIT = 25;
 
-/** A stored or sent setting, read leniently: a field that is not one of the choices keeps its default. */
-export function reviewProtoOf(raw: unknown): ReviewProto {
-  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const d = REVIEW_PROTO_DEFAULT;
-  const display = REVIEW_DISPLAYS.find((x) => x === o.display) || d.display;
-  const when = REVIEW_WHENS.find((x) => x === o.when) || d.when;
-  const t = typeof o.threshold === "number" && Number.isFinite(o.threshold) && o.threshold >= 0 ? Math.floor(o.threshold) : d.threshold;
-  return { display, when, threshold: t };
+/** What the decision reads of one batch, and of the session it arrives in. */
+export interface ReviewFacts {
+  /** "Review each change first" as the designer left it (true when never set) */
+  checkbox: boolean;
+  /** how many of its ops edit a source (setVariable, setStyle, a patch of a main component) */
+  sourceEdits: number;
+  /** #171's hook: the batch changes nodes it selects by a rule */
+  bulkByRule: boolean;
+  /** the existing layers it changes (see the header), each once */
+  layers: number;
+  /** the existing layers changed since the designer's last approval, this plugin session */
+  sinceApproval: number;
 }
 
-/** What one op does to layers that already exist. `nodes`: the existing nodes it changes itself (a patch, move, delete,
- *  fill/text/mode op, a keyed re-send's root); `follows`: how many layers or instances follow a source edit. A create
- *  counts nothing. */
-export interface OpFact { effect: WriteEffect; source?: boolean; nodes?: readonly string[]; follows?: number }
-
-export interface ReviewDecision { wait: boolean; reason: string }
-
-/** How many existing layers a batch changes: its ops' unique nodes, plus what follows its source edits. */
-export function layersChanged(facts: readonly OpFact[]): number {
-  const ids = new Set<string>();
-  let follows = 0;
-  for (const f of facts) {
-    if (f.effect === "creates" && !f.source) continue;
-    for (const id of f.nodes || []) ids.add(id);
-    follows += f.follows || 0;
-  }
-  return ids.size + follows;
+export interface ReviewDecision {
+  wait: boolean;
+  /** why, in the designer's words (the card shows it, the dry run returns it as `waitReason`); "" when it does not wait */
+  reason: string;
 }
 
-/** Whether a batch waits for the designer, and why (the card and the dry run show the reason). `checkbox` is the saved
- *  checkbox, undefined when it was never set: "checkbox-forced" reads that as ON, "today" as off. */
-export function reviewDecision(when: ReviewWhen, checkbox: boolean | undefined, threshold: number, facts: readonly OpFact[]): ReviewDecision {
-  if (when === "today") return checkbox === true ? { wait: true, reason: "'Review each write' is on" } : { wait: false, reason: "" };
-  if (when === "overwrites") {
-    const n = facts.filter((f) => f.effect !== "creates" || f.source).length;
-    return n ? { wait: true, reason: n + " op" + (n === 1 ? "" : "s") + " overwrite, move, delete or edit a source" } : { wait: false, reason: "" };
-  }
+const plural = (n: number, one: string, many: string = one + "s"): string => n + " " + (n === 1 ? one : many);
+
+/** Whether a batch waits for the designer, and why. Every reason that holds is named, the checkbox last (it says
+ *  least: the others are why it would wait even with the box clear). */
+export function reviewDecision(f: ReviewFacts): ReviewDecision {
   const reasons: string[] = [];
-  const sources = facts.filter((f) => f.source);
-  if (sources.length) {
-    const follow = sources.reduce((n, f) => n + (f.follows || 0), 0);
-    reasons.push("source edit: " + follow + " layer" + (follow === 1 ? "" : "s") + " follow");
+  if (f.sourceEdits) reasons.push("it changes " + (f.sourceEdits === 1 ? "a variable, style or main component" : f.sourceEdits + " variables, styles or main components") + " that other layers follow");
+  if (f.bulkByRule) reasons.push("it changes layers it picks by a rule");
+  const total = f.sinceApproval + f.layers;
+  if (total > REVIEW_LAYER_LIMIT) {
+    reasons.push(f.sinceApproval
+      ? plural(total, "existing layer") + " would have changed since your last approval (over " + REVIEW_LAYER_LIMIT + ")"
+      : "it changes " + plural(total, "existing layer") + " (over " + REVIEW_LAYER_LIMIT + ")");
   }
-  const changed = layersChanged(facts);
-  if (changed > threshold) reasons.push(changed + " layers change — over " + threshold);
-  if (checkbox !== false) reasons.unshift("'Review each change first' is on");
+  if (f.checkbox) reasons.push("'Review each change first' is on");
   return reasons.length ? { wait: true, reason: reasons.join("; ") } : { wait: false, reason: "" };
+}
+
+/** What the preview offer reads of one batch. */
+export interface PreviewFacts {
+  sourceEdits: number;
+  bulkByRule: boolean;
+  /** the existing layers this batch alone changes */
+  layers: number;
+  /** it deletes a node, or a keyed createTree re-sends (and so may remove nodes): neither can be put back */
+  deletes: boolean;
+  keyedResend: boolean;
+}
+
+/** Whether the card offers "Preview on canvas". */
+export function previewOffered(f: PreviewFacts): boolean {
+  if (f.deletes || f.keyedResend) return false;
+  return f.sourceEdits > 0 || f.bulkByRule || f.layers > REVIEW_LAYER_LIMIT;
+}
+
+/** The layers a batch changes, counted once: the ids of the existing layers it changes and the ones that follow its
+ *  source edits. `own` says which ids this plugin session created (they do not count). */
+export function countLayers(ids: Iterable<string>, own: (id: string) => boolean): number {
+  const seen = new Set<string>();
+  for (const id of ids) if (!own(id)) seen.add(id);
+  return seen.size;
 }

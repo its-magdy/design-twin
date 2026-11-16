@@ -5,7 +5,7 @@
 // A leaf: type imports of bridge/src only, so the window's relay (relay.ts) and the tests can import it without the
 // main thread's modules (which need the Figma globals).
 import type { Asset } from "../../bridge/src/doc-types.ts";
-import type { ReviewDisplay, ReviewProto } from "../../bridge/src/review-policy.ts";
+import type { CardRow } from "../../bridge/src/review-card.ts";
 
 // ---------- UI -> main ----------
 
@@ -18,16 +18,13 @@ export interface RunFullMsg { type: "run-full"; }
 // sends these — relay.ts never turns a socket frame into either.
 export interface GetAllowEditsMsg { type: "get-allow-edits"; }
 export interface SetAllowEditsMsg { type: "set-allow-edits"; allowed: boolean; }
-// "Review each write" (review.ts): ask for its saved state, or set it — the window's checkbox only, like Allow edits.
+// "Review each change first" (review.ts): ask for its saved state, or set it — the window's checkbox only, like Allow edits.
 export interface GetReviewWritesMsg { type: "get-review-writes"; }
 export interface SetReviewWritesMsg { type: "set-review-writes"; on: boolean; }
-// The designer's answer on review card `id`: Apply (`apply: true`) or Reject, with the reason they typed. The window's
-// buttons only — relay.ts never turns a socket frame into it.
-export interface ReviewAnswerMsg { type: "review-answer"; id: string; apply: boolean; reason?: string; }
-// PROTOTYPE (#174): the window's "Review prototype (dev)" block (review-proto.ts), and a card's Show me (`index` an op,
-// -1 all). The window's controls only, like the checkboxes.
-export interface GetReviewProtoMsg { type: "get-review-proto"; }
-export interface SetReviewProtoMsg { type: "set-review-proto"; proto: unknown; }
+// A button on review card `id`: Apply, Reject (with the reason typed, if any), Preview on canvas, Keep, Put back. The
+// window's buttons only — relay.ts never turns a socket frame into it.
+export interface ReviewAnswerMsg { type: "review-answer"; id: string; action: "apply" | "reject" | "preview" | "keep" | "put-back"; reason?: string; }
+// A card's Show me (`index` a line, -1 Show all): select and zoom to its layers. The window's buttons only.
 export interface ReviewShowMsg { type: "review-show"; id: string; index: number; }
 // Three meanings, one message type (main.ts `case "cancel"`):
 //   no `id`, no `scope` — the designer's Cancel button (answered with `cancel-ack`, unchanged);
@@ -50,15 +47,13 @@ export type UIToMain =
   | GetReviewWritesMsg
   | SetReviewWritesMsg
   | ReviewAnswerMsg
-  | GetReviewProtoMsg
-  | SetReviewProtoMsg
   | ReviewShowMsg
   | CancelMsg
   | BridgeMsg;
 
 const UI_TO_MAIN_TYPES: ReadonlySet<UIToMain["type"]> = new Set([
   "get-token", "set-token", "get-identity", "run-selection", "run-full", "get-allow-edits", "set-allow-edits",
-  "get-review-writes", "set-review-writes", "review-answer", "get-review-proto", "set-review-proto", "review-show", "cancel", "bridge",
+  "get-review-writes", "set-review-writes", "review-answer", "review-show", "cancel", "bridge",
 ]);
 
 export function isUIToMain(x: unknown): x is UIToMain {
@@ -124,30 +119,22 @@ export interface CancelAckMsg { type: "cancel-ack"; accepted: boolean; label: st
 export interface AllowEditsMsg { type: "allow-edits"; allowed: boolean; }
 /** A write batch changed the file, or was refused (writes.ts announce): `text` is the sentence Figma's toast showed. */
 export interface WritesMsg { type: "writes"; applied: number; ok: boolean; text: string; }
-/** The Review each write setting as the main thread holds it (the answer to get-/set-review-writes). */
+/** The "Review each change first" setting as the main thread holds it (the answer to get-/set-review-writes). */
 export interface ReviewWritesMsg { type: "review-writes"; on: boolean; }
-/** A write batch waits for the designer (review.ts): one plain line per op (commands.ts reviewLines, the dry run's
- *  description), and how long the card waits before the batch is refused unreviewed. */
-export interface ReviewMsg {
-  type: "review"; id: string; lines: string[]; waitMs: number;
-  // PROTOTYPE (#174), all absent on today's card: the form, why it waited, each line's Show me, each line's drawing.
-  form?: ReviewDisplay; why?: string; shows?: Array<ReviewShow | null>; drawings?: Array<ReviewDrawing | null>;
-}
-/** A line's Show me: `n` layers it selects of `total`; `spot`: none yet, it pans to where a new tree lands. */
-export interface ReviewShow { n: number; total: number; spot?: true }
-/** A schematic box of a new tree (review-proto.ts schematic): auto-layout → flex. */
-export interface ReviewBox {
-  name?: string; dir?: "row" | "column"; gap?: number; pad?: number[]; w?: number; h?: number; fill?: string;
-  text?: string; size?: number; inst?: string; radius?: number; kids?: ReviewBox[]; more?: true;
-}
-export interface ReviewRow { field: string; old: string; now: string }
-/** A line's drawing: a new tree's schematic, or "before" thumbnails (PNG bytes) beside field rows. */
-export interface ReviewDrawing { tree?: ReviewBox; thumbs?: Uint8Array[]; rows?: ReviewRow[] }
-export interface ReviewProtoMsg { type: "review-proto"; proto: ReviewProto; }
+/** One line of a review card (bridge/src/review-card.ts): `head`, its value rows (old → new; the window draws a swatch
+ *  for a colour), `tail`; `show` when it has layers to select (`n` of `total`) or a spot to pan to. */
+export interface ReviewCardLine { head: string; rows: CardRow[]; tail?: string; show?: { n: number; total: number; spot?: true } }
+/** A write batch waits for the designer (review.ts): its lines, the dry run's sentences for Details, why it waited,
+ *  whether it offers a preview on the canvas, and how long the card stays up at most. `id` is the write's ticket. */
+export interface ReviewMsg { type: "review"; id: string; lines: ReviewCardLine[]; details: string[]; why: string; previewable: boolean; waitMs: number; }
+/** Where a card is: waiting for an answer, busy (applying, previewing or putting back), or showing a preview. */
+export type ReviewState = "waiting" | "busy" | "previewing";
+export interface ReviewStateMsg { type: "review-state"; id: string; state: ReviewState; note?: string; }
+/** What a card's Show me did, in a sentence. */
 export interface ReviewShownMsg { type: "review-shown"; text: string; }
-/** How a review card ended: applied by the designer, rejected, nobody answered in time, withdrawn by the bridge (its
- *  caller gave up or disconnected), stopped with Cancel, or ended because "Allow edits" was unticked. */
-export type ReviewEnd = "approved" | "rejected" | "timed-out" | "withdrawn" | "cancelled" | "edits-off";
+/** How a review card ended: applied (the designer approved it, or kept its preview), rejected, out of time, the agent
+ *  stopped asking for it ("expired"), withdrawn by the agent, "Allow edits" unticked, or its preview or put-back failed. */
+export type ReviewEnd = "approved" | "kept" | "rejected" | "timed-out" | "expired" | "withdrawn" | "edits-off" | "failed";
 /** Card `id` has ended (whatever ended it): the window takes it down. */
 export interface ReviewEndMsg { type: "review-end"; id: string; end: ReviewEnd; }
 export interface BridgeResultMsg { type: "bridge-result"; id?: string; ok: boolean; result: unknown; error?: string; }
@@ -164,7 +151,7 @@ export type MainToUI =
   | ReviewWritesMsg
   | ReviewMsg
   | ReviewEndMsg
-  | ReviewProtoMsg
+  | ReviewStateMsg
   | ReviewShownMsg
   | BridgeResultMsg
   // run-begin / progress / run-end, posted by progress.ts

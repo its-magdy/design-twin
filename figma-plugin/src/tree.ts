@@ -393,12 +393,15 @@ function occupied(c: SceneNode): { x: number; y: number; width: number; height: 
   return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
 }
 
-/** Where the root lands: its own x/y, else right of everything already on the page, top-aligned with it. */
-/** PROTOTYPE (#174): where a new tree's root will land, before it is built (the review card's Show me). */
-export function landingSpot(t: TreeTarget): { page: PageNode; x: number; y: number } {
-  return { page: t.page, ...placement(t.page, "", t.spec) };
+/** Where a new tree's root will land, before it is built (the review card says it, and its Show me pans there):
+ *  `beside` when it goes right of the frames already on the page, false when the spec placed it or the page is empty. */
+export function landingSpot(t: TreeTarget): { page: PageNode; x: number; y: number; beside: boolean } {
+  const at = placement(t.page, "", t.spec);
+  const beside = !(t.spec.x !== undefined && t.spec.y !== undefined) && t.page.children.length > 0;
+  return { page: t.page, x: at.x, y: at.y, beside };
 }
 
+/** Where the root lands: its own x/y, else right of everything already on the page, top-aligned with it. */
 function placement(page: PageNode, rootId: string, spec: TreeNodeSpec): { x: number; y: number } {
   if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
   let right: number | null = null;

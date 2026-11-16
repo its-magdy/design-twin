@@ -25,6 +25,7 @@ import type {
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, WriteResult } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { sniffImage } from "../bridge/src/image-file.ts";
+import type { ReviewCardLine } from "../figma-plugin/src/messages.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real
@@ -63,10 +64,10 @@ export interface PostedMessage {
   requestId?: string;
   /** main.ts `bridge-result` */
   id?: string; ok?: boolean; result?: unknown; error?: string;
-  /** review.ts `review` (id, lines, waitMs) / `review-end` (id, end); main.ts `review-writes` (on) */
-  lines?: string[]; waitMs?: number; end?: string; on?: boolean;
-  /** PROTOTYPE (#174): a card's form, why it waited, its Show me rows */
-  form?: string; why?: string; shows?: unknown;
+  /** review.ts `review` (id = its ticket, lines, details, why, previewable, waitMs) / `review-state` (state, note) /
+   *  `review-end` (id, end) / `review-shown` (text); main.ts `review-writes` (on) */
+  lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; on?: boolean;
+  state?: string; note?: string; text?: string;
 }
 export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
@@ -81,8 +82,9 @@ export interface FakeFigma {
   ui: { onmessage: ((msg: unknown) => Promise<void>) | null; postMessage(m: PostedMessage): void };
   /** Per-user plugin storage, keyed like the real one (the bridge token, the Allow edits setting). */
   clientStorage: { getAsync(key: string): Promise<unknown>; setAsync(key: string, value: unknown): Promise<void> };
-  /** Figma's toast; the fake records each message in `World.notified`. */
-  notify(message: string, options?: { error?: boolean }): void;
+  /** Figma's toast; the fake records each message in `World.notified`, and each one taken down (its handle's cancel) in
+   *  `World.toastsDown`. */
+  notify(message: string, options?: { error?: boolean }): { cancel(): void };
   /** Figma's undo checkpoint; the fake counts calls in `World.undo.commits`. */
   commitUndo(): void;
   currentPage: FakePage;
@@ -236,6 +238,11 @@ export interface Scene {
   clientStorage?: Record<string, unknown>;
   /** the plugin realm's setTimeout/clearTimeout (the real ones by default): a fake clock's, for a case that times out */
   timers?: PluginTimers;
+  /** The designer at the window, for the review of a write (figma-plugin/src/review.ts). "approves" (the default): they
+   *  have cleared "Review each change first" (unless `clientStorage` says otherwise) and press Apply on every card a
+   *  write still waits on (a source edit, a batch over the layer limit) — what a case about something else than the
+   *  review needs. "real": nobody answers a card and the box starts as the plugin leaves it (on): the review's own cases. */
+  reviewer?: "approves" | "real";
   /** the most modes a collection may have (the file plan's limit): addMode past it throws as Figma's does */
   modeLimit?: number;
 }
@@ -274,6 +281,8 @@ export interface World {
   send(msg: unknown): Promise<PostedMessage[]>;
   /** every figma.notify message, in order */
   notified: string[];
+  /** how many toasts the plugin took down (a notification handle's cancel) */
+  toastsDown: { n: number };
   /** how many times the plugin called figma.commitUndo() (one Cmd-Z step ends at each), and how many steps Figma ended
    *  on its own: it ends the open step at each addComponentProperty, editComponentProperty and deleteComponentProperty
    *  call, the call included (seen live). A fake component counts those when its componentApi is given the world's `undo`
@@ -368,7 +377,9 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
   const undo: World["undo"] = { commits: 0, implicit: 0, onImplicit: null };
-  const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
+  const reviewer = delta.reviewer ?? base.reviewer ?? "approves";
+  const storage = new Map<string, unknown>(Object.entries({ ...(reviewer === "approves" ? { reviewWrites: false } : {}), ...(delta.clientStorage ?? base.clientStorage ?? {}) }));
+  const toastsDown = { n: 0 };
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
   // The document's own plugin data: what the plugin sets reads back; anything else is what the scene says (or "").
   const rootData = new Map<string, string>();
@@ -377,9 +388,19 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const figma: FakeFigma = {
     mixed: MIXED,
     showUI: noop, on: noop,
-    ui: { onmessage: null, postMessage: (m) => { posted.push(m); } },
+    ui: {
+      onmessage: null,
+      postMessage: (m) => {
+        posted.push(m);
+        // The approving designer answers a card on the next turn, the way a click arrives after the card is drawn.
+        if (reviewer === "approves" && m.type === "review" && typeof m.id === "string") {
+          const id = m.id;
+          setTimeout(() => { void figma.ui.onmessage?.({ type: "review-answer", id, action: "apply" }); }, 0);
+        }
+      },
+    },
     clientStorage: { getAsync: async (k) => storage.get(k), setAsync: async (k, v) => { storage.set(k, v); } },
-    notify: (m) => { notified.push(m); },
+    notify: (m) => { notified.push(m); return { cancel: () => { toastsDown.n++; } }; },
     commitUndo: () => { undo.commits++; },
     currentPage,
     fileKey: file.fileKey ?? "",
@@ -449,7 +470,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     return posted.slice(from);
   };
   return {
-    figma, api, scene, posted, send, notified, storage,
+    figma, api, scene, posted, send, notified, toastsDown, storage,
     undo,
     async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
   };

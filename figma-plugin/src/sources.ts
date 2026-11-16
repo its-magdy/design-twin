@@ -711,34 +711,21 @@ async function instancesOf(c: ComponentNode | ComponentSetNode, warn: (m: string
   return n;
 }
 
-/** PROTOTYPE (#174): the layers that follow a source edit, by id — writeImpact's own walk, the ids kept (a variable's
- *  layers, a style's users, a main component's instances). Null when `op` edits no source. The batch's earlier alias
- *  edits are not projected here (the dry run's count does that). */
-export async function followersOf(op: WriteOp): Promise<Set<string> | null> {
-  const warn = (): void => { /* a prototype: a page that cannot be read just counts low */ };
+/** The layers that follow a change of one source, by id — writeImpact's own walk with the ids kept: a variable's layers
+ *  (directly, through an alias or a style), a style's users, a main component's instances. For the review card's count
+ *  and its Show me (figma-plugin/src/review-reads.ts). The batch's earlier alias edits are not projected here (the dry
+ *  run's count does that); a page that cannot be read counts low, said by `warn`. */
+export async function followersOf(source: { variable: Variable } | { style: BaseStyle } | { component: ComponentNode | ComponentSetNode }, warn: (m: string) => void): Promise<Set<string>> {
   const keep = new Set<string>();
-  if (op.op === "patch") {
-    let nd: BaseNode | null = null;
-    try { nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null; } catch { nd = null; }
-    const c = nd ? componentOf(nd) : null;
-    if (!c) return null;
-    await instancesOf(c, warn, keep);
-    return keep;
-  }
-  const lookups = sourceLookups();
-  if (op.op === "setVariable" && op.variable) {
-    const found = await lookups.variable(op.variable);
-    if ("error" in found) return keep;
-    await variableImpact(found.ok, lookups, new Map(), warn, keep);
-    return keep;
-  }
-  if (op.op === "setStyle" && op.style) {
-    const kind = isStyleSet(op.set) ? checkStyleSet(op.set).summary.kind : null;
-    const found = await lookups.style(op.style, kind);
-    if (!("error" in found)) await consumersOf(found.ok, keep, warn);
-    return keep;
-  }
-  return null;
+  if ("component" in source) await instancesOf(source.component, warn, keep);
+  else if ("style" in source) await consumersOf(source.style, keep, warn);
+  else await variableImpact(source.variable, sourceLookups(), new Map(), warn, keep);
+  return keep;
+}
+
+/** The main component (or set) a node is, or is inside, or null: a patch of it is a source edit. */
+export function mainComponentOf(node: BaseNode): ComponentNode | ComponentSetNode | null {
+  return componentOf(node);
 }
 
 /** The dry run's file-side half (the `writeImpact` command): for each source edit of the batch, how much follows, or

@@ -1,20 +1,35 @@
-// The designer's review of a write (review.ts): "Review each write" holds a batch until the designer applies or rejects
-// it in the plugin window, and every way the wait can end without an Apply refuses the batch with nothing changed.
-import { EDITS_OFF_MESSAGE, rejectedMessage, reviewLines, REVIEW_REASON_MAX, unreviewedMessage, writeOpPreview, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
-import { REVIEW_WAIT_MS } from "../../bridge/src/timeouts.ts";
+// The designer's review of a write (figma-plugin/src/review.ts, docs/write-plane-spec.md decision 18): when a write
+// waits (the box, on by default; a source edit or more than 25 layers since the last approval even with it clear), the
+// card it waits on (plain lines, Show me, a preview on the canvas with Keep / Put back), and the ticket the agent waits
+// with (pending after the hold, asked again, withdrawn, expired when the agent stops asking). Every way a card ends
+// without an Apply refuses the batch with nothing changed.
+import { EDITS_OFF_MESSAGE, rejectedMessage, reviewLines, REVIEW_REASON_MAX, unreviewedMessage, type LastFigmaWrite, type WriteOp, type WritePending, type WriteReply, type WriteResult } from "../../bridge/src/commands.ts";
+import { lineText } from "../../bridge/src/review-card.ts";
+import { REVIEW_CARD_MAX_MS, REVIEW_IDLE_MS } from "../../bridge/src/timeouts.ts";
 import { ok } from "../assert.ts";
 import { fakeClock } from "../fake-clock.ts";
 import { clockTimers, textRuns, type FakeNode, type PostedMessage, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
-/** A writable file: one text node ("t:1", "old"), frames the plugin creates are listed in `created`. */
+const textNode = (id: string, name: string, characters: string): FakeNode =>
+  textRuns({ id, type: "TEXT", name, characters, fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
+
+/** A writable file, reviewed for real (nobody answers a card unless the case does): one text node ("t:1", "old"); 30
+ *  more ("n:1"…"n:30") for counts; a main component "Row" (c:1) holding a layer (c:2) with 2 instances. Frames the
+ *  plugin creates are listed in `created`. */
 function reviewWorld(extra: Scene = {}) {
   const created: FakeNode[] = [];
-  const label: FakeNode = textRuns({ id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
-  const w = world({ nodes: { "t:1": label }, ...extra }, {
+  const label = textNode("t:1", "Label", "old");
+  const many: Record<string, FakeNode> = {};
+  for (let i = 1; i <= 30; i++) many["n:" + i] = textNode("n:" + i, "Row " + i, "a");
+  const inst = (id: string): FakeNode => ({ id, type: "INSTANCE", name: "Row", visible: true });
+  const row: FakeNode = { id: "c:1", type: "COMPONENT", name: "Row", visible: true, remote: false, children: [], getInstancesAsync: async () => [inst("i:1"), inst("i:2")] };
+  const divider: FakeNode = { id: "c:2", type: "RECTANGLE", name: "Divider", visible: true, parent: row, fills: [], opacity: 1, boundVariables: {} };
+  row.children = [divider];
+  const w = world({ nodes: { "t:1": label, "c:1": row, "c:2": divider, ...many }, reviewer: "real", ...extra }, {
     createFrame: () => {
-      const n: FakeNode = { id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} };
+      const n: FakeNode = { id: "new:" + (created.length + 1), type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} };
       n.remove = () => { const i = created.indexOf(n); if (i >= 0) created.splice(i, 1); };
       created.push(n);
       return n;
@@ -23,187 +38,272 @@ function reviewWorld(extra: Scene = {}) {
   });
   w.figma.currentPage.appendChild = () => {};
   w.figma.currentPage.loadAsync = async () => {};
-  return { ...w, created, label };
+  w.figma.viewport = { scrollAndZoomIntoView: () => {} };
+  return { ...w, created, label, many, divider };
 }
 type ReviewWorld = ReturnType<typeof reviewWorld>;
 
 const BATCH: WriteOp[] = [{ op: "createFrame", name: "Card", fill: "#ff0000" }, { op: "setText", nodeId: "t:1", text: "new" }];
+const TEN = (from: number): WriteOp[] => Array.from({ length: 10 }, (_, i) => ({ op: "setText", nodeId: "n:" + (from + i), text: "b" }));
 
 /** Let the plugin's pending promises run until `until` holds (or give up). */
 async function tick(until: () => boolean): Promise<void> {
   for (let i = 0; i < 200 && !until(); i++) await new Promise((r) => setTimeout(r, 0));
 }
 const lastOf = (w: ReviewWorld, type: string): PostedMessage | undefined => [...w.posted].reverse().find((m) => m.type === type);
+const isPending = (r: WriteReply | undefined): r is WritePending => !!r && (r as { pending?: unknown }).pending === true;
+const asResult = (r: WriteReply | undefined): WriteResult | undefined => (r && !isPending(r) ? r : undefined);
+
+/** Send one bridge command; the reply (or the error) once the plugin answers it. */
+function bridge(w: ReviewWorld, id: string, cmd: string, args: unknown): Promise<{ ok: boolean; result?: WriteReply; error?: string }> {
+  return w.send({ type: "bridge", id, cmd, args }).then((posted) => {
+    const r = posted.find((m) => m.type === "bridge-result" && m.id === id);
+    return { ok: r?.ok === true, ...(r?.result !== undefined ? { result: r.result as WriteReply } : {}), ...(r?.error !== undefined ? { error: r.error } : {}) };
+  });
+}
 
 /** Send a bridge `write` and wait until its review card is up (or it already answered). */
-async function writeAwaitingReview(w: ReviewWorld, id: string, ops: WriteOp[] = BATCH) {
+async function writeAwaitingReview(w: ReviewWorld, id: string, ops: WriteOp[] = BATCH, holdMs?: number) {
   const from = w.posted.length;
-  const reply = w.send({ type: "bridge", id, cmd: "write", args: { ops } }).then((posted) => {
-    const r = posted.find((m) => m.type === "bridge-result" && m.id === id);
-    return (r && r.result) as WriteResult | undefined;
-  });
+  const reply = bridge(w, id, "write", { ops, ...(holdMs !== undefined ? { holdMs } : {}) }).then((r) => r.result);
   await tick(() => w.posted.slice(from).some((m) => m.type === "review" || (m.type === "bridge-result" && m.id === id)));
   const card = w.posted.slice(from).find((m) => m.type === "review");
   return { reply, card };
 }
+const answer = (w: ReviewWorld, card: PostedMessage | undefined, action: string, reason?: string) =>
+  w.send({ type: "review-answer", id: String(card?.id), action, ...(reason !== undefined ? { reason } : {}) });
 
 const untouched = (w: ReviewWorld): boolean => w.created.length === 0 && w.label.characters === "old";
+const whoami = async (w: ReviewWorld): Promise<Record<string, unknown>> => ((await bridge(w, "who" + w.posted.length, "whoami", {})).result ?? {}) as unknown as Record<string, unknown>;
+const lastWrite = async (w: ReviewWorld): Promise<LastFigmaWrite | undefined> => ((await bridge(w, "ping" + w.posted.length, "ping", {})).result as unknown as { lastFigmaWrite?: LastFigmaWrite }).lastFigmaWrite;
 
 export const cases: Case[] = [{
-  name: "Review each write (review.ts): off by default — writes apply directly, as before",
+  name: "Review each change first (review.ts): ON by default — a write waits on a plain card, and Apply lands it",
   async run() {
     const w = reviewWorld();
     const asked = await w.send({ type: "get-review-writes" });
-    ok("[REVIEW] default is OFF: the window is told on:false, nothing saved", asked[0]?.type === "review-writes" && asked[0]?.on === false && !w.storage.has("reviewWrites"));
-    const who = await w.send({ type: "bridge", id: "who", cmd: "whoami", args: {} });
-    ok("[REVIEW] whoami reports reviewWrites:false", (who.find((m) => m.type === "bridge-result")?.result as { reviewWrites?: unknown } | undefined)?.reviewWrites === false);
+    ok("[REVIEW] default is ON: the window is told on:true, nothing saved", asked[0]?.type === "review-writes" && asked[0]?.on === true && !w.storage.has("reviewWrites"));
+    const who = await whoami(w);
+    ok("[REVIEW] whoami reports reviewWrites:true and no layers counted yet", who.reviewWrites === true && who.reviewLayers === 0 && who.reviewWaiting === undefined);
     await w.allowEdits();
-    const { reply, card } = await writeAwaitingReview(w, "w0");
-    const r = await reply;
-    ok("[REVIEW] off: the write applies at once, no card", card === undefined && r?.ok === true && r.applied.length === 2 && w.created.length === 1 && w.label.characters === "new");
-  },
-}, {
-  name: "Review each write: 'Allow edits' off refuses first — no card",
-  async run() {
-    const w = reviewWorld({ clientStorage: { reviewWrites: true } });
+    const commitsBefore = w.undo.commits;
     const { reply, card } = await writeAwaitingReview(w, "w1");
-    const r = await reply;
-    ok("[REVIEW] edits off + review on: refused edits-off, no card, file untouched",
-      card === undefined && r?.refused === "edits-off" && r.error === EDITS_OFF_MESSAGE && untouched(w));
+    ok("[REVIEW] the write waits: a card is up and the file is untouched", card !== undefined && untouched(w));
+    ok("[REVIEW] the card says why it waited, in the designer's words", card?.why === "'Review each change first' is on");
+    const lines = (card?.lines ?? []).map((l) => lineText({ ...l, ops: [] }));
+    ok(`[REVIEW] the card's lines are plain words, no node ids (got ${JSON.stringify(lines)})`,
+      lines[0] === "New frame 'Card', fill #ff0000 — on the current page" && lines[1] === "Text 'Label': text “old” → “new”" && !lines.some((l) => /\d+:\d+/.test(l)));
+    ok("[REVIEW] …the dry run's sentences are its Details", JSON.stringify(card?.details) === JSON.stringify(reviewLines(BATCH)));
+    ok("[REVIEW] …its Show me: the layer a line changes", card?.lines?.[1]?.show?.n === 1 && card.lines[0]?.show === undefined);
+    ok("[REVIEW] …a small batch offers no preview, and Figma's toast says a write waits", card?.previewable === false && w.notified.some((t) => /wants to change this file/.test(t)));
+    ok("[REVIEW] whoami names the waiting ticket", (await whoami(w)).reviewWaiting === card?.id);
+    const shown = await w.send({ type: "review-show", id: String(card?.id), index: 1 });
+    ok("[REVIEW] Show me selects the layer (no undo step) and says so", /Showing 1 layer/.test(String(shown.find((m) => m.type === "review-shown")?.text)) && w.figma.currentPage.selection.length === 1 && w.undo.commits === commitsBefore + 2);
+    await answer(w, { type: "review", id: "rv-nope" }, "apply");
+    ok("[REVIEW] an answer naming another card changes nothing", untouched(w));
+    await answer(w, card, "apply");
+    const r = asResult(await reply);
+    ok("[REVIEW] Apply: the batch lands whole", r?.ok === true && r.applied.length === 2 && w.created.length === 1 && w.label.characters === "new");
+    ok("[REVIEW] …the card is taken down as approved", lastOf(w, "review-end")?.end === "approved" && lastOf(w, "review-end")?.id === card?.id);
+    ok("[REVIEW] …and it is still its own undo step (committed before and after)", w.undo.commits - commitsBefore >= 4);
+    await answer(w, card, "reject");
+    ok("[REVIEW] a late second answer changes nothing", w.created.length === 1);
   },
 }, {
-  name: "Review each write: the card lists the batch in plain words (the dry run's description); Apply lands it",
+  name: "Review each change first: cleared, a small write applies at once; a source edit and a 26th layer still wait",
   async run() {
     const w = reviewWorld();
     await w.allowEdits();
-    const set = await w.send({ type: "set-review-writes", on: true });
-    ok("[REVIEW] ticking it is echoed and saved", set[0]?.type === "review-writes" && set[0]?.on === true && w.storage.get("reviewWrites") === true);
-    const who = await w.send({ type: "bridge", id: "who", cmd: "whoami", args: {} });
-    ok("[REVIEW] whoami reports reviewWrites:true", (who.find((m) => m.type === "bridge-result")?.result as { reviewWrites?: unknown } | undefined)?.reviewWrites === true);
-
-    const commitsBefore = w.undo.commits;
-    const { reply, card } = await writeAwaitingReview(w, "w2");
-    ok("[REVIEW] the write waits: a card is up and the file is untouched", card !== undefined && untouched(w));
-    ok("[REVIEW] the card shows one plain line per op — commands.ts reviewLines, built from the dry run's preview",
-      JSON.stringify(card?.lines) === JSON.stringify(reviewLines(BATCH)) && card?.lines?.length === 2 &&
-      card.lines[0] === "creates a frame 'Card' — new node on the current page, fill #ff0000" && /text becomes "new"/.test(card.lines[1] ?? "") && card.waitMs === REVIEW_WAIT_MS);
-    // An answer for a card that is not up is ignored.
-    await w.send({ type: "review-answer", id: "review-nope", apply: true });
-    ok("[REVIEW] an answer naming another card changes nothing", untouched(w));
-    await w.send({ type: "review-answer", id: String(card?.id), apply: true });
-    const r = await reply;
-    ok("[REVIEW] Apply: the batch lands whole", r?.ok === true && r.applied.length === 2 && w.created.length === 1 && w.label.characters === "new");
-    ok("[REVIEW] …the card is taken down as approved", lastOf(w, "review-end")?.end === "approved" && lastOf(w, "review-end")?.id === card?.id);
-    ok("[REVIEW] …and it is still its own undo step (committed before and after)", w.undo.commits - commitsBefore >= 2);
-    // A second answer to the same card is ignored (the window disables its buttons; this is the main thread's half).
-    await w.send({ type: "review-answer", id: String(card?.id), apply: false });
-    ok("[REVIEW] a late second answer changes nothing", w.created.length === 1);
-
-    // Every field a create sets is on its line (the live check found the fill missing).
-    const made = reviewLines([{ op: "createFrame", name: "Row", width: 200, height: 40, layoutMode: "HORIZONTAL", itemSpacing: 8, padding: [1, 2, 3, 4], fill: "#00ff00", parentId: "1:2" }, { op: "createText", text: "Hello", fontSize: 18, fill: "#111111" }]);
-    ok("[REVIEW] a create's line names its size, auto-layout, padding and fill; a text's its size and fill",
-      made[0] === "creates a frame 'Row' — new node under 1:2, 200×40, row auto-layout, gap 8, padding 1 2 3 4, fill #00ff00"
-      && made[1] === "creates a text \"Hello\" — new node on the current page, size 18, fill #111111");
-    ok("[REVIEW] a gap given without auto-layout is still on the line (the plugin sets it), a gap of 0 too",
-      reviewLines([{ op: "createFrame", name: "Card", itemSpacing: 0 }])[0] === "creates a frame 'Card' — new node on the current page, gap 0");
-    // A createTree and a patch show exactly the dry run's `change` sentence.
-    const ops: WriteOp[] = [{ op: "createTree", tree: { name: "Panel", children: [{ text: "Hi" }] } }, { op: "patch", nodeId: "t:1", set: { name: "Title" } }];
-    const lines = reviewLines(ops);
-    ok("[REVIEW] createTree/patch lines are the dry run's change sentences", lines[0] === writeOpPreview(ops[0] as WriteOp, 0).change && lines[1] === writeOpPreview(ops[1] as WriteOp, 1).change);
+    const set = await w.send({ type: "set-review-writes", on: false });
+    ok("[REVIEW] clearing it is echoed and saved", set[0]?.on === false && w.storage.get("reviewWrites") === false);
+    const { reply, card } = await writeAwaitingReview(w, "s1");
+    ok("[REVIEW] cleared: a small write applies at once, no card", card === undefined && asResult(await reply)?.ok === true && w.label.characters === "new");
+    // A patch of a layer inside a main component carries to its instances: it waits whatever the box says.
+    const src = await writeAwaitingReview(w, "s2", [{ op: "patch", nodeId: "c:2", set: { opacity: 0.5 } }]);
+    const srcLine = src.card?.lines?.[0];
+    ok(`[REVIEW] a source edit waits with the box clear, saying other layers follow (${String(src.card?.why)})`,
+      src.card !== undefined && /other layers follow/.test(String(src.card.why)) && srcLine !== undefined && lineText({ ...srcLine, ops: [] }) === "Main component 'Row', layer 'Divider': opacity 100% → 50% — 2 layers follow");
+    ok("[REVIEW] …and offers a preview on the canvas", src.card?.previewable === true);
+    await answer(w, src.card, "reject");
+    await src.reply;
+    // The layers changed since the last approval add up, this session's own left out.
+    w.label.characters = "old";
+    const own = await writeAwaitingReview(w, "s3", [{ op: "createFrame", name: "Mine" }]);
+    const mineId = asResult(await own.reply)?.applied[0]?.id;
+    for (let i = 0; i < 30; i++) await w.api.applyWrites([{ op: "setFill", nodeId: String(mineId), color: "#00ff00" }]);
+    ok("[REVIEW] a layer this session created is never counted, however often it changes", (await whoami(w)).reviewLayers === 0 && !w.posted.some((m) => m.type === "review" && m.id !== src.card?.id));
+    const first = await writeAwaitingReview(w, "s4", TEN(1));
+    const second = await writeAwaitingReview(w, "s5", TEN(11));
+    ok("[REVIEW] 20 existing layers in two batches: no card, and the count is 20", first.card === undefined && second.card === undefined && (await whoami(w)).reviewLayers === 20);
+    const third = await writeAwaitingReview(w, "s6", TEN(21));
+    ok(`[REVIEW] the batch that takes it to 30 waits, saying so (${String(third.card?.why)})`, /30 existing layers would have changed since your last approval \(over 25\)/.test(String(third.card?.why)));
+    await answer(w, third.card, "apply");
+    ok("[REVIEW] …approved, it lands, and the count starts again", asResult(await third.reply)?.ok === true && (await whoami(w)).reviewLayers === 0);
   },
 }, {
-  name: "Review each write: Reject leaves the file untouched and the typed reason reaches the reply",
+  name: "Review: Preview on canvas — Keep keeps it as an applied write; Put back restores it and the card waits again",
   async run() {
-    const w = reviewWorld({ clientStorage: { reviewWrites: true } });
+    const w = reviewWorld();
     await w.allowEdits();
-    const { reply, card } = await writeAwaitingReview(w, "w3");
-    await w.send({ type: "review-answer", id: String(card?.id), apply: false, reason: "  Use the brand red token, not a raw hex.  " });
-    const r = await reply;
-    ok("[REVIEW] Reject: refused 'rejected', nothing applied, file untouched", r?.ok === false && r.refused === "rejected" && r.applied.length === 0 && untouched(w));
-    ok("[REVIEW] …the reason (trimmed) is in `reason` and quoted in the error",
-      r?.reason === "Use the brand red token, not a raw hex." && r.error === rejectedMessage("Use the brand red token, not a raw hex.") && /Their reason: "Use the brand red token/.test(r.error));
-    ok("[REVIEW] …and the refusal is announced", w.notified.some((t) => /rejected/.test(t)) && lastOf(w, "writes")?.ok === false);
-
-    const second = await writeAwaitingReview(w, "w4");
-    await w.send({ type: "review-answer", id: String(second.card?.id), apply: false, reason: "   " });
-    const r2 = await second.reply;
-    ok("[REVIEW] Reject with no reason: no `reason`, the error says none was given", r2?.refused === "rejected" && r2.reason === undefined && /no reason/.test(r2.error ?? "") && untouched(w));
-
-    const third = await writeAwaitingReview(w, "w5");
-    await w.send({ type: "review-answer", id: String(third.card?.id), apply: false, reason: "x".repeat(REVIEW_REASON_MAX + 50) });
-    const r3 = await third.reply;
-    ok("[REVIEW] a very long reason is cut, and says so", (r3?.reason ?? "").length === REVIEW_REASON_MAX + "… (cut)".length && /\(cut\)$/.test(r3?.reason ?? ""));
-  },
-}, {
-  name: "Review each write: nobody answers — refused unreviewed when the wait runs out, never a hang",
-  async run() {
-    const clock = fakeClock();
-    const w = reviewWorld({ clientStorage: { reviewWrites: true }, timers: clockTimers(clock) });
-    await w.allowEdits();
-    const { reply, card } = await writeAwaitingReview(w, "w6");
-    ok("[REVIEW] the card's wait is armed", card !== undefined && clock.armed() === 1);
-    clock.advance(REVIEW_WAIT_MS - 1);
-    await tick(() => false);
-    ok("[REVIEW] …not before the wait is up", lastOf(w, "review-end") === undefined && untouched(w));
-    clock.advance(1);
-    const r = await reply;
-    ok("[REVIEW] timed out: refused 'unreviewed' with the plain reason, file untouched",
-      r?.refused === "unreviewed" && r.error === unreviewedMessage("timed-out", REVIEW_WAIT_MS) && untouched(w));
-    ok("[REVIEW] …the card is taken down as timed-out, and no timer is left", lastOf(w, "review-end")?.end === "timed-out" && clock.armed() === 0);
-    await w.send({ type: "review-answer", id: String(card?.id), apply: true });
-    ok("[REVIEW] an Apply after it timed out changes nothing", untouched(w));
-  },
-}, {
-  name: "Review each write: the bridge gives up or drops, the designer cancels, or 'Allow edits' goes off — the card ends",
-  async run() {
-    const clock = fakeClock();
-    const w = reviewWorld({ clientStorage: { reviewWrites: true }, timers: clockTimers(clock) });
-    await w.allowEdits();
-
-    // The bridge abandoned this request (its caller timed out, or the agent cancelled the call).
-    const a = await writeAwaitingReview(w, "w7");
-    await w.send({ type: "cancel", id: "w7" });
-    const ra = await a.reply;
-    ok("[REVIEW] bridge cancel by id: refused 'unreviewed' (withdrawn), file untouched, card down, timer cleared",
-      ra?.refused === "unreviewed" && ra.error === unreviewedMessage("withdrawn", REVIEW_WAIT_MS) && untouched(w) && lastOf(w, "review-end")?.end === "withdrawn" && clock.armed() === 0);
-    await w.send({ type: "review-answer", id: String(a.card?.id), apply: true });
-    ok("[REVIEW] …an Apply on the withdrawn card changes nothing", untouched(w));
-
-    // The socket closed (the MCP server or the bridge went away).
-    const b = await writeAwaitingReview(w, "w8");
-    await w.send({ type: "cancel", scope: "bridge" });
-    const rb = await b.reply;
-    ok("[REVIEW] bridge dropped: withdrawn, file untouched", rb?.refused === "unreviewed" && /withdrawn/.test(rb.error ?? "") && untouched(w));
-
-    // The designer pressed the window's Cancel while it waited.
-    const c = await writeAwaitingReview(w, "w9");
-    await w.send({ type: "cancel" });
-    const rc = await c.reply;
-    ok("[REVIEW] designer's Cancel: refused 'unreviewed' (cancelled), file untouched", rc?.refused === "unreviewed" && rc.error === unreviewedMessage("cancelled", REVIEW_WAIT_MS) && untouched(w));
-
-    // "Allow edits" unticked while it waited: refused as edits-off at once.
-    const d = await writeAwaitingReview(w, "w10");
-    await w.allowEdits(false);
-    const rd = await d.reply;
-    ok("[REVIEW] 'Allow edits' unticked while waiting: refused edits-off at once, file untouched",
-      rd?.refused === "edits-off" && rd.error === EDITS_OFF_MESSAGE && untouched(w) && lastOf(w, "review-end")?.end === "edits-off" && clock.armed() === 0);
-
-    // A batch that would be refused never puts a card up.
-    await w.allowEdits(true);
-    const bad = await writeAwaitingReview(w, "w11", [{ op: "patch", nodeId: "missing:1", set: { name: "x" } }]);
-    const rbad = await bad.reply;
-    ok("[REVIEW] a batch refused on its names gets no card", bad.card === undefined && rbad?.ok === false && rbad.refused === undefined);
-
-    // Review turned off again: the next write applies directly.
     await w.send({ type: "set-review-writes", on: false });
-    const e = await writeAwaitingReview(w, "w12");
-    const re = await e.reply;
-    ok("[REVIEW] unticked: writes apply directly again", e.card === undefined && re?.ok === true && w.label.characters === "new");
+    const ops: WriteOp[] = Array.from({ length: 26 }, (_, i) => ({ op: "setText", nodeId: i < 25 ? "n:" + (i + 1) : "t:1", text: "new" }));
+    const changedNow = (): number => Object.values(w.many).filter((n) => n.characters === "new").length + (w.label.characters === "new" ? 1 : 0);
+    const { reply, card } = await writeAwaitingReview(w, "p1", ops);
+    ok("[PREVIEW] a batch over the limit by itself offers a preview, grouped as one line", card?.previewable === true && card.lines?.length === 1 && /^26 texts: text/.test(lineText({ ...(card.lines[0] ?? { head: "", rows: [] }), ops: [] })));
+    const commits = w.undo.commits;
+    // Preview, then Put back sent right away (before the preview has landed): both are done, in order — one click each.
+    await answer(w, card, "preview");
+    await answer(w, card, "put-back");
+    await tick(() => w.posted.some((m) => m.type === "review-state" && m.state === "waiting" && m.id === card?.id));
+    const states = w.posted.filter((m) => m.type === "review-state" && m.id === card?.id).map((m) => m.state);
+    ok(`[PREVIEW] Put back clicked while the preview landed still puts it back (states ${states.join(" → ")})`,
+      states.includes("previewing") && states[states.length - 1] === "waiting" && changedNow() === 0);
+    ok("[PREVIEW] …the preview and its put-back are two undo entries of their own", w.undo.commits - commits >= 4);
+    await answer(w, card, "preview");
+    await tick(() => lastOf(w, "review-state")?.state === "previewing");
+    ok("[PREVIEW] previewing: the batch is in the file, the card says everyone sees it, and the layers are selected",
+      changedNow() === 26 && /everyone in this file can see it/.test(String(lastOf(w, "review-state")?.note)) && w.figma.currentPage.selection.length > 0);
+    await answer(w, card, "keep");
+    const r = asResult(await reply);
+    ok("[PREVIEW] Keep: the normal success reply, the batch stays, the card ends as kept", r?.ok === true && r.applied.length === 26 && changedNow() === 26 && lastOf(w, "review-end")?.end === "kept");
+    ok("[PREVIEW] …and the count starts again", (await whoami(w)).reviewLayers === 0);
+    // A card withdrawn while previewing puts the preview back first.
+    for (const n of Object.values(w.many)) n.characters = "a";
+    w.label.characters = "old";
+    const again = await writeAwaitingReview(w, "p2", ops, 0);
+    const pend = await again.reply;
+    await answer(w, again.card, "preview");
+    await tick(() => lastOf(w, "review-state")?.state === "previewing");
+    const cancelled = asResult((await bridge(w, "p2c", "writeTicket", { ticket: isPending(pend) ? pend.ticket : "", cancel: true })).result);
+    ok("[PREVIEW] withdrawn while previewing: put back, refused unreviewed, saying the preview was put back",
+      cancelled?.refused === "unreviewed" && /it was put back/.test(cancelled.error ?? "") && changedNow() === 0 && lastOf(w, "review-end")?.end === "withdrawn");
+    // A batch with a delete is never offered a preview (a delete cannot be put back).
+    const made = asResult(await (await writeAwaitingReview(w, "p3", [{ op: "createFrame", name: "Tmp" }])).reply);
+    void made;
   },
 }, {
-  name: "Review each write: 'Allow edits' unticked while the batch resolves — refused edits-off, no card",
+  name: "Review: the ticket — pending after the hold, asked again, a repeat answers at once, unknown is refused",
   async run() {
-    const w = reviewWorld({ clientStorage: { reviewWrites: true, allowEdits: true } });
+    const clock = fakeClock();
+    const w = reviewWorld({ timers: clockTimers(clock) });
+    await w.allowEdits();
+    const { reply, card } = await writeAwaitingReview(w, "t1", BATCH, 1000);
+    clock.advance(1000);
+    const first = await reply;
+    ok("[TICKET] after the hold the plugin answers pending with its ticket, why it waits, and what to do; the card stays up",
+      isPending(first) && first.ticket === card?.id && first.why === "'Review each change first' is on" && /Call figma_write \{ticket: 'rv-/.test(first.note) && /do not re-send the ops/.test(first.note)
+      && /tell the user/.test(first.note) && lastOf(w, "review-end") === undefined && untouched(w));
+    const ticket = isPending(first) ? first.ticket : "";
+    const second = await writeAwaitingReview(w, "t2", [{ op: "createFrame", name: "Other" }], 1000);
+    const refused = asResult(await second.reply);
+    ok("[TICKET] a second batch while one waits is refused at once, naming the waiting ticket, with no second card",
+      second.card === undefined && refused?.refused === "waiting" && (refused.error ?? "").includes(ticket) && untouched(w));
+    const poll = bridge(w, "t3", "writeTicket", { ticket, holdMs: 1000 });
+    clock.advance(1000);
+    ok("[TICKET] asked again: pending again after the hold", isPending((await poll).result));
+    const poll2 = bridge(w, "t4", "writeTicket", { ticket, holdMs: 60000 });
+    await tick(() => false);
+    await answer(w, card, "apply");
+    const done = asResult((await poll2).result);
+    ok("[TICKET] the designer answers during a poll: the poll gets the result", done?.ok === true && done.applied.length === 2 && w.label.characters === "new");
+    const repeat = asResult((await bridge(w, "t5", "writeTicket", { ticket, holdMs: 1000 })).result);
+    ok("[TICKET] a repeat answers at once with the same outcome", JSON.stringify(repeat) === JSON.stringify(done));
+    const unknown = await bridge(w, "t6", "writeTicket", { ticket: "rv-404-x", holdMs: 1000 });
+    ok("[TICKET] an unknown ticket is refused, saying nothing waits under it", !unknown.ok && /No write is waiting under ticket 'rv-404-x'/.test(unknown.error ?? ""));
+    const lw = await lastWrite(w);
+    ok("[TICKET] figma_status's ping reports the last outcome", lw?.ticket === ticket && lw.outcome === "applied" && lw.unseen === undefined);
+  },
+}, {
+  name: "Review: the agent stops asking — the card is withdrawn; answered after it stopped, figma_status still says so",
+  async run() {
+    const clock = fakeClock();
+    const w = reviewWorld({ timers: clockTimers(clock) });
+    await w.allowEdits();
+    const a = await writeAwaitingReview(w, "e1", BATCH, 0);
+    clock.advance(0);
+    const pend = await a.reply;
+    const ticket = isPending(pend) ? pend.ticket : "";
+    clock.advance(REVIEW_IDLE_MS - 1);
+    await tick(() => false);
+    ok("[EXPIRE] not before no poll has come for the idle time", lastOf(w, "review-end") === undefined);
+    clock.advance(1);
+    await tick(() => lastOf(w, "review-end") !== undefined);
+    ok("[EXPIRE] then the card ends 'expired' (the window says the agent stopped waiting), nothing applied",
+      lastOf(w, "review-end")?.end === "expired" && untouched(w) && clock.armed() === 0);
+    const late = asResult((await bridge(w, "e2", "writeTicket", { ticket })).result);
+    ok("[EXPIRE] a late poll gets a rejection that clearly says nothing changed", late?.refused === "unreviewed" && late.error === unreviewedMessage("expired", REVIEW_IDLE_MS) && /Nothing in the file was changed/.test(late.error));
+    // The designer answers after the agent's last pending answer (within the idle time): only figma_status sees it.
+    const b = await writeAwaitingReview(w, "e3", BATCH, 0);
+    clock.advance(0);
+    const pendB = await b.reply;
+    await answer(w, b.card, "apply");
+    await tick(() => lastOf(w, "writes")?.ok === true);
+    const lw = await lastWrite(w);
+    ok("[EXPIRE] answered after the agent stopped asking: figma_status reports it applied, unseen", lw?.outcome === "applied" && lw.unseen === true && lw.ticket === (isPending(pendB) ? pendB.ticket : "?"));
+    await bridge(w, "e4", "writeTicket", { ticket: isPending(pendB) ? pendB.ticket : "" });
+    ok("[EXPIRE] …until its ticket is asked again", (await lastWrite(w))?.unseen === undefined);
+    // A card nobody polls (a direct caller) still ends after the overall cap.
+    w.label.characters = "old";
+    w.created.splice(0);
+    const direct = w.api.applyWrites(BATCH);
+    await tick(() => w.posted.filter((m) => m.type === "review").length === 3);
+    clock.advance(REVIEW_CARD_MAX_MS);
+    const capped = await direct;
+    ok("[EXPIRE] after 15 min in all the card ends timed out, nothing applied", capped.refused === "unreviewed" && capped.error === unreviewedMessage("timed-out", REVIEW_CARD_MAX_MS) && untouched(w) && clock.armed() === 0);
+  },
+}, {
+  name: "Review: withdrawn by the agent (figma_write {ticket, cancel}); Reject passes the reason; Allow edits off ends it",
+  async run() {
+    const w = reviewWorld();
+    await w.allowEdits();
+    const a = await writeAwaitingReview(w, "c1", BATCH, 0);
+    const pend = await a.reply;
+    const res = asResult((await bridge(w, "c2", "writeTicket", { ticket: isPending(pend) ? pend.ticket : "", cancel: true })).result);
+    ok("[CANCEL] withdrawn: refused unreviewed, card down, file untouched", res?.refused === "unreviewed" && res.error === unreviewedMessage("withdrawn", 0) && lastOf(w, "review-end")?.end === "withdrawn" && untouched(w));
+    await answer(w, a.card, "apply");
+    ok("[CANCEL] …an Apply on the withdrawn card changes nothing", untouched(w));
+
+    const b = await writeAwaitingReview(w, "c3");
+    await answer(w, b.card, "reject", "  Use the brand red token, not a raw hex.  ");
+    const rb = asResult(await b.reply);
+    ok("[REJECT] Reject: refused 'rejected', the reason (trimmed) in `reason` and quoted in the error, file untouched",
+      rb?.refused === "rejected" && rb.reason === "Use the brand red token, not a raw hex." && rb.error === rejectedMessage("Use the brand red token, not a raw hex.") && untouched(w));
+    ok("[REJECT] …and the refusal is announced in a red toast", w.notified.some((t) => /rejected/.test(t)) && lastOf(w, "writes")?.ok === false);
+    const down = w.toastsDown.n;
+    const c = await writeAwaitingReview(w, "c4");
+    ok("[TOAST] the next card takes the stale red toast down", w.toastsDown.n === down + 1 && c.card !== undefined);
+    await answer(w, c.card, "reject", "x".repeat(REVIEW_REASON_MAX + 50));
+    const rc = asResult(await c.reply);
+    ok("[REJECT] a very long reason is cut, and says so", (rc?.reason ?? "").length === REVIEW_REASON_MAX + "… (cut)".length);
+
+    const d = await writeAwaitingReview(w, "c5");
+    await w.allowEdits(false);
+    const rd = asResult(await d.reply);
+    ok("[EDITS] 'Allow edits' unticked while waiting: refused edits-off at once, file untouched", rd?.refused === "edits-off" && rd.error === EDITS_OFF_MESSAGE && lastOf(w, "review-end")?.end === "edits-off" && untouched(w));
+    const e = await writeAwaitingReview(w, "c6");
+    ok("[EDITS] 'Allow edits' off refuses first — no card", e.card === undefined && asResult(await e.reply)?.refused === "edits-off");
+    await w.allowEdits(true);
+    const bad = await writeAwaitingReview(w, "c7", [{ op: "patch", nodeId: "missing:1", set: { name: "x" } }]);
+    ok("[REVIEW] a batch refused on its names gets no card", bad.card === undefined && asResult(await bad.reply)?.ok === false);
+  },
+}, {
+  name: "Review: 'Allow edits' unticked while a preview is on the canvas — it stays, and the reply says so",
+  async run() {
+    const w = reviewWorld();
+    await w.allowEdits();
+    const { reply, card } = await writeAwaitingReview(w, "x1", [{ op: "patch", nodeId: "c:2", set: { opacity: 0.5 } }]);
+    await answer(w, card, "preview");
+    await tick(() => lastOf(w, "review-state")?.state === "previewing");
+    ok("[PREVIEW] a source edit's preview changes the main component", w.divider.opacity === 0.5);
+    await w.allowEdits(false);
+    const r = asResult(await reply);
+    ok("[PREVIEW] edits off while previewing: refused edits-off, the preview stays applied and is listed",
+      r?.refused === "edits-off" && r.applied.length === 1 && /preview stays applied/.test(r.error ?? "") && w.divider.opacity === 0.5);
+  },
+}, {
+  name: "Review: 'Allow edits' unticked while the batch resolves — refused edits-off, no card",
+  async run() {
+    const w = reviewWorld({ clientStorage: { allowEdits: true } });
     // The patch's node lookup is where the batch waits: the designer unticks the box there.
     const lookup = w.figma.getNodeByIdAsync;
     let unticked = false;
@@ -214,67 +314,5 @@ export const cases: Case[] = [{
     const r = await w.api.applyWrites([{ op: "patch", nodeId: "t:1", set: { name: "Renamed" } }]);
     ok("[REVIEW] unticked during resolution: refused edits-off at once, no card, file untouched",
       unticked && r.refused === "edits-off" && !w.posted.some((m) => m.type === "review") && w.label.name === "Label");
-  },
-}, {
-  name: "Review each write: direct applyWrites (the test surface) meets the same review",
-  async run() {
-    const w = reviewWorld({ clientStorage: { reviewWrites: true, allowEdits: true } });
-    const pending = w.api.applyWrites([{ op: "createFrame", name: "Card", fill: "#ff0000" }, { op: "setText", nodeId: "t:1", text: "new" }]);
-    await tick(() => w.posted.some((m) => m.type === "review"));
-    const card = lastOf(w, "review");
-    ok("[REVIEW] a direct caller waits for the card too", card !== undefined && untouched(w));
-    await w.send({ type: "review-answer", id: String(card?.id), apply: false, reason: "not now" });
-    const r = await pending;
-    ok("[REVIEW] …and a Reject refuses it the same way", r.refused === "rejected" && r.reason === "not now" && untouched(w));
-  },
-}, {
-  // PROTOTYPE (#174): the review switches (review-proto.ts, bridge/src/review-policy.ts).
-  name: "Review prototype: the window's switches are saved, and a draft is applied first, then kept or put back",
-  async run() {
-    const w = reviewWorld({ clientStorage: { reviewWrites: true } });
-    await w.allowEdits();
-    const set = await w.send({ type: "set-review-proto", proto: { display: "draft", when: "today", threshold: 10 } });
-    ok("[REVIEW-PROTO] set-review-proto is echoed and saved", set.some((m) => m.type === "review-proto") && JSON.stringify(w.storage.get("reviewProto")) === JSON.stringify({ display: "draft", when: "today", threshold: 10 }));
-    const kept = await writeAwaitingReview(w, "d1");
-    ok("[REVIEW-PROTO] draft: the card is up with the batch already applied", kept.card?.form === "draft" && w.created.length === 1 && w.label.characters === "new");
-    await w.send({ type: "review-answer", id: String(kept.card?.id), apply: true });
-    const rk = await kept.reply;
-    ok("[REVIEW-PROTO] Keep: the normal success reply, the draft stays", rk?.ok === true && rk.applied.length === 2 && w.label.characters === "new");
-    w.label.characters = "old";
-    w.created.splice(0);
-    const back = await writeAwaitingReview(w, "d2");
-    await w.send({ type: "review-answer", id: String(back.card?.id), apply: false, reason: "not this" });
-    const rb = await back.reply;
-    ok("[REVIEW-PROTO] Put back: refused 'rejected' with the reason, the draft put back", rb?.refused === "rejected" && rb.reason === "not this" && /put back/.test(rb.error ?? "") && untouched(w));
-  },
-}, {
-  name: "Review prototype: when a write waits (checkbox-forced, overwrites) and a longer ticket-mode wait",
-  async run() {
-    const w = reviewWorld({ clientStorage: { reviewProto: { display: "list", when: "checkbox-forced", threshold: 25 } } });
-    await w.allowEdits();
-    const box = await w.send({ type: "get-review-writes" });
-    ok("[REVIEW-PROTO] checkbox-forced: a box never set reads as ON", box.some((m) => m.type === "review-writes" && m.on === true));
-    const forced = await writeAwaitingReview(w, "f1", [{ op: "createFrame", name: "Card" }]);
-    ok("[REVIEW-PROTO] …so even a create waits, saying why", /Review each change first/.test(String(forced.card?.why)));
-    await w.send({ type: "review-answer", id: String(forced.card?.id), apply: false });
-    await forced.reply;
-    await w.send({ type: "set-review-writes", on: false });
-    await w.send({ type: "set-review-proto", proto: { display: "list", when: "overwrites", threshold: 25 } });
-    const create = await w.api.applyWrites([{ op: "createFrame", name: "Card" }]);
-    ok("[REVIEW-PROTO] overwrites: a pure create goes straight through", create.ok === true && !w.posted.some((m) => m.type === "review" && m.id !== forced.card?.id));
-    const over = await writeAwaitingReview(w, "o1", [{ op: "setText", nodeId: "t:1", text: "new" }]);
-    const shows = over.card?.shows as Array<{ n: number } | null> | undefined;
-    ok("[REVIEW-PROTO] …an overwrite waits, with a Show me for its layer", /overwrite/.test(String(over.card?.why)) && shows?.[0]?.n === 1);
-    const shown = await w.send({ type: "review-show", id: String(over.card?.id), index: 0 });
-    ok("[REVIEW-PROTO] Show me answers in the window (never throws)", shown.some((m) => m.type === "review-shown"));
-    await w.send({ type: "review-answer", id: String(over.card?.id), apply: false });
-    await over.reply;
-    const from = w.posted.length;
-    const long = w.send({ type: "bridge", id: "t1", cmd: "write", args: { ops: [{ op: "setText", nodeId: "t:1", text: "x" }], reviewWaitMs: 99 * 60000 } });
-    await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
-    const card = w.posted.slice(from).find((m) => m.type === "review");
-    ok("[REVIEW-PROTO] a ticket-mode write's longer wait is capped at 30 min", card?.waitMs === 30 * 60000);
-    await w.send({ type: "review-answer", id: String(card?.id), apply: false });
-    await long;
   },
 }];

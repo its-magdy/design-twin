@@ -1,37 +1,66 @@
-// PROTOTYPE (#174): when a write waits for the designer (bridge/src/review-policy.ts), pure.
+// The designer's review of a write, the pure halves: when a batch waits and when its card offers a preview
+// (bridge/src/review-policy.ts), and the card's plain lines (bridge/src/review-card.ts).
 //   bun test/review-policy.test.ts
 import { check, report } from "./assert.ts";
-import { layersChanged, REVIEW_PROTO_DEFAULT, reviewDecision, reviewProtoOf, type OpFact } from "../bridge/src/review-policy.ts";
+import { countLayers, previewOffered, REVIEW_LAYER_LIMIT, reviewDecision, type ReviewFacts } from "../bridge/src/review-policy.ts";
+import { cardLines, lineText, valueText } from "../bridge/src/review-card.ts";
+import { describeTree, sizePhrase } from "../bridge/src/tree-spec.ts";
+import { checkTree } from "../bridge/src/tree-check.ts";
+import { writeOpPreview, type WriteOp } from "../bridge/src/commands.ts";
 
-const create: OpFact = { effect: "creates" };
-const patch = (id: string): OpFact => ({ effect: "overwrites", nodes: [id] });
-const source = (follows: number): OpFact => ({ effect: "overwrites", source: true, follows });
+const facts = (f: Partial<ReviewFacts> = {}): ReviewFacts => ({ checkbox: false, sourceEdits: 0, bulkByRule: false, layers: 0, sinceApproval: 0, ...f });
 
-console.log("\nthe setting:");
-check("defaults are today's behaviour", JSON.stringify(reviewProtoOf(undefined)) === JSON.stringify(REVIEW_PROTO_DEFAULT) && REVIEW_PROTO_DEFAULT.when === "today" && REVIEW_PROTO_DEFAULT.display === "list");
-check("a stored setting is read field by field; a bad field keeps its default",
-  JSON.stringify(reviewProtoOf({ display: "draft", when: "nope", threshold: -3 })) === JSON.stringify({ display: "draft", when: "today", threshold: 25 }));
+console.log("\nwhen a write waits:");
+check("the limit is 25 layers, fixed", REVIEW_LAYER_LIMIT === 25);
+check("the box ticked: every batch waits, saying so", reviewDecision(facts({ checkbox: true })).wait && reviewDecision(facts({ checkbox: true })).reason === "'Review each change first' is on");
+check("the box clear: a small change goes straight through", !reviewDecision(facts({ layers: 3, sinceApproval: 10 })).wait && reviewDecision(facts()).reason === "");
+const src = reviewDecision(facts({ sourceEdits: 1 }));
+check("the box clear: a source edit still waits, saying other layers follow it", src.wait && /variable, style or main component that other layers follow/.test(src.reason));
+check("…and a bulk change by rule (#171's hook)", reviewDecision(facts({ bulkByRule: true })).wait && /picks by a rule/.test(reviewDecision(facts({ bulkByRule: true })).reason));
+check("over the limit in one batch waits; exactly the limit does not", reviewDecision(facts({ layers: 26 })).wait && /it changes 26 existing layers \(over 25\)/.test(reviewDecision(facts({ layers: 26 })).reason) && !reviewDecision(facts({ layers: 25 })).wait);
+const chunk = reviewDecision(facts({ layers: 10, sinceApproval: 20 }));
+check("the count is cumulative since the last approval: chunks of 10 stop at the one that crosses 25", chunk.wait && /30 existing layers would have changed since your last approval \(over 25\)/.test(chunk.reason));
+check("every reason that holds is named, the box last", /^it changes a variable.*; 'Review each change first' is on$/.test(reviewDecision(facts({ checkbox: true, sourceEdits: 1 })).reason));
+check("layers are counted once, this session's own left out", countLayers(["1:1", "1:1", "1:2", "9:9"], (id) => id === "9:9") === 2);
 
-console.log("\ncounting layers:");
-check("creates count nothing; a node patched twice counts once; followers add up",
-  layersChanged([create, patch("1:1"), patch("1:1"), patch("1:2"), source(10)]) === 12);
+console.log("\nwhen a preview is offered:");
+const pv = { sourceEdits: 0, bulkByRule: false, layers: 0, deletes: false, keyedResend: false };
+check("a source edit, a bulk change by rule, or a batch over the limit by itself", previewOffered({ ...pv, sourceEdits: 1 }) && previewOffered({ ...pv, bulkByRule: true }) && previewOffered({ ...pv, layers: 26 }));
+check("not a small change", !previewOffered({ ...pv, layers: 25 }));
+check("never with a delete or a keyed re-send (they cannot be put back)", !previewOffered({ ...pv, sourceEdits: 1, deletes: true }) && !previewOffered({ ...pv, layers: 40, keyedResend: true }));
 
-console.log("\ntoday:");
-check("waits only with the checkbox ticked", reviewDecision("today", true, 25, [create]).wait && !reviewDecision("today", undefined, 25, [source(500)]).wait && !reviewDecision("today", false, 25, [source(500)]).wait);
+console.log("\nthe card's lines:");
+const patch = (id: string, set: Record<string, unknown>): WriteOp => ({ op: "patch", nodeId: id, set });
+const many = Array.from({ length: 30 }, (_, i) => patch("1:" + i, { radius: 20, opacity: 0.8 }));
+const grouped = cardLines(many, many.map(() => ({ name: "Card", old: { radius: 6, opacity: 1 } })));
+check("30 layers patched alike are one line, old → new, opacity as a percentage",
+  grouped.length === 1 && lineText(grouped[0]!) === "30 layers: radius 6 → 20, opacity 100% → 80%" && grouped[0]?.ops.length === 30);
+const mixed = cardLines([patch("1:1", { radius: 20 }), patch("1:2", { radius: 20 })], [{ old: { radius: 4 } }, { old: { radius: 6 } }]);
+check("old values that differ read 'mixed'", lineText(mixed[0]!) === "2 layers: radius mixed → 20");
+const unread = cardLines([patch("1:1", { radius: 20 })], []);
+check("a value the plugin could not read shows only the new one, and no id stands in for a name it read", lineText(unread[0]!) === "A layer: radius → 20");
+const one = cardLines([patch("1:1", { name: "Title", fills: [{ type: "solid", color: "#16a34a" }] })], [{ name: "Heading", old: { name: "Heading", fills: [{ type: "solid", color: "#3b82f6" }] } }]);
+check("one layer is named; a fill reads as its colour", lineText(one[0]!) === "Layer 'Heading': name Heading → Title, fills #3b82f6 → #16a34a");
+const v = cardLines([{ op: "setVariable", variable: "demo/accent", value: "#16a34a" }], [{ name: "demo/accent", old: { Default: "#3b82f6" }, follows: 40 }]);
+check("a variable: its value old → new, and how many layers follow", lineText(v[0]!) === "Variable 'demo/accent': #3b82f6 → #16a34a — 40 layers follow");
+const vm = cardLines([{ op: "setVariable", variable: "bg", values: { Light: "#ffffff", Dark: "#111111" } }], [{ old: { Light: "#fafafa", Dark: "#000000" }, follows: 1 }]);
+check("…by mode when it sets several", lineText(vm[0]!) === "Variable 'bg': Light #fafafa → #ffffff, Dark #000000 → #111111 — 1 layer follows");
+const main = cardLines([patch("5:1", { radius: 8 })], [{ name: "Base", component: "Button", old: { radius: 4 }, follows: 12 }]);
+check("a patch inside a main component is its own line, with the instances that follow", lineText(main[0]!) === "Main component 'Button', layer 'Base': radius 4 → 8 — 12 layers follow");
+const tree: WriteOp = { op: "createTree", tree: { name: "Settings card", layout: { display: "flex", flexDirection: "column", width: 320 }, heightMode: "hug", children: [{ text: "Hi" }] } };
+const created = cardLines([tree], [{ lands: "right of the existing frames" }]);
+check("a new frame: its name, its size (a width only: height hugs content), what is inside, where it lands",
+  lineText(created[0]!) === "New frame 'Settings card', 320 wide, height hugs content, 1 layer inside — lands right of the existing frames");
+check("a keyed re-send says it updates in place", lineText(cardLines([tree], [{ updates: "Settings card" }])[0]!) === "Updates 'Settings card' in place");
+check("no line carries a node id or the dry run's check details", ![...grouped, ...v, ...created].some((l) => /\d+:\d+|checked against|put back if/.test(lineText(l))));
+check("a delete says it cannot be put back", /cannot be put back/.test(lineText(cardLines([{ op: "delete", nodeId: "3:3" }], [{ name: "Old" }])[0]!)));
+check("values in a few words", valueText("hidden", true) === "hidden" && valueText("text", "x".repeat(60)).length === 42 && valueText("box", { w: 320, h: 200 }) === "320×200" && valueText("fills", []) === "none");
 
-console.log("\ncheckbox-forced:");
-check("never set reads as ON", reviewDecision("checkbox-forced", undefined, 25, [create]).wait);
-check("off: a plain create goes straight through", !reviewDecision("checkbox-forced", false, 25, [create, patch("1:1")]).wait);
-const s = reviewDecision("checkbox-forced", false, 25, [source(10)]);
-check("off: a source edit still waits, saying how many layers follow", s.wait && s.reason === "source edit: 10 layers follow");
-const many = Array.from({ length: 142 }, (_, i) => patch("1:" + i));
-const big = reviewDecision("checkbox-forced", false, 25, many);
-check("off: over the threshold waits, saying by how much", big.wait && big.reason === "142 layers change — over 25");
-check("…and exactly the threshold does not", !reviewDecision("checkbox-forced", false, 25, many.slice(0, 25)).wait);
-check("on: the reason leads with the checkbox", /^'Review each change first' is on; source edit/.test(reviewDecision("checkbox-forced", true, 25, [source(2)]).reason));
-
-console.log("\noverwrites:");
-check("creates never wait, whatever the checkbox", !reviewDecision("overwrites", true, 25, [create, create]).wait);
-check("an overwrite, move, delete or source edit waits", reviewDecision("overwrites", false, 25, [create, { effect: "deletes", nodes: ["1:1"] }]).wait && reviewDecision("overwrites", false, 25, [{ effect: "creates", source: true }]).wait);
+console.log("\nthe size of a new frame (shared with the dry run):");
+check("both sides: W×H", sizePhrase({ box: { w: 320, h: 200 } }) === "320×200");
+check("a width only never reads '×undefined'", sizePhrase({ layout: { width: 320 } }) === "320 wide, height as Figma makes a new frame" && sizePhrase({ layout: { width: 320 }, heightMode: "hug" }) === "320 wide, height hugs content");
+const spec = { name: "Card", layout: { display: "flex" as const, width: 320 }, heightMode: "hug" as const };
+const { summary } = checkTree(spec);
+check("the dry run's sentence says it the same way", /creates frame 'Card' 320 wide, height hugs content, horizontal auto-layout with/.test(describeTree(spec, undefined, summary)) && !/undefined/.test(String(writeOpPreview({ op: "createTree", tree: spec }, 0).change)));
 
 report();

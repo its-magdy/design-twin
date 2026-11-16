@@ -12,7 +12,6 @@
 //
 // ESM TypeScript like the rest of bridge/src/ (the MCP SDK is ESM-only). The bridge core and the other
 // bridge modules are imported directly, typed by their own source.
-import crypto from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
@@ -31,7 +30,7 @@ import { z } from "zod";
 import { createBridge } from "./server-core.ts";
 import { createRoute } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
-import { TIMEOUTS, NAMED_CLIENT_WAIT_MS, REVIEW_WAIT_MS } from "./timeouts.ts";
+import { TIMEOUTS, NAMED_CLIENT_WAIT_MS, REVIEW_HOLD_MAX_MS, REVIEW_HOLD_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { runRead, tickMessage } from "./read-run.ts";
 import type { ReadRun } from "./read-run.ts";
@@ -41,7 +40,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
 import { componentRootOf } from "./component-spec.ts";
-import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WhoamiReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName, type WriteResult } from "./commands.ts";
+import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, isPending, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName, type WriteReply, type WriteResult } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -155,7 +154,7 @@ import { findMapFile } from "./project-layout.ts";
 import { loadSpecFiles } from "./spec-file.ts";
 import { inputIndex, loadSeedTokens, MAX_WRITE_OPS, seededPreview, seededReply } from "./seed-file.ts";
 import { imagePreview, loadImageFiles } from "./image-file.ts";
-import { reviewDecision, type OpFact } from "./review-policy.ts";
+import { reviewDecision } from "./review-policy.ts";
 import type { SeedRecord } from "./seed-file.ts";
 import { installOf } from "./install-layout.ts";
 import { exportRoot, readComponentCatalog } from "./export-reader.ts";
@@ -767,8 +766,12 @@ const writeOpShape = z.object({
 // `editsAllowed` is the plugin's "Allow edits" checkbox as its whoami reports it: false => a real write would be
 // refused (and `wouldRefuse` says what to ask the designer); null => unknown (no plugin reachable, or one built
 // before the opt-in).
-// `reviewWrites` is its "Review each write" checkbox: true => a real write waits for the designer's Apply or Reject.
-function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites, proto }: PluginWriteSettings, impact: ImpactRead) {
+// `wouldWait` / `waitReason`: whether a real write would wait for the designer's review, by review-policy.ts — the rule
+// the plugin applies — over what the dry run can see (only with a plugin that reports its review state). It cannot
+// tell the layers this plugin session created (the plugin does not count them), so it may say a write waits that the
+// plugin then applies at once; never the other way round.
+function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: ImpactRead) {
+  const { editsAllowed } = settings;
   const steps = ops.map(writeOpPreview);
   // A source edit's counts (and a refusal only the file can give) come from the plugin, when one answered.
   if (impact.reply) {
@@ -784,16 +787,15 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites, proto }: Pl
       if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");
     }
   }
-  // PROTOTYPE (#174): with the window's review switches reported (whoami reviewProto) and `when` not "today", whether a
-  // real write would wait is review-policy.ts reviewDecision over the preview's own facts (a source edit's `affects`).
-  const facts: OpFact[] = steps.map((s, i) => {
-    const op = ops[i];
-    const follows = s.affects ? (s.affects.nodes || 0) + (s.affects.instances || 0) : 0;
-    const source = !!s.affects || (op !== undefined && (op.op === "setVariable" || op.op === "setStyle"));
-    return { effect: s.effect, ...(source ? { source, follows } : {}), nodes: op && op.nodeId && s.effect !== "creates" ? [op.nodeId] : [] };
-  });
-  const protoWait = proto && proto.when !== "today" ? reviewDecision(proto.when, proto.checkbox === null ? undefined : proto.checkbox, proto.threshold, facts) : null;
-  const waits = protoWait ? protoWait.wait : reviewWrites;
+  const review = settings.review;
+  const wait = review ? (() => {
+    // A source edit: a variable or style edit, a patch the plugin counted followers for, a component re-sent in place.
+    const sourceEdits = steps.filter((s, i) => { const o = ops[i]; return !!o && (o.op === "setVariable" || o.op === "setStyle" || (!!s.affects && (o.op === "patch" || o.op === "createTree"))); }).length;
+    const ids = new Set<string>();
+    let follows = 0;
+    steps.forEach((s, i) => { const o = ops[i]; if (o && o.nodeId && s.effect !== "creates") ids.add(o.nodeId); if (s.affects) follows += (s.affects.nodes || 0) + (s.affects.instances || 0); });
+    return reviewDecision({ checkbox: review.checkbox, sourceEdits, bulkByRule: false, layers: ids.size + follows, sinceApproval: review.layers });
+  })() : null;
   const sourceNote = impact.asked
     ? impact.reply
       ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind. " +
@@ -812,10 +814,11 @@ function previewWrites(ops: WriteOp[], { editsAllowed, reviewWrites, proto }: Pl
     steps,
     editsAllowed,
     ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
-    ...(reviewWrites ? { reviewWrites: true } : {}),
-    ...(protoWait ? { wouldWait: protoWait.wait, ...(protoWait.wait ? { waitReason: protoWait.reason } : {}) } : {}),
+    ...(wait ? { wouldWait: wait.wait, ...(wait.wait ? { waitReason: wait.reason } : {}) } : {}),
+    ...(review && review.waiting ? { waitingTicket: review.waiting } : {}),
     note: "Nothing was changed. Once applied, a batch is undone only by the designer's Cmd-Z in Figma (one step per batch, except that each component property it declares, edits or deletes ends a step: the reply's undoSteps says how many). " + sourceNote +
-      (waits ? `A real write WAITS (up to ${Math.round((REVIEW_WAIT_MODE === "ticket" ? TICKET_CARD_MS : REVIEW_WAIT_MS) / 60000)} min) until the designer applies or rejects it in the plugin window` + (protoWait ? ` (${protoWait.reason})` : "") + (REVIEW_WAIT_MODE === "ticket" ? "; the call returns a `ticket` if they have not answered within " + holdText() + ": call figma_write {ticket} to keep waiting" : "") + ". " : "") +
+      (wait && wait.wait ? "A real write WAITS for the designer's answer in the plugin window (" + wait.reason + "): the call returns {pending, ticket} if they have not answered within " + Math.round(REVIEW_HOLD_MS / 1000) + " s — then call figma_write {ticket} until it answers, and tell the user it waits for them. " : "") +
+      (review && review.waiting ? "Another write is waiting for the designer now (ticket '" + review.waiting + "'): a real write is refused until it ends. " : "") +
       (editsAllowed === false
         ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
         : editsAllowed === null
@@ -847,51 +850,47 @@ async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | u
   }
 }
 
-// The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
-// with none): no connected file that `client` names (or none at all), several it could mean, or any failure, is
-// `null` (unknown) — so a named file not connected yet is not waited for.
-interface PluginWriteSettings { editsAllowed: boolean | null; reviewWrites: boolean; proto?: WhoamiReply["reviewProto"] }
+// The dry run's read of the "Allow edits" checkbox and of the review state (whoami). Never waits for a plugin to connect
+// (the preview must answer with none): no connected file that `client` names (or none at all), several it could mean,
+// or any failure, is `null` (unknown) — so a named file not connected yet is not waited for. `review` is null from a
+// plugin that does not report it.
+interface PluginWriteSettings { editsAllowed: boolean | null; review: { checkbox: boolean; layers: number; waiting: string | null } | null }
 async function readWriteSettings(a: { client?: string | undefined } | undefined): Promise<PluginWriteSettings> {
-  const unknown: PluginWriteSettings = { editsAllowed: null, reviewWrites: false };
+  const unknown: PluginWriteSettings = { editsAllowed: null, review: null };
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
     if (p.kind !== "one") return unknown;
     const who = await ask("whoami", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client });
-    return { editsAllowed: typeof who.editsAllowed === "boolean" ? who.editsAllowed : null, reviewWrites: who.reviewWrites === true, ...(who.reviewProto ? { proto: who.reviewProto } : {}) };
+    return {
+      editsAllowed: typeof who.editsAllowed === "boolean" ? who.editsAllowed : null,
+      review: typeof who.reviewWrites === "boolean" ? { checkbox: who.reviewWrites, layers: typeof who.reviewLayers === "number" ? who.reviewLayers : 0, waiting: typeof who.reviewWaiting === "string" ? who.reviewWaiting : null } : null,
+    };
   } catch {
     return unknown;
   }
 }
 
-// PROTOTYPE (#174) Q3: how the agent waits for a write held for the designer's review.
-//   DTWIN_REVIEW_WAIT=call (default): the call waits as long as the card (today).
-//   DTWIN_REVIEW_WAIT=ticket: the call waits DTWIN_REVIEW_HOLD_MS (default 2 min; 0 = return at once) for the plugin's
-//     answer, then returns a small non-error `{pending, ticket}`; `figma_write {ticket}` waits again for the same request.
-//     The card waits longer (TICKET_CARD_MS, sent as `reviewWaitMs`). The request in flight carries only `presence.gone`,
-//     never the first call's abort signal, so ending that call does not withdraw the card.
-// Tickets live in this Map, in this process: they die with the MCP server (a restart forgets every one).
-const REVIEW_WAIT_MODE: "call" | "ticket" = process.env.DTWIN_REVIEW_WAIT === "ticket" ? "ticket" : "call";
-const REVIEW_HOLD_MS = ((): number => { const n = Number(process.env.DTWIN_REVIEW_HOLD_MS); return process.env.DTWIN_REVIEW_HOLD_MS !== undefined && process.env.DTWIN_REVIEW_HOLD_MS !== "" && Number.isFinite(n) && n >= 0 ? n : 120000; })();
-const TICKET_CARD_MS = 15 * 60000;
-const holdText = (): string => (REVIEW_HOLD_MS >= 60000 ? Math.round(REVIEW_HOLD_MS / 60000) + " min" : Math.round(REVIEW_HOLD_MS / 1000) + " s");
-type TicketOutcome = { reply: WriteResult } | { error: unknown };
-interface Ticket { id: string; done: Promise<TicketOutcome>; outcome: TicketOutcome | null; until: number; seeds: readonly SeedRecord[] }
-const tickets = new Map<string, Ticket>();
+// How the agent waits for a write held for the designer's review (figma-plugin/src/review.ts): the PLUGIN owns the
+// ticket and the outcome. A write that waits is answered after the hold — under the 60 s an MCP client built on the
+// TypeScript SDK gives a tool call by default — with `{pending, ticket}`; `figma_write {ticket}` sends `writeTicket`,
+// which the plugin answers with the result once there is one (pending again after the hold), and `{ticket, cancel}`
+// withdraws it. Nothing about it lives here but each ticket's seeded rows (seed-file.ts cuts a seeded table's reply to
+// what changed), so a restarted server still gets every answer (uncut, for a seeded table). DTWIN_REVIEW_HOLD_MS
+// overrides the hold (tests), within 0…REVIEW_HOLD_MAX_MS.
+const REVIEW_HOLD = ((): number => {
+  const raw = process.env.DTWIN_REVIEW_HOLD_MS;
+  const n = Number(raw);
+  return raw !== undefined && raw !== "" && Number.isFinite(n) ? Math.max(0, Math.min(REVIEW_HOLD_MAX_MS, n)) : REVIEW_HOLD_MS;
+})();
+const ticketSeeds = new Map<string, readonly SeedRecord[]>();
 
-/** Wait up to the hold for ticket `t`'s answer: its real result, or `{pending}` again. */
-async function awaitTicket(t: Ticket, holdMs: number, started: number) {
-  if (!t.outcome && holdMs > 0) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([t.done, new Promise<void>((res) => { timer = setTimeout(res, holdMs); })]);
-    if (timer !== undefined) clearTimeout(timer);
+/** A write's answer as the agent reads it: pending (its ticket remembered with its seeds), or the result. */
+function writeAnswer(sent: WriteReply, seeds: readonly SeedRecord[]) {
+  if (isPending(sent)) {
+    if (seeds.length) { ticketSeeds.set(sent.ticket, seeds); while (ticketSeeds.size > 50) { const k = ticketSeeds.keys().next().value; if (k === undefined) break; ticketSeeds.delete(k); } }
+    return textResult(sent);
   }
-  const o = t.outcome;
-  if (o) return "error" in o ? errorResult(o.error) : writeReply(o.reply, t.seeds);
-  const secs = Math.round((Date.now() - started) / 1000);
-  return textResult({
-    pending: true, ticket: t.id, waited: secs >= 60 ? Math.round(secs / 60) + " min" : secs + " s",
-    note: "The designer has not answered yet. Call figma_write {ticket} to keep waiting; do not re-send the ops. The card stays up until " + new Date(t.until).toLocaleTimeString() + ".",
-  });
+  return writeReply(sent, seeds);
 }
 
 /** A write's reply as the agent reads it (refused, failed partway, or applied). */
@@ -944,15 +943,14 @@ registerTool(
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
       "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
-      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed); with 'Review each write' on, a write waits (≤5 min) for their Apply/Reject." +
-      (REVIEW_WAIT_MODE === "ticket" ? " A reply {pending, ticket} means they have not answered yet: call figma_write {ticket} to keep waiting (no ops)." : ""),
+      "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed). A write may wait for their review there (dry run: wouldWait): a reply {pending, ticket} means call figma_write {ticket} again, not the ops, until it answers; {ticket, cancel:true} withdraws it.",
     inputSchema: {
       ...clientShape,
-      // Constrain `op` to the ops the plugin actually implements (writeOpsSchema).
-      ops: REVIEW_WAIT_MODE === "ticket" ? writeOpsSchema.optional() : writeOpsSchema,
-      // PROTOTYPE (#174): keep waiting on a write held for review; `ops` is then not needed. Only in ticket mode, so the
-      // default definition (and its cost, test/write-cost.test.ts) is today's.
-      ...(REVIEW_WAIT_MODE === "ticket" ? { ticket: z.string().optional() } : {}),
+      // Constrain `op` to the ops the plugin actually implements (writeOpsSchema). Optional only for a ticket poll.
+      ops: writeOpsSchema.optional(),
+      // A write waiting for the designer's review, asked about again (or withdrawn): figma-plugin/src/review.ts.
+      ticket: z.string().optional(),
+      cancel: z.boolean().optional(),
       dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection; when one is connected it also reports editsAllowed — false means a real write would be refused)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
@@ -964,13 +962,16 @@ registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   guarded(async (a, extra) => {
-    const ticket = "ticket" in a && typeof a.ticket === "string" ? a.ticket : undefined;
-    if (ticket !== undefined) {
-      const t = tickets.get(ticket);
-      if (!t) return errorResult("No write is waiting under ticket '" + ticket + "': it is unknown, or this MCP server restarted (tickets live only as long as it). Check the file with a read before re-sending the ops.");
-      return awaitTicket(t, REVIEW_HOLD_MS, Date.now());
+    if (a.ticket !== undefined) {
+      if (a.ops !== undefined) return errorResult("Send either `ops` (a new batch) or `ticket` (a write already waiting for the designer), not both. Nothing was changed.");
+      const sent = await ask("writeTicket", { ticket: a.ticket, holdMs: REVIEW_HOLD, ...(a.cancel ? { cancel: true } : {}) }, { timeoutMs: TIMEOUTS.write, target: a.client, signal: callSignal(extra) });
+      const seeds = ticketSeeds.get(a.ticket) || [];
+      // A withdrawal that took: say so plainly (it is what was asked, not a failure).
+      if (a.cancel && !isPending(sent) && sent.refused === "unreviewed") return textResult({ cancelled: true, ticket: a.ticket, note: sent.error || "Withdrawn. Nothing in the file was changed." });
+      return writeAnswer(sent, seeds);
     }
-    if (!a.ops) return errorResult("`ops` is required (or `ticket`, to keep waiting on a write held for review).");
+    if (a.cancel) return errorResult("`cancel` withdraws a write waiting for review: send it with that write's `ticket`.");
+    if (!a.ops) return errorResult("`ops` is missing: send the batch to apply (or `ticket`, to ask again about a write waiting for the designer's review).");
     // A spec given by path is read into the op first, so it meets every check below exactly as the same spec inline.
     const loaded = loadSpecFiles(a.ops, (p, what) => assertInsideCwd(p, what));
     if ("error" in loaded) return errorResult(loaded.error + ". Nothing was changed.");
@@ -987,23 +988,11 @@ registerTool(
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
     if (a.dryRun) return textResult(seededPreview(imagePreview(previewWrites(ops, await readWriteSettings(a), await readImpact(ops, a, extra)), imaged.records, imaged.hashes), seeds));
-    // The write's own budget (TIMEOUTS.write): long enough for a batch held for the designer's review, whose own
-    // "nobody answered" reply lands first. The call's cancel signal is passed on so that an agent that gives up
-    // withdraws a write still waiting for review (figma-plugin/src/review.ts) — the designer must never apply a write
-    // nobody is waiting for. A batch already running is not stopped by it (writes have no cancel point).
-    // PROTOTYPE (#174): ticket mode — the request outlives this call (only presence.gone withdraws it).
-    if (REVIEW_WAIT_MODE === "ticket") {
-      const started = Date.now();
-      const id = "rv-" + crypto.randomUUID().slice(0, 8);
-      const done: Promise<TicketOutcome> = ask("write", { ops, ...(images ? { images } : {}), reviewWaitMs: TICKET_CARD_MS }, { timeoutMs: TICKET_CARD_MS + 60000, target: a && a.client, signal: presence.gone })
-        .then((reply): TicketOutcome => ({ reply }), (error: unknown): TicketOutcome => ({ error }));
-      const t: Ticket = { id, done, outcome: null, until: started + TICKET_CARD_MS, seeds };
-      void done.then((o) => { t.outcome = o; });
-      tickets.set(id, t);
-      return awaitTicket(t, REVIEW_HOLD_MS, started);
-    }
-    const sent = await ask("write", { ops, ...(images ? { images } : {}) }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
-    return writeReply(sent, seeds);
+    // The write's own budget (TIMEOUTS.write): the hold for the designer's review plus the batch itself. The plugin
+    // answers within the hold either way — the result, or `{pending, ticket}` with the card still up — so ending this
+    // call (the agent's cancel) does not withdraw the card: only {ticket, cancel} does, or the agent not asking again.
+    const sent = await ask("write", { ops, ...(images ? { images } : {}), holdMs: REVIEW_HOLD }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
+    return writeAnswer(sent, seeds);
   })
 );
 

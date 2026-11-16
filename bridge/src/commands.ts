@@ -30,7 +30,6 @@ import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
 import { imageTableError, type ImageTable } from "./image-spec.ts";
-import type { ReviewProto } from "./review-policy.ts";
 import type { BindCounts } from "./bind-values.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -136,9 +135,17 @@ export interface WriteArgs {
    *  paint's `image`) → base64 (image-spec.ts). Put here by figma_write on the MCP server (image-file.ts), never by the
    *  spec's author; absent when no paint names a file. */
   images?: ImageTable | undefined;
-  /** PROTOTYPE (#174): how long a review card waits for this batch (a ticket-mode figma_write asks for a longer wait);
-   *  the plugin caps it at 30 min. Absent: REVIEW_WAIT_MS. */
-  reviewWaitMs?: number | undefined;
+  /** How long the plugin holds this request for the designer's review before it answers `{pending, ticket}` instead
+   *  (figma-plugin/src/review.ts): at most REVIEW_HOLD_MAX_MS, REVIEW_HOLD_MS when absent (timeouts.ts). */
+  holdMs?: number | undefined;
+}
+/** `writeTicket`: a write waiting for the designer's review, asked about again by its ticket (figma_write {ticket}). */
+export interface WriteTicketArgs {
+  ticket: string;
+  /** as for `write`: how long to hold for the designer's answer before answering `{pending}` again */
+  holdMs?: number | undefined;
+  /** withdraw the write instead: its card comes down, nothing is applied (a preview on the canvas is put back) */
+  cancel?: boolean | undefined;
 }
 
 /** A WriteOp field that holds a string. */
@@ -331,6 +338,22 @@ export interface PingReply {
   file: string;
   /** only when figma.fileKey is readable (private-plugin API) */
   fileKey?: string;
+  /** the last write this plugin session answered (figma-plugin/src/review.ts), or a write waiting for review now */
+  lastFigmaWrite?: LastFigmaWrite;
+}
+/** How the plugin's last write ended, for figma_status: a write the designer answered after its agent stopped asking
+ *  is only ever seen here. */
+export interface LastFigmaWrite {
+  /** the review ticket, when the write waited for the designer */
+  ticket?: string;
+  /** when it ended (ISO), or when it began waiting */
+  at: string;
+  /** "applied", "failed", a refusal (WriteRefusal), or "waiting" (its card is up now) */
+  outcome: "applied" | "failed" | WriteRefusal | "waiting";
+  /** the reply's sentence, or what is applied */
+  text: string;
+  /** it ended after its agent had stopped asking (no reply carried it) */
+  unseen?: true;
 }
 
 /** bridge.ts `whoami`: the plugin instance's identity (see the handler's comment for what each answers). */
@@ -349,11 +372,14 @@ export interface WhoamiReply {
   /** Whether the designer has ticked "Allow edits" in the plugin window (edits.ts). Absent from a plugin
    *  built before the opt-in existed — which applies every write it is sent. */
   editsAllowed?: boolean;
-  /** Whether the designer has ticked "Review each write" in the plugin window (figma-plugin/src/review.ts): a write
-   *  then waits until they apply or reject it there. Absent from a plugin built before the review card existed. */
+  /** "Review each change first" in the plugin window (figma-plugin/src/review.ts; on unless the designer cleared it):
+   *  every write then waits for their answer there. Absent from a plugin built before the review card existed. */
   reviewWrites?: boolean;
-  /** PROTOTYPE (#174): the window's review switches (review-policy.ts) and the box as saved (null: never set). */
-  reviewProto?: ReviewProto & { checkbox: boolean | null };
+  /** The existing layers changed since the designer last approved a write, this plugin session (review-policy.ts): a
+   *  write that takes the count over REVIEW_LAYER_LIMIT waits even with the box clear. */
+  reviewLayers?: number;
+  /** The ticket of the write waiting for the designer now, if one is (a second write is refused until it ends). */
+  reviewWaiting?: string;
 }
 
 /** One selected node (figma.currentPage.selection, summarised). */
@@ -530,9 +556,10 @@ export interface CreatePlan {
  *    `edits-off`  — the designer has not ticked "Allow edits" (figma-plugin/src/edits.ts).
  *    `rejected`   — review was on and the designer pressed Reject on the card (figma-plugin/src/review.ts); their
  *                   typed reason, if any, is in `reason`.
- *    `unreviewed` — review was on and nobody applied the batch: no answer in time, the request was withdrawn (the
- *                   caller gave up or the bridge dropped), or the designer stopped it with Cancel. */
-export type WriteRefusal = "edits-off" | "rejected" | "unreviewed";
+ *    `unreviewed` — it waited for review and nobody applied it: the card ran out of time, the agent stopped asking
+ *                   for it, or withdrew it (figma_write {ticket, cancel}).
+ *    `waiting`    — another write is waiting for the designer's review; one card at a time. */
+export type WriteRefusal = "edits-off" | "rejected" | "unreviewed" | "waiting";
 /** The sentence a refused `edits-off` batch carries as `error`, and what figma_write shows the agent. */
 export const EDITS_OFF_MESSAGE =
   "Edits are off in the Design Twin plugin — tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
@@ -550,15 +577,44 @@ export function rejectedMessage(reason: string | undefined): string {
   return "The designer rejected this write in the Design Twin plugin window. Nothing in the file was changed. " +
     (reason ? "Their reason: \"" + reason + "\"" : "They gave no reason.");
 }
+/** How a waiting write ended without being applied: its card ran out of time (REVIEW_CARD_MAX_MS), its agent stopped
+ *  asking for it (REVIEW_IDLE_MS after the last pending answer), or withdrew it. */
+export type UnreviewedEnd = "timed-out" | "expired" | "withdrawn";
 /** The sentence an `unreviewed` batch carries as `error`, by how its review card ended (figma-plugin/src/review.ts). */
-export function unreviewedMessage(end: "timed-out" | "withdrawn" | "cancelled", waitMs: number): string {
+export function unreviewedMessage(end: UnreviewedEnd, waitMs: number): string {
   const nothing = " Nothing in the file was changed.";
   if (end === "timed-out") {
     return "Nobody applied or rejected this write in the Design Twin plugin window within " + Math.round(waitMs / 60000) +
-      " min, so it was not applied." + nothing + " Ask the designer to watch the plugin window (or to untick 'Review each write' there), then retry.";
+      " min, so it was not applied." + nothing + " Ask the designer to watch the plugin window, then send it again.";
   }
-  if (end === "cancelled") return "The designer stopped this write with Cancel in the Design Twin plugin window before applying it." + nothing;
-  return "This write was withdrawn before the designer answered its review: the request was abandoned or the bridge disconnected." + nothing;
+  if (end === "expired") return "This write was withdrawn: its ticket was not asked about again within " + Math.round(waitMs / 60000) + " min, so the card in the plugin window came down." + nothing;
+  return "This write was withdrawn at the agent's request before the designer answered." + nothing;
+}
+/** The sentence a batch refused because another one waits for review carries as `error`. */
+export function waitingMessage(ticket: string): string {
+  return "Another write is waiting for the designer's review in the Design Twin plugin window (ticket '" + ticket + "'). " +
+    "Call figma_write {ticket: '" + ticket + "'} to wait for its answer (or add cancel: true to withdraw it), then send this batch again. Nothing in the file was changed.";
+}
+/** A write waiting for the designer, answered after the hold (figma-plugin/src/review.ts): call figma_write {ticket}
+ *  again. Small on purpose: the agent may poll it many times. */
+export interface WritePending {
+  pending: true;
+  ticket: string;
+  /** why it waits, in the designer's words (review-policy.ts) */
+  why: string;
+  /** how long it has waited so far, rounded ("2 min", "45 s") */
+  waited: string;
+  note: string;
+}
+/** What a `write` or `writeTicket` answers: the batch's result, or `pending` while the designer has not answered. */
+export type WriteReply = WriteResult | WritePending;
+export function isPending(r: WriteReply): r is WritePending {
+  return (r as { pending?: unknown }).pending === true;
+}
+/** The note every pending answer carries. */
+export function pendingNote(ticket: string, idleMs: number): string {
+  return "The designer has not answered yet. Call figma_write {ticket: '" + ticket + "'} again to keep waiting — do not re-send the ops — and tell the user the change waits for them in the Design Twin plugin window. " +
+    "If no call asks within " + Math.round(idleMs / 60000) + " min, the card is withdrawn and nothing is applied.";
 }
 /** One line of the plugin window's review card for each op: the sentence the dry run gives (`change`) where it has
  *  one, else one built from the same preview step's fields. So the card shows the data figma_write's dry run returns
@@ -661,7 +717,8 @@ export interface Commands {
   exportSelection: { args: ReadOptArgs; reply: ScreenReply };
   exportNode: { args: ExportNodeArgs; reply: ScreenReply };
   screenshot: { args: ScreenshotArgs; reply: ScreenshotReply };
-  write: { args: WriteArgs; reply: WriteResult };
+  write: { args: WriteArgs; reply: WriteReply };
+  writeTicket: { args: WriteTicketArgs; reply: WriteReply };
   writeImpact: { args: WriteArgs; reply: WriteImpactReply };
 }
 
@@ -713,6 +770,9 @@ const COMMAND_TRAITS = {
   exportNode: { run: "exclusive", export: true },
   screenshot: { run: "exclusive", export: true },
   write: { run: "exclusive", export: false },
+  // A write waiting for review, asked about by its ticket: answered at once from the plugin's own record of it (a
+  // document change it leads to — the batch applied on approval, a preview put back — is scheduled as a run of its own).
+  writeTicket: { run: "identity", export: false },
   // Reads the file to count what a source edit would carry to (figma_write's dry run); changes nothing.
   writeImpact: { run: "scene", export: false },
 } as const satisfies Record<Cmd, CommandTraits>;
@@ -771,9 +831,16 @@ const REPLY_CHECKS: { [C in Cmd]: (r: unknown) => string | null } = {
   exportSelection: (r) => fields(r, [["screenName", "string"], ["screen", "object"], ["assets", "array"]]),
   exportNode: (r) => fields(r, [["screenName", "string"], ["screen", "object"], ["assets", "array"]]),
   screenshot: (r) => fields(r, [["id", "string"], ["reference", "string"], ["assets", "array"]]),
-  write: (r) => fields(r, [["ok", "boolean"], ["applied", "array"]]),
+  write: (r) => writeReplyError(r),
+  writeTicket: (r) => writeReplyError(r),
   writeImpact: (r) => fields(r, [["steps", "array"]]),
 };
+
+/** A write's answer: a result, or a pending ticket. */
+function writeReplyError(r: unknown): string | null {
+  if (isRecord(r) && r.pending === true) return fields(r, [["ticket", "string"]]);
+  return fields(r, [["ok", "boolean"], ["applied", "array"]]);
+}
 
 /** What is structurally wrong with `reply` for `cmd`, or null when it has the shape `Commands[cmd]["reply"]` promises. */
 export function replyShapeError(cmd: Cmd, reply: unknown): string | null {
@@ -876,8 +943,12 @@ export function writeOpError(o: unknown, i: number): string | null {
 }
 const writeArgs: ArgsCheck = (a) => {
   if (!Array.isArray(a.ops)) return a.ops === undefined ? "`ops` is missing" : "`ops` is not an array";
-  return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "reviewWaitMs", isNum, "a number")]);
+  return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "holdMs", isNum, "a number")]);
 };
+const writeTicketArgs: ArgsCheck = (a) => first([
+  isStr(a.ticket) && a.ticket ? null : a.ticket === undefined ? "`ticket` is missing" : "`ticket` is not a non-empty string",
+  opt(a, "holdMs", isNum, "a number"), opt(a, "cancel", isBool, "a boolean"),
+]);
 
 /** NoArgs: nothing is read, so nothing can be wrong (see the undeclared-key rule above). */
 const noArgs: ArgsCheck = () => null;
@@ -896,6 +967,7 @@ const ARGS_CHECKS: { [C in Cmd]: ArgsCheck } = {
   exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
   screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum, "a number")]),
   write: writeArgs,
+  writeTicket: writeTicketArgs,
   writeImpact: writeArgs,
 };
 
@@ -941,6 +1013,7 @@ export function parseCommandRequest(cmd: string, args: unknown): ParsedRequest {
     case "exportNode": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     case "screenshot": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     case "write": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+    case "writeTicket": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     case "writeImpact": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     default: {
       // Exhaustive: a command added to `Commands` without a case here fails to compile.

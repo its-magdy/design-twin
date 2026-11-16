@@ -14,11 +14,21 @@ import { ALLOWED_PORTS } from "./ports.ts";
 //                the first to fail on exactly the large files where looking before you pull matters.
 //   export     — one page / one node: found the hard way on a ~1000-node file.
 //   exportAll  — whole file / --all-pages: measured >15 min on a real 25-page file.
-//   write      — a write batch. With "Review each write" on (figma-plugin/src/review.ts) it waits for the designer for
-//                up to REVIEW_WAIT_MS before it runs, so its budget is that wait plus a minute for the batch itself:
-//                the plugin's own "nobody answered" reply always lands before the bridge would give up.
-export const REVIEW_WAIT_MS = 300000;
-export const TIMEOUTS = { command: 120000, selection: 120000, list: 300000, export: 300000, exportAll: 900000, write: REVIEW_WAIT_MS + 60000 };
+//   write      — a write batch, or a poll of one waiting for the designer's review (`writeTicket`). A batch that waits
+//                for review (figma-plugin/src/review.ts) is answered by the plugin itself after at most the hold (below):
+//                the result when the designer answered in time, else `{pending, ticket}`. So the budget is the longest
+//                hold plus a margin for the batch itself (resolving and building a large tree), the command budget.
+//
+// The designer's review of a write (docs/write-plane-spec.md decision 18). MCP clients built on the TypeScript SDK time
+// a tool call out at 60 s by default, so one figma_write call never holds longer than REVIEW_HOLD_MS (≤ REVIEW_HOLD_MAX_MS
+// whatever a caller asks): the plugin then answers `{pending, ticket}` and keeps the card up; the agent polls with the
+// ticket. A card whose agent stops polling is withdrawn REVIEW_IDLE_MS after the last pending answer; no card stays up
+// longer than REVIEW_CARD_MAX_MS.
+export const REVIEW_HOLD_MS = 45000;
+export const REVIEW_HOLD_MAX_MS = 50000;
+export const REVIEW_IDLE_MS = 120000;
+export const REVIEW_CARD_MAX_MS = 15 * 60000;
+export const TIMEOUTS = { command: 120000, selection: 120000, list: 300000, export: 300000, exportAll: 900000, write: REVIEW_HOLD_MAX_MS + 70000 };
 
 // The scope -> tier RULE is read-plan.ts's (with the rest of what a read sends): hoisting only the numbers
 // still left both front-ends restating which tier an export picks, and they had already drifted once (the
