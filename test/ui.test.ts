@@ -9,6 +9,7 @@ import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
 import { PLUGIN_REDIAL_MS } from "../bridge/src/timeouts.ts";
 import { UI_HTML, renderUiHtml } from "../figma-plugin/build-options.ts";
+import type { ReviewCardLine } from "../figma-plugin/src/messages.ts";
 
 // The window as build.ts makes it from the current ui.template.html + src/relay.ts, so a stale committed ui.html
 // cannot pass here; the freshness check below fails on one instead.
@@ -35,7 +36,7 @@ interface FakeSocket {
   close(): void; send(d: string): void;
 }
 interface Timer { fn: (() => void) | null; ms: number }
-interface PluginMsg { type: string; allowed?: unknown; on?: unknown; apply?: unknown; reason?: unknown; lines?: string[]; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
+interface PluginMsg { type: string; allowed?: unknown; on?: unknown; action?: unknown; index?: unknown; state?: string; note?: string; reason?: unknown; lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
@@ -273,7 +274,7 @@ check("a write notice from the main thread lands on the status line (red when re
 console.log("Review each change first:");
 /** An element's text with its children's (a card line is built of spans). */
 const textOf = (e: FakeEl): string => e.textContent + e.kids.map(textOf).join("");
-const LINES = [
+const LINES: ReviewCardLine[] = [
   { head: "30 layers", rows: [{ field: "radius", from: "6", to: "20" }, { field: "fill", from: "#3b82f6", to: "#16a34a" }], show: { n: 30, total: 30 } },
   { head: "<img src=x onerror=alert(1)>", rows: [] },
   { head: "New frame 'Card', 320 wide, height hugs content", rows: [], tail: "lands right of the existing frames", show: { n: 0, total: 0, spot: true } },
