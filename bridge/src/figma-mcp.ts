@@ -964,7 +964,7 @@ registerTool(
   guarded(async (a, extra) => {
     if (a.ticket !== undefined) {
       if (a.ops !== undefined) return errorResult("Send either `ops` (a new batch) or `ticket` (a write already waiting for the designer), not both. Nothing was changed.");
-      const sent = await ask("writeTicket", { ticket: a.ticket, holdMs: REVIEW_HOLD, ...(a.cancel ? { cancel: true } : {}) }, { timeoutMs: TIMEOUTS.write, target: a.client, signal: callSignal(extra) });
+      const sent = await ask("writeTicket", { ticket: a.ticket, holdMs: REVIEW_HOLD, ...(a.cancel ? { cancel: true } : {}) }, { timeoutMs: TIMEOUTS.write, target: a && a.client, signal: callSignal(extra) });
       const seeds = ticketSeeds.get(a.ticket) || [];
       // A withdrawal that took: say so plainly (it is what was asked, not a failure).
       if (a.cancel && !isPending(sent) && sent.refused === "unreviewed") return textResult({ cancelled: true, ticket: a.ticket, note: sent.error || "Withdrawn. Nothing in the file was changed." });
