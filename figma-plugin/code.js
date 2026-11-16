@@ -10692,13 +10692,19 @@
       const vs = getF3(st.fontName, "variationSettings");
       return !!vs && typeof vs === "object" && Object.keys(vs).length > 0;
     };
+    const changesVariables = ops.some((o) => o.op === "setVariable") || targets.some((t) => t.kind === "variables" && t.rows.some((r) => r.existing !== null));
+    const boundFields = (st) => {
+      const bv = getF3(st, "boundVariables");
+      return !!bv && typeof bv === "object" && Object.keys(bv).some((k) => getF3(bv, k) !== void 0 && getF3(bv, k) !== null);
+    };
+    const steady = (st) => !changesVariables || !boundFields(st);
     const plainParagraph = (st) => !hasAxes(st) && !st.paragraphIndent && !st.paragraphSpacing && !st.listSpacing && (st.leadingTrim === void 0 || st.leadingTrim === "NONE");
     const fileStyles = await figma.getLocalTextStylesAsync();
     const styleNames = /* @__PURE__ */ new Map();
     for (const st of fileStyles) {
       styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
       if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
-      if (readsAsRef(st.name, "S:") || !plainParagraph(st)) continue;
+      if (readsAsRef(st.name, "S:") || !plainParagraph(st) || !steady(st)) continue;
       styles.set(st.id, textStyleEntry(st.id, st.name, {
         family: st.fontName.family,
         style: st.fontName.style,
@@ -10733,7 +10739,7 @@
         const was = s.existing && s.existing.type === "TEXT" ? s.existing : null;
         const paraSpacing = set.paragraphSpacing !== void 0 ? set.paragraphSpacing : was ? was.paragraphSpacing : 0;
         const paraIndent = set.paragraphIndent !== void 0 ? set.paragraphIndent : was ? was.paragraphIndent : 0;
-        const restPlain = !was || !hasAxes(was) && !was.listSpacing && (was.leadingTrim === void 0 || was.leadingTrim === "NONE");
+        const restPlain = !was || steady(was) && !hasAxes(was) && !was.listSpacing && (was.leadingTrim === void 0 || was.leadingTrim === "NONE");
         if (paraSpacing || paraIndent || !restPlain) {
           styles.delete(ref2);
           continue;

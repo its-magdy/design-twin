@@ -279,7 +279,7 @@ anything resolves, then builds the bound spec as if it had been written so:
   list spacing, leading trim or variable-font axis value (the fields the style sets are then dropped from
   `font`). Not bound: sizes, opacity, stroke weights, pictures, a paint with its own `opacity`, anything inside a copy
   or an instance — nor a paint style (a spec has no fill style), nor a variable or style a `setVariable` / `setStyle` of
-  the batch changes (or a variable aliasing one).
+  the batch changes (or a variable aliasing one; and while the batch changes a variable, no text style bound to one).
 - **Equal.** A colour by its 8-bit RGBA (the read's hex), a number within 0.01. A variable's value is the one in its
   collection's default mode, through its aliases (a broken or looping chain has none). A variable or style is named by
   its name when nothing else in the file or the batch has that name, else (the file's) by its id; one a create table

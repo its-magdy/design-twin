@@ -267,13 +267,23 @@ void (async () => {
     // a variable a source edit of the batch changes shows its new value: never bound to (nor what aliases it)
     const w6 = await treeWorld();
     const made6: WriteResult = await w6.api.applyWrites([{ op: "createVariables", collection: "Edit", modes: ["Light"], variables: [["space/test", "number", 8], ["space/alias", "number", { aliasOf: "space/test" }]] }]);
+    // a text style whose size is bound to a variable: matched while no variable changes, not once the batch changes one
+    const sizeVar = Object.values(w6.scene.variables).find((x) => x.name === "space/test")?.id ?? "";
+    const boundStyle: FakeNode = { id: "S:bd,", name: "Body/Bound", key: "local-bd", type: "TEXT", fontName: { family: "Inter", style: "Regular" }, fontSize: 14, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: sizeVar } } };
+    w6.scene.localStyles.text.push(boundStyle);
+    w6.scene.styles["S:bd,"] = boundStyle;
+    const body14 = { text: "y", font: { family: "Inter", weight: "Regular", size: 14 } };
+    const calm: WriteResult = await w6.api.applyWrites([{ op: "createTree", bind: true, tree: { name: "Calm", box: { w: 300, h: 200 }, children: [body14] } }]);
+    const calmRoot = w6.alive().find((n) => n.name === "Calm");
+    check(`…a text style bound to a variable is matched while the batch changes no variable (${JSON.stringify(calm.applied[0] ?? calm.error)})`, calm.ok && kids(calmRoot)[0]?.textStyleId === "S:bd,");
     const edited: WriteResult = await w6.api.applyWrites([
       { op: "setVariable", variable: "space/test", value: 16 },
-      { op: "createTree", bind: true, tree: { name: "Edited", box: { w: 300, h: 200 }, layout: { display: "flex", gap: 8 }, children: [{ text: "x" }] } },
+      { op: "createTree", bind: true, tree: { name: "Edited", box: { w: 300, h: 200 }, layout: { display: "flex", gap: 8 }, children: [{ text: "x" }, body14] } },
     ]);
     const editedRoot = w6.alive().find((n) => n.name === "Edited");
     check(`a variable the batch's setVariable changes (8 → 16), and one aliasing it, are not bound to a gap of 8 (${JSON.stringify(edited.applied[1] ?? edited.error)})`,
       made6.ok && edited.ok && edited.applied[1]?.bind?.bound === 0 && (editedRoot?.boundVariables as Record<string, unknown> | undefined)?.itemSpacing === undefined);
+    check("…nor a text style bound to a variable, while the batch changes one", !kids(editedRoot)[1]?.textStyleId);
     // names the resolver reads as a ref (a 40-hex key, an id): never bound to, on the send that makes them or after
     const w4 = await treeWorld();
     const pre: WriteResult = await w4.api.applyWrites([{ op: "createVariables", collection: "Base", modes: ["Light"], variables: [["color/base", "color", "#222222"]] }]);

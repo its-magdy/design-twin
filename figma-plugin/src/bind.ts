@@ -171,6 +171,14 @@ async function bindTable(creates: CreateResolution | null, ops: readonly WriteOp
     const vs = getF(st.fontName, "variationSettings");
     return !!vs && typeof vs === "object" && Object.keys(vs).length > 0;
   };
+  // A batch that changes a variable (a setVariable, or a create table row for one the file has) may change what a style
+  // bound to variables shows, after the values read here: then a style with a bound field is never matched.
+  const changesVariables = ops.some((o) => o.op === "setVariable") || targets.some((t) => t.kind === "variables" && t.rows.some((r) => r.existing !== null));
+  const boundFields = (st: TextStyle): boolean => {
+    const bv = getF(st, "boundVariables");
+    return !!bv && typeof bv === "object" && Object.keys(bv).some((k) => getF(bv, k) !== undefined && getF(bv, k) !== null);
+  };
+  const steady = (st: TextStyle): boolean => !changesVariables || !boundFields(st);
   // A captured text has no paragraph settings (the tree spec writes none): a style with an indent, paragraph or list
   // spacing, or a leading trim would add them, so it is never matched.
   const plainParagraph = (st: TextStyle): boolean =>
@@ -181,7 +189,7 @@ async function bindTable(creates: CreateResolution | null, ops: readonly WriteOp
     styleNames.set(st.name, (styleNames.get(st.name) || 0) + 1);
     // every field a style has in Figma; one that cannot be read leaves the style out (it is never matched half-known)
     if (!st.fontName || typeof st.fontSize !== "number" || !st.lineHeight || !st.letterSpacing || typeof st.textCase !== "string" || typeof st.textDecoration !== "string") continue;
-    if (readsAsRef(st.name, "S:") || !plainParagraph(st)) continue;
+    if (readsAsRef(st.name, "S:") || !plainParagraph(st) || !steady(st)) continue;
     styles.set(st.id, textStyleEntry(st.id, st.name, {
       family: st.fontName.family, style: st.fontName.style, size: st.fontSize,
       lineHeight: st.lineHeight, letterSpacing: st.letterSpacing, textCase: st.textCase, textDecoration: st.textDecoration,
@@ -207,7 +215,7 @@ async function bindTable(creates: CreateResolution | null, ops: readonly WriteOp
       // spacing and leading trim a table cannot set)
       const paraSpacing = set.paragraphSpacing !== undefined ? set.paragraphSpacing : was ? was.paragraphSpacing : 0;
       const paraIndent = set.paragraphIndent !== undefined ? set.paragraphIndent : was ? was.paragraphIndent : 0;
-      const restPlain = !was || (!hasAxes(was) && !was.listSpacing && (was.leadingTrim === undefined || was.leadingTrim === "NONE"));
+      const restPlain = !was || (steady(was) && !hasAxes(was) && !was.listSpacing && (was.leadingTrim === undefined || was.leadingTrim === "NONE"));
       if (paraSpacing || paraIndent || !restPlain) { styles.delete(ref); continue; }
       const lh = set.lineHeight;
       const ls = set.letterSpacing;
