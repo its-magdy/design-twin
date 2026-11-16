@@ -408,7 +408,9 @@ const hideHtml = `<!doctype html><body><div id="x" style="color: rgb(1, 2, 3) !i
 // a lazy image far down the page whose response sends its headers and part of a body, then never ends
 const stallImgHtml = `<!doctype html><body style="margin:0"><div style="height:3000px">Top</div><img loading="lazy" width="40" height="40" src="/stall-img.png"></body>`;
 const server = Bun.serve({
-  hostname: "127.0.0.1", port: 0,
+  // idleTimeout 0: Bun otherwise ends a quiet response after 10 s, so stall-img.png's body would end before a slow
+  // runner reaches the read's --timeout (load and read each get their own)
+  hostname: "127.0.0.1", port: 0, idleTimeout: 0,
   fetch(req) {
     const p = new URL(req.url).pathname;
     if (p === "/photo.png") return new Response(photo, { headers: { "content-type": "image/png" } });
