@@ -229,11 +229,13 @@ screens.
       never set, saved per user, set only from the window — or, whatever the box says, the batch edits a source
       (setVariable, setStyle, a patch of a main component or a layer in one: a change other layers follow), or it is a
       bulk change by rule (#171 sets `bulkByRule`; nothing does yet), or the existing layers changed since the
-      designer's last approval exceed 25 (fixed). Counted: existing layers a batch patches, moves or deletes plus the
-      layers and instances that follow its source edits, each once; layers this plugin session created do not count.
-      The count is per plugin session and goes back to 0 when the designer approves a batch or keeps a preview. The dry
-      run reports `wouldWait` and `waitReason` (and `waitingTicket` when one waits) by the same rule over what it can
-      see. On approval the batch is resolved again against the file as it is then; #171 must recount a rule's matches
+      designer's last approval exceed 25 (fixed). Counted: existing layers a batch patches, moves or deletes (a keyed
+      re-send: each layer of its earlier result whose fields change, that changes place among its frame's children, or
+      that it removes) plus the layers and instances that follow its source edits, each once; layers this plugin
+      session created do not count. The count is per plugin session and goes back to 0 when the designer approves a
+      batch or keeps a preview. The dry run reports `wouldWait` and `waitReason` (and `waitingTicket` when one waits)
+      by the same rule over what it can see (a keyed re-send's count, `changedLayers`, is the plugin's, planned against
+      the spec as sent). On approval the batch is resolved again against the file as it is then; #171 must recount a rule's matches
       there and refuse on drift (a hook comment in `figma-plugin/src/writes.ts`).
     - **How the agent waits — a ticket the plugin owns.** MCP clients built on the TypeScript SDK time a tool call out
       at 60 s by default, so one call holds at most 45 s (`REVIEW_HOLD_MS`; `DTWIN_REVIEW_HOLD_MS` overrides it for

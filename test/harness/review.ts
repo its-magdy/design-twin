@@ -11,6 +11,7 @@ import { fakeClock } from "../fake-clock.ts";
 import { clockTimers, textRuns, type FakeNode, type PostedMessage, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
+import { treeWorld } from "./writes.ts";
 
 const textNode = (id: string, name: string, characters: string): FakeNode =>
   textRuns({ id, type: "TEXT", name, visible: true, characters, fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => Object.freeze([{ family: "Inter", style: "Regular" }]) });
@@ -59,8 +60,10 @@ const lastOf = (w: ReviewWorld, type: string): PostedMessage | undefined => [...
 const isPending = (r: WriteReply | undefined): r is WritePending => !!r && (r as { pending?: unknown }).pending === true;
 const asResult = (r: WriteReply | undefined): WriteResult | undefined => (r && !isPending(r) ? r : undefined);
 
+/** What a bridge command needs of a world (a review world's, or a tree world's). */
+type Sender = Pick<ReviewWorld, "send" | "posted">;
 /** Send one bridge command; the reply (or the error) once the plugin answers it. */
-function bridge(w: ReviewWorld, id: string, cmd: string, args: unknown): Promise<{ ok: boolean; result?: WriteReply; error?: string }> {
+function bridge(w: Sender, id: string, cmd: string, args: unknown): Promise<{ ok: boolean; result?: WriteReply; error?: string }> {
   return w.send({ type: "bridge", id, cmd, args }).then((posted) => {
     const r = posted.find((m) => m.type === "bridge-result" && m.id === id);
     return { ok: r?.ok === true, ...(r?.result !== undefined ? { result: r.result as WriteReply } : {}), ...(r?.error !== undefined ? { error: r.error } : {}) };
@@ -80,7 +83,7 @@ const answer = (w: ReviewWorld, card: PostedMessage | undefined, action: string,
 
 const untouched = (w: ReviewWorld): boolean => w.created.length === 0 && w.label.characters === "old";
 const rec = (x: unknown): Record<string, unknown> => (typeof x === "object" && x !== null ? { ...x } : {});
-const whoami = async (w: ReviewWorld): Promise<Record<string, unknown>> => rec((await bridge(w, "who" + w.posted.length, "whoami", {})).result);
+const whoami = async (w: Sender): Promise<Record<string, unknown>> => rec((await bridge(w, "who" + w.posted.length, "whoami", {})).result);
 /** figma_status's ping: the plugin's lastFigmaWrite (commands.ts LastFigmaWrite), read field by field. */
 const lastWrite = async (w: ReviewWorld): Promise<Record<string, unknown> | undefined> => {
   const lw = rec((await bridge(w, "ping" + w.posted.length, "ping", {})).result).lastFigmaWrite;
@@ -325,5 +328,33 @@ export const cases: Case[] = [{
     const r = await w.api.applyWrites([{ op: "patch", nodeId: "t:1", set: { name: "Renamed" } }]);
     ok("[REVIEW] unticked during resolution: refused edits-off at once, no card, file untouched",
       unticked && r.refused === "edits-off" && !w.posted.some((m) => m.type === "review") && w.label.name === "Label");
+  },
+}, {
+  name: "Review: a keyed re-send counts the existing layers its update changes — 30 from an earlier session wait; the session's own do not",
+  async run() {
+    const spec = (opacity: number): Record<string, unknown> => ({ key: "list", name: "List", children: Array.from({ length: 30 }, (_, i) => ({ name: "Row " + (i + 1), opacity })) });
+    const resend = (opacity: number): WriteOp[] => [{ op: "createTree", tree: spec(opacity) }];
+    const steps = async (w: Sender, id: string, ops: WriteOp[]): Promise<Array<Record<string, unknown>>> => {
+      const r = rec((await bridge(w, id, "writeImpact", { ops })).result).steps;
+      return Array.isArray(r) ? r.map(rec) : [];
+    };
+    // "Review each change first" cleared (a tree world's default); a card would be answered Apply at once.
+    const a = await treeWorld();
+    const built = await a.api.applyWrites(resend(1));
+    ok("[REVIEW] a keyed list of 30 rows is built", built.ok === true && a.alive().length === 31);
+    const own = await steps(a, "k0", resend(0.5));
+    ok(`[REVIEW] the dry run's count leaves this session's own rows out (got ${JSON.stringify(own)})`, own.length === 1 && own[0]?.changedLayers === 0);
+    const again = await a.api.applyWrites(resend(0.5));
+    ok("[REVIEW] re-sent in the session that built it: applied at once, no card, nothing counted",
+      again.ok === true && !a.posted.some((m) => m.type === "review") && (await whoami(a)).reviewLayers === 0);
+    // The plugin opened again on the same file: the rows are no longer this session's own.
+    const b = world({ pages: a.figma.root.children, currentPage: a.pages.current, nodes: a.scene.nodes, rootPluginData: (k) => a.figma.root.getPluginData(k) }, { loadFontAsync: async () => {} });
+    await b.allowEdits();
+    const theirs = await steps(b, "k1", resend(0.25));
+    ok(`[REVIEW] from a later session the dry run counts the 30 rows the re-send changes (got ${JSON.stringify(theirs)})`, theirs.length === 1 && theirs[0]?.changedLayers === 30);
+    const later = await b.api.applyWrites(resend(0.25));
+    const card = b.posted.find((m) => m.type === "review");
+    ok(`[REVIEW] …and the re-send waits with the box clear, saying 30 existing layers change (${String(card?.why)})`,
+      card !== undefined && /it changes 30 existing layers \(over 25\)/.test(String(card.why)) && later.ok === true);
   },
 }];

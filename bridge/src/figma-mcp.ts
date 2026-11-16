@@ -769,7 +769,8 @@ const writeOpShape = z.object({
 // `wouldWait` / `waitReason`: whether a real write would wait for the designer's review, by review-policy.ts — the rule
 // the plugin applies — over what the dry run can see (only with a plugin that reports its review state). It cannot
 // tell the layers this plugin session created (the plugin does not count them), so it may say a write waits that the
-// plugin then applies at once; never the other way round.
+// plugin then applies at once; never the other way round. A keyed re-send counts the existing layers the plugin says it
+// changes (writeImpact `changedLayers`, the session's own already left out), planned against the spec as sent.
 function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: ImpactRead) {
   const { editsAllowed } = settings;
   const steps = ops.map(writeOpPreview);
@@ -785,6 +786,8 @@ function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: Im
       if (s.bind) step.bind = s.bind;
       // A component spec: the file says whether it is made or updated in place (with how many instances follow).
       if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");
+      // A keyed re-send: the existing layers it changes, for wouldWait.
+      if (s.changedLayers !== undefined) step.changedLayers = s.changedLayers;
     }
   }
   const review = settings.review;
@@ -793,12 +796,12 @@ function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: Im
     const sourceEdits = steps.filter((s, i) => { const o = ops[i]; return !!o && (o.op === "setVariable" || o.op === "setStyle" || (!!s.affects && (o.op === "patch" || o.op === "createTree"))); }).length;
     const ids = new Set<string>();
     let follows = 0;
-    steps.forEach((s, i) => { const o = ops[i]; if (o && o.nodeId && s.effect !== "creates") ids.add(o.nodeId); if (s.affects) follows += (s.affects.nodes || 0) + (s.affects.instances || 0); });
+    steps.forEach((s, i) => { const o = ops[i]; if (o && o.nodeId && s.effect !== "creates") ids.add(o.nodeId); if (s.affects) follows += (s.affects.nodes || 0) + (s.affects.instances || 0); if (s.changedLayers) follows += s.changedLayers; });
     return reviewDecision({ checkbox: review.checkbox, sourceEdits, bulkByRule: false, layers: ids.size + follows, sinceApproval: review.layers });
   })() : null;
   const sourceNote = impact.asked
     ? impact.reply
-      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind. " +
+      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind; a keyed re-send's `changedLayers` counts the existing layers it would change. " +
         (impact.reply.warnings && impact.reply.warnings.length ? "Some pages could not be read, so a count may be low: " + impact.reply.warnings.join("; ") + ". " : "")
       : "How much a source edit carries to (which names of a create table the file has already, what a `bind: true` spec binds) is read by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see it. "
     : "";
@@ -839,7 +842,8 @@ interface ImpactRead { asked: boolean; reply: WriteImpactReply | null; why: stri
 async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | undefined, extra: ToolExtra): Promise<ImpactRead> {
   // A component spec asks too: only the file knows whether it makes the component or updates the one it has.
   // So does a `bind: true` spec: only the file knows what its values bind to.
-  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true)))) return { asked: false, reply: null, why: "" };
+  // So does a keyed spec: only the file knows which of its layers a re-send changes (the review's count).
+  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true || (!!o.tree && typeof o.tree.key === "string"))))) return { asked: false, reply: null, why: "" };
   // Only a patch that changes a main component is a source edit: the plugin says which, so every patch asks.
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);

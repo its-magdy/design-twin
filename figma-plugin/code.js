@@ -10273,6 +10273,419 @@
     return warnings.length ? { steps: steps2, warnings } : { steps: steps2 };
   }
 
+  // src/keyed.ts
+  var isObj10 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
+  async function findResult(key) {
+    const id = readIndex(key);
+    if (!id) return null;
+    const n = await figma.getNodeByIdAsync(id);
+    if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
+    return await loadPageOf(n) ? n : null;
+  }
+  async function loadPageOf(n) {
+    let p = n.parent;
+    while (p && p.type !== "PAGE") p = p.parent;
+    if (!p || p.type !== "PAGE") return false;
+    await p.loadAsync();
+    return true;
+  }
+  var MAX_STAMP_BYTES = 99e3;
+  function utf8Bytes(s) {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 128) n += 1;
+      else if (c < 2048) n += 2;
+      else if (c >= 55296 && c <= 56319) {
+        n += 4;
+        i++;
+      } else n += 3;
+    }
+    return n;
+  }
+  function oversized(s, path, out) {
+    const bytes = utf8Bytes(JSON.stringify(ownSpec(s)));
+    if (bytes > MAX_STAMP_BYTES) out.push(path + ": its own fields are " + bytes + " bytes, more than a keyed spec can store on a node (" + MAX_STAMP_BYTES + "); shorten its text, or leave out the key");
+    (s.children || []).forEach((c, i) => oversized(c, path + ".children[" + i + "]", out));
+    return out;
+  }
+  function foreignIn(n, key) {
+    if (n.getPluginData(KEY_DATA) !== key) return n;
+    if (n.type === "INSTANCE" || !("children" in n)) return null;
+    for (const c of n.children) {
+      const f = foreignIn(c, key);
+      if (f) return f;
+    }
+    return null;
+  }
+  async function resolveKeyed(ops, targets) {
+    const problems = [];
+    const seen = /* @__PURE__ */ new Map();
+    const loaded3 = /* @__PURE__ */ new Map();
+    const loadFont = (f) => {
+      const k = f.family + "|" + f.style;
+      let p = loaded3.get(k);
+      if (!p) {
+        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
+        loaded3.set(k, p);
+      }
+      return p;
+    };
+    for (const [index, op] of ops.entries()) {
+      const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
+      if (op.op !== "createTree" || !isObj10(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
+      const key = comp ? componentKey(comp.name) : String(op.tree.key);
+      const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const first2 = seen.get(key);
+      if (first2 !== void 0) {
+        bad(comp ? "component '" + comp.name + "' is also made by ops[" + first2 + "]; one batch makes or updates a component once" : "tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
+        continue;
+      }
+      seen.set(key, index);
+      const t = targets.get(index);
+      if (!t) continue;
+      const big = oversized(t.spec, "tree", []);
+      if (big.length) {
+        for (const m of big) bad(m);
+        continue;
+      }
+      let root = null;
+      if (comp) {
+        const found = await existingComponent(comp.type, comp.name);
+        if ("problem" in found) {
+          bad(found.problem);
+          continue;
+        }
+        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+      } else root = await findResult(key);
+      if (!root) continue;
+      if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
+        bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+        continue;
+      }
+      const old = readOld(root, key);
+      if (!old) {
+        bad(what + ": the spec stored on its result " + label3(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
+        continue;
+      }
+      const plan = planUpdate(old, t.spec);
+      const before = problems.length;
+      for (const b of plan.builds) {
+        if (!b.replaces) continue;
+        const f = foreignIn(b.replaces, key);
+        if (f) bad(b.path + ": " + label3(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label3(f) + ", which this key did not build; move that layer out first");
+      }
+      for (const r of plan.removals) {
+        const f = foreignIn(r, key);
+        if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
+      }
+      const owner = root;
+      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
+      if (defs) {
+        defs.wiring = planWiring(defs, plan.kept);
+        const bound = new Map(defs.wiring.map((w) => [w.ref, w.stays]));
+        for (const u of plan.updates) {
+          const stays = bound.get(u.ref);
+          if (!u.set || !stays) continue;
+          if (stays.indexOf("characters") >= 0) delete u.set.text;
+          if (stays.indexOf("visible") >= 0) delete u.set.hidden;
+          if (!Object.keys(u.set).length) u.set = null;
+        }
+        for (const n of textsFollowing(defs)) {
+          const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
+          for (const f of fonts) {
+            const m = await loadFont(f);
+            if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
+          }
+        }
+      }
+      const patches = /* @__PURE__ */ new Map();
+      for (const [i, u] of plan.updates.entries()) {
+        if (!u.set) continue;
+        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
+        const checked = checkPatch(u.set);
+        if (checked.problems.length) {
+          for (const m of checked.problems) say(m);
+          continue;
+        }
+        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
+        if (!p) continue;
+        p.refs = t.refs;
+        patches.set(i, p);
+      }
+      if (problems.length === before) t.update = { key, root, plan, patches, ...comp && defs ? { component: { name: comp.name, defs } } : {} };
+    }
+    return { problems };
+  }
+  function checkRemoval(u, n) {
+    if (n.removed) return;
+    const f = foreignIn(n, u.key);
+    if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
+  }
+  function touchedBy(u) {
+    const out = /* @__PURE__ */ new Set([u.root.id]);
+    for (const x of u.plan.updates) out.add(x.ref.id);
+    for (const b of u.plan.builds) out.add(b.parent.id);
+    for (const o of u.plan.orders) out.add(o.parent.id);
+    for (const st of u.plan.stamps) out.add(st.ref.id);
+    for (const h of u.plan.handles) out.add(h.ref.id);
+    return out;
+  }
+  function changedBy(plan, key) {
+    const out = [];
+    for (const u of plan.updates) out.push(u.ref.id);
+    for (const o of plan.orders) {
+      const kept = [];
+      for (const e of o.order) if ("ref" in e) kept.push(e.ref);
+      const now = o.parent.children.filter((c) => kept.indexOf(c) >= 0);
+      kept.forEach((n, i) => {
+        if (now[i] !== n) out.push(n.id);
+      });
+    }
+    const gone = (x) => {
+      if (x.removed) return;
+      if (x.getPluginData(KEY_DATA) === key) out.push(x.id);
+      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) gone(c);
+    };
+    for (const r of plan.removals) gone(r);
+    for (const b of plan.builds) if (b.replaces) gone(b.replaces);
+    return out;
+  }
+  async function keyedImpact(ops, own4) {
+    const steps2 = [];
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "createTree" || !isObj10(op.tree)) continue;
+      const comp = componentRootOf(op.tree);
+      if (typeof op.tree.key !== "string" && !comp) continue;
+      try {
+        const checked = checkTree(op.tree);
+        if (checked.problems.length || !checked.expanded) continue;
+        const key = comp ? componentKey(comp.name) : String(op.tree.key);
+        let root = null;
+        if (comp) {
+          const found = await existingComponent(comp.type, comp.name);
+          if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+        } else root = await findResult(key);
+        if (!root) continue;
+        const old = readOld(root, key);
+        if (!old) continue;
+        const ids = /* @__PURE__ */ new Set();
+        for (const id of changedBy(planUpdate(old, checked.expanded), key)) if (!own4(id)) ids.add(id);
+        steps2.push({ index, op: op.op, changedLayers: ids.size });
+      } catch {
+      }
+    }
+    return steps2;
+  }
+  function removalCount(u) {
+    let n = 0;
+    const count2 = (x) => {
+      if (x.removed) return;
+      if (x.getPluginData(KEY_DATA) === u.key) n++;
+      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
+    };
+    for (const x of removalsOf(u)) count2(x);
+    return n;
+  }
+  function removalsOf(u) {
+    const out = u.plan.removals.slice();
+    for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
+    return out;
+  }
+  var ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" };
+  var LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
+  var PLACE_FIELDS = ["absolute", "grow", "alignSelf"];
+  var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
+  function boundTo(n, k) {
+    const bv = "boundVariables" in n ? n.boundVariables : void 0;
+    const a = isObj10(bv) ? bv[k] : void 0;
+    return isObj10(a) && typeof a.id === "string" ? a.id : null;
+  }
+  function applyExtras(n, s, fields, only, variables, changes) {
+    const todo = only.filter((f) => fields.indexOf(f) >= 0);
+    if (!todo.length) return;
+    const kept = [];
+    const limits = todo.indexOf("sizeLimits") >= 0;
+    const bound = limits ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
+    const size2 = limits ? { w: n.width, h: n.height, sizing: ["layoutSizingHorizontal", "layoutSizingVertical"].map((k) => [k, k in n ? Reflect.get(n, k) : void 0]) } : null;
+    changes.push({
+      applied: { id: n.id },
+      kind: "updated node",
+      what: "the place, clipping or size limits of " + label3(n),
+      async restore() {
+        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
+        if (size2) {
+          if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
+          for (const [k, v] of size2.sizing) if (v !== void 0 && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
+        }
+        for (const [k, id] of bound) {
+          if (boundTo(n, k) === id) continue;
+          const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+          n.setBoundVariable(k, v);
+        }
+      }
+    });
+    const put2 = (k, v) => {
+      if (!(k in n)) return;
+      const was = Reflect.get(n, k);
+      if (was === v) return;
+      if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
+      kept.push([k, was]);
+    };
+    const parent = n.parent;
+    const onPage = !parent || parent.type === "PAGE";
+    const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
+    for (const f of todo) {
+      if (f === "absolute" && inFlex) put2("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
+      else if (f === "grow" && inFlex) put2("layoutGrow", s.grow !== void 0 ? s.grow : 0);
+      else if (f === "alignSelf" && inFlex) put2("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
+      else if (f === "clip") put2("clipsContent", s.clip === true);
+      else if (f === "sizeLimits") {
+        for (const k of LIMITS) put2(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
+        for (const k of LIMITS) {
+          const ref2 = s.tokens && s.tokens[k];
+          const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
+          if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
+        }
+      } else if (f === "strokesInLayout") put2("strokesIncludedInLayout", s.strokesInLayout === true);
+      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
+    }
+  }
+  function arrange(parent, want) {
+    for (const [i, n] of want.entries()) {
+      if (n.parent !== parent) continue;
+      if (parent.children[i] !== n) parent.insertChild(i, n);
+    }
+  }
+  function applyOrder(o, built, replaced) {
+    const parent = o.parent;
+    const was = parent.children.slice();
+    const nodes = [];
+    const olds = [];
+    for (const e of o.order) {
+      const n = "ref" in e ? e.ref : built[e.build];
+      if (n && n.parent === parent) nodes.push(n);
+      const r = "build" in e ? replaced[e.build] : null;
+      if (r && r.parent === parent) olds.push(r);
+    }
+    const seq2 = nodes.concat(olds);
+    const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
+    const want = was.slice();
+    slots.forEach((slot, k) => {
+      const n = seq2[k];
+      if (n) want[slot] = n;
+    });
+    arrange(parent, want);
+    return {
+      applied: { id: parent.id },
+      kind: "reordered frame",
+      what: "the order of the layers in " + label3(parent),
+      restore() {
+        arrange(parent, was.filter((c) => c.parent === parent));
+      }
+    };
+  }
+  function restamp2(stamps, key, changes) {
+    const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
+    changes.push({
+      applied: {},
+      kind: "stored spec",
+      what: "the spec stored on " + stamps.length + " node(s)",
+      restore() {
+        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
+      }
+    });
+    for (const s of stamps) stampNode(s.ref, key, s.spec);
+  }
+  async function applyUpdate(t, u, consent2, allowed2, changes) {
+    const { plan, key } = u;
+    const changed = [];
+    const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
+    for (const [i, up] of plan.updates.entries()) {
+      const p = u.patches.get(i);
+      if (up.extras.length) {
+        consent2();
+        applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
+      }
+      if (p) {
+        consent2();
+        await applyPatch(p, consent2, allowed2, changes);
+      }
+      if (up.extras.length) {
+        consent2();
+        applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
+      }
+      changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
+    }
+    const made2 = newMade(t.refs, t.clones);
+    const built = [];
+    for (const b of plan.builds) {
+      consent2();
+      const from = made2.pairs.length;
+      const n = await buildSubtree(b.spec, b.parent, made2, consent2);
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
+        n.remove();
+      } });
+      stampAll(made2, key, from);
+      built.push(n);
+    }
+    const replaced = plan.builds.map((b) => b.replaces);
+    for (const o of plan.orders) {
+      consent2();
+      changes.push(applyOrder(o, built, replaced));
+    }
+    if (plan.stamps.length) {
+      consent2();
+      restamp2(plan.stamps, key, changes);
+    }
+    let props = /* @__PURE__ */ new Map();
+    let rewired = 0;
+    if (u.component) {
+      const root = u.root;
+      if (root.type === "COMPONENT_SET" && built.length) {
+        consent2();
+        const size2 = { w: root.width, h: root.height };
+        const at3 = root.children.map((c) => [c, c.x, c.y]);
+        const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
+        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
+          for (const [c, x, y] of at3) if (!c.removed) {
+            c.x = x;
+            c.y = y;
+          }
+          if (root.width !== size2.w || root.height !== size2.h) root.resize(size2.w, size2.h);
+          if (sizing2) {
+            root.layoutSizingHorizontal = sizing2.h;
+            root.layoutSizingVertical = sizing2.v;
+          }
+        } });
+        arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
+      }
+      const synced = syncComponent(u.component.defs, unwired, made2.pairs, consent2, changes);
+      props = synced.props;
+      rewired = synced.rewired;
+    }
+    const applied = { id: u.root.id, key };
+    if (changed.length) applied.changed = changed;
+    if (plan.builds.length) applied.created = createdCount(made2);
+    const removed = removalCount(u);
+    if (removed) applied.removed = removed;
+    const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
+    if (reordered) applied.reordered = reordered;
+    const handles = {};
+    for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
+    for (const [h, id] of made2.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
+    if (Object.keys(handles).length) applied.handles = handles;
+    const dropped = u.component ? u.component.defs.remove.length : 0;
+    if (u.component) componentReply(applied, u.component.name, props, rewired);
+    if (dropped && u.component) applied.propsRemoved = u.component.defs.remove.map((r) => r.name);
+    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles && !props.size && !rewired && !dropped) applied.unchanged = true;
+    return applied;
+  }
+
   // src/review-reads.ts
   var SHOW_CAP = 200;
   function hexOf(c, opacity) {
@@ -10353,11 +10766,15 @@
       const ids = [];
       let source = false;
       let spot;
+      let counted;
       const follow = async (from) => {
         source = true;
         const f = await followersOf(from, warn);
         read.follows = countLayers(f, createdThisSession);
-        for (const id of f) ids.push(id);
+        for (const id of f) {
+          ids.push(id);
+          if (counted) counted.push(id);
+        }
       };
       try {
         switch (op.op) {
@@ -10434,8 +10851,11 @@
             if (!tt) break;
             if (tt.update) {
               read.updates = tt.update.root.name;
-              ids.push(tt.update.root.id);
               const root = tt.update.root;
+              const changed2 = changedBy(tt.update.plan, tt.update.key);
+              ids.push(root.id);
+              for (const id of changed2) if (id !== root.id) ids.push(id);
+              counted = changed2;
               if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
               break;
             }
@@ -10485,13 +10905,13 @@
       } catch (e) {
         warn("what op " + i + " changes could not all be read (" + errMsg(e) + ")");
       }
-      ops.push({ read, ids, source, ...spot ? { spot } : {} });
+      ops.push({ read, ids, source, ...spot ? { spot } : {}, ...counted ? { counted } : {} });
     }
     const changed = [];
     ops.forEach((o, i) => {
       const op = list[i];
       if (!op || op.op === "createFrame" || op.op === "createText") return;
-      for (const id of o.ids) changed.push(id);
+      for (const id of o.counted || o.ids) changed.push(id);
     });
     return { ops, layers: countLayers(changed, createdThisSession), sourceEdits: ops.filter((o) => o.source).length, warnings };
   }
@@ -10951,373 +11371,6 @@
         else node.setExplicitVariableModeForCollection(collection, prev);
       }
     };
-  }
-
-  // src/keyed.ts
-  var isObj10 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
-  async function findResult(key) {
-    const id = readIndex(key);
-    if (!id) return null;
-    const n = await figma.getNodeByIdAsync(id);
-    if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
-    return await loadPageOf(n) ? n : null;
-  }
-  async function loadPageOf(n) {
-    let p = n.parent;
-    while (p && p.type !== "PAGE") p = p.parent;
-    if (!p || p.type !== "PAGE") return false;
-    await p.loadAsync();
-    return true;
-  }
-  var MAX_STAMP_BYTES = 99e3;
-  function utf8Bytes(s) {
-    let n = 0;
-    for (let i = 0; i < s.length; i++) {
-      const c = s.charCodeAt(i);
-      if (c < 128) n += 1;
-      else if (c < 2048) n += 2;
-      else if (c >= 55296 && c <= 56319) {
-        n += 4;
-        i++;
-      } else n += 3;
-    }
-    return n;
-  }
-  function oversized(s, path, out) {
-    const bytes = utf8Bytes(JSON.stringify(ownSpec(s)));
-    if (bytes > MAX_STAMP_BYTES) out.push(path + ": its own fields are " + bytes + " bytes, more than a keyed spec can store on a node (" + MAX_STAMP_BYTES + "); shorten its text, or leave out the key");
-    (s.children || []).forEach((c, i) => oversized(c, path + ".children[" + i + "]", out));
-    return out;
-  }
-  function foreignIn(n, key) {
-    if (n.getPluginData(KEY_DATA) !== key) return n;
-    if (n.type === "INSTANCE" || !("children" in n)) return null;
-    for (const c of n.children) {
-      const f = foreignIn(c, key);
-      if (f) return f;
-    }
-    return null;
-  }
-  async function resolveKeyed(ops, targets) {
-    const problems = [];
-    const seen = /* @__PURE__ */ new Map();
-    const loaded3 = /* @__PURE__ */ new Map();
-    const loadFont = (f) => {
-      const k = f.family + "|" + f.style;
-      let p = loaded3.get(k);
-      if (!p) {
-        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
-        loaded3.set(k, p);
-      }
-      return p;
-    };
-    for (const [index, op] of ops.entries()) {
-      const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
-      if (op.op !== "createTree" || !isObj10(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
-      const key = comp ? componentKey(comp.name) : String(op.tree.key);
-      const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
-      const bad = (message) => {
-        problems.push({ index, op: op.op, message });
-      };
-      const first2 = seen.get(key);
-      if (first2 !== void 0) {
-        bad(comp ? "component '" + comp.name + "' is also made by ops[" + first2 + "]; one batch makes or updates a component once" : "tree.key '" + key + "' is also the key of ops[" + first2 + "]; one batch updates a result once");
-        continue;
-      }
-      seen.set(key, index);
-      const t = targets.get(index);
-      if (!t) continue;
-      const big = oversized(t.spec, "tree", []);
-      if (big.length) {
-        for (const m of big) bad(m);
-        continue;
-      }
-      let root = null;
-      if (comp) {
-        const found = await existingComponent(comp.type, comp.name);
-        if ("problem" in found) {
-          bad(found.problem);
-          continue;
-        }
-        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
-      } else root = await findResult(key);
-      if (!root) continue;
-      if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
-        bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
-        continue;
-      }
-      const old = readOld(root, key);
-      if (!old) {
-        bad(what + ": the spec stored on its result " + label3(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
-        continue;
-      }
-      const plan = planUpdate(old, t.spec);
-      const before = problems.length;
-      for (const b of plan.builds) {
-        if (!b.replaces) continue;
-        const f = foreignIn(b.replaces, key);
-        if (f) bad(b.path + ": " + label3(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label3(f) + ", which this key did not build; move that layer out first");
-      }
-      for (const r of plan.removals) {
-        const f = foreignIn(r, key);
-        if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
-      }
-      const owner = root;
-      const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
-      if (defs) {
-        defs.wiring = planWiring(defs, plan.kept);
-        const bound = new Map(defs.wiring.map((w) => [w.ref, w.stays]));
-        for (const u of plan.updates) {
-          const stays = bound.get(u.ref);
-          if (!u.set || !stays) continue;
-          if (stays.indexOf("characters") >= 0) delete u.set.text;
-          if (stays.indexOf("visible") >= 0) delete u.set.hidden;
-          if (!Object.keys(u.set).length) u.set = null;
-        }
-        for (const n of textsFollowing(defs)) {
-          const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
-          for (const f of fonts) {
-            const m = await loadFont(f);
-            if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
-          }
-        }
-      }
-      const patches = /* @__PURE__ */ new Map();
-      for (const [i, u] of plan.updates.entries()) {
-        if (!u.set) continue;
-        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
-        const checked = checkPatch(u.set);
-        if (checked.problems.length) {
-          for (const m of checked.problems) say(m);
-          continue;
-        }
-        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
-        if (!p) continue;
-        p.refs = t.refs;
-        patches.set(i, p);
-      }
-      if (problems.length === before) t.update = { key, root, plan, patches, ...comp && defs ? { component: { name: comp.name, defs } } : {} };
-    }
-    return { problems };
-  }
-  function checkRemoval(u, n) {
-    if (n.removed) return;
-    const f = foreignIn(n, u.key);
-    if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
-  }
-  function touchedBy(u) {
-    const out = /* @__PURE__ */ new Set([u.root.id]);
-    for (const x of u.plan.updates) out.add(x.ref.id);
-    for (const b of u.plan.builds) out.add(b.parent.id);
-    for (const o of u.plan.orders) out.add(o.parent.id);
-    for (const st of u.plan.stamps) out.add(st.ref.id);
-    for (const h of u.plan.handles) out.add(h.ref.id);
-    return out;
-  }
-  function removalCount(u) {
-    let n = 0;
-    const count2 = (x) => {
-      if (x.removed) return;
-      if (x.getPluginData(KEY_DATA) === u.key) n++;
-      if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
-    };
-    for (const x of removalsOf(u)) count2(x);
-    return n;
-  }
-  function removalsOf(u) {
-    const out = u.plan.removals.slice();
-    for (const b of u.plan.builds) if (b.replaces) out.push(b.replaces);
-    return out;
-  }
-  var ALIGN_SELF = { min: "MIN", center: "CENTER", max: "MAX", stretch: "STRETCH" };
-  var LIMITS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
-  var PLACE_FIELDS = ["absolute", "grow", "alignSelf"];
-  var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
-  function boundTo(n, k) {
-    const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj10(bv) ? bv[k] : void 0;
-    return isObj10(a) && typeof a.id === "string" ? a.id : null;
-  }
-  function applyExtras(n, s, fields, only, variables, changes) {
-    const todo = only.filter((f) => fields.indexOf(f) >= 0);
-    if (!todo.length) return;
-    const kept = [];
-    const limits = todo.indexOf("sizeLimits") >= 0;
-    const bound = limits ? LIMITS.map((k) => [k, boundTo(n, k)]) : [];
-    const size2 = limits ? { w: n.width, h: n.height, sizing: ["layoutSizingHorizontal", "layoutSizingVertical"].map((k) => [k, k in n ? Reflect.get(n, k) : void 0]) } : null;
-    changes.push({
-      applied: { id: n.id },
-      kind: "updated node",
-      what: "the place, clipping or size limits of " + label3(n),
-      async restore() {
-        for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
-        if (size2) {
-          if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
-          for (const [k, v] of size2.sizing) if (v !== void 0 && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
-        }
-        for (const [k, id] of bound) {
-          if (boundTo(n, k) === id) continue;
-          const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
-          n.setBoundVariable(k, v);
-        }
-      }
-    });
-    const put2 = (k, v) => {
-      if (!(k in n)) return;
-      const was = Reflect.get(n, k);
-      if (was === v) return;
-      if (!Reflect.set(n, k, v)) throw new Error("cannot set " + k);
-      kept.push([k, was]);
-    };
-    const parent = n.parent;
-    const onPage = !parent || parent.type === "PAGE";
-    const inFlex = !!parent && "layoutMode" in parent && parent.layoutMode !== "NONE";
-    for (const f of todo) {
-      if (f === "absolute" && inFlex) put2("layoutPositioning", s.absolute === true ? "ABSOLUTE" : "AUTO");
-      else if (f === "grow" && inFlex) put2("layoutGrow", s.grow !== void 0 ? s.grow : 0);
-      else if (f === "alignSelf" && inFlex) put2("layoutAlign", s.alignSelf !== void 0 ? ALIGN_SELF[s.alignSelf] : "INHERIT");
-      else if (f === "clip") put2("clipsContent", s.clip === true);
-      else if (f === "sizeLimits") {
-        for (const k of LIMITS) put2(k, s.sizeLimits && s.sizeLimits[k] !== void 0 ? s.sizeLimits[k] : null);
-        for (const k of LIMITS) {
-          const ref2 = s.tokens && s.tokens[k];
-          const v = ref2 !== void 0 ? variables.get(ref2) : void 0;
-          if (v && boundTo(n, k) !== v.id) n.setBoundVariable(k, v);
-        }
-      } else if (f === "strokesInLayout") put2("strokesIncludedInLayout", s.strokesInLayout === true);
-      else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
-    }
-  }
-  function arrange(parent, want) {
-    for (const [i, n] of want.entries()) {
-      if (n.parent !== parent) continue;
-      if (parent.children[i] !== n) parent.insertChild(i, n);
-    }
-  }
-  function applyOrder(o, built, replaced) {
-    const parent = o.parent;
-    const was = parent.children.slice();
-    const nodes = [];
-    const olds = [];
-    for (const e of o.order) {
-      const n = "ref" in e ? e.ref : built[e.build];
-      if (n && n.parent === parent) nodes.push(n);
-      const r = "build" in e ? replaced[e.build] : null;
-      if (r && r.parent === parent) olds.push(r);
-    }
-    const seq2 = nodes.concat(olds);
-    const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
-    const want = was.slice();
-    slots.forEach((slot, k) => {
-      const n = seq2[k];
-      if (n) want[slot] = n;
-    });
-    arrange(parent, want);
-    return {
-      applied: { id: parent.id },
-      kind: "reordered frame",
-      what: "the order of the layers in " + label3(parent),
-      restore() {
-        arrange(parent, was.filter((c) => c.parent === parent));
-      }
-    };
-  }
-  function restamp2(stamps, key, changes) {
-    const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
-    changes.push({
-      applied: {},
-      kind: "stored spec",
-      what: "the spec stored on " + stamps.length + " node(s)",
-      restore() {
-        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
-      }
-    });
-    for (const s of stamps) stampNode(s.ref, key, s.spec);
-  }
-  async function applyUpdate(t, u, consent2, allowed2, changes) {
-    const { plan, key } = u;
-    const changed = [];
-    const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
-    for (const [i, up] of plan.updates.entries()) {
-      const p = u.patches.get(i);
-      if (up.extras.length) {
-        consent2();
-        applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
-      }
-      if (p) {
-        consent2();
-        await applyPatch(p, consent2, allowed2, changes);
-      }
-      if (up.extras.length) {
-        consent2();
-        applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
-      }
-      changed.push({ id: up.ref.id, ...up.spec.handle !== void 0 ? { handle: up.spec.handle } : {}, fields: up.fields });
-    }
-    const made2 = newMade(t.refs, t.clones);
-    const built = [];
-    for (const b of plan.builds) {
-      consent2();
-      const from = made2.pairs.length;
-      const n = await buildSubtree(b.spec, b.parent, made2, consent2);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
-        n.remove();
-      } });
-      stampAll(made2, key, from);
-      built.push(n);
-    }
-    const replaced = plan.builds.map((b) => b.replaces);
-    for (const o of plan.orders) {
-      consent2();
-      changes.push(applyOrder(o, built, replaced));
-    }
-    if (plan.stamps.length) {
-      consent2();
-      restamp2(plan.stamps, key, changes);
-    }
-    let props = /* @__PURE__ */ new Map();
-    let rewired = 0;
-    if (u.component) {
-      const root = u.root;
-      if (root.type === "COMPONENT_SET" && built.length) {
-        consent2();
-        const size2 = { w: root.width, h: root.height };
-        const at3 = root.children.map((c) => [c, c.x, c.y]);
-        const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
-          for (const [c, x, y] of at3) if (!c.removed) {
-            c.x = x;
-            c.y = y;
-          }
-          if (root.width !== size2.w || root.height !== size2.h) root.resize(size2.w, size2.h);
-          if (sizing2) {
-            root.layoutSizingHorizontal = sizing2.h;
-            root.layoutSizingVertical = sizing2.v;
-          }
-        } });
-        arrangeVariants(root, t.spec, built.filter((n) => n.type === "COMPONENT" && n.parent === root));
-      }
-      const synced = syncComponent(u.component.defs, unwired, made2.pairs, consent2, changes);
-      props = synced.props;
-      rewired = synced.rewired;
-    }
-    const applied = { id: u.root.id, key };
-    if (changed.length) applied.changed = changed;
-    if (plan.builds.length) applied.created = createdCount(made2);
-    const removed = removalCount(u);
-    if (removed) applied.removed = removed;
-    const reordered = plan.orders.filter((o) => o.order.every((e) => "ref" in e)).length;
-    if (reordered) applied.reordered = reordered;
-    const handles = {};
-    for (const h of plan.handles) Object.defineProperty(handles, h.handle, { value: h.ref.id, enumerable: true, writable: true, configurable: true });
-    for (const [h, id] of made2.handles) Object.defineProperty(handles, h, { value: id, enumerable: true, writable: true, configurable: true });
-    if (Object.keys(handles).length) applied.handles = handles;
-    const dropped = u.component ? u.component.defs.remove.length : 0;
-    if (u.component) componentReply(applied, u.component.name, props, rewired);
-    if (dropped && u.component) applied.propsRemoved = u.component.defs.remove.map((r) => r.name);
-    if (!changed.length && !plan.builds.length && !removed && !plan.orders.length && !applied.handles && !props.size && !rewired && !dropped) applied.unchanged = true;
-    return applied;
   }
 
   // src/bind.ts
@@ -12182,6 +12235,12 @@
     const components2 = await componentImpact(ops);
     const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
     const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds].sort((a, b) => a.index - b.index);
+    for (const k of await keyedImpact(ops, createdThisSession)) {
+      const at3 = steps2.filter((x) => x.index === k.index)[0];
+      if (at3) at3.changedLayers = k.changedLayers;
+      else steps2.push(k);
+    }
+    steps2.sort((a, b) => a.index - b.index);
     return sources.warnings ? { steps: steps2, warnings: sources.warnings } : { steps: steps2 };
   }
 

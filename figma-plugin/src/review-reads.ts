@@ -10,6 +10,7 @@ import type { OpRead } from "../../bridge/src/review-card.ts";
 import { countLayers } from "../../bridge/src/review-policy.ts";
 import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } from "./sources";
 import { landingSpot, type TreeTarget } from "./tree";
+import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { ModeTarget } from "./variable-modes";
 import type { DeleteTarget, MoveTarget } from "./structure";
@@ -38,6 +39,8 @@ export interface OpLayers {
   read: OpRead;
   /** the existing layers it changes, and those that follow it (its own and this session's included: counted later) */
   ids: string[];
+  /** the ids counted, when not `ids` (a keyed re-send: Show me starts at its root, which may not change) */
+  counted?: string[];
   /** a source edit: other layers follow it */
   source: boolean;
   spot?: Spot;
@@ -119,11 +122,12 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
     const ids: string[] = [];
     let source = false;
     let spot: Spot | undefined;
+    let counted: string[] | undefined;
     const follow = async (from: Parameters<typeof followersOf>[0]): Promise<void> => {
       source = true;
       const f = await followersOf(from, warn);
       read.follows = countLayers(f, createdThisSession);
-      for (const id of f) ids.push(id);
+      for (const id of f) { ids.push(id); if (counted) counted.push(id); }
     };
     try {
       switch (op.op) {
@@ -188,8 +192,12 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           if (!tt) break;
           if (tt.update) {
             read.updates = tt.update.root.name;
-            ids.push(tt.update.root.id);
             const root = tt.update.root;
+            // The existing layers the update plan changes, moves or removes (keyed.ts changedBy); Show me starts at the root.
+            const changed = changedBy(tt.update.plan, tt.update.key);
+            ids.push(root.id);
+            for (const id of changed) if (id !== root.id) ids.push(id);
+            counted = changed;
             if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
             break;
           }
@@ -229,14 +237,15 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
     } catch (e) {
       warn("what op " + i + " changes could not all be read (" + errMsg(e) + ")");
     }
-    ops.push({ read, ids, source, ...(spot ? { spot } : {}) });
+    ops.push({ read, ids, source, ...(spot ? { spot } : {}), ...(counted ? { counted } : {}) });
   }
-  // The layers counted: what each op changes, minus a create's parent (Show me shows it; nothing on it changes).
+  // The layers counted: what each op changes, minus a create's parent and a keyed re-send's root when only what is below
+  // it changes (Show me shows them; nothing on them changes).
   const changed: string[] = [];
   ops.forEach((o, i) => {
     const op = list[i];
     if (!op || op.op === "createFrame" || op.op === "createText") return;
-    for (const id of o.ids) changed.push(id);
+    for (const id of o.counted || o.ids) changed.push(id);
   });
   return { ops, layers: countLayers(changed, createdThisSession), sourceEdits: ops.filter((o) => o.source).length, warnings };
 }

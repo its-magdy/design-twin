@@ -28,8 +28,9 @@
 //
 // The reply is the root id and the key, and only what changed: the nodes updated (id, handle, fields), how many nodes
 // were built and removed, the ids of new handles — `unchanged: true` when the spec is the one sent last time.
-import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
+import type { AppliedWrite, WriteImpactStep, WriteOp } from "../../bridge/src/commands.ts";
 import { checkPatch } from "../../bridge/src/patch-spec.ts";
+import { checkTree } from "../../bridge/src/tree-check.ts";
 import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type Plan } from "../../bridge/src/tree-diff.ts";
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { KEY_DATA, readIndex, readOld, SPEC_DATA, stampNode } from "./keyed-store";
@@ -214,6 +215,62 @@ export function touchedBy(u: KeyedUpdate): Set<string> {
   for (const st of u.plan.stamps) out.add(st.ref.id);
   for (const h of u.plan.handles) out.add(h.ref.id);
   return out;
+}
+
+/** The ids of the existing layers a planned update changes, for the review's count (docs/write-plane-spec.md decision
+ *  18): every kept node whose fields change, every kept node that changes place among its frame's spec children, and
+ *  every node it removes (dropped, or built anew) with what this key built below it. Not the root when only its children
+ *  change, nor a frame that only gains a child, nor a stored spec (plugin data). The session's own are left in: the
+ *  count leaves them out. */
+export function changedBy(plan: Plan<SceneNode>, key: string): string[] {
+  const out: string[] = [];
+  for (const u of plan.updates) out.push(u.ref.id);
+  for (const o of plan.orders) {
+    // The kept children's order now and in the new spec: one that moves among them is moved.
+    const kept: SceneNode[] = [];
+    for (const e of o.order) if ("ref" in e) kept.push(e.ref);
+    const now = (o.parent as FrameNode).children.filter((c) => kept.indexOf(c) >= 0);
+    kept.forEach((n, i) => { if (now[i] !== n) out.push(n.id); });
+  }
+  const gone = (x: SceneNode): void => {
+    if (x.removed) return;
+    if (x.getPluginData(KEY_DATA) === key) out.push(x.id);
+    if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) gone(c);
+  };
+  for (const r of plan.removals) gone(r);
+  for (const b of plan.builds) if (b.replaces) gone(b.replaces);
+  return out;
+}
+
+/** The dry run's half for a keyed re-send (the `writeImpact` command): for each createTree whose key (or component
+ *  name) the file has a result for, how many of the existing layers it would change — planned against the spec as sent,
+ *  this session's own left out. Reads only. */
+export async function keyedImpact(ops: readonly WriteOp[], own: (id: string) => boolean): Promise<WriteImpactStep[]> {
+  const steps: WriteImpactStep[] = [];
+  for (const [index, op] of ops.entries()) {
+    if (op.op !== "createTree" || !isObj(op.tree)) continue;
+    const comp = componentRootOf(op.tree);
+    if (typeof op.tree.key !== "string" && !comp) continue;
+    try {
+      const checked = checkTree(op.tree);
+      if (checked.problems.length || !checked.expanded) continue;
+      const key = comp ? componentKey(comp.name) : String(op.tree.key);
+      let root: FrameNode | ComponentNode | ComponentSetNode | null = null;
+      if (comp) {
+        const found = await existingComponent(comp.type, comp.name);
+        if ("ours" in found && (await loadPageOf(found.ours))) root = found.ours;
+      } else root = await findResult(key);
+      if (!root) continue;
+      const old = readOld(root, key);
+      if (!old) continue;
+      const ids = new Set<string>();
+      for (const id of changedBy(planUpdate(old, checked.expanded), key)) if (!own(id)) ids.add(id);
+      steps.push({ index, op: op.op, changedLayers: ids.size });
+    } catch {
+      // Not counted: the write itself reports what is wrong with it.
+    }
+  }
+  return steps;
 }
 
 /** How many nodes of the result the removals take: the removed ones and what this key built below them, as the file

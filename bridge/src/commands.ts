@@ -231,6 +231,9 @@ export interface WritePreviewStep {
   invalid?: string;
   /** createTree with `bind`, when a plugin answered the dry run: what the file would bind (bind-values.ts) */
   bind?: BindCounts;
+  /** a keyed createTree re-send, when a plugin answered the dry run: the existing layers it would change (writeImpact),
+   *  the ones this plugin session created left out */
+  changedLayers?: number;
   /** the images its paints use, one line each: a file the server read ("photo.png: PNG 800×600, 41 kB"), or a hash the
    *  file must have (checked when the write runs) — figma_write's dry run (image-file.ts imagePreview) */
   images?: string[];
@@ -695,6 +698,9 @@ export interface WriteImpactStep {
   change?: string;
   /** a createTree with `bind`: what the file would bind */
   bind?: BindCounts;
+  /** a keyed createTree (or component spec) the file has a result for: how many of its existing layers the re-send
+   *  changes, those this plugin session created left out (the review's count, decision 18) */
+  changedLayers?: number;
 }
 /** writeImpact's reply: the dry run's file-side half. `warnings`: pages that could not be read, so a count may be low. */
 export interface WriteImpactReply {

@@ -9,8 +9,8 @@
 //   - it edits a source: a variable, a style, or a main component through `patch` — one change other layers follow;
 //   - it is a bulk change by rule (#171: the op that selects its nodes by a rule sets `bulkByRule`; none does yet);
 //   - the existing layers changed since the designer's last approval, this batch included, exceed REVIEW_LAYER_LIMIT.
-// The layers counted are the existing ones a batch patches, moves or deletes plus the layers and instances that
-// follow its source edits, each once; the layers this plugin session created do not count (the designer is watching
+// The layers counted are the existing ones a batch patches, moves or deletes (a keyed re-send: the layers of its earlier
+// result its update changes, moves or removes) plus the layers and instances that follow its source edits, each once; the layers this plugin session created do not count (the designer is watching
 // them appear). The count is kept per plugin session and goes back to 0 when the designer approves a batch (or keeps
 // its preview), so a large change sent in chunks of 25 still stops at the chunk that crosses the line.
 //
