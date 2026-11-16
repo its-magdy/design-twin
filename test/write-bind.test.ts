@@ -109,11 +109,13 @@ console.log("\nthe component map in the write direction (code-usage.ts):");
   };
   const u = figmaUsageOf(button, { variant: "primary", disabled: true, onClick: "x" }, "Save");
   check("enum values inverted, a boolean as given, a children string from the rendered text, an unmapped code prop ignored",
-    same(u.props, { Variant: "Primary", Size: "Medium", Disabled: true, Label: "Save" }) && u.component === KEY);
+    same(u.props, { Variant: "Primary", Disabled: true, Label: "Save" }) && u.component === KEY);
   check("…an instance prop (a slot) is not written: warned", u.warnings.some((w) => w.code === "slot-not-written" && w.prop === "Icon"));
   const absent = figmaUsageOf(button, {}, "");
-  check("an absent code prop: the map's default, else the one option that maps to no code prop (null), else left out",
-    same(absent.props, { Variant: "Default", Size: "Medium", Disabled: false }));
+  check("an absent code prop: the one option that maps to no code prop (null); a default the map writes out is not assumed (left out)",
+    same(absent.props, { Variant: "Default" }));
+  const omitted = figmaUsageOf({ ...button, props: { ...button.props, "Size#1:0": { kind: "enum", codeProp: "size", values: { Small: "sm", Medium: "md" }, default: "Medium", omitDefault: true }, Disabled: { kind: "boolean", codeProp: "disabled", default: false, omitDefault: true } } }, {}, "");
+  check("…a default the map omits (omitDefault) is what an absent code prop stands for", omitted.props.Size === "Medium" && omitted.props.Disabled === false);
   const twice = figmaUsageOf(button, { size: "sm" }, "Go");
   check("two options mapping to one code value: not written (the component's default shows), warned", twice.props.Size === undefined && twice.warnings.some((w) => w.code === "ambiguous-variant-value" && w.prop === "Size"));
   const unknown = figmaUsageOf(button, { variant: "danger", disabled: "yes" });
@@ -216,6 +218,18 @@ void (async () => {
     const made = (name: string): string | undefined => Object.values(w2.scene.variables).find((x) => x.name === name)?.id;
     check(`a create table of the same batch: its new variables (by their default mode, Light) are bound by name and resolve to what it made (${JSON.stringify(r2.applied[1] ?? r2.error)})`,
       r2.ok && same(r2.applied[1]?.bind, { bound: 3, instanced: 0, unbound: 1 }) && paintVar(two) === made("color/page") && (two?.boundVariables as Record<string, { id: string }> | undefined)?.itemSpacing?.id === made("space/lg") && paintVar(kids(two)[0]) === made("color/ink"));
+    // the same seed-and-capture batch sent twice: the second finds the variables and the style made, and binds them as the
+    // first did (by the same name), so the keyed result is unchanged
+    const w3 = await treeWorld();
+    const seedAndCapture = () => [
+      { op: "createVariables", collection: "Kit", modes: ["Light"], variables: [["color/page", "color", "#fafafa"], ["space/lg", "number", 24]] },
+      { op: "createStyles", styles: [{ name: "Body", kind: "text", set: { font: "Inter", weight: "Regular", size: 14 } }] },
+      { op: "createTree", bind: true, tree: { name: "Seeded", key: "capture:seeded@300", box: { w: 300, h: 200 }, fills: [{ type: "solid", color: "#fafafa" }], layout: { display: "flex", gap: 24 }, children: [{ text: "Hi", font: { family: "Inter", weight: "Regular", size: 14 } }] } },
+    ];
+    const first: WriteResult = await w3.api.applyWrites(seedAndCapture());
+    const second: WriteResult = await w3.api.applyWrites(seedAndCapture());
+    check(`the first send binds what the batch makes (${JSON.stringify(first.applied[2] ?? first.error)})`, first.ok && first.applied[2]?.bind?.bound === 3);
+    check(`the identical batch again: the keyed result is unchanged (${JSON.stringify(second.applied[2] ?? second.error)})`, second.ok && second.applied[2]?.unchanged === true && second.applied[2]?.bind?.bound === 3);
     // without bind nothing binds (the op is as before)
     const r3: WriteResult = await w2.api.applyWrites([{ op: "createTree", tree: { ...spec2, name: "Three" } }]);
     check("without bind: nothing is bound, the reply as before (`unbound`, no `bind`)", r3.ok && r3.applied[0]?.bind === undefined && r3.applied[0]?.unbound === 4);

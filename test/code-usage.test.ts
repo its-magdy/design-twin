@@ -1,6 +1,6 @@
 // Offline tests for design-to-code/code-usage.ts — an instance's props, translated through its map entry, nothing guessed.
 //   bun test/code-usage.test.ts
-import { codeUsageOf } from "../design-to-code/code-usage.ts";
+import { codeUsageOf, figmaUsageOf } from "../design-to-code/code-usage.ts";
 import { check, report } from "./assert.ts";
 import type { CodeUsageWarningCode, MapEntry } from "../design-to-code/types.ts";
 
@@ -84,6 +84,36 @@ console.log("the code target:");
   const tie: MapEntry["variantOverrides"] = [{ when: { A: "1" }, code: { module: "a", export: "A" } }, { when: { B: "2" }, code: { module: "b", export: "B" } }];
   const r = codeUsageOf(entry({ variantOverrides: tie, props: { A: { kind: "enum", codeProp: "a", values: { 1: "one" } }, B: { kind: "enum", codeProp: "b", values: { 2: "two" } } } }), { props: { A: "1", B: "2" } });
   check("overrides that hold with different targets are a tie, not a pick", r.usage === null && codes(r).join() === "ambiguous-variant-override");
+}
+
+console.log("the round trip (codeUsageOf, then figmaUsageOf):");
+{
+  // Figma values → code props (the read direction) → Figma values again (the write direction): where the translation loses
+  // nothing, the same values come back; an absent code prop reads back only as the one option written as none.
+  const back = (e: MapEntry, figma: Record<string, string | boolean>): Record<string, string | boolean> => {
+    const code = codeUsageOf(e, { props: figma }).usage?.props ?? {};
+    return { ...figmaUsageOf(e, code).props };
+  };
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+  const kept = entry({ props: { Variant: { kind: "enum", codeProp: "variant", values: { Primary: "primary", Ghost: null }, default: "Primary", omitDefault: false } } });
+  check("a default the map writes out (omitDefault false): an absent code prop is the null option, never the default",
+    same(back(kept, { Variant: "Ghost" }), { Variant: "Ghost" }) && same(back(kept, { Variant: "Primary" }), { Variant: "Primary" }));
+  const omitted = entry({ props: { Size: { kind: "enum", codeProp: "size", values: { Small: "sm", Medium: "md", Large: "lg" }, default: "Medium", omitDefault: true } } });
+  check("an omitted default (omitDefault true): absent reads back as the default, a written option as itself",
+    same(back(omitted, { Size: "Medium" }), { Size: "Medium" }) && same(back(omitted, { Size: "Large" }), { Size: "Large" }));
+  const written = entry({ props: { Size: { kind: "enum", codeProp: "size", values: { Small: "sm", Medium: "md" }, default: "Medium" } } });
+  const absent = figmaUsageOf(written, {});
+  check("a default the map writes out and no null option: an absent code prop is left out (the component's default shows), not warned",
+    same(back(written, { Size: "Small" }), { Size: "Small" }) && same({ ...absent.props }, {}) && absent.warnings.length === 0);
+  const two = figmaUsageOf(entry({ props: { Tone: { kind: "enum", codeProp: "tone", values: { Plain: null, Soft: "soft", Base: "base" }, default: "Base", omitDefault: true } } }), {});
+  check("an absent code prop several options stand for (a null one and an omitted default): left out, warned",
+    two.props.Tone === undefined && two.warnings.some((w) => w.code === "ambiguous-variant-value" && w.prop === "Tone"));
+  const bool = entry({ props: { On: { kind: "boolean", codeProp: "on", default: false, omitDefault: true } } });
+  check("a boolean whose default is omitted: both values come back",
+    same(back(bool, { On: false }), { On: false }) && same(back(bool, { On: true }), { On: true }));
+  const boolKept = entry({ props: { On: { kind: "boolean", codeProp: "on", default: false } } });
+  check("a boolean the map writes out: both values come back; absent is left out, not the default",
+    same(back(boolKept, { On: false }), { On: false }) && same(back(boolKept, { On: true }), { On: true }) && figmaUsageOf(boolKept, {}).props.On === undefined);
 }
 
 report();

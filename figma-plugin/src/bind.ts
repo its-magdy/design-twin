@@ -5,8 +5,10 @@
 // styles, and what the create tables earlier in the batch make or change (creates.ts: their rows' default-mode values,
 // a new name only when nothing else is called that) — and runs it on each `bind: true` spec, BEFORE the batch's names
 // resolve (tree.ts resolveTreeOps) and before a keyed re-send compares the spec with its last one (keyed.ts), so a
-// re-send binds the same way and only a real change shows. A variable or style the file has is named by its id, one the
-// batch makes by its name (tree-refs.ts finds it in the batch's plan).
+// re-send binds the same way and only a real change shows. A variable or style is named by its name whenever that name
+// is its alone (in the file and the batch's tables; tree-refs.ts finds one the batch makes in the batch's plan), else
+// by its id: so one the batch makes is named the same on the send that makes it and on every re-send after, when the
+// file has it (a keyed re-send of a seed-and-capture batch is unchanged).
 //
 // It reads only, and it adds no Figma call to the build (binding uses the fields a spec could carry anyway), so the batch
 // stays one Undo step and all-or-nothing, as every createTree is.
@@ -145,6 +147,9 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
       else list.delete(ref);
     }
   }
+  // A local variable whose name is its alone is named by it (the form a new one has: the same before and after it is made).
+  const named = new Map<string, string>();
+  for (const v of locals) if (!v.remote && byName(v.name, "VariableID:", localNames.get(v.name), plannedNames.get(v.name))) named.set(v.id, v.name);
   // ---- the variables an alias reaches outside the local ones (a library's): followed, never bound to themselves
   for (let hops = 0; pending.length && hops < 200; hops++) {
     const id = pending.shift();
@@ -194,5 +199,19 @@ async function bindTable(creates: CreateResolution | null): Promise<BindTable> {
       }));
     }
   }
-  return { colors: [...colors.values()], numbers: [...numbers.values()], textStyles: [...styles.values()] };
+  for (const st of fileStyles) if (byName(st.name, "S:", styleNames.get(st.name), plannedStyles.get(st.name))) named.set(st.id, st.name);
+  const out = (ref: string): string => { const n = named.get(ref); return n === undefined ? ref : n; };
+  const renamed = (e: BindVariable): BindVariable => (e.aliasOf === undefined ? { ...e, ref: out(e.ref) } : { ...e, ref: out(e.ref), aliasOf: out(e.aliasOf) });
+  return {
+    colors: [...colors.values()].map(renamed),
+    numbers: [...numbers.values()].map(renamed),
+    textStyles: [...styles.values()].map((s) => ({ ...s, ref: out(s.ref) })),
+  };
+}
+
+/** A local variable or style is named by its name when the name resolves to it alone (tree-refs.ts): no other local one
+ *  has it (`inFile` 1), no create table of the batch makes one (`planned`), and it reads as neither an id (`idPrefix`)
+ *  nor a 40-hex key. */
+function byName(name: string, idPrefix: string, inFile: number | undefined, planned: number | undefined): boolean {
+  return inFile === 1 && !planned && name.indexOf(idPrefix) !== 0 && !/^[0-9a-f]{40}$/i.test(name);
 }

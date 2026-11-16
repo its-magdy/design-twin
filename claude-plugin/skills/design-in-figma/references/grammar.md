@@ -279,9 +279,10 @@ anything resolves, then builds the bound spec as if it had been written so:
   `font`). Not bound: sizes, opacity, stroke weights, pictures, a paint with its own `opacity`, anything inside a copy
   or an instance — nor a paint style (a spec has no fill style).
 - **Equal.** A colour by its 8-bit RGBA (the read's hex), a number within 0.01. A variable's value is the one in its
-  collection's default mode, through its aliases (a broken or looping chain has none). A variable or style the file has
-  is named by its id; one a create table earlier in the batch makes (`seedTokens`, `createVariables`, `createStyles`)
-  by its name, which must be new and made once.
+  collection's default mode, through its aliases (a broken or looping chain has none). A variable or style is named by
+  its name when nothing else in the file or the batch has that name, else (the file's) by its id; one a create table
+  earlier in the batch makes (`seedTokens`, `createVariables`, `createStyles`) must be new and made once. So the same
+  seed-and-capture batch sent again names each one as the first send did.
 - **Several equal.** In order: drop a variable whose `scopes` leave the field out; keep those whose name has a word for
   the field (fill: bg, background, surface, fill; text: text, fg, foreground, content; stroke: border, stroke, outline,
   divider; spacing: space, spacing, gap, padding, inset, gutter; radius: radius, radii, round, corner) when any has; drop

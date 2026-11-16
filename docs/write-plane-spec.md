@@ -102,8 +102,9 @@ every raw value equal to exactly one of them into the spec's own reference field
 (`fills[i].tokens.color`; a text's font colour through `tokens.fills`), the stroke colours (`tokens.strokes`, all or
 none), the gap, the wrapped tracks' gap, each padding side and the radius (`tokens.<field>`), and a text's font
 (`styles.text`, when family, style, size, line height, letter spacing, case and decoration all equal). A colour is equal
-by its 8-bit RGBA, a number within 0.01. A file's variable or style is named by its id, one the batch makes by its
-name (so `seedTokens` and the capture land in one call). Several equal: those whose scopes leave the field out go, then
+by its 8-bit RGBA, a number within 0.01. A variable or style is named by its name when that is its alone in the file
+and the batch (so `seedTokens` and the capture land in one call, and the same batch sent again names each one as the
+first send did: a keyed re-send is unchanged), else by its id. Several equal: those whose scopes leave the field out go, then
 those whose name has no word for the field (when one has), then a variable another candidate aliases; still several,
 the value stays raw and the reply lists it (decision 15). Sizes, opacity, stroke weights and pictures are not bound, nor
 is a paint style (a tree spec has no fill style; a follow-up). The bound refs resolve through the same resolver as any
@@ -114,9 +115,11 @@ Instances: the capture's walker reads each element's code component — its `dat
 `module#Export`, props in `data-props`), else a React development build's fibers (the composite components whose first
 host node is the element, outermost first) — and the first one the component map names (`design/codeconnect.local.json`,
 or `--map`) is resolved in the write direction (`design-to-code/code-usage.ts` `figmaUsageOf`: enum values inverted, a
-boolean as it is, a `children` string from the rendered text, a variantOverride's `when` values; what cannot be read back
-is left at the component's default and warned). That element lands as an INSTANCE (by the entry's key, else id, else
-name) at its place and size, nothing inside it captured; a component the file lacks refuses the batch with candidates,
+boolean as it is, a `children` string from the rendered text, a variantOverride's `when` values; a code prop the element
+does not pass reads back as the one option the read direction writes no code prop for — mapped to null, or the default
+with `omitDefault` — else it is left out; what cannot be read back is left at the component's default and warned). That
+element lands as an INSTANCE (by the entry's key, else id, else name) at its place and size, nothing inside it captured
+(a `--root` element the map names is that instance inside the keyed screen frame); a component the file lacks refuses the batch with candidates,
 as any name does. Slots (instance-swap properties) are not filled from code yet. Parts repeated with no component are
 listed in the report as candidate components, each written as a `COMPONENT` spec (a TEXT property per text that differs)
 for a `createTree` of its own; making one does not replace the captured copies — map it, then capture again.

@@ -3884,14 +3884,20 @@ function captureSpec(doc) {
     const inFlex = pf !== null && !/absolute|fixed/.test(outer.position);
     const grows = inFlex && pf !== null && outer.flexGrow > 0 && pf.grow === true && pf.dir === "row";
     const stretched = inFlex && parent !== null && pf !== null && pf.dir === "column" && near(outer.rect.w, contentBox(parent.el).w) && (outer.alignSelf === "stretch" || (outer.alignSelf === "auto" || outer.alignSelf === "normal") && (pf.align === "normal" || pf.align === "stretch"));
-    if (parent && el.instance) {
+    if (el.instance) {
       stats.instances++;
       const n2 = { component: el.instance.component, name: el.instance.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) } };
       if (Object.keys(el.instance.props).length) n2.props = { ...el.instance.props };
       if (el.opacity < 1) n2.opacity = r2(Math.max(0, el.opacity));
       pagePaths.set(n2, at2);
-      place(n2, outer, parent, false);
-      return n2;
+      if (parent) {
+        place(n2, outer, parent, false);
+        return n2;
+      }
+      n2.x = 0;
+      n2.y = 0;
+      stats.frames++;
+      return { name: el.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) }, children: [n2] };
     }
     if (parent && asText(el) && el.text) {
       const wider = inFlex && el.rect.w > el.text.rect.w + 1;
@@ -4122,12 +4128,10 @@ function figmaUsageOf(entry, codeProps, text, codeName) {
       const table = p.values || {};
       const options = Object.keys(table);
       if (given === void 0) {
-        if (p.default !== void 0) {
-          props[base] = String(p.default);
-          continue;
-        }
-        const silent = options.filter((o) => table[o] === null);
-        if (silent.length === 1 && silent[0] !== void 0) props[base] = silent[0];
+        const silent = options.filter((o) => table[o] === null || p.omitDefault === true && p.default !== void 0 && String(p.default) === o);
+        const one = silent[0];
+        if (silent.length === 1 && one !== void 0) props[base] = one;
+        else if (silent.length > 1) warn({ code: "ambiguous-variant-value", prop: base, message: `'${name}'.${base}: no code prop ${p.codeProp} is what ${silent.length} options stand for (${silent.slice(0, 3).join(", ")}): not written, the component's default shows` });
         continue;
       }
       const hits = options.filter((o) => table[o] === given);
@@ -4144,7 +4148,7 @@ function figmaUsageOf(entry, codeProps, text, codeName) {
     }
     if (p.kind === "boolean") {
       if (given === void 0) {
-        if (p.default !== void 0) props[base] = p.default;
+        if (p.omitDefault === true && p.default !== void 0) props[base] = p.default;
         continue;
       }
       if (typeof given !== "boolean") {

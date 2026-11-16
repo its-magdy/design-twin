@@ -319,6 +319,13 @@ console.log("\ninstances and candidate components:");
   check("an element the map names is an INSTANCE: the component (by key), its props, the component's name as the layer's, its box", same(a, { component: "a1".repeat(20), name: "Button", box: { w: 196, h: 40 }, props: { Size: "Large", Label: "Save" }, grow: 1, alignSelf: "stretch" }));
   check("…in a block parent at its x/y, its opacity kept; nothing inside it is written; counted", same({ x: b?.x, y: b?.y, o: b?.opacity, c: b?.children }, { x: 10, y: 100, o: 0.5, c: undefined }) && r.ok && r.stats.instances === 3);
   check("…and the spec passes the tree spec's check", r.ok && checkCaptured(r.spec, () => IMG).length === 0);
+  // a --root element the map names: the keyed screen frame, the instance inside it at its corner
+  const rr = captureSpec(docOf(inst({ rect: { x: 40, y: 100, w: 300, h: 48 }, opacity: 0.5 }), { document: false, width: 1280 }));
+  const rs = rr.ok ? rr.spec : {};
+  check(`a --root element the map names: the keyed root frame holding its instance (${JSON.stringify(rs)})`,
+    rs.key === "capture:t@1280" && rs.name === "t @1280" && same(rs.box, { w: 300, h: 48 }) && rs.component === undefined
+    && same(rs.children, [{ component: "a1".repeat(20), name: "Button", box: { w: 300, h: 48 }, props: { Size: "Large", Label: "Save" }, opacity: 0.5, x: 0, y: 0 }])
+    && rr.ok && rr.stats.instances === 1 && rr.stats.frames === 1 && checkCaptured(rr.spec, () => IMG).length === 0);
 }
 {
   // three cards: a painted, rounded frame with a title and a meta row of two texts; a fourth meta row stands alone

@@ -142,10 +142,12 @@ function figmaUsageOf(entry: MapEntry, codeProps: CodePropValues, text?: string,
       const table = p.values || {};
       const options = Object.keys(table);
       if (given === undefined) {
-        // Absent: the map's default, else the one option that maps to no code prop (null).
-        if (p.default !== undefined) { props[base] = String(p.default); continue; }
-        const silent = options.filter((o) => table[o] === null);
-        if (silent.length === 1 && silent[0] !== undefined) props[base] = silent[0];
+        // Absent: the options the read direction writes no code prop for — the ones mapped to null, and the default when
+        // the map omits it. One: that option; several: warned, left to the component's default; none: left out.
+        const silent = options.filter((o) => table[o] === null || (p.omitDefault === true && p.default !== undefined && String(p.default) === o));
+        const one = silent[0];
+        if (silent.length === 1 && one !== undefined) props[base] = one;
+        else if (silent.length > 1) warn({ code: "ambiguous-variant-value", prop: base, message: `'${name}'.${base}: no code prop ${p.codeProp} is what ${silent.length} options stand for (${silent.slice(0, 3).join(", ")}): not written, the component's default shows` });
         continue;
       }
       const hits = options.filter((o) => table[o] === given);
@@ -155,7 +157,8 @@ function figmaUsageOf(entry: MapEntry, codeProps: CodePropValues, text?: string,
       continue;
     }
     if (p.kind === "boolean") {
-      if (given === undefined) { if (p.default !== undefined) props[base] = p.default; continue; }
+      // absent: the default, when the map omits it (the read direction writes no code prop for it); else left out
+      if (given === undefined) { if (p.omitDefault === true && p.default !== undefined) props[base] = p.default; continue; }
       if (typeof given !== "boolean") { warn({ code: "prop-value-mismatch", prop: base, message: `'${name}'.${base} is mapped as a boolean but the code's ${p.codeProp} is ${JSON.stringify(given)}: not written` }); continue; }
       props[base] = given;
       continue;

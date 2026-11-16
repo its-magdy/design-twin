@@ -26,7 +26,7 @@
 //   - an element with no paint, stroke, clip or padding and exactly one child of the same box is that child; an empty
 //     unpainted leaf is left out (in an auto-layout parent it is kept: it takes space).
 //   - an element the component map names → an INSTANCE (`component`, `props`, the component's name, its box and place);
-//     nothing inside it is written.
+//     nothing inside it is written. A --root element the map names is the instance inside the keyed root frame.
 // Shadows, gradients, pseudo-element content, transforms and filters cannot be written (the tree spec has no effects):
 // they are counted under `dropped`.
 import type { TreeFill, TreeFont, TreeLayout, TreeNodeSpec, TreeStrokes } from "../bridge/src/tree-spec.ts";
@@ -554,14 +554,18 @@ export function captureSpec(doc: CaptureDoc): CaptureResult {
     const grows = inFlex && pf !== null && outer.flexGrow > 0 && pf.grow === true && pf.dir === "row";
     const stretched = inFlex && parent !== null && pf !== null && pf.dir === "column" && near(outer.rect.w, contentBox(parent.el).w) && (outer.alignSelf === "stretch" || ((outer.alignSelf === "auto" || outer.alignSelf === "normal") && (pf.align === "normal" || pf.align === "stretch")));
     // an element the component map names: an instance of the file's component, at the element's place and size
-    if (parent && el.instance) {
+    if (el.instance) {
       stats.instances++;
       const n: TreeNodeSpec = { component: el.instance.component, name: el.instance.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) } };
       if (Object.keys(el.instance.props).length) n.props = { ...el.instance.props };
       if (el.opacity < 1) n.opacity = r2(Math.max(0, el.opacity));
       pagePaths.set(n, at);
-      place(n, outer, parent, false);
-      return n;
+      if (parent) { place(n, outer, parent, false); return n; }
+      // the --root element is one: the keyed screen frame (named and filled below) holds its instance, at its corner
+      n.x = 0;
+      n.y = 0;
+      stats.frames++;
+      return { name: el.name, box: { w: r2(Math.max(0.01, el.rect.w)), h: r2(Math.max(0.01, el.rect.h)) }, children: [n] };
     }
     // text only, and nothing a frame must keep: the element is its TEXT
     if (parent && asText(el) && el.text) {

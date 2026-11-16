@@ -867,9 +867,9 @@
   function matchByName(ref2, items, name, exact = () => []) {
     const byId = items.filter((t) => exact(t).includes(ref2));
     if (byId.length === 1 && byId[0] !== void 0) return { kind: "one", item: byId[0] };
-    const byName = items.filter((t) => name(t) === ref2);
-    if (byName.length === 1 && byName[0] !== void 0) return { kind: "one", item: byName[0] };
-    if (byName.length > 1) return { kind: "many", matches: byName };
+    const byName2 = items.filter((t) => name(t) === ref2);
+    if (byName2.length === 1 && byName2[0] !== void 0) return { kind: "one", item: byName2[0] };
+    if (byName2.length > 1) return { kind: "many", matches: byName2 };
     return { kind: "none", candidates: nearestNames(ref2, items.map(name)) };
   }
   function quoteList(names) {
@@ -2669,12 +2669,12 @@
       if (ok) summary.rows.push({ name, type, values });
     }
     if (problems.length) return { problems, summary };
-    const byName = /* @__PURE__ */ new Map();
-    for (const r of summary.rows) byName.set(r.name, r);
+    const byName2 = /* @__PURE__ */ new Map();
+    for (const r of summary.rows) byName2.set(r.name, r);
     for (const [i, r] of summary.rows.entries()) {
       for (const [j, v] of r.values.entries()) {
         if (typeof v !== "object") continue;
-        const target = byName.get(v.aliasOf);
+        const target = byName2.get(v.aliasOf);
         const cp = at3("variables") + "[" + i + "][" + (j + 2) + "].aliasOf";
         if (!target) {
           if (summary.outside.indexOf(v.aliasOf) < 0) summary.outside.push(v.aliasOf);
@@ -2687,18 +2687,18 @@
         if (target.type !== r.type) problems.push(cp + ": '" + target.name + "' is a " + target.type + " row, and '" + r.name + "' is a " + r.type + " one");
       }
     }
-    const loop = tableLoop(summary.rows, byName, summary.modes.length || 1);
+    const loop = tableLoop(summary.rows, byName2, summary.modes.length || 1);
     if (loop) problems.push(at3("variables") + ": " + loop);
     return { problems, summary };
   }
-  function tableLoop(rows, byName, width) {
+  function tableLoop(rows, byName2, width) {
     for (let m = 0; m < width; m++) {
       for (const start of rows) {
         const chain = [start];
         const seen = /* @__PURE__ */ new Set([start]);
         for (let cur = start; ; ) {
           const v = cur.values[m];
-          const next = v !== void 0 && typeof v === "object" ? byName.get(v.aliasOf) : void 0;
+          const next = v !== void 0 && typeof v === "object" ? byName2.get(v.aliasOf) : void 0;
           if (!next || next === cur) break;
           chain.push(next);
           if (next === start) return "the aliases " + chain.map((r) => "'" + r.name + "'").join(" \u2192 ") + " make a loop" + (width > 1 ? " (mode " + (m + 1) + ")" : "");
@@ -3522,7 +3522,7 @@
     const dedupable = a.kind !== "reference";
     const hash = contentHash(a);
     const r = run();
-    const { byContent, byName } = r.assetFiles;
+    const { byContent, byName: byName2 } = r.assetFiles;
     if (dedupable) {
       const hit = byContent.get(hash + "." + fmt);
       if (hit) {
@@ -3533,12 +3533,12 @@
     const base = baseNameFor(a);
     let file = base + "." + fmt;
     const key = file.toLowerCase();
-    const taken = byName.get(key);
+    const taken = byName2.get(key);
     if (taken !== void 0 && taken !== hash) {
       const [head = ""] = hash.split("-");
       file = base + "-" + head.slice(0, 6) + "." + fmt;
     }
-    byName.set(file.toLowerCase(), hash);
+    byName2.set(file.toLowerCase(), hash);
     const asset = { ...a, file, hash };
     r.assets.push(asset);
     if (dedupable) byContent.set(hash + "." + fmt, { file, asset });
@@ -10673,6 +10673,8 @@
         else list.delete(ref2);
       }
     }
+    const named = /* @__PURE__ */ new Map();
+    for (const v of locals) if (!v.remote && byName(v.name, "VariableID:", localNames.get(v.name), plannedNames.get(v.name))) named.set(v.id, v.name);
     for (let hops = 0; pending2.length && hops < 200; hops++) {
       const id = pending2.shift();
       if (id === void 0 || colors.has(id) || numbers.has(id)) continue;
@@ -10731,7 +10733,20 @@
         }));
       }
     }
-    return { colors: [...colors.values()], numbers: [...numbers.values()], textStyles: [...styles.values()] };
+    for (const st of fileStyles) if (byName(st.name, "S:", styleNames.get(st.name), plannedStyles2.get(st.name))) named.set(st.id, st.name);
+    const out = (ref2) => {
+      const n = named.get(ref2);
+      return n === void 0 ? ref2 : n;
+    };
+    const renamed = (e) => e.aliasOf === void 0 ? { ...e, ref: out(e.ref) } : { ...e, ref: out(e.ref), aliasOf: out(e.aliasOf) };
+    return {
+      colors: [...colors.values()].map(renamed),
+      numbers: [...numbers.values()].map(renamed),
+      textStyles: [...styles.values()].map((s) => ({ ...s, ref: out(s.ref) }))
+    };
+  }
+  function byName(name, idPrefix, inFile, planned) {
+    return inFile === 1 && !planned && name.indexOf(idPrefix) !== 0 && !/^[0-9a-f]{40}$/i.test(name);
   }
 
   // src/creates.ts

@@ -29,7 +29,7 @@ import { DEFAULT_FONT, nodeKind, type TreeFont, type TreeNodeSpec, type TreeToke
 /** A colour or number variable a value can bind to. `value` is its own value in its collection's default mode (a hex as
  *  formatHex writes it, or a number); `aliasOf` the `ref` of the variable that mode aliases instead (in the same list). */
 export interface BindVariable {
-  /** what the spec names it by: its id (a variable the file has), or its name (one a create op of the batch makes) */
+  /** what the spec names it by: its name when that is its alone (in the file and the batch), else its id (bind.ts) */
   ref: string;
   name: string;
   value?: string | number;
