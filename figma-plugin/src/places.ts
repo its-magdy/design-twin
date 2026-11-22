@@ -135,35 +135,39 @@ function occupied(c: SceneNode): { x: number; y: number; width: number; height: 
 interface Box { x: number; y: number; width: number; height: number }
 const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-/** Where a top-level node lands on `page`: the spec's own x/y, else right of everything already on it, top-aligned. */
-export function pagePlacement(page: PageNode, skip: string, spec: Pick<TreeNodeSpec, "x" | "y">): { x: number; y: number } {
-  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
-  let right: number | null = null;
-  let top: number | null = null;
-  for (const c of others(page, skip)) {
-    const b = occupied(c);
-    right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
-    top = top === null ? b.y : Math.min(top, b.y);
-  }
-  return {
-    x: spec.x !== undefined ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
-    y: spec.y !== undefined ? spec.y : top === null ? 0 : Math.round(top),
-  };
+/**
+ * Where a node of `w`×`h` goes among `held` (boxes in the same coordinates), by the spec's x/y — `pad` in from the
+ * edges when nothing is held. Neither given: right of everything held, level with the topmost. Only `y`: right of
+ * everything held, at that `y`. Only `x`: at that `x`, level with the topmost when that overlaps nothing, else below
+ * everything held in its column. Only the spec's own coordinates are kept as given; the other never lands on a layer.
+ */
+function besideHeld(held: readonly Box[], spec: Pick<TreeNodeSpec, "x" | "y">, w: number, h: number, pad: number): { x: number; y: number } {
+  if (!held.length) return { x: spec.x !== undefined ? spec.x : pad, y: spec.y !== undefined ? spec.y : pad };
+  const top = Math.round(Math.min(...held.map((b) => b.y)));
+  if (spec.x === undefined) return { x: Math.round(Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP), y: spec.y !== undefined ? spec.y : top };
+  const x = spec.x;
+  if (spec.y !== undefined) return { x, y: spec.y };
+  if (!held.some((b) => overlaps({ x, y: top, width: w, height: h }, b))) return { x, y: top };
+  const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
+  return { x, y: Math.round(Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP) };
 }
 
-/** Where a node of `w`×`h` lands in `section` (its own coordinates), by the spec's x/y and what the section holds. */
+/** Where a top-level node of `w`×`h` lands on `page`: the spec's own x/y, the rest beside what is on it (besideHeld). */
+export function pagePlacement(page: PageNode, skip: string, spec: Pick<TreeNodeSpec, "x" | "y">, w: number, h: number): { x: number; y: number } {
+  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
+  return besideHeld(others(page, skip).map(occupied), spec, w, h, 0);
+}
+
+/** Where a node of `w`×`h` lands in `section` (its own coordinates), by the spec's x/y and what the section holds:
+ *  with neither, beside what it holds, or on a new row below when that would run the section into a neighbour; with
+ *  one, as besideHeld says. */
 function sectionPlacement(section: SectionNode, skip: string, spec: Pick<TreeNodeSpec, "x" | "y">, w: number, h: number): { x: number; y: number } {
   if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
   const held = others(section, skip).map(occupied);
-  const pick = (x: number, y: number): { x: number; y: number } => ({ x: spec.x !== undefined ? spec.x : Math.round(x), y: spec.y !== undefined ? spec.y : Math.round(y) });
-  if (!held.length) return pick(SECTION_PAD, SECTION_PAD);
-  const left = Math.min(...held.map((b) => b.x));
-  const top = Math.min(...held.map((b) => b.y));
-  const right = Math.max(...held.map((b) => b.x + b.width));
-  const bottom = Math.max(...held.map((b) => b.y + b.height));
-  const beside = pick(right + PLACE_GAP, top);
+  if (!held.length || spec.x !== undefined || spec.y !== undefined) return besideHeld(held, spec, w, h, SECTION_PAD);
+  const beside = besideHeld(held, {}, w, h, SECTION_PAD);
   if (!runsInto(section, beside, w, h)) return beside;
-  const below = pick(left, bottom + PLACE_GAP);
+  const below = { x: Math.round(Math.min(...held.map((b) => b.x))), y: Math.round(Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
   return runsInto(section, below, w, h) ? beside : below;
 }
 /** Whether `section`, grown to hold a node of `w`×`h` at `at`, would run into one of its neighbours. */
@@ -202,7 +206,7 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
   const page = dest.page.node;
   if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
   if (!dest.section) {
-    const { x, y } = pagePlacement(page, root.id, spec);
+    const { x, y } = pagePlacement(page, root.id, spec, root.width, root.height);
     page.appendChild(root);
     root.x = x;
     root.y = y;
@@ -306,7 +310,7 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     section.name = s.name;
     made.what = "the new section " + label(section);
     // Beside what the page holds; it grows to hold the frames placed in it (land).
-    const at = pagePlacement(page, section.id, {});
+    const at = pagePlacement(page, section.id, {}, SECTION_PAD * 2, SECTION_PAD * 2);
     page.appendChild(section);
     section.x = at.x;
     section.y = at.y;
@@ -325,17 +329,17 @@ export function landing(dest: Dest, spec: TreeNodeSpec): { lands: string; spot: 
   const page = p.node;
   const s = dest.section;
   if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
+  const w = spec.box ? spec.box.w : 100;
+  const h = spec.box ? spec.box.h : 100;
   if (!s) {
-    const at = pagePlacement(page, "", spec);
-    const beside = !(spec.x !== undefined && spec.y !== undefined) && page.children.length > 0;
+    const at = pagePlacement(page, "", spec, w, h);
+    const beside = spec.x === undefined && spec.y === undefined && page.children.length > 0;
     return { lands: (beside ? "right of the existing frames" : "at " + at.x + ", " + at.y) + pageText, spot: { pageId: page.id, x: at.x, y: at.y } };
   }
   if (!s.node) {
-    const at = pagePlacement(page, "", {});
+    const at = pagePlacement(page, "", {}, SECTION_PAD * 2, SECTION_PAD * 2);
     return { lands: "in a new section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: at.x + SECTION_PAD, y: at.y + SECTION_PAD } };
   }
-  const w = spec.box ? spec.box.w : 100;
-  const h = spec.box ? spec.box.h : 100;
   const at = sectionPlacement(s.node, "", spec, w, h);
   const origin = s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y };
   return { lands: "in section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at.x, y: origin.y + at.y } };

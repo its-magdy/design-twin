@@ -226,6 +226,10 @@ screens.
       and so does each section around it. A section that still runs into a neighbour (explicit coordinates, or no row
       that avoids it) is a `warning`, never a refusal: no existing layer is moved to make room. A new section is placed
       on its page as a new frame is (right of everything, level with the topmost), then grows to hold its frames.
+    - **One coordinate given.** On a page or in a section, the one given is kept and the other is chosen so the frame
+      lands on no layer: only `y`, right of everything there; only `x`, level with the topmost when that overlaps
+      nothing, else 100 px below what is in its column (the band from `x` to `x` + its width). Neither refused nor
+      warned: the coordinate given is honoured and the promise of no overlap kept (both given: exactly there).
     - **All or nothing (decision 14).** A made page and section are Changes on the batch's list, so a later failure
       removes them, newest first, after the frames in them; a section's growth goes back with the frame that caused
       it. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)

@@ -1059,6 +1059,9 @@ name refuses the whole batch.
 The tree is built hidden, then moved to its page and shown only when every node is in place, so it lands whole or not
 at all; if a later op of the batch fails, the tree is removed and listed as `restored` (as far as the batch can be put back). Without `x`/`y` on the root,
 the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
+With only one of them, that one is kept and the other is chosen so the frame overlaps nothing: only `y`, right of
+everything; only `x`, level with the topmost unless that lands on a layer, else 100 px below what is in its column.
+The same holds in a section.
 
 **Pages and sections.** With `section`, the root lands inside that section of the page (a nested one too), and its
 `x`/`y` are the section's own: 100 px right of what the section holds and level with its top — or on a new row 100 px

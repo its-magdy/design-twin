@@ -1004,7 +1004,7 @@ export const cases: Case[] = [{
     ok("[TREE] page by id, with explicit x/y", byId.ok === true && parentOf(third) === pages.screens && num(third, "x") === -400 && num(third, "y") === 1200);
     const xOnly = await api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "X only", x: 5 } }]);
     const fourth = alive().find((n) => n.id === xOnly.applied[0]?.id);
-    ok("[TREE] only x given: y still comes from placement (the topmost frame on 'Screens' is at 0)", xOnly.ok === true && num(fourth, "x") === 5 && num(fourth, "y") === 0);
+    ok("[TREE] only x given: y still comes from placement — level with the topmost frame would sit on 'Empty state', so below it (100+100)", xOnly.ok === true && num(fourth, "x") === 5 && num(fourth, "y") === 200);
 
     // ---- warnings: accepted, no effect
     const warned = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ name: "Pinned", x: 10, y: 10 }] } }]);

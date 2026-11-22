@@ -9328,32 +9328,27 @@
     return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
   }
   var overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-  function pagePlacement(page, skip, spec) {
+  function besideHeld(held, spec, w, h, pad) {
+    if (!held.length) return { x: spec.x !== void 0 ? spec.x : pad, y: spec.y !== void 0 ? spec.y : pad };
+    const top = Math.round(Math.min(...held.map((b) => b.y)));
+    if (spec.x === void 0) return { x: Math.round(Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP), y: spec.y !== void 0 ? spec.y : top };
+    const x = spec.x;
+    if (spec.y !== void 0) return { x, y: spec.y };
+    if (!held.some((b) => overlaps({ x, y: top, width: w, height: h }, b))) return { x, y: top };
+    const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
+    return { x, y: Math.round(Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP) };
+  }
+  function pagePlacement(page, skip, spec, w, h) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    let right = null;
-    let top = null;
-    for (const c of others(page, skip)) {
-      const b = occupied(c);
-      right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
-      top = top === null ? b.y : Math.min(top, b.y);
-    }
-    return {
-      x: spec.x !== void 0 ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
-      y: spec.y !== void 0 ? spec.y : top === null ? 0 : Math.round(top)
-    };
+    return besideHeld(others(page, skip).map(occupied), spec, w, h, 0);
   }
   function sectionPlacement(section, skip, spec, w, h) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
     const held = others(section, skip).map(occupied);
-    const pick = (x, y) => ({ x: spec.x !== void 0 ? spec.x : Math.round(x), y: spec.y !== void 0 ? spec.y : Math.round(y) });
-    if (!held.length) return pick(SECTION_PAD, SECTION_PAD);
-    const left = Math.min(...held.map((b) => b.x));
-    const top = Math.min(...held.map((b) => b.y));
-    const right = Math.max(...held.map((b) => b.x + b.width));
-    const bottom = Math.max(...held.map((b) => b.y + b.height));
-    const beside = pick(right + PLACE_GAP, top);
+    if (!held.length || spec.x !== void 0 || spec.y !== void 0) return besideHeld(held, spec, w, h, SECTION_PAD);
+    const beside = besideHeld(held, {}, w, h, SECTION_PAD);
     if (!runsInto(section, beside, w, h)) return beside;
-    const below = pick(left, bottom + PLACE_GAP);
+    const below = { x: Math.round(Math.min(...held.map((b) => b.x))), y: Math.round(Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
     return runsInto(section, below, w, h) ? beside : below;
   }
   function runsInto(section, at3, w, h) {
@@ -9380,7 +9375,7 @@
     const page = dest.page.node;
     if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
     if (!dest.section) {
-      const { x: x2, y: y2 } = pagePlacement(page, root.id, spec);
+      const { x: x2, y: y2 } = pagePlacement(page, root.id, spec, root.width, root.height);
       page.appendChild(root);
       root.x = x2;
       root.y = y2;
@@ -9481,7 +9476,7 @@
       changes.push(made2);
       section.name = s.name;
       made2.what = "the new section " + label3(section);
-      const at3 = pagePlacement(page, section.id, {});
+      const at3 = pagePlacement(page, section.id, {}, SECTION_PAD * 2, SECTION_PAD * 2);
       page.appendChild(section);
       section.x = at3.x;
       section.y = at3.y;
@@ -9496,17 +9491,17 @@
     const page = p.node;
     const s = dest.section;
     if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
+    const w = spec.box ? spec.box.w : 100;
+    const h = spec.box ? spec.box.h : 100;
     if (!s) {
-      const at4 = pagePlacement(page, "", spec);
-      const beside = !(spec.x !== void 0 && spec.y !== void 0) && page.children.length > 0;
+      const at4 = pagePlacement(page, "", spec, w, h);
+      const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
       return { lands: (beside ? "right of the existing frames" : "at " + at4.x + ", " + at4.y) + pageText, spot: { pageId: page.id, x: at4.x, y: at4.y } };
     }
     if (!s.node) {
-      const at4 = pagePlacement(page, "", {});
+      const at4 = pagePlacement(page, "", {}, SECTION_PAD * 2, SECTION_PAD * 2);
       return { lands: "in a new section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: at4.x + SECTION_PAD, y: at4.y + SECTION_PAD } };
     }
-    const w = spec.box ? spec.box.w : 100;
-    const h = spec.box ? spec.box.h : 100;
     const at3 = sectionPlacement(s.node, "", spec, w, h);
     const origin = s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y };
     return { lands: "in section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at3.x, y: origin.y + at3.y } };

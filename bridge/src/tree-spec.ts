@@ -144,7 +144,8 @@ export interface TreeNodeSpec {
   key?: string;
   /** `true` on a built node; a copy's patch also takes `false` */
   hidden?: boolean;
-  /** The root: page coordinates (placed beside the existing frames when absent). A child: relative to its parent,
+  /** The root: page coordinates (placed beside the existing frames when absent; one given alone is kept, and the
+   *  other is chosen so the root overlaps nothing). A child: relative to its parent,
    *  for a child of a frame without auto-layout or an `absolute` one. */
   x?: number;
   y?: number;

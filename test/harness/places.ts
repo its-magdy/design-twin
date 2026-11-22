@@ -68,6 +68,31 @@ export const cases: Case[] = [{
     ok("[PLACE] …by id it lands in that one, at the margin", comp2.ok === true && parentOf(found(w, comp2))?.id === "6:5" && num(found(w, comp2), "x") === 80);
   },
 }, {
+  name: "one coordinate given: it is kept, and the other is chosen so the frame overlaps nothing",
+  async run() {
+    const at = async (ops: WriteOp[]): Promise<{ r: WriteResult; xy: string }> => {
+      const w = await flowsWorld();
+      const r = await write(w, ops);
+      const n = found(w, r);
+      return { r, xy: num(n, "x") + "," + num(n, "y") };
+    };
+    // Flows page: Onboarding 0,0 1040×1004 and Library 0,4000 500×500 are in the column x 0–390; Drafts end at 3200.
+    const col = await at([{ op: "createTree", page: "Flows", tree: screen("Col", { x: 0 }) }]);
+    ok(`[PLACE-AXIS] x only on a page: below what is in its column (4500+100), not on top of it (${col.xy})`, col.r.ok === true && col.xy === "0,4600");
+    const free = await at([{ op: "createTree", page: "Flows", tree: screen("Free", { x: 5000 }) }]);
+    ok(`[PLACE-AXIS] x only, the column clear: level with the topmost frame (${free.xy})`, free.r.ok === true && free.xy === "5000,0");
+    const row = await at([{ op: "createTree", page: "Flows", tree: screen("Row", { y: 0 }) }]);
+    ok(`[PLACE-AXIS] y only on a page: right of everything (3200+100) (${row.xy})`, row.r.ok === true && row.xy === "3300,0");
+    // Onboarding holds Welcome (80,80 390×844) and Sign up (570,80).
+    const inCol = await at([{ op: "createTree", page: "Flows", section: "Onboarding", tree: screen("Col", { x: 80 }) }]);
+    ok(`[PLACE-AXIS] x only in a section: below the frame in its column (80+844+100), not on it (${inCol.xy})`, inCol.r.ok === true && inCol.xy === "80,1024");
+    const inRow = await at([{ op: "createTree", page: "Flows", section: "Onboarding", tree: screen("Row", { y: 80 }) }]);
+    ok(`[PLACE-AXIS] y only in a section: right of what it holds (960+100), never on a row that sits on a frame; the neighbour it reaches is a warning (${inRow.xy})`,
+      inRow.r.ok === true && inRow.xy === "1060,80" && /now overlaps 'Payments'/.test((inRow.r.warnings ?? []).join()));
+    const empty = await at([{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Empty", { x: 200 }) }]);
+    ok(`[PLACE-AXIS] x only in an empty section: the other at its margin (${empty.xy})`, empty.r.ok === true && empty.xy === "200,80");
+  },
+}, {
   name: "a page and a section to make: made once, used by the batch and by the same batch sent again",
   async run() {
     const w = await flowsWorld();

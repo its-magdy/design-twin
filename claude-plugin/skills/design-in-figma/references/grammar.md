@@ -128,7 +128,8 @@ a `component`, a `TEXT` when it has `text`, else a `FRAME`; the root is a frame 
 | `children` | the child nodes, in order (not on a TEXT, an INSTANCE or a copy) |
 
 Placement: the root lands on `page`, 100 px right of the rightmost frame there and level with the topmost, unless it
-has `x`/`y`. It is built hidden and shown only once every node is in place.
+has `x`/`y`. With only one, it is kept and the other avoids overlap: only `y` goes right of everything; only `x` stays
+level with the topmost unless that lands on a layer, else 100 px below what is in its column (in a section too). It is built hidden and shown only once every node is in place.
 
 ### Pages and sections
 
