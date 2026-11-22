@@ -195,8 +195,10 @@ screens.
     paint in any `fills` (or a paint style's `paints`): `{type: "image", file}` or `{type: "image", hash}`. The MCP
     server reads each file (inside its directory, by real path; PNG, JPEG or GIF by its bytes; ≤ 8 MB, ≤ 4096 px a
     side; ≤ 32 MB a batch), rewrites the paint to carry the sha-256 of the bytes as `image`, and sends the bytes once
-    per image beside the ops; the plugin makes every image and checks every `hash` before the batch runs, and the
-    reply lists each made image's Figma hash for reuse. A crop, rotation and filters are not written yet.
+    per image beside the ops; the plugin checks every `hash` with the rest of the batch, and makes the images only
+    when the batch runs: once it resolved and, if it waits for review, once it is approved (or previewed). A batch
+    refused or rejected first loads no image; one refused after an image loaded says so to the designer and the agent.
+    The reply lists each made image's Figma hash for reuse. A crop, rotation and filters are not written yet.
 13. **Placement.** The spec names a target page (the current one by default) and optionally a section; the
     plugin places a new top-level frame beside the existing ones without overlap. Explicit coordinates are
     optional. As built, the target is a page only (`page`); a section cannot be named yet.

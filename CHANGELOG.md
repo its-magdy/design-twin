@@ -260,8 +260,11 @@ list of merged PRs.
   stayed on "Putting it on the canvas…". An empty batch still says nothing, and the window goes back to the line it
   showed before. An op the plugin refuses on arrival (a field missing that the server's schema let through) is said the
   same way. A refusal that came after a library import or an image landed says what landed instead of "nothing
-  changed". A batch refused before it runs no longer adds its images from disk to the file first: they are made only
-  once the whole batch resolved.
+  changed", in the toast, on the status line and in the error the agent gets. A batch refused before it runs, or a
+  write the designer rejects on its review card, no longer loads its images from disk into Figma first: they are made
+  only when the batch runs, once it resolved and was approved (a preview makes them too, and a card that then ends
+  unapplied says they stay). Unticking "Allow edits" while images load stops before the next one, and an image Figma
+  cannot open stops the images after it.
 
 ## [0.1.6] - 2026-11-02
 

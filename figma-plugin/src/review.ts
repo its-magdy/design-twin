@@ -40,7 +40,7 @@ import { editsAllowedNow } from "./edits";
 import { clearErrorToast, toast } from "./toast";
 import type { ReviewCardLine, ReviewEnd, ReviewEndMsg, ReviewMsg, ReviewState, ReviewStateMsg } from "./messages";
 import { errMsg } from "./util";
-import type { Landed } from "./write-batch";
+import { landedResult, type Landed } from "./write-batch";
 
 export type { ReviewEnd };
 
@@ -114,6 +114,9 @@ export interface Card {
   state: ReviewState;
   /** set while a preview is on the canvas */
   previewed: { result: WriteResult; putBack: () => Promise<WriteResult | null> } | null;
+  /** what its previews loaded or imported (images, library items: writes.ts), which a put-back leaves: a card that ends
+   *  unapplied says so instead of "nothing was changed" */
+  landed: Landed;
   /** every action on the card, one after another */
   chain: Promise<void>;
   /** settles once, with the batch's outcome */
@@ -159,7 +162,7 @@ export function openCard(input: CardInput): Card {
   const ticket = "rv-" + (++seq) + "-" + Math.random().toString(36).slice(2, 7);
   let settle: (r: WriteResult) => void = () => {};
   const outcome = new Promise<WriteResult>((res) => { settle = res; });
-  const card: Card = { ticket, input, state: "waiting", previewed: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: undefined, cap: undefined, opened: Date.now() };
+  const card: Card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: undefined, cap: undefined, opened: Date.now() };
   current = card;
   card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
   const lines: ReviewCardLine[] = input.lines.map((l, i) => {
@@ -238,14 +241,16 @@ async function end(card: Card, e: Ending): Promise<void> {
     card.previewed = null;
     post(msg);
     if (failed) { card.input.announce(failed); finish(card, failed); return; }
-    const r: WriteResult = { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" };
-    card.input.announce(r);
+    const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" }, card.landed);
+    card.input.announce(r, card.landed);
     finish(card, r);
     return;
   }
   post(msg);
-  card.input.announce(refusal);
-  finish(card, refusal);
+  // A preview put back earlier may have left an image or an import: said (landedResult); else word for word as ever.
+  const r = landedResult(refusal, card.landed);
+  card.input.announce(r, card.landed);
+  finish(card, r);
 }
 
 function refusalFor(e: Ending): WriteResult {
@@ -290,6 +295,9 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
         return;
       }
       card.previewed = p;
+      // What it loaded or imported stays whatever the card comes to (a put-back takes back only its layers). A second
+      // preview of the same batch loads the same images and items: the most either loaded, not their sum.
+      if (p.landed) card.landed = { images: Math.max(card.landed.images, p.landed.images), imported: Math.max(card.landed.imported, p.landed.imported) };
       // Show what it changed: the lines' layers and anything it made.
       const ids: string[] = [];
       for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);

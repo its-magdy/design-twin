@@ -22,7 +22,7 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, hasLanded, landedResult, landedText, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -325,6 +325,8 @@ async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: M
   }
   if (list.length) commitUndo();
   if ("card" in r) return r;
+  // A refusal after an import or an image landed tells the agent so, as the designer is told (write-batch.ts).
+  r = landedResult(r, out.landed);
   // A preview is said by its card. An empty batch says nothing.
   if (mode !== "preview" && list.length) announce(r, out.landed);
   if (mode === "submit" && list.length && r.refused !== "waiting") {
@@ -348,6 +350,7 @@ function commitUndo(): void {
 function announce(r: WriteResult, landed?: Landed): void {
   const n = r.applied.length;
   const edits = n + " edit" + (n === 1 ? "" : "s");
+  const some = landed && hasLanded(landed) ? landed : null;
   let text: string | null = null;
   if (r.refused === "waiting") {
     say("Design Twin refused another edit request while one waits for your review — nothing changed.", 0, false, false);
@@ -355,8 +358,11 @@ function announce(r: WriteResult, landed?: Landed): void {
   }
   if (r.refused === "edits-off") text = n
     ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
-    : "Design Twin refused an edit request — 'Allow edits' is off.";
-  else if (r.refused === "rejected") text = "Design Twin did not apply the edit request — it was rejected. Nothing changed.";
+    : "Design Twin refused an edit request — 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+  // Rejected after a preview that loaded an image (or imported an item) and was put back: that stays, and is said.
+  else if (r.refused === "rejected") text = some
+    ? "Design Twin did not apply the edit request — it was rejected. No layer changed, but its preview had already " + landedText(some) + "."
+    : "Design Twin did not apply the edit request — it was rejected. Nothing changed.";
   else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
@@ -364,9 +370,9 @@ function announce(r: WriteResult, landed?: Landed): void {
   // Refused before anything changed (#206): a check before the first op (an image hash the file does not have, a name
   // that resolves to nothing, a bad op, Dev Mode, a file that changed while the batch waited for review), or an op
   // that failed and put itself back before anything else had landed. No layer changed then, but a library item imported
-  // or an image made before the refusal stays in the file, and is said.
-  else if (!r.ok) text = landed && hasLanded(landed)
-    ? "Design Twin refused an edit request — no layer changed, but it had already " + landedText(landed) + ": " + refusalReason(r.error)
+  // or an image loaded before the refusal stays, and is said.
+  else if (!r.ok) text = some
+    ? "Design Twin refused an edit request — no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error)
     : REFUSED + refusalReason(r.error);
   if (text === null) return;
   say(text, n, r.ok);
@@ -377,16 +383,6 @@ const REFUSED = "Design Twin refused an edit request — nothing changed: ";
 /** A write refused before it reached the batch (bridge.ts: the wire guard), said like any other refusal. */
 export function announceRefused(error: string): void {
   say(REFUSED + refusalReason(error), 0, false);
-}
-
-const hasLanded = (l: Landed): boolean => l.imported > 0 || l.images > 0;
-const plural = (n: number, what: string): string => n + " " + what + (n === 1 ? "" : "s");
-/** "added 1 image to the file and imported 2 library items" */
-function landedText(l: Landed): string {
-  const parts: string[] = [];
-  if (l.images) parts.push("added " + plural(l.images, "image") + " to the file");
-  if (l.imported) parts.push("imported " + plural(l.imported, "library item"));
-  return parts.join(" and ");
 }
 
 /** The toast and the status line for `text` (red unless `ok`); `toasts: false` for the status line only. */
@@ -403,10 +399,11 @@ function announceThrown(e: unknown, landed: boolean): void {
     : "Design Twin could not run an edit request — nothing changed: " + errMsg(e), 0, false);
 }
 
-/** Why a batch was refused, as one line: its error without the "nothing was changed" the sentence already says
- *  (write-batch.ts batchRefusal), its problems joined with "; ". */
+/** Why a batch was refused, as one line: its error without the "nothing was changed" (or what landed, write-batch.ts
+ *  landedResult) the sentence already says (write-batch.ts batchRefusal), its problems joined with "; ". */
 function refusalReason(error: string | undefined): string {
-  return (error || "unknown error").replace(/\. Nothing was changed\.$/, "").replace(/^(\d+ problems) — nothing was changed:\n/, "$1: ").replace(/\n/g, "; ");
+  return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*)\.$/, "")
+    .replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
 }
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
@@ -451,7 +448,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   const badTable = imageTableError(images);
   if (badTable !== null) return { ok: false, applied, error: badTable + ". Nothing was changed." };
   // The images first (images.ts): each `hash` checked against the file, each image from disk checked for its bytes. None
-  // is made yet: that waits until the whole batch resolved, so a batch refused below adds no image to the file.
+  // is made yet: that waits until the batch runs (after its review, below), so a batch refused first loads no image.
   const imgs = await checkImages(list, images);
   // Every name an op carries is resolved against the file before the first op runs (spec decisions 14, 15): a
   // collection, mode, page, component, variable or style that matches nothing or several things, a missing node, a node
@@ -487,23 +484,10 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
     return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
   }
-  // The images from disk are made only now, the whole batch resolved (images.ts makeImages): making one adds it to the
-  // file (no node), so "Allow edits" must still be on. One Figma cannot open refuses the batch; any made before it stay
-  // (nothing removes an image), and the refusal says so (announce).
-  let madeImages: MadeImage[] = [];
-  if (imgs.pending.length) {
-    if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const m = await makeImages(imgs.pending);
-    out.landed.images += m.added;
-    setBatchImages(m.made);
-    madeImages = m.images;
-    const firstBad = m.problems[0];
-    if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
-  }
   // A bulk change by rule always waits for the designer (`bulkByRule`); on approval its matches were counted again just
   // now (resolveRuleOps with the card's tokens), and a batch whose matches drifted from the card's was refused above.
   // The designer's review (review.ts, spec decision 18): decided here, once the whole batch resolved (a batch that would
-  // be refused never puts a card up) and before anything touches the file (the library imports below included).
+  // be refused never puts a card up) and before anything touches the file (the images and library imports below included).
   if (mode === "submit" && list.length) {
     const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
     out.layers = reads.layers;
@@ -545,6 +529,23 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       });
       return { card };
     }
+  }
+  // The images from disk are made only now (images.ts makeImages): the whole batch resolved, and a batch that waits for
+  // the designer was approved (resolved again then, against the file as it is) or is being previewed — so a batch
+  // refused, rejected or withdrawn before it runs loads none. Making one hands its bytes to Figma (no node), so "Allow
+  // edits" is asked before each; unticked partway, nothing more is made. One Figma cannot open refuses the batch, and
+  // the images after it are not made. Ones made before either stay (nothing removes an image), and the refusal says so
+  // (runBatch: landedResult, announce). A preview needs its images to show them: it makes them, and a put-back leaves
+  // them loaded, with no layer of the batch using them (review.ts says so if the card then ends unapplied).
+  let madeImages: MadeImage[] = [];
+  if (imgs.pending.length) {
+    const m = await makeImages(imgs.pending, editsAllowedNow);
+    out.landed.images += m.loaded;
+    if (m.revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    setBatchImages(m.made);
+    madeImages = m.images;
+    const firstBad = m.problems[0];
+    if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
   }
   const changes: Change[] = out.changes;
   countPropertySteps(changes);

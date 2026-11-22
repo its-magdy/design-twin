@@ -1,7 +1,7 @@
 // What every write op shares (writes.ts): a problem found while resolving, the refusal that lists them all, and a
 // change that can be undone when a later op of the batch fails (docs/write-plane-spec.md decisions 14, 15, 16). Every
 // op that changes the file returns a Change, so a batch that fails partway puts back everything it did.
-import type { AppliedWrite } from "../../bridge/src/commands.ts";
+import type { AppliedWrite, WriteResult } from "../../bridge/src/commands.ts";
 import { errMsg } from "./util";
 
 /** One reason an op cannot run, against its op index. */
@@ -83,5 +83,33 @@ export function countChanges(changes: readonly Change[]): string {
 }
 
 /** What a batch added to the file besides its changes, which nothing puts back: the library items it imported, the
- *  images it made (images.ts). Neither is a layer; a refusal that came after one says so (writes.ts announce). */
+ *  images it loaded (images.ts makeImages: bytes the file may already hold, so never called new ones). Neither is a
+ *  layer; a refusal that came after one says so, to the designer (writes.ts announce) and to the agent (landedResult). */
 export interface Landed { imported: number; images: number }
+
+export const hasLanded = (l: Landed): boolean => l.imported > 0 || l.images > 0;
+const plural = (n: number, what: string): string => n + " " + what + (n === 1 ? "" : "s");
+
+/** "loaded 1 image file into Figma and imported 2 library items" */
+export function landedText(l: Landed): string {
+  const parts: string[] = [];
+  if (l.images) parts.push("loaded " + plural(l.images, "image file") + " into Figma");
+  if (l.imported) parts.push("imported " + plural(l.imported, "library item"));
+  return parts.join(" and ");
+}
+
+/** The sentence a refusal's error carries in place of "Nothing was changed." once something landed (landedResult). */
+export const landedNote = (l: Landed): string => "No layer was changed, but the batch had already " + landedText(l) + ".";
+
+/**
+ * A refusal as the agent gets it, once something landed before it (an import, an image): its "Nothing was changed."
+ * (or "Nothing in the file was changed.", or a list's "N problems — nothing was changed:") says what landed instead.
+ * Anything else — a result that applied or put back ops, says nothing of the kind, or came after nothing landed — is
+ * returned as it is, word for word.
+ */
+export function landedResult(r: WriteResult, l: Landed): WriteResult {
+  if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
+  let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
+  if (error === r.error) error = r.error.replace(/^(\d+ problems) — nothing was changed:\n/, "$1 — no layer was changed, but the batch had already " + landedText(l) + ":\n");
+  return error === r.error ? r : { ...r, error };
+}

@@ -4,11 +4,12 @@
 //
 // Checked first, with the names and fonts and adding nothing to the file (checkImages): every `hash` must name an image
 // the file has (getImageByHash, then getSizeAsync: a handle can come back for a hash the file does not hold), and every
-// image of the table a paint uses must have its bytes. Only once the whole batch resolved is each of those images made
-// (makeImages: figma.createImage, which adds the image to the file and creates no node), so a batch refused for any
-// other reason adds no image (#206). A table image Figma cannot open, or a hash it does not have, refuses the whole
-// batch with the file or the hash named. The build then reads the made images' hashes from here (setBatchImages), as it
-// reads the batch's planned names from batch-plan.ts.
+// image of the table a paint uses must have its bytes. Only once the whole batch resolved — and, for a batch that waits
+// for the designer, once it was approved — is each of those images made (makeImages: figma.createImage, which hands
+// the bytes to Figma and creates no node), so a batch refused or rejected before it runs loads no image (#206). A table
+// image Figma cannot open, or a hash it does not have, refuses the whole batch with the file or the hash named. The
+// build then reads the made images' hashes from here (setBatchImages), as it reads the batch's planned names from
+// batch-plan.ts.
 import type { TreeImageFill } from "../../bridge/src/tree-spec.ts";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { imagePaintsIn, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -103,30 +104,41 @@ export async function checkImages(list: readonly WriteOp[], table: ImageTable | 
 }
 
 /**
- * Make the checked images (figma.createImage adds each to the file and creates no node): the id → hash map the build
- * reads, the reply's rows for the made ones, a problem for each op that names an image Figma cannot open, and how many
- * images were added to the file (made ones stay whatever the batch comes to: nothing removes an image).
+ * Make the checked images (figma.createImage hands each one's bytes to Figma and creates no node): the id → hash map
+ * the build reads, the reply's rows for the made ones, the problem of the first image Figma cannot open, and how many
+ * images were loaded (one per distinct hash; made ones stay whatever the batch comes to: nothing removes an image).
+ * `allowed` is asked before each image (the designer can untick "Allow edits" while an image's size is read): once it
+ * is false, no more images are made and `revoked` is set (also when it turned false while the last one's size was
+ * read; it outranks a problem). The first image Figma cannot open stops it too: the batch is
+ * refused then, so the images after it are not made.
+ *
+ * `loaded` counts the images this batch handed to Figma, not new ones: Figma's image table is content-addressed, so
+ * bytes the file already holds come back as the hash it has, and nothing here can tell the two apart (getImageByHash
+ * needs the hash, which createImage is what gives). The sentences that say it never call it added (writes.ts).
  */
-export async function makeImages(pending: readonly PendingImage[]): Promise<{ problems: OpProblem[]; made: Map<string, string>; images: MadeImage[]; added: number }> {
+export async function makeImages(pending: readonly PendingImage[], allowed: () => boolean): Promise<{ problems: OpProblem[]; made: Map<string, string>; images: MadeImage[]; loaded: number; revoked: boolean }> {
   const problems: OpProblem[] = [];
   const refuse = refuser(problems);
   const out = new Map<string, string>();
   const images: MadeImage[] = [];
-  let added = 0;
+  const hashes = new Set<string>();
+  const result = (revoked: boolean) => ({ problems, made: out, images, loaded: hashes.size, revoked });
   for (const e of pending) {
+    if (!allowed()) return result(true);
     let img: Image;
     try { img = figma.createImage(figma.base64Decode(e.b64)); } catch (err) {
       refuse(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-      continue;
+      break;
     }
-    added++;
+    hashes.add(img.hash);
     let size: { width: number; height: number };
     try { size = await img.getSizeAsync(); } catch (err) {
       refuse(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-      continue;
+      break;
     }
     out.set(e.id, img.hash);
     images.push({ file: e.file, hash: img.hash, w: size.width, h: size.height });
   }
-  return { problems, made: out, images, added };
+  // Unticked while the last one's size was read: said as that, before any problem.
+  return result(!allowed());
 }

@@ -6653,32 +6653,34 @@
     }
     return { problems, pending: pending2 };
   }
-  async function makeImages(pending2) {
+  async function makeImages(pending2, allowed2) {
     const problems = [];
     const refuse2 = refuser(problems);
     const out = /* @__PURE__ */ new Map();
     const images = [];
-    let added = 0;
+    const hashes = /* @__PURE__ */ new Set();
+    const result = (revoked) => ({ problems, made: out, images, loaded: hashes.size, revoked });
     for (const e of pending2) {
+      if (!allowed2()) return result(true);
       let img;
       try {
         img = figma.createImage(figma.base64Decode(e.b64));
       } catch (err) {
         refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-        continue;
+        break;
       }
-      added++;
+      hashes.add(img.hash);
       let size2;
       try {
         size2 = await img.getSizeAsync();
       } catch (err) {
         refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-        continue;
+        break;
       }
       out.set(e.id, img.hash);
       images.push({ file: e.file, hash: img.hash, w: size2.width, h: size2.height });
     }
-    return { problems, made: out, images, added };
+    return result(!allowed2());
   }
 
   // ../bridge/src/tree-diff.ts
@@ -7635,6 +7637,21 @@
     const counts = /* @__PURE__ */ new Map();
     for (const c of changes) counts.set(c.kind, (counts.get(c.kind) || 0) + 1);
     return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
+  }
+  var hasLanded = (l) => l.imported > 0 || l.images > 0;
+  var plural3 = (n, what) => n + " " + what + (n === 1 ? "" : "s");
+  function landedText(l) {
+    const parts = [];
+    if (l.images) parts.push("loaded " + plural3(l.images, "image file") + " into Figma");
+    if (l.imported) parts.push("imported " + plural3(l.imported, "library item"));
+    return parts.join(" and ");
+  }
+  var landedNote = (l) => "No layer was changed, but the batch had already " + landedText(l) + ".";
+  function landedResult(r, l) {
+    if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
+    let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
+    if (error === r.error) error = r.error.replace(/^(\d+ problems) — nothing was changed:\n/, "$1 \u2014 no layer was changed, but the batch had already " + landedText(l) + ":\n");
+    return error === r.error ? r : { ...r, error };
   }
 
   // src/patch.ts
@@ -11287,7 +11304,7 @@
     const outcome = new Promise((res) => {
       settle = res;
     });
-    const card = { ticket, input, state: "waiting", previewed: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
+    const card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
     current3 = card;
     card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
     const lines = input.lines.map((l, i) => {
@@ -11332,19 +11349,19 @@
     if (e.end === "approved" || e.end === "kept") {
       post2(msg);
       sinceApproval = 0;
-      let r;
+      let r2;
       if (e.end === "kept" && card.previewed) {
-        r = card.previewed.result;
-        card.input.announce(r);
+        r2 = card.previewed.result;
+        card.input.announce(r2);
       } else {
         setState(card, "busy");
         try {
-          r = await card.input.apply();
+          r2 = await card.input.apply();
         } catch (e2) {
-          r = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) };
+          r2 = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) };
         }
       }
-      finish2(card, r);
+      finish2(card, r2);
       return;
     }
     const refusal = refusalFor(e);
@@ -11352,9 +11369,9 @@
     if (p) {
       if (e.end === "edits-off" || !editsAllowedNow()) {
         post2(msg);
-        const r2 = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
-        card.input.announce(r2);
-        finish2(card, r2);
+        const r3 = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
+        card.input.announce(r3);
+        finish2(card, r3);
         return;
       }
       setState(card, "busy", "Putting the preview back\u2026");
@@ -11366,14 +11383,15 @@
         finish2(card, failed);
         return;
       }
-      const r = { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" };
-      card.input.announce(r);
-      finish2(card, r);
+      const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" }, card.landed);
+      card.input.announce(r2, card.landed);
+      finish2(card, r2);
       return;
     }
     post2(msg);
-    card.input.announce(refusal);
-    finish2(card, refusal);
+    const r = landedResult(refusal, card.landed);
+    card.input.announce(r, card.landed);
+    finish2(card, r);
   }
   function refusalFor(e) {
     if (e.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(e.reason), ...e.reason !== void 0 ? { reason: e.reason } : {} };
@@ -11417,6 +11435,7 @@
           return;
         }
         card.previewed = p;
+        if (p.landed) card.landed = { images: Math.max(card.landed.images, p.landed.images), imported: Math.max(card.landed.imported, p.landed.imported) };
         const ids = [];
         for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);
         for (const a of p.result.applied) if (a.id && ids.length < SHOW_CAP) ids.push(a.id);
@@ -13153,6 +13172,7 @@
     }
     if (list.length) commitUndo();
     if ("card" in r) return r;
+    r = landedResult(r, out.landed);
     if (mode !== "preview" && list.length) announce(r, out.landed);
     if (mode === "submit" && list.length && r.refused !== "waiting") {
       rememberWrite(r);
@@ -13170,32 +13190,25 @@
   function announce(r, landed) {
     const n = r.applied.length;
     const edits = n + " edit" + (n === 1 ? "" : "s");
+    const some = landed && hasLanded(landed) ? landed : null;
     let text = null;
     if (r.refused === "waiting") {
       say("Design Twin refused another edit request while one waits for your review \u2014 nothing changed.", 0, false, false);
       return;
     }
-    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
-    else if (r.refused === "rejected") text = "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
+    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+    else if (r.refused === "rejected") text = some ? "Design Twin did not apply the edit request \u2014 it was rejected. No layer changed, but its preview had already " + landedText(some) + "." : "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
-    else if (!r.ok) text = landed && hasLanded(landed) ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(landed) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
+    else if (!r.ok) text = some ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
     if (text === null) return;
     say(text, n, r.ok);
   }
   var REFUSED = "Design Twin refused an edit request \u2014 nothing changed: ";
   function announceRefused(error) {
     say(REFUSED + refusalReason(error), 0, false);
-  }
-  var hasLanded = (l) => l.imported > 0 || l.images > 0;
-  var plural3 = (n, what) => n + " " + what + (n === 1 ? "" : "s");
-  function landedText(l) {
-    const parts = [];
-    if (l.images) parts.push("added " + plural3(l.images, "image") + " to the file");
-    if (l.imported) parts.push("imported " + plural3(l.imported, "library item"));
-    return parts.join(" and ");
   }
   function say(text, applied, ok, toasts = true) {
     if (toasts) toast(text, !ok);
@@ -13206,7 +13219,7 @@
     say(landed ? "Design Twin could not finish an edit request: " + errMsg(e) + " \u2014 some of it may be in the file." : "Design Twin could not run an edit request \u2014 nothing changed: " + errMsg(e), 0, false);
   }
   function refusalReason(error) {
-    return (error || "unknown error").replace(/\. Nothing was changed\.$/, "").replace(/^(\d+ problems) — nothing was changed:\n/, "$1: ").replace(/\n/g, "; ");
+    return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*)\.$/, "").replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
   }
   async function gatedWrites(list, images, mode, out, expect) {
     try {
@@ -13274,16 +13287,6 @@
       const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
       return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
     }
-    let madeImages = [];
-    if (imgs.pending.length) {
-      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const m = await makeImages(imgs.pending);
-      out.landed.images += m.added;
-      setBatchImages(m.made);
-      madeImages = m.images;
-      const firstBad = m.problems[0];
-      if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
-    }
     if (mode === "submit" && list.length) {
       const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
       out.layers = reads.layers;
@@ -13330,6 +13333,16 @@
         });
         return { card };
       }
+    }
+    let madeImages = [];
+    if (imgs.pending.length) {
+      const m = await makeImages(imgs.pending, editsAllowedNow);
+      out.landed.images += m.loaded;
+      if (m.revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      setBatchImages(m.made);
+      madeImages = m.images;
+      const firstBad = m.problems[0];
+      if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
     }
     const changes = out.changes;
     countPropertySteps(changes);

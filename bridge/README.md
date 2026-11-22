@@ -1293,9 +1293,13 @@ a `createTree` node's `fills` (a fragment, a row, a copy's edits), a patch's `se
 - Each paint is sent as `{type: "image", file, image: <sha-256 of the bytes>, …}` and the bytes once per image beside
   the ops (`images`: id → base64), only on the wire to the plugin: never in a reply, the dry run or the spec a keyed
   re-send stores. So a re-send of an unchanged file changes nothing, and one whose file changed updates that fill.
-- The plugin looks up each `hash` first, then makes each image (`figma.createImage`) once the whole batch resolved and
-  before it touches the document, so a batch refused for another reason adds no image; bytes Figma cannot open, or a
-  hash the file does not have, refuse the whole batch, naming the file or the hash. The
+- The plugin looks up each `hash` first, then makes each image (`figma.createImage`) only when the batch runs: once the
+  whole batch resolved and, for a write that waits for the designer's review, once it is approved (or previewed), and
+  before it touches the document. So a batch refused for another reason, or rejected, loads no image. Bytes Figma
+  cannot open, or a hash the file does not have, refuse the whole batch, naming the file or the hash; no image after
+  the bad one is made, and none more once "Allow edits" is turned off. A refusal that comes after an image loaded (or
+  a library item was imported) says so instead of "Nothing was changed.": "No layer was changed, but the batch had
+  already loaded 1 image file into Figma." The
   reply lists each image made from a file as `images: [{file, hash, w, h}]`, to reuse by `hash` in a later spec.
 - The dry run reads and checks the files too (it needs no plugin) and gives each step's `images` ("photo.png: PNG
   800×600, 41 kB"); a `hash` is looked up only when the write runs.
