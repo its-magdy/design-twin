@@ -252,6 +252,12 @@ list of merged PRs.
 - The plugin export loses less. An OpenType feature the designer turned off now reaches the IR as `font.openTypeOff`
   (before, only enabled ones survived); each layout grid carries its own variable bindings as `tokens`, on frames and
   grid styles; and an annotation carries its Dev Mode category's label as `category` beside `categoryId`.
+- A write the plugin refuses before anything changes now says so. That covers an image `hash` the file doesn't have,
+  a name that matches nothing, a bad op, Dev Mode, an op that failed and put itself back, and a batch whose file
+  changed while it waited for review. Figma's toast and the plugin window's status line say it was refused, that
+  nothing changed, and why. Before, the toast stayed silent and the window kept showing "Applying edits…". A write
+  that throws now says it could not run. A preview that throws ends its review card as failed, where before the card
+  stayed on "Putting it on the canvas…". An empty batch still says nothing.
 
 ## [0.1.6] - 2026-11-02
 

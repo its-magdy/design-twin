@@ -277,7 +277,9 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       if (card.previewed || !card.input.previewable) { setState(card, card.state); return; }
       if (!editsAllowedNow()) { await end(card, { end: "edits-off" }); return; }
       setState(card, "busy", "Putting it on the canvas…");
-      const p = await card.input.preview();
+      // One that throws ends the card as a failed preview (else the card stayed on "Putting it on the canvas…").
+      let p: Awaited<ReturnType<CardInput["preview"]>>;
+      try { p = await card.input.preview(); } catch (e2) { p = { result: { ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, putBack: async () => null }; }
       if (!p.result.ok) {
         // It could not land whole (what it did was put back, as for any failed batch): the card ends with that result.
         post({ type: "review-end", id: card.ticket, end: "failed" });

@@ -315,11 +315,18 @@ async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: M
   // the next one never joins it. Committing with nothing pending is a no-op.
   const out: RunOut = { changes: [], layers: 0 };
   if (list.length) commitUndo();
-  const r = await gatedWrites(list, images, mode, out, expect);
+  let r: WriteResult | { card: Card };
+  try {
+    r = await gatedWrites(list, images, mode, out, expect);
+  } catch (e) {
+    // A write that throws is said too (its run's "Applying edits…" line must not stay up), then fails as it did.
+    if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0);
+    throw e;
+  }
   if (list.length) commitUndo();
   if ("card" in r) return r;
-  // A preview is said by its card; a batch refused because another waits is said by that card already.
-  if (mode !== "preview" && r.refused !== "waiting") announce(r);
+  // A preview is said by its card. An empty batch says nothing.
+  if (mode !== "preview" && list.length) announce(r);
   if (mode === "submit" && list.length && r.refused !== "waiting") {
     rememberWrite(r);
     // What a batch that did not wait changed counts toward the next forced review (review-policy.ts).
@@ -333,12 +340,17 @@ function commitUndo(): void {
 }
 
 // A write is never silent: whatever changed the file (or was refused from changing it) is said in Figma's own
-// toast AND on the plugin window's status line (ui.template.html `writes`). An empty batch changed nothing and
-// says nothing.
+// toast AND on the plugin window's status line (ui.template.html `writes`), which it replaces — the write's run put
+// "Applying edits…" there. An empty batch changed nothing and says nothing (runBatch does not call this for one).
+// A batch refused because another waits for review is said on the status line only: that card's toast is up already.
 function announce(r: WriteResult): void {
   const n = r.applied.length;
   const edits = n + " edit" + (n === 1 ? "" : "s");
   let text: string | null = null;
+  if (r.refused === "waiting") {
+    say("Design Twin refused another edit request while one waits for your review — nothing changed.", 0, false, false);
+    return;
+  }
   if (r.refused === "edits-off") text = n
     ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
     : "Design Twin refused an edit request — 'Allow edits' is off.";
@@ -347,10 +359,32 @@ function announce(r: WriteResult): void {
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+  // Refused before anything changed (#206): a check before the first op (an image hash the file does not have, a name
+  // that resolves to nothing, a bad op, Dev Mode, a file that changed while the batch waited for review), or an op
+  // that failed and put itself back before anything else had landed.
+  else if (!r.ok) text = "Design Twin refused an edit request — nothing changed: " + refusalReason(r.error);
   if (text === null) return;
-  toast(text, !r.ok);
-  const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
+  say(text, n, r.ok);
+}
+
+/** The toast and the status line for `text` (red unless `ok`); `toasts: false` for the status line only. */
+function say(text: string, applied: number, ok: boolean, toasts = true): void {
+  if (toasts) toast(text, !ok);
+  const m: WritesMsg = { type: "writes", applied, ok, text };
   figma.ui.postMessage(m);
+}
+
+/** A write that threw (runBatch): `landed` when it had changed the file before it did. */
+function announceThrown(e: unknown, landed: boolean): void {
+  say(landed
+    ? "Design Twin could not finish an edit request: " + errMsg(e) + " — some of it may be in the file."
+    : "Design Twin could not run an edit request — nothing changed: " + errMsg(e), 0, false);
+}
+
+/** Why a batch was refused, as one line: its error without the "nothing was changed" the sentence already says
+ *  (write-batch.ts batchRefusal), its problems joined with "; ". */
+function refusalReason(error: string | undefined): string {
+  return (error || "unknown error").replace(/\. Nothing was changed\.$/, "").replace(/^(\d+ problems) — nothing was changed:\n/, "$1: ").replace(/\n/g, "; ");
 }
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.

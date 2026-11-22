@@ -388,4 +388,38 @@ export const cases: Case[] = [{
     ok(`[REVIEW] …and the re-send waits with the box clear, saying 30 existing layers change (${String(card?.why)})`,
       card !== undefined && /it changes 30 existing layers \(over 25\)/.test(String(card.why)) && later.ok === true);
   },
+}, {
+  name: "Review: a preview that cannot land changes nothing and says why, the card ends (#206)",
+  async run() {
+    const head = "Design Twin refused an edit request — nothing changed: The designer asked to preview this write on the canvas, and it failed: ";
+    const w = reviewWorld();
+    await w.allowEdits();
+    const ops: WriteOp[] = Array.from({ length: 26 }, (_, i) => ({ op: "patch", nodeId: "n:" + (i + 1), set: { name: "Renamed" } }));
+    const renamed = (): number => Object.values(w.many).filter((n) => n.name === "Renamed").length;
+    // The designer deletes a layer the batch changes while its card is up, then previews it: refused, said, the card ends.
+    const one = await writeAwaitingReview(w, "pv1", ops);
+    ok("[PREVIEW] a batch of 26 existing layers offers a preview", one.card?.previewable === true);
+    delete w.scene.nodes["n:1"];
+    let t = w.notified.length;
+    let p = w.posted.length;
+    await answer(w, one.card, "preview");
+    const r1 = asResult(await one.reply);
+    const said1 = w.posted.slice(p).filter((m) => m.type === "writes");
+    ok(`[PREVIEW] a preview refused by its checks: the toast and the panel say nothing changed, and why (got ${JSON.stringify(w.notified.slice(t))})`,
+      r1?.ok === false && w.notified.length === t + 1 && w.notified[t] === head + "the file changed while the write waited for review: ops[0] (patch): no node with id 'n:1' (invalid or removed)"
+      && said1.length === 1 && said1[0]?.text === w.notified[t] && said1[0]?.ok === false && lastOf(w, "review-end")?.end === "failed" && renamed() === 0);
+    // A preview whose run throws: the card no longer stays on "Putting it on the canvas…".
+    const two = await writeAwaitingReview(w, "pv2", ops.map((o, i) => ({ ...o, nodeId: "n:" + (i + 2) })));
+    ok("[PREVIEW] …another, of 26 layers that are all there, offers one too", two.card?.previewable === true);
+    Object.defineProperty(w.figma, "editorType", { configurable: true, get: () => { throw new Error("the editor went away"); } });
+    t = w.notified.length;
+    p = w.posted.length;
+    await answer(w, two.card, "preview");
+    const r2 = asResult(await two.reply);
+    Object.defineProperty(w.figma, "editorType", { configurable: true, writable: true, value: "figma" });
+    const said2 = w.posted.slice(p).filter((m) => m.type === "writes");
+    ok(`[PREVIEW] a preview that throws ends its card as failed, and says so once (got ${JSON.stringify(w.notified.slice(t))}, reply ${JSON.stringify(r2)})`,
+      r2?.ok === false && r2.applied.length === 0 && w.notified.length === t + 1 && w.notified[t] === head + "the preview could not run: the editor went away"
+      && said2.length === 1 && said2[0]?.text === w.notified[t] && lastOf(w, "review-end")?.end === "failed" && renamed() === 0);
+  },
 }];

@@ -1051,19 +1051,19 @@
     const problems = [];
     const warnings = [];
     if (!isObj2(spec) || !repeats(spec, 0)) return { tree: spec, problems, warnings, labels };
-    const say = (m) => {
+    const say2 = (m) => {
       problems.push(m);
     };
     const fragments = {};
     const defs = spec.fragments;
     if (defs !== void 0) {
-      if (!isObj2(defs)) say("tree.fragments: must be an object of fragment name \u2192 node spec");
+      if (!isObj2(defs)) say2("tree.fragments: must be an object of fragment name \u2192 node spec");
       else for (const name of Object.keys(defs)) {
         const f = defs[name];
         const at3 = "tree.fragments[" + JSON.stringify(name) + "]";
-        if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
-        else if (!isObj2(f)) say(at3 + ": must be a node spec");
-        else if (f.key !== void 0) say(at3 + ".key: a key names a whole result, so only the spec's root carries it");
+        if (!name.trim()) say2("tree.fragments: a fragment name must be a non-empty string");
+        else if (!isObj2(f)) say2(at3 + ": must be a node spec");
+        else if (f.key !== void 0) say2(at3 + ".key: a key names a whole result, so only the spec's root carries it");
         else put(fragments, name, f);
       }
     }
@@ -1072,27 +1072,27 @@
     let tooMany = false;
     const applyEdits = (layers, edits, path, of, inWhat) => {
       if (!isObj2(edits)) {
-        say(path + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
+        say2(path + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
         return;
       }
       for (const layer of Object.keys(edits)) {
         const fields = edits[layer];
         const at3 = path + "[" + JSON.stringify(layer) + "]";
         if (!isObj2(fields)) {
-          say(at3 + ": must be an object of the fields to change");
+          say2(at3 + ": must be an object of the fields to change");
           continue;
         }
         const hits = layers.filter((l) => l.name === layer);
         if (hits.length !== 1) {
           const names = layers.map((l) => l.name).filter((x) => typeof x === "string");
-          say(at3 + ": " + (hits.length ? "matches " + hits.length + " layers of " + of + "; give them different names" : "no layer of " + of + " has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
+          say2(at3 + ": " + (hits.length ? "matches " + hits.length + " layers of " + of + "; give them different names" : "no layer of " + of + " has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
           continue;
         }
         const target = hits[0];
         if (!target) continue;
         for (const k of Object.keys(fields)) {
           if (NOT_EDITED.indexOf(k) >= 0) {
-            say(at3 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
+            say2(at3 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
             continue;
           }
           const v = fields[k];
@@ -1104,16 +1104,16 @@
     const expand = (n, path, stack, isRoot) => {
       if (tooMany) return [];
       if (!isObj2(n)) return [n];
-      if (!isRoot && n.fragments !== void 0) say(path + ".fragments: fragments are defined once, on the spec's root");
+      if (!isRoot && n.fragments !== void 0) say2(path + ".fragments: fragments are defined once, on the spec's root");
       if (isRoot && n.type === "COMPONENT_SET") return variants(n, path, stack);
       if (isRoot && n.type === "COMPONENT" && (n.variant !== void 0 || n.rows !== void 0 || n.columns !== void 0)) {
-        say(path + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
+        say2(path + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
         return [];
       }
-      if (n.variant !== void 0) say(path + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
+      if (n.variant !== void 0) say2(path + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
       if (n.use !== void 0) return place2(n, path, stack, isRoot);
       if (n.rows !== void 0) return spread(n, path);
-      if (n.columns !== void 0) say(path + ".columns: names the values of each row in `rows`, which this node does not have");
+      if (n.columns !== void 0) say2(path + ".columns: names the values of each row in `rows`, which this node does not have");
       if (++count2 > maxNodes) {
         tooMany = true;
         return [];
@@ -1133,21 +1133,21 @@
     const place2 = (n, path, stack, isRoot) => {
       const name = n.use;
       if (typeof name !== "string" || !name.trim()) {
-        say(path + ".use: must be a fragment's name");
+        say2(path + ".use: must be a fragment's name");
         return [];
       }
       if (!own(fragments, name)) {
         const near2 = nearestNames(name, Object.keys(fragments));
-        say(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
+        say2(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
         return [];
       }
       if (stack.indexOf(name) >= 0) {
-        say(path + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
+        say2(path + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
         return [];
       }
       used.add(name);
-      if (n.children !== void 0) say(path + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
-      if (n.rows !== void 0 || n.columns !== void 0) say(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
+      if (n.children !== void 0) say2(path + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
+      if (n.rows !== void 0 || n.columns !== void 0) say2(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
       const body = copy(fragments[name]);
       if (!isObj2(body)) return [];
       if (n.edits !== void 0) applyEdits(layersOf(body, []), n.edits, path + ".edits", "fragment '" + name + "'", "in the fragment");
@@ -1156,7 +1156,7 @@
         if (n[k] !== void 0) put(body, k, copy(n[k]));
       }
       if (isRoot && (body.type === "COMPONENT" || body.type === "COMPONENT_SET")) {
-        say(path + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
+        say2(path + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
         return [];
       }
       return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
@@ -1166,29 +1166,29 @@
       const base = n.variant;
       const cols = n.columns;
       const rows = n.rows;
-      if (n.children !== void 0) say(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
-      if (n.use !== void 0) say(path + ".use: a component set is not a fragment");
-      if (!isObj2(base)) say(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
+      if (n.children !== void 0) say2(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
+      if (n.use !== void 0) say2(path + ".use: a component set is not a fragment");
+      if (!isObj2(base)) say2(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
       else {
-        if (base.type !== void 0 && base.type !== "COMPONENT") say(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
-        if (base.name !== void 0) say(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
-        if (base.handle !== void 0) say(path + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
+        if (base.type !== void 0 && base.type !== "COMPONENT") say2(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
+        if (base.name !== void 0) say2(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+        if (base.handle !== void 0) say2(path + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
         for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
           const why = VARIANT_FIXED[k];
-          if (base[k] !== void 0 && why !== void 0) say(path + ".variant." + k + ": not on a variant \u2014 " + why);
+          if (base[k] !== void 0 && why !== void 0) say2(path + ".variant." + k + ": not on a variant \u2014 " + why);
         }
       }
-      if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
+      if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say2(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
       else {
-        if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+        if (new Set(cols).size !== cols.length) say2(path + ".columns: names a property twice");
         const padded = cols.findIndex((c) => String(c).trim() !== c);
-        if (padded >= 0) say(path + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
+        if (padded >= 0) say2(path + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
         const proto = cols.indexOf("__proto__");
-        if (proto >= 0) say(path + ".columns[" + proto + "]: " + PROTO_NAME);
+        if (proto >= 0) say2(path + ".columns[" + proto + "]: " + PROTO_NAME);
         const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
-        if (odd >= 0) say(path + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
+        if (odd >= 0) say2(path + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
       }
-      if (!Array.isArray(rows) || !rows.length) say(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
+      if (!Array.isArray(rows) || !rows.length) say2(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
       if (problems.length !== before || !isObj2(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
       const names = cols.map(String);
       const seen = /* @__PURE__ */ new Map();
@@ -1198,27 +1198,27 @@
         const r = path + ".rows[" + i + "]";
         const shape = "a list of " + names.length + " value" + (names.length === 1 ? "" : "s") + ", one per column (" + quoteList(names) + "), then optionally an object of the fields this variant changes";
         if (!Array.isArray(row)) {
-          say(r + ": must be " + shape);
+          say2(r + ": must be " + shape);
           return;
         }
         const cells = row;
         const last3 = cells[names.length];
         const over = cells.length === names.length + 1 && isObj2(last3) ? last3 : null;
         if (cells.length !== names.length && !over) {
-          say(r + ": must be " + shape);
+          say2(r + ": must be " + shape);
           return;
         }
         const values = cells.slice(0, names.length);
         const bad = values.findIndex((v2) => typeof v2 !== "string" || !v2.trim() || v2.trim() !== v2 || /[=,]/.test(v2));
         if (bad >= 0) {
           const v2 = values[bad];
-          say(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : v2.trim() !== v2 ? "cannot start or end with a space (Figma trims a variant's values)" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
+          say2(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : v2.trim() !== v2 ? "cannot start or end with a space (Figma trims a variant's values)" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
           return;
         }
         const name = names.map((c, j) => c + "=" + String(values[j])).join(", ");
         const dup = seen.get(name);
         if (dup !== void 0) {
-          say(r + ": " + name + " is rows[" + dup + "]'s combination too; each variant needs its own");
+          say2(r + ": " + name + " is rows[" + dup + "]'s combination too; each variant needs its own");
           return;
         }
         seen.set(name, i);
@@ -1232,7 +1232,7 @@
             if (k === "edits" || x === void 0) continue;
             const why = own(VARIANT_FIXED, k) ? VARIANT_FIXED[k] : void 0;
             if (why !== void 0) {
-              say(r + "." + k + ": a row cannot change it \u2014 " + why);
+              say2(r + "." + k + ": a row cannot change it \u2014 " + why);
               continue;
             }
             if (x === null) delete v[k];
@@ -1255,27 +1255,27 @@
     const spread = (n, path) => {
       const at3 = path + ".rows";
       if (n.component === void 0 || n.type !== void 0 && n.type !== "INSTANCE") {
-        say(at3 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
+        say2(at3 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
         return [];
       }
-      if (n.handle !== void 0) say(path + ".handle: a handle names one node, and a row table makes several; leave it out");
-      if (n.children !== void 0) say(path + ".children: an instance's layers come from its component");
+      if (n.handle !== void 0) say2(path + ".handle: a handle names one node, and a row table makes several; leave it out");
+      if (n.children !== void 0) say2(path + ".children: an instance's layers come from its component");
       const cols = n.columns;
       if (cols !== void 0 && (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0))) {
-        say(path + ".columns: must be a non-empty list of property names");
+        say2(path + ".columns: must be a non-empty list of property names");
         return [];
       }
       if (Array.isArray(cols) && new Set(cols).size !== cols.length) {
-        say(path + ".columns: names a property twice");
+        say2(path + ".columns: names a property twice");
         return [];
       }
       const rows = n.rows;
       if (!Array.isArray(rows) || !rows.length) {
-        say(at3 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
+        say2(at3 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
         return [];
       }
       if (n.props !== void 0 && !isObj2(n.props)) {
-        say(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
+        say2(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
         return [];
       }
       const base = isObj2(n.props) ? n.props : {};
@@ -1285,24 +1285,24 @@
         let props = null;
         if (Array.isArray(cols)) {
           if (!Array.isArray(row) || row.length !== cols.length) {
-            say(r + ": must be a list of " + cols.length + " value" + (cols.length === 1 ? "" : "s") + ", one per column (" + quoteList(cols.map(String)) + ")");
+            say2(r + ": must be a list of " + cols.length + " value" + (cols.length === 1 ? "" : "s") + ", one per column (" + quoteList(cols.map(String)) + ")");
             return;
           }
           const bad = row.findIndex((v) => !propValue(v));
           if (bad >= 0) {
-            say(r + "[" + bad + "]: must be a string (a variant's value, a text) or a boolean");
+            say2(r + "[" + bad + "]: must be a string (a variant's value, a text) or a boolean");
             return;
           }
           props = {};
           for (const [j, c] of cols.entries()) put(props, String(c), row[j]);
         } else {
           if (!isObj2(row)) {
-            say(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
+            say2(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
             return;
           }
           const bad = Object.keys(row).find((k) => !propValue(row[k]) || !k.trim());
           if (bad !== void 0) {
-            say(r + (bad.trim() ? "." + bad + ": must be a string (a variant's value, a text) or a boolean" : ": has an empty property name"));
+            say2(r + (bad.trim() ? "." + bad + ": must be a string (a variant's value, a text) or a boolean" : ": has an empty property name"));
             return;
           }
           props = row;
@@ -1322,7 +1322,7 @@
       return out;
     };
     const [root] = expand(spec, "tree", [], true);
-    if (tooMany) say("tree: more than " + maxNodes + " nodes once its fragments and rows are expanded \u2014 send a large screen as several trees");
+    if (tooMany) say2("tree: more than " + maxNodes + " nodes once its fragments and rows are expanded \u2014 send a large screen as several trees");
     for (const name of Object.keys(fragments)) if (!used.has(name)) warnings.push("tree.fragments[" + JSON.stringify(name) + "]: no node uses it, so it is not built");
     return { tree: root === void 0 ? {} : root, problems, warnings, labels };
   }
@@ -1824,30 +1824,30 @@
   function fontOf(font) {
     return { family: font && font.family !== void 0 ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== void 0 ? font.weight : DEFAULT_FONT.weight };
   }
-  function tokenProblems(n, t, kind, flex, inFlex, say) {
+  function tokenProblems(n, t, kind, flex, inFlex, say2) {
     const fits = kind === "FRAME" ? FRAME_TOKENS : kind === "TEXT" ? TEXT_TOKENS : INSTANCE_TOKENS;
     const l = isObj4(n.layout) ? n.layout : {};
     for (const k of Object.keys(t)) {
       if (t[k] === void 0 || !settable(TOKEN_RULES, k)) continue;
       const at3 = "`tokens." + k + "`";
       if (fits.indexOf(k) < 0) {
-        say(at3 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
+        say2(at3 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
         continue;
       }
-      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at3 + ' needs auto-layout on the node (layout.display "flex")');
-      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say(at3 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
-      if (k === "width" && n.widthMode !== void 0) say(at3 + " sizes the node, which `widthMode` already does; leave one out");
-      if (k === "height" && n.heightMode !== void 0) say(at3 + " sizes the node, which `heightMode` already does; leave one out");
-      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at3 + " needs auto-layout on the node or its parent");
+      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say2(at3 + ' needs auto-layout on the node (layout.display "flex")');
+      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say2(at3 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
+      if (k === "width" && n.widthMode !== void 0) say2(at3 + " sizes the node, which `widthMode` already does; leave one out");
+      if (k === "height" && n.heightMode !== void 0) say2(at3 + " sizes the node, which `heightMode` already does; leave one out");
+      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say2(at3 + " needs auto-layout on the node or its parent");
     }
     const fills = nameList(t.fills);
     if (t.fills !== void 0 && Array.isArray(n.fills)) {
       const onPaints = n.fills.map((p) => isObj4(p) && isObj4(p.tokens) ? p.tokens.color : void 0);
-      for (const name of fills) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
+      for (const name of fills) if (onPaints.indexOf(name) < 0) say2("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
     const strokes = nameList(t.strokes);
     const colors = isObj4(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
-    if (t.strokes !== void 0 && colors && colors.length !== strokes.length) say("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
+    if (t.strokes !== void 0 && colors && colors.length !== strokes.length) say2("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
   }
   var NODE_ID = /^[^\s:;]+:[^\s:;]+$/;
   var INSTANCE_LAYER = /^I[^\s]*;/;
@@ -1866,18 +1866,18 @@
     type: "a copy's type is its source's, so the field is refused",
     children: "a copy's layers come from its source; change them with `edits` (a layer's name or id \u2192 its fields)"
   };
-  function placeProblems(n, parentFlex, say, warn) {
+  function placeProblems(n, parentFlex, say2, warn) {
     const isRoot = parentFlex === null;
     for (const axis of ["widthMode", "heightMode"]) {
-      if (n[axis] === "fill" && parentFlex !== true) say("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
+      if (n[axis] === "fill" && parentFlex !== true) say2("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
     }
     if (parentFlex !== true) {
-      for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say("`" + k + "` needs a parent with auto-layout");
+      for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say2("`" + k + "` needs a parent with auto-layout");
     }
     if (n.absolute === true && parentFlex === true) {
-      for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
-      if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
-      if (n.alignSelf === "stretch") say('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
+      for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say2("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
+      if (n.grow === 1) say2("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
+      if (n.alignSelf === "stretch") say2('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
     }
     if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
       warn("`x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
@@ -1903,14 +1903,14 @@
     };
     let count2 = 0;
     let tooMany = false;
-    const handleOf = (n, say) => {
+    const handleOf = (n, say2) => {
       if (typeof n.handle !== "string" || !n.handle) return;
-      if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
+      if (seenHandles.has(n.handle)) say2("handle '" + n.handle + "' is used twice; a handle names one node");
       seenHandles.add(n.handle);
     };
     const cloneNode = (n, path, parentFlex) => {
       const before = problems.length;
-      const say = (msg) => {
+      const say2 = (msg) => {
         problems.push(path + ": " + msg);
       };
       const own4 = {};
@@ -1924,21 +1924,21 @@
       problems.push(...objectProblems(own4, CLONE_RULES, path));
       const self = Object.keys(set).length ? patch(set, path) : null;
       if (self) problems.push(...self.problems);
-      if (parentFlex !== null && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
-      else if (n.key !== void 0) say("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
-      if (parentFlex === null && n.hidden !== void 0) say("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
-      placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
+      if (parentFlex !== null && n.key !== void 0) say2("`key` names a whole result, so only the root carries it");
+      else if (n.key !== void 0) say2("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
+      if (parentFlex === null && n.hidden !== void 0) say2("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
+      placeProblems(n, parentFlex, say2, (m) => summary.warnings.push(path + ": " + m));
       const edits = [];
       if (isObj4(n.edits)) {
         const keys = Object.keys(n.edits).filter((k) => isObj4(n.edits) && n.edits[k] !== void 0);
-        if (!keys.length) say("`edits` is empty; leave it out for an exact copy");
+        if (!keys.length) say2("`edits` is empty; leave it out for an exact copy");
         for (const k of keys) {
           if (!k.trim()) {
-            say("`edits` has an empty layer name");
+            say2("`edits` has an empty layer name");
             continue;
           }
           if (n.clone === k) {
-            say("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields");
+            say2("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields");
             continue;
           }
           const r = patch(n.edits[k], path + ".edits[" + JSON.stringify(k) + "]");
@@ -1946,7 +1946,7 @@
           edits.push(r);
         }
       }
-      handleOf(n, say);
+      handleOf(n, say2);
       if (problems.length !== before) return;
       summary.clones++;
       addRef(summary.sources, n.clone);
@@ -1987,24 +1987,24 @@
       const kind = nodeKind(n);
       if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
       const flex = isFlex(n);
-      const say = (msg) => {
+      const say2 = (msg) => {
         problems.push(path + ": " + msg);
       };
       if (compType !== null && !isRoot && !(isVariant && compType === "COMPONENT")) {
-        say('`type: "' + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
+        say2('`type: "' + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
       }
-      if (isVariant && compType !== "COMPONENT") say("a component set holds only its variants (each a COMPONENT)");
+      if (isVariant && compType !== "COMPONENT") say2("a component set holds only its variants (each a COMPONENT)");
       if (isCompRoot) {
-        if (typeof n.name !== "string" || !n.name.trim()) say("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
-        if (n.key !== void 0) say("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
-        if (n.component !== void 0 && n.component !== n.name) say("`component` on a component root is only the read's echo of its own `name`; leave it out");
+        if (typeof n.name !== "string" || !n.name.trim()) say2("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
+        if (n.key !== void 0) say2("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
+        if (n.component !== void 0 && n.component !== n.name) say2("`component` on a component root is only the read's echo of its own `name`; leave it out");
         if (n.props !== void 0) problems.push(...propDefsProblems(n.props, path + ".props", columns));
       }
-      if (isVariant && n.props !== void 0) say("a variant's properties are the set's: declare them in the root's `props`");
-      if (isVariant && n.key !== void 0) say("a component's name is its key: leave `key` out");
+      if (isVariant && n.props !== void 0) say2("a variant's properties are the set's: declare them in the root's `props`");
+      if (isVariant && n.key !== void 0) say2("a component's name is its key: leave `key` out");
       if (n.propRefs !== void 0 && isObj4(n.propRefs) && propRefsShape(n.propRefs) === null) {
-        if (!comp) say("`propRefs` wires a layer to a property of the component it is in, so it is only inside a COMPONENT or COMPONENT_SET root");
-        else if (isCompRoot || isVariant) say("`propRefs` wires a layer inside the component to one of its properties; the component itself cannot be wired");
+        if (!comp) say2("`propRefs` wires a layer to a property of the component it is in, so it is only inside a COMPONENT or COMPONENT_SET root");
+        else if (isCompRoot || isVariant) say2("`propRefs` wires a layer inside the component to one of its properties; the component itself cannot be wired");
         else {
           for (const f of PROP_REF_FIELDS) {
             const prop = n.propRefs[f];
@@ -2014,65 +2014,65 @@
             const has2 = comp.defs.get(prop);
             if (has2 === void 0) {
               const near2 = nearestNames(prop, [...comp.defs.keys()]);
-              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+              say2(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
               continue;
             }
             comp.used.add(prop);
-            if (has2 !== want) say(at4 + " names '" + prop + "', a " + has2 + " property; `" + f + "` follows a " + want + " property");
-            if (f === "characters" && kind !== "TEXT") say(at4 + ": only a TEXT layer's text follows a property");
+            if (has2 !== want) say2(at4 + " names '" + prop + "', a " + has2 + " property; `" + f + "` follows a " + want + " property");
+            if (f === "characters" && kind !== "TEXT") say2(at4 + ": only a TEXT layer's text follows a property");
             const def = comp.defaults.get(prop);
-            if (has2 === want && f === "characters" && n.text !== void 0 && n.text !== def) say("`text` " + JSON.stringify(n.text) + " differs from the default of '" + prop + "' (" + JSON.stringify(def) + "), which the text follows (`propRefs.characters`); change the property's default instead");
-            if (has2 === want && f === "visible" && n.hidden !== void 0 && typeof def === "boolean" && n.hidden !== !def) say("`hidden: " + String(n.hidden) + "` differs from the default of '" + prop + "' (" + String(def) + "), which the layer's visibility follows (`propRefs.visible`); change the property's default instead");
-            if (f === "mainComponent" && kind !== "INSTANCE") say(at4 + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
+            if (has2 === want && f === "characters" && n.text !== void 0 && n.text !== def) say2("`text` " + JSON.stringify(n.text) + " differs from the default of '" + prop + "' (" + JSON.stringify(def) + "), which the text follows (`propRefs.characters`); change the property's default instead");
+            if (has2 === want && f === "visible" && n.hidden !== void 0 && typeof def === "boolean" && n.hidden !== !def) say2("`hidden: " + String(n.hidden) + "` differs from the default of '" + prop + "' (" + String(def) + "), which the layer's visibility follows (`propRefs.visible`); change the property's default instead");
+            if (f === "mainComponent" && kind !== "INSTANCE") say2(at4 + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
           }
         }
       }
-      if (!isRoot && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
+      if (!isRoot && n.key !== void 0) say2("`key` names a whole result, so only the root carries it");
       if (kind === "TEXT") {
-        if (typeof n.text !== "string") say("a TEXT node needs `text`");
-        for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
+        if (typeof n.text !== "string") say2("a TEXT node needs `text`");
+        for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say2("`" + k + "` is not on a TEXT node");
         if (n.maxLines !== void 0 && n.truncate !== true) summary.warnings.push(path + ": `maxLines` has no effect without `truncate: true`, so it is not set");
       } else if (kind === "FRAME") {
-        for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say("`" + k + "` is only on a TEXT node (give the node `text`)");
+        for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say2("`" + k + "` is only on a TEXT node (give the node `text`)");
       } else if (kind === "INSTANCE") {
-        if (n.component === void 0) say("an INSTANCE node needs `component` (a component's name, key or id)");
-        for (const k of Object.keys(n)) if (n[k] !== void 0 && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
+        if (n.component === void 0) say2("an INSTANCE node needs `component` (a component's name, key or id)");
+        for (const k of Object.keys(n)) if (n[k] !== void 0 && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say2("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
       }
       if (kind !== "INSTANCE") {
-        for (const k of ["component", "props"]) if (n[k] !== void 0 && !isCompRoot && !(isVariant && k === "props")) say("`" + k + "` is only on an INSTANCE node");
+        for (const k of ["component", "props"]) if (n[k] !== void 0 && !isCompRoot && !(isVariant && k === "props")) say2("`" + k + "` is only on an INSTANCE node");
       }
-      if (isObj4(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
+      if (isObj4(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say2("`styles.text` is only on a TEXT node");
       for (const axis of ["widthMode", "heightMode"]) {
-        if (n[axis] === "hug" && !flex && kind === "FRAME") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
+        if (n[axis] === "hug" && !flex && kind === "FRAME") say2("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
       }
-      if (isObj4(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
-      placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
-      if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
+      if (isObj4(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say2);
+      placeProblems(n, parentFlex, say2, (m) => summary.warnings.push(path + ": " + m));
+      if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say2("`sizeLimits` needs auto-layout on the node or its parent");
       if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
       if (isObj4(n.layout) && n.layout.display === "flex") {
         const l = n.layout;
         const column = l.flexDirection === "column";
-        if (l.alignItems === "baseline" && column) say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
+        if (l.alignItems === "baseline" && column) say2('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
         if (l.flexWrap === void 0) {
-          for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs `flexWrap: "wrap"`');
+          for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say2("`layout." + k + '` needs `flexWrap: "wrap"`');
         }
         if (l.flexWrap !== void 0 && (column ? l.rowGap : l.columnGap) !== void 0) {
-          say("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
+          say2("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
         }
       }
-      if (kind === "TEXT" && isObj4(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
+      if (kind === "TEXT" && isObj4(n.strokes) && n.strokes.weights !== void 0) say2("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
       if (isObj4(n.sizeLimits)) {
         const m = n.sizeLimits;
-        if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
-        if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
+        if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say2("`sizeLimits.minWidth` is above `maxWidth`");
+        if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say2("`sizeLimits.minHeight` is above `maxHeight`");
       }
       if (isObj4(n.layout) && n.layout.mode === "absolute") {
         const l = n.layout;
-        if (l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
-        else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
+        if (l.display !== void 0) say2('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+        else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say2("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
       }
-      if (isObj4(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
-      handleOf(n, say);
+      if (isObj4(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say2('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
+      handleOf(n, say2);
       if (problems.length === before && kind !== null && kind !== "CLONE") {
         const styled = isObj4(n.styles) && typeof n.styles.text === "string";
         if (kind === "TEXT") {
@@ -2250,7 +2250,7 @@
     const summary = { fields: [], refs: { variables: [], textStyles: [] }, unbound: 0 };
     if (!isObj4(set)) return { problems: [path + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
     const problems = [];
-    const say = (m) => {
+    const say2 = (m) => {
       problems.push(path + ": " + m);
     };
     for (const [k, v] of Object.entries(set)) {
@@ -2268,34 +2268,34 @@
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
     const fields = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
-    if (!fields.length && !problems.length) say("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
+    if (!fields.length && !problems.length) say2("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
     if (problems.length) return { problems, summary };
     const l = isObj4(set.layout) ? set.layout : null;
     if (l) {
-      if (l.mode !== void 0 && l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+      if (l.mode !== void 0 && l.display !== void 0) say2('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
       else if (l.mode !== void 0) {
-        for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && settableIn(PATCH_LAYOUT_RULES).indexOf(k) >= 0) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` removes auto-layout');
+        for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && settableIn(PATCH_LAYOUT_RULES).indexOf(k) >= 0) say2("`layout." + k + '` is an auto-layout field; `mode: "absolute"` removes auto-layout');
       }
-      if (l.alignItems === "baseline" && l.flexDirection === "column") say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
+      if (l.alignItems === "baseline" && l.flexDirection === "column") say2('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
       if (l.flexWrap === "nowrap") {
-        for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs wrapping; `flexWrap: "nowrap"` turns it off');
+        for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say2("`layout." + k + '` needs wrapping; `flexWrap: "nowrap"` turns it off');
       }
     }
     const box = isObj4(set.box) ? set.box : null;
-    if (box && box.w !== void 0 && set.widthMode !== void 0 && set.widthMode !== "fixed") say('`box.w` gives a fixed width, which `widthMode: "' + String(set.widthMode) + '"` contradicts; leave one out');
-    if (box && box.h !== void 0 && set.heightMode !== void 0 && set.heightMode !== "fixed") say('`box.h` gives a fixed height, which `heightMode: "' + String(set.heightMode) + '"` contradicts; leave one out');
+    if (box && box.w !== void 0 && set.widthMode !== void 0 && set.widthMode !== "fixed") say2('`box.w` gives a fixed width, which `widthMode: "' + String(set.widthMode) + '"` contradicts; leave one out');
+    if (box && box.h !== void 0 && set.heightMode !== void 0 && set.heightMode !== "fixed") say2('`box.h` gives a fixed height, which `heightMode: "' + String(set.heightMode) + '"` contradicts; leave one out');
     const t = isObj4(set.tokens) ? set.tokens : {};
-    if (t.width !== void 0 && t.width !== null && set.widthMode !== void 0 && set.widthMode !== "fixed") say("`tokens.width` sizes the node, which `widthMode` already does; leave one out");
-    if (t.height !== void 0 && t.height !== null && set.heightMode !== void 0 && set.heightMode !== "fixed") say("`tokens.height` sizes the node, which `heightMode` already does; leave one out");
+    if (t.width !== void 0 && t.width !== null && set.widthMode !== void 0 && set.widthMode !== "fixed") say2("`tokens.width` sizes the node, which `widthMode` already does; leave one out");
+    if (t.height !== void 0 && t.height !== null && set.heightMode !== void 0 && set.heightMode !== "fixed") say2("`tokens.height` sizes the node, which `heightMode` already does; leave one out");
     if (Array.isArray(set.fills) && t.fills !== void 0) {
       const onPaints = set.fills.map((p) => isObj4(p) && isObj4(p.tokens) ? p.tokens.color : void 0);
-      if (t.fills === null) say("`tokens.fills: null` unbinds the node's paints, and `fills` replaces them; give one");
-      else for (const name of typeof t.fills === "string" ? [t.fills] : Array.isArray(t.fills) ? t.fills : []) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + String(name) + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
+      if (t.fills === null) say2("`tokens.fills: null` unbinds the node's paints, and `fills` replaces them; give one");
+      else for (const name of typeof t.fills === "string" ? [t.fills] : Array.isArray(t.fills) ? t.fills : []) if (onPaints.indexOf(name) < 0) say2("`tokens.fills` names '" + String(name) + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
     const st = isObj4(set.strokes) ? set.strokes : null;
     if (st && Array.isArray(st.colors) && t.strokes !== void 0 && t.strokes !== null) {
       const n = typeof t.strokes === "string" ? 1 : Array.isArray(t.strokes) ? t.strokes.length : 0;
-      if (n !== st.colors.length) say("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
+      if (n !== st.colors.length) say2("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
     }
     if (problems.length) return { problems, summary };
     summary.fields = fields;
@@ -7648,10 +7648,10 @@
   function unfit(node, set) {
     const kind = [];
     const state = [];
-    const say = (list) => (field, m) => {
+    const say2 = (list) => (field, m) => {
       list.push("set." + field + ": " + m);
     };
-    const fixed = say(kind), now = say(state);
+    const fixed = say2(kind), now = say2(state);
     const what = "'" + node.name + "' is a " + node.type;
     for (const f of ["text", "styles", "autoResize"]) if (set[f] !== void 0 && node.type !== "TEXT") fixed(f, "only on a TEXT node; " + what);
     if (set.props !== void 0 && node.type !== "INSTANCE") fixed("props", "only on an INSTANCE node; " + what);
@@ -8402,34 +8402,34 @@
       const page = pageOf2(nd);
       if (page) await page.loadAsync();
       const before = { n: 0 };
-      const say = (m) => {
+      const say2 = (m) => {
         before.n++;
         bad(m);
       };
       const self = clonePatch(s);
-      const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say(under(path, m)), fontsLater) : null;
+      const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say2(under(path, m)), fontsLater) : null;
       const edits = [];
       const named2 = /* @__PURE__ */ new Map();
       for (const [ref2, set] of cloneEdits(s)) {
         const where = path + ".edits[" + JSON.stringify(ref2) + "]";
         const layer = findLayer(nd, ref2);
         if ("error" in layer) {
-          say(where + ": " + layer.error);
+          say2(where + ": " + layer.error);
           continue;
         }
         let inMain = layer.ok;
         while (inMain && inMain !== nd && inMain.type !== "COMPONENT" && inMain.type !== "COMPONENT_SET") inMain = inMain.parent;
         if (inMain && inMain !== nd) {
-          say(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
+          say2(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
           continue;
         }
         const twice = named2.get(layer.ok.id);
         if (twice !== void 0) {
-          say(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
+          say2(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
           continue;
         }
         named2.set(layer.ok.id, ref2);
-        const t = await resolvePatchNode(layer.ok, set, true, loadFont, (m) => say(under(where, m)), fontsLater);
+        const t = await resolvePatchNode(layer.ok, set, true, loadFont, (m) => say2(under(where, m)), fontsLater);
         if (t) edits.push(t);
       }
       if (before.n) continue;
@@ -10592,13 +10592,13 @@
       const patches = /* @__PURE__ */ new Map();
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
-        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
+        const say2 = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
         const checked = checkPatch(u.set);
         if (checked.problems.length) {
-          for (const m of checked.problems) say(m);
+          for (const m of checked.problems) say2(m);
           continue;
         }
-        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
+        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say2);
         if (!p) continue;
         p.refs = t.refs;
         patches.set(i, p);
@@ -11381,7 +11381,12 @@
           return;
         }
         setState(card, "busy", "Putting it on the canvas\u2026");
-        const p = await card.input.preview();
+        let p;
+        try {
+          p = await card.input.preview();
+        } catch (e2) {
+          p = { result: { ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, putBack: async () => null };
+        }
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
           const r = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
@@ -13117,10 +13122,16 @@
   async function runBatch(list, images, mode, expect) {
     const out = { changes: [], layers: 0 };
     if (list.length) commitUndo();
-    const r = await gatedWrites(list, images, mode, out, expect);
+    let r;
+    try {
+      r = await gatedWrites(list, images, mode, out, expect);
+    } catch (e) {
+      if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0);
+      throw e;
+    }
     if (list.length) commitUndo();
     if ("card" in r) return r;
-    if (mode !== "preview" && r.refused !== "waiting") announce(r);
+    if (mode !== "preview" && list.length) announce(r);
     if (mode === "submit" && list.length && r.refused !== "waiting") {
       rememberWrite(r);
       if (r.applied.length) countUnreviewed(out.layers);
@@ -13138,16 +13149,30 @@
     const n = r.applied.length;
     const edits = n + " edit" + (n === 1 ? "" : "s");
     let text = null;
+    if (r.refused === "waiting") {
+      say("Design Twin refused another edit request while one waits for your review \u2014 nothing changed.", 0, false, false);
+      return;
+    }
     if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
     else if (r.refused === "rejected") text = "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+    else if (!r.ok) text = "Design Twin refused an edit request \u2014 nothing changed: " + refusalReason(r.error);
     if (text === null) return;
-    toast(text, !r.ok);
-    const m = { type: "writes", applied: n, ok: r.ok, text };
+    say(text, n, r.ok);
+  }
+  function say(text, applied, ok, toasts = true) {
+    if (toasts) toast(text, !ok);
+    const m = { type: "writes", applied, ok, text };
     figma.ui.postMessage(m);
+  }
+  function announceThrown(e, landed) {
+    say(landed ? "Design Twin could not finish an edit request: " + errMsg(e) + " \u2014 some of it may be in the file." : "Design Twin could not run an edit request \u2014 nothing changed: " + errMsg(e), 0, false);
+  }
+  function refusalReason(error) {
+    return (error || "unknown error").replace(/\. Nothing was changed\.$/, "").replace(/^(\d+ problems) — nothing was changed:\n/, "$1: ").replace(/\n/g, "; ");
   }
   async function gatedWrites(list, images, mode, out, expect) {
     try {

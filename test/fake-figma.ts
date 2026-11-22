@@ -68,6 +68,8 @@ export interface PostedMessage {
    *  `review-end` (id, end) / `review-shown` (text); main.ts `review-writes` (on) */
   lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; on?: boolean;
   state?: string; note?: string; text?: string;
+  /** writes.ts `writes` (text, ok, applied: how many edits stayed) */
+  applied?: number;
 }
 export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
