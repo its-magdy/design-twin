@@ -239,6 +239,6 @@ export const cases: Case[] = [{
     const theirs = (await matchOf(other, op)).match?.token;
     const ours = (await matchOf(w, op)).match;
     const foreign = await write(w, [{ ...op, token: theirs }]);
-    ok(`[RULE] another session's token for the same ids is refused (got ${String(foreign.error)})`, !!theirs && !!ours && theirs !== ours.token && !foreign.ok && /changed since the dry run/.test(String(foreign.error)));
+    ok(`[RULE] another session's token for the same ids is refused (got ${String(foreign.error)})`, !!theirs && !!ours && theirs !== ours.token && !foreign.ok && /26 then and now: other layers, or a token from before the plugin was reloaded/.test(String(foreign.error)));
   },
 }];

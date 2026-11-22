@@ -233,7 +233,8 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
       if (op.token === undefined && match.needsToken) { bad(what + hits.length + " layers (over " + RULE_TOKEN_MIN + "): dry-run the batch first (dryRun: true) and send this op again with the `token` its `match` gives"); continue; }
       if (op.token !== undefined && op.token !== match.token) {
         const was = tokenCount(op.token);
-        bad("the layers its rule matches changed since the dry run that gave its token (" + (was === null ? "a token it did not give" : was + " then") + ", " + hits.length + " now): dry-run it again and send the new `token`");
+        const why = was === null ? "a token it did not give" : was === hits.length ? was + " then and now: other layers, or a token from before the plugin was reloaded or from another file" : was + " then, " + hits.length + " now";
+        bad("the layers its rule matches changed since the dry run that gave its token (" + why + "): dry-run it again and send the new `token`");
         continue;
       }
     }
