@@ -7,7 +7,7 @@
 //   - "Review each change first" is ticked in the plugin window (on by default: a box never set reads ON), or, whatever
 //     the box says,
 //   - it edits a source: a variable, a style, or a main component through `patch` — one change other layers follow;
-//   - it is a bulk change by rule (#171: the op that selects its nodes by a rule sets `bulkByRule`; none does yet);
+//   - it is a bulk change by rule (`patchWhere`, figma-plugin/src/rules.ts: `bulkByRule`);
 //   - the existing layers changed since the designer's last approval, this batch included, exceed REVIEW_LAYER_LIMIT.
 // The layers counted are the existing ones a batch patches, moves or deletes (a keyed re-send: the layers of its earlier
 // result its update changes, moves or removes) plus the layers and instances that follow its source edits, each once; the layers this plugin session created do not count (the designer is watching
@@ -26,7 +26,7 @@ export interface ReviewFacts {
   checkbox: boolean;
   /** how many of its ops edit a source (setVariable, setStyle, a patch of a main component) */
   sourceEdits: number;
-  /** #171's hook: the batch changes nodes it selects by a rule */
+  /** the batch changes layers it picks by a rule (a patchWhere) */
   bulkByRule: boolean;
   /** the existing layers it changes (see the header), each once */
   layers: number;

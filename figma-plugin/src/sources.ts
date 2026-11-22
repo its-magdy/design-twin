@@ -633,6 +633,12 @@ function boundIds(node: SceneNode, out: Set<string>): void {
     if (Array.isArray(list)) for (const p of list as unknown[]) if (p && typeof p === "object") walk(getF(p, "boundVariables"), 0);
   }
 }
+/** Every variable id `node` (or one of its paints or effects) is bound to: a rule's `variable` kind (rules.ts). */
+export function boundVariableIds(node: SceneNode): Set<string> {
+  const out = new Set<string>();
+  boundIds(node, out);
+  return out;
+}
 /** Every variable id a style's fields or paints/effects are bound to. */
 function styleBoundIds(st: BaseStyle): Set<string> {
   const out = new Set<string>();

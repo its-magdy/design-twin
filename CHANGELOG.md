@@ -32,6 +32,13 @@ list of merged PRs.
 
 ### Added
 
+- One `figma_write` op changes every layer that matches a rule: `patchWhere {where, scope?, set, token?}`. The rule is
+  any of text equals, fill equals, uses a variable, is an instance of a component, and name matches (`*` for any run),
+  all of which must hold; the scope is the selection, the current page, listed pages or the whole file. Its dry run
+  answers with counts per page, three samples and a token; a run over 25 matches must carry the token, and is refused
+  when the matches changed since. It always waits for the designer's review (one card line with Show me), is counted
+  again on Apply, and runs as one undo step, put back whole if it fails. Changing one footer text on 12 screens across
+  3 pages costs one call and about 46 tokens, against 14 calls and about 5,900 tokens op by op.
 - A captured page now lands bound to the Figma file's design system. A `createTree` op takes `bind: true`: before the
   batch runs, the plugin binds every raw colour, gap, padding side, corner radius and text font in the spec that equals
   exactly one of the file's variables (in its collection's default mode, through aliases) or text styles — or one a

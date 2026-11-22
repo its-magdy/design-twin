@@ -2359,6 +2359,129 @@
     return parts.join("; ") + " \u2014 the node, its kind and the names are checked against the file when applied; the values it replaces are kept, and put back if a later op of the batch fails";
   }
 
+  // ../bridge/src/rule-spec.ts
+  var RULE_TOKEN_MIN = 25;
+  var MAX_RULE_MATCHES = 2e3;
+  var RULE_SAMPLES = 3;
+  var RULE_KINDS = ["text", "fill", "variable", "instanceOf", "name"];
+  var SCOPE_WORDS = ["selection", "page", "file"];
+  var isObj5 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isStr = (v) => typeof v === "string";
+  var isKind = (k) => RULE_KINDS.indexOf(k) >= 0;
+  function checkRule(o, at3) {
+    const problems = [];
+    const where = {};
+    const w = o.where;
+    if (!isObj5(w)) problems.push(at3 + '.where: must be an object of the rule, e.g. {text: "Sign in"} (' + RULE_KINDS.join(", ") + ")");
+    else {
+      let kinds = 0;
+      for (const k of Object.keys(w)) {
+        const v = w[k];
+        if (v === void 0) continue;
+        if (!isKind(k)) {
+          problems.push(at3 + ".where." + k + ": not a rule kind (" + RULE_KINDS.join(", ") + ")");
+          continue;
+        }
+        if (!isStr(v) || v === "") {
+          problems.push(at3 + ".where." + k + ": must be a non-empty string");
+          continue;
+        }
+        if (k === "fill" && !parseHexColor(v)) {
+          problems.push(at3 + ".where.fill: '" + v + "' is not " + HEX_COLOR_HINT);
+          continue;
+        }
+        where[k] = v;
+        kinds++;
+      }
+      if (!kinds && !problems.length) problems.push(at3 + ".where: give at least one of " + RULE_KINDS.join(", "));
+    }
+    const s = o.scope;
+    let scope;
+    if (s === void 0) scope = void 0;
+    else if (isStr(s) && SCOPE_WORDS.indexOf(s) >= 0) scope = s;
+    else if (Array.isArray(s)) {
+      if (!s.length) problems.push(at3 + '.scope: name at least one page, or use "page", "file" or "selection"');
+      const pages = [];
+      s.forEach((p, i) => {
+        if (isStr(p) && p !== "") pages.push(p);
+        else problems.push(at3 + ".scope[" + i + "]: must be a page's name or id");
+      });
+      scope = pages;
+    } else problems.push(at3 + '.scope: must be "selection", "page" (the current page, the default), "file" (every page) or a list of page names');
+    if (o.token !== void 0 && (!isStr(o.token) || o.token === "")) problems.push(at3 + ".token: must be the token string the dry run returned");
+    if (o.nodeId !== void 0) problems.push(at3 + ".nodeId: a patchWhere has none \u2014 its rule picks the layers (a `patch` changes one node by id)");
+    return { problems, rule: problems.length ? null : { where, scope } };
+  }
+  function describeWhere(w) {
+    const parts = [];
+    for (const k of RULE_KINDS) {
+      const v = w[k];
+      if (v === void 0) continue;
+      if (k === "text") parts.push("text \u201C" + v + "\u201D");
+      else if (k === "fill") parts.push("fill " + v.toLowerCase());
+      else if (k === "variable") parts.push("variable '" + v + "'");
+      else if (k === "instanceOf") parts.push("an instance of '" + v + "'");
+      else parts.push("name '" + v + "'");
+    }
+    return parts.join(" and ");
+  }
+  function describeScope(s) {
+    if (s === void 0 || s === "page") return "the current page";
+    if (s === "selection") return "the selection";
+    if (s === "file") return "every page";
+    if (typeof s === "string") return "scope '" + s + "'";
+    return (s.length === 1 ? "page " : "pages ") + quoteList(s);
+  }
+  function globMatch(pattern, name) {
+    let p = 0, n = 0, star = -1, mark = 0;
+    while (n < name.length) {
+      if (p < pattern.length && pattern[p] !== "*" && pattern[p] === name[n]) {
+        p++;
+        n++;
+      } else if (p < pattern.length && pattern[p] === "*") {
+        star = p++;
+        mark = n;
+      } else if (star >= 0) {
+        p = star + 1;
+        n = ++mark;
+      } else return false;
+    }
+    while (p < pattern.length && pattern[p] === "*") p++;
+    return p === pattern.length;
+  }
+  function solidMatches(c, opacity, hex2) {
+    const h = parseHexColor(hex2);
+    if (!h) return false;
+    const b8 = (x) => Math.round(Math.max(0, Math.min(1, x)) * 255);
+    const a = opacity === void 0 ? 1 : opacity;
+    return b8(c.r) === b8(h.r) && b8(c.g) === b8(h.g) && b8(c.b) === b8(h.b) && b8(a) === b8(h.a === void 0 ? 1 : h.a);
+  }
+  function canonical(v) {
+    if (v === void 0) return "null";
+    if (v === null || typeof v !== "object") return JSON.stringify(v);
+    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+    const o = v;
+    return "{" + Object.keys(o).filter((k) => o[k] !== void 0).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
+  }
+  function hash16(s) {
+    let a = 2166136261, b = 16777619 ^ 1540483477;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      a = Math.imul(a ^ c, 16777619);
+      b = Math.imul(b ^ c, 16777619) ^ b >>> 13;
+    }
+    const hex2 = (x) => ("0000000" + (x >>> 0).toString(16)).slice(-8);
+    return hex2(a) + hex2(b);
+  }
+  function ruleToken(o, ids) {
+    const sorted = ids.slice().sort();
+    return sorted.length + "." + hash16(canonical({ where: o.where, scope: o.scope === void 0 ? "page" : o.scope, set: o.set }) + "|" + sorted.join(","));
+  }
+  function tokenCount(t) {
+    const m = /^(\d+)\.[0-9a-f]{16}$/.exec(t);
+    return m && m[1] !== void 0 ? Number(m[1]) : null;
+  }
+
   // ../bridge/src/source-spec.ts
   var SHADOW_TOKEN_FIELDS = ["color", "radius", "spread", "offsetX", "offsetY"];
   var TEXT_STYLE_TOKEN_FIELDS = ["fontFamily", "fontStyle", "fontWeight", "fontSize", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent"];
@@ -2592,7 +2715,7 @@
     return t === "color" ? "COLOR" : t === "number" ? "FLOAT" : t === "string" ? "STRING" : "BOOLEAN";
   }
   var MAX_TABLE_ROWS = 1e3;
-  var isObj5 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var nonEmpty3 = (v) => typeof v === "string" && v.trim().length > 0;
   var isNum3 = (v) => typeof v === "number" && Number.isFinite(v);
   var isTypeName = (v) => typeof v === "string" && VARIABLE_TYPE_NAMES.indexOf(v) >= 0;
@@ -2734,7 +2857,7 @@
     const seen = /* @__PURE__ */ new Map();
     for (const [i, s] of o.styles.entries()) {
       const sp = at3("styles") + "[" + i + "]";
-      if (!isObj5(s)) {
+      if (!isObj6(s)) {
         problems.push(sp + ": must be a style {name, kind, set}");
         continue;
       }
@@ -2752,7 +2875,7 @@
         problems.push(sp + ".kind: must be paint | text | effect");
         continue;
       }
-      if (isObj5(s.set) && s.set.name !== void 0) {
+      if (isObj6(s.set) && s.set.name !== void 0) {
         problems.push(sp + ".set.name: a new style is named by the row's `name` (rename an existing one with setStyle)");
         continue;
       }
@@ -2805,7 +2928,7 @@
   }
 
   // ../bridge/src/commands.ts
-  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"];
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "patchWhere", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"];
   var INHERITED = "inherited";
   var WRITE_OPS = {
     createFrame: { effect: "creates", required: [], shows: {} },
@@ -2816,6 +2939,8 @@
     clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
     createTree: { effect: "creates", required: ["tree"], shows: {} },
     patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
+    // A bulk patch by rule (rule-spec.ts): the same `set` on every layer the rule matches within its scope.
+    patchWhere: { effect: "overwrites", required: ["where", "set"], shows: {} },
     move: { effect: "moves", required: ["nodeId", "parentId"], shows: {} },
     delete: { effect: "deletes", required: ["nodeId"], shows: {} },
     // Source edits (source-spec.ts): one change that every user of the variable or style follows.
@@ -2836,6 +2961,7 @@
     const missing = missingWriteFields(o.op, o);
     if (o.op === "createTree") return treePreview(o, index, missing);
     if (o.op === "patch") return patchPreview(o, index, missing);
+    if (o.op === "patchWhere") return rulePreview(o, index, missing);
     if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
     if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
     if (o.op === "createVariables" || o.op === "createStyles") return createPreview(o, index, missing);
@@ -2867,6 +2993,19 @@
     const { problems, summary } = checkPatch(o.set);
     if (problems.length || !isPatchSet(o.set)) return { ...base, invalid: problems.join("\n") };
     return { ...base, fields: patchRows(o.set, summary), change: describePatch(o.nodeId, summary) };
+  }
+  function rulePreview(o, index, missing) {
+    const base = { index, op: o.op, effect: "overwrites", target: describeScope(o.scope) };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    const r = checkRule({ ...o }, `ops[${index}]`);
+    const { problems, summary } = checkPatch(o.set);
+    if (r.problems.length || !r.rule || problems.length || !isPatchSet(o.set)) return { ...base, invalid: [...r.problems, ...problems].join("\n") };
+    const sets = "sets " + summary.fields.join(", ") + (summary.refs.variables.length ? "; variables " + summary.refs.variables.map((v) => "'" + v + "'").join(", ") : "") + (summary.refs.textStyles.length ? "; text styles " + summary.refs.textStyles.map((v) => "'" + v + "'").join(", ") : "");
+    return {
+      ...base,
+      fields: patchRows(o.set, summary),
+      change: `every layer matching ${describeWhere(r.rule.where)} on ${describeScope(r.rule.scope)}: ${sets} \u2014 the plugin counts the matches (a dry run it answers gives \`match\`: per page, samples and a \`token\`); a real run over ${RULE_TOKEN_MIN} matches must carry that token, and is refused when the matches changed since; always waits for the designer's review; one undo step, put back whole if it fails`
+    };
   }
   function structurePreview(o, index, missing) {
     const base = { index, op: o.op, effect: WRITE_OPS[o.op].effect, target: o.nodeId || null };
@@ -2977,7 +3116,7 @@
   }
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
-  var isStr = (v) => typeof v === "string";
+  var isStr2 = (v) => typeof v === "string";
   var isNum4 = (v) => typeof v === "number";
   function opt(a, key, ok, what, label5 = key) {
     const v = a[key];
@@ -2989,10 +3128,10 @@
   }
   var READ_OPT_NAMES = READ_OPTS.map((o) => o.name);
   var readOptArgs = (a) => first(READ_OPT_NAMES.map((k) => opt(a, k, isBool, "a boolean")));
-  var nodeArgs = (a) => a.nodeId === void 0 || a.nodeId === null ? NO_NODE_ID : isStr(a.nodeId) ? null : "`nodeId` is not a string";
+  var nodeArgs = (a) => a.nodeId === void 0 || a.nodeId === null ? NO_NODE_ID : isStr2(a.nodeId) ? null : "`nodeId` is not a string";
   var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
-  var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
-  var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
+  var isPageSel = (v) => isStr2(v) || Array.isArray(v) && v.every(isStr2);
+  var isWriteOpName = (v) => isStr2(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
   var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum4);
   var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
@@ -3003,7 +3142,7 @@
     const op = o.op;
     if (!isWriteOpName(op)) return `\`${at3}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
-      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at3}.${k}`)),
+      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr2, "a string", `${at3}.${k}`)),
       ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum4, "a number", `${at3}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at3}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at3}.padding`),
@@ -3013,6 +3152,7 @@
     if (typeErr !== null) return typeErr;
     if (o.treeFile !== void 0) return `\`${at3}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
     if (o.bind !== void 0 && op !== "createTree") return `\`${at3}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
+    for (const k of ["where", "scope", "token"]) if (o[k] !== void 0 && op !== "patchWhere") return `\`${at3}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
     const missing = missingWriteFields(op, o);
     if (missing.length) return `\`${at3}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {
@@ -3021,6 +3161,10 @@
     }
     if (op === "patch") {
       const { problems } = checkPatch(o.set, `${at3}.set`);
+      if (problems.length) return patchRefusal(problems);
+    }
+    if (op === "patchWhere") {
+      const problems = [...checkRule(o, at3).problems, ...checkPatch(o.set, `${at3}.set`).problems];
       if (problems.length) return patchRefusal(problems);
     }
     if (op === "setVariable") {
@@ -3046,7 +3190,7 @@
     return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "holdMs", isNum4, "a number")]);
   };
   var writeTicketArgs = (a) => first([
-    isStr(a.ticket) && a.ticket ? null : a.ticket === void 0 ? "`ticket` is missing" : "`ticket` is not a non-empty string",
+    isStr2(a.ticket) && a.ticket ? null : a.ticket === void 0 ? "`ticket` is missing" : "`ticket` is not a non-empty string",
     opt(a, "holdMs", isNum4, "a number"),
     opt(a, "cancel", isBool, "a boolean")
   ]);
@@ -3060,7 +3204,7 @@
     listLibraries: noArgs,
     exportFull: (a) => first([readOptArgs(a), opt(a, "allPages", isBool, "a boolean"), opt(a, "page", isPageSel, "a string or an array of strings")]),
     exportDesignSystem: designSystemArgs,
-    exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr, "a string")]),
+    exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr2, "a string")]),
     exportSelection: readOptArgs,
     exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
     screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum4, "a number")]),
@@ -6151,12 +6295,12 @@
     return (r.field ? r.field + " " : "") + (r.from !== void 0 ? r.from + " \u2192 " : "\u2192 ") + r.to;
   }
   var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
-  var isObj6 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj7 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var cut = (s, n = 40) => s.length > n ? s.slice(0, n - 1) + "\u2026" : s;
   function paintsText(v) {
     if (!v.length) return "none";
     const first2 = v[0];
-    const one = isObj6(first2) ? typeof first2.color === "string" ? first2.color : first2.type === "image" ? "image" : isObj6(first2.tokens) && typeof first2.tokens.color === "string" ? "variable '" + first2.tokens.color + "'" : typeof first2.type === "string" ? first2.type : "paint" : "paint";
+    const one = isObj7(first2) ? typeof first2.color === "string" ? first2.color : first2.type === "image" ? "image" : isObj7(first2.tokens) && typeof first2.tokens.color === "string" ? "variable '" + first2.tokens.color + "'" : typeof first2.type === "string" ? first2.type : "paint" : "paint";
     return one + (v.length > 1 ? " +" + (v.length - 1) : "");
   }
   function valueText(field, v) {
@@ -6166,7 +6310,7 @@
     if (typeof v === "boolean") return field === "hidden" ? v ? "hidden" : "shown" : v ? "on" : "off";
     if (typeof v === "string") return field === "text" || field === "characters" ? "\u201C" + cut(v) + "\u201D" : cut(v);
     if (Array.isArray(v)) return field === "fills" || field === "strokes" || field === "paints" || field === "fill" ? paintsText(v) : cut(v.map((x) => valueText("", x)).join(", "));
-    if (isObj6(v)) {
+    if (isObj7(v)) {
       if (typeof v.aliasOf === "string") return "alias of '" + v.aliasOf + "'";
       if (field === "box" && (typeof v.w === "number" || typeof v.h === "number")) return (typeof v.w === "number" ? v.w : "\u2026") + "\xD7" + (typeof v.h === "number" ? v.h : "\u2026");
       if (field === "strokes" && Array.isArray(v.paints)) return paintsText(v.paints) + (typeof v.weight === "number" ? ", " + v.weight + " px" : "");
@@ -6227,6 +6371,24 @@
           });
           return;
         }
+        case "patchWhere": {
+          const rule = checkRule({ ...o }, "op").rule;
+          if (!rule || !isPatchSet(o.set)) {
+            lines.push({ head: "Layers picked by a rule", rows: [], ops: [i] });
+            return;
+          }
+          const set = { ...o.set };
+          const checked = checkPatch(o.set).summary.fields;
+          const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
+          const mixed = r && r.mixed ? r.mixed : [];
+          const rows = fields.map((f) => mixed.indexOf(f) >= 0 ? { field: f, from: "mixed", to: valueText(f, set[f]) } : fieldRows(set, [f], [r])[0] || { field: f, to: valueText(f, set[f]) });
+          const count2 = r && typeof r.matched === "number" ? plural(r.matched, "layer") : "Layers";
+          const pages = r && r.pages ? r.pages : [];
+          const shown4 = pages.slice(0, 3).map((p) => "'" + p.page + "' (" + p.count + ")").join(", ");
+          const more = pages.length > 3 ? " and " + plural(pages.length - 3, "more page") : "";
+          lines.push({ head: count2 + " matching " + describeWhere(rule.where), rows, ...pages.length ? { tail: "on " + shown4 + more } : {}, ops: [i] });
+          return;
+        }
         case "setFill":
           group("fill " + String(o.color), i, (g) => {
             g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
@@ -6251,7 +6413,7 @@
           return;
         }
         case "setVariable": {
-          const vals = o.value !== void 0 ? [["", o.value]] : isObj6(o.values) ? Object.entries(o.values) : [];
+          const vals = o.value !== void 0 ? [["", o.value]] : isObj7(o.values) ? Object.entries(o.values) : [];
           const rows = vals.map(([mode, v]) => {
             const was = r && r.old ? mode === "" ? Object.values(r.old)[0] : r.old[mode] : void 0;
             return { field: mode, to: valueText("", v), ...was !== void 0 ? { from: valueText("", was) } : {} };
@@ -6517,17 +6679,17 @@
     }
     return out;
   }
-  var isObj7 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  function canonical(v) {
+  var isObj8 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  function canonical2(v) {
     if (v === void 0) return "undefined";
     if (v === null || typeof v !== "object") return JSON.stringify(v);
-    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+    if (Array.isArray(v)) return "[" + v.map(canonical2).join(",") + "]";
     const o = v;
-    return "{" + Object.keys(o).filter((k) => o[k] !== void 0).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
+    return "{" + Object.keys(o).filter((k) => o[k] !== void 0).sort().map((k) => JSON.stringify(k) + ":" + canonical2(o[k])).join(",") + "}";
   }
-  var same = (a, b) => canonical(a) === canonical(b);
+  var same = (a, b) => canonical2(a) === canonical2(b);
   function without(o, keys) {
-    if (!isObj7(o)) return void 0;
+    if (!isObj8(o)) return void 0;
     const out = {};
     for (const k of Object.keys(o)) if (keys.indexOf(k) < 0 && o[k] !== void 0) out[k] = o[k];
     return Object.keys(out).length ? out : void 0;
@@ -6843,7 +7005,7 @@
   function writeIndex(key, id) {
     figma.root.setPluginData(indexEntry(key), id);
   }
-  var isObj8 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj9 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var holds = (n) => n.type === "FRAME" || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
   function readOld(n, key) {
     let spec;
@@ -6852,7 +7014,7 @@
     } catch {
       return null;
     }
-    if (!isObj8(spec)) return null;
+    if (!isObj9(spec)) return null;
     const children = [];
     if (holds(n)) {
       for (const c of n.children) {
@@ -7660,13 +7822,13 @@
     if (misfits.length) return null;
     return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
   }
-  function canonical2(v) {
+  function canonical3(v) {
     if (v === void 0) return "undefined";
     if (v === null || typeof v !== "object") return JSON.stringify(v);
-    if (Array.isArray(v)) return "[" + v.map(canonical2).join(",") + "]";
-    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical2(getF(v, k))).join(",") + "}";
+    if (Array.isArray(v)) return "[" + v.map(canonical3).join(",") + "]";
+    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical3(getF(v, k))).join(",") + "}";
   }
-  var same2 = (a, b) => a === b || canonical2(a) === canonical2(b);
+  var same2 = (a, b) => a === b || canonical3(a) === canonical3(b);
   function putBack(n, k, v) {
     if (!same2(getF(n, k), v)) setF(n, k, v);
   }
@@ -8760,7 +8922,7 @@
     if (!c) return null;
     return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a === void 0 ? 1 : c.a });
   }
-  var isObj9 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj10 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var NUMBER_TOLERANCE = 0.01;
   function resolveAll(list) {
     const byRef = /* @__PURE__ */ new Map();
@@ -8817,11 +8979,11 @@
     };
   }
   function textFont(font) {
-    if (isObj9(font.variationSettings) && Object.keys(font.variationSettings).length) return null;
+    if (isObj10(font.variationSettings) && Object.keys(font.variationSettings).length) return null;
     const size2 = typeof font.size === "number" ? font.size : 12;
-    const lh = isObj9(font.lineHeight) ? font.lineHeight : null;
+    const lh = isObj10(font.lineHeight) ? font.lineHeight : null;
     const lineHeight = !lh || lh.unit === "auto" ? null : typeof lh.value !== "number" ? null : lh.unit === "percent" ? lh.value * size2 / 100 : lh.value;
-    const ls = isObj9(font.letterSpacing) ? font.letterSpacing : null;
+    const ls = isObj10(font.letterSpacing) ? font.letterSpacing : null;
     const letterSpacing = !ls || typeof ls.value !== "number" ? 0 : ls.unit === "percent" ? ls.value * size2 / 100 : ls.value;
     return {
       family: typeof font.family === "string" ? font.family : DEFAULT_FONT.family,
@@ -8886,7 +9048,7 @@
           }
         }
         if (!(n.styles && n.styles.text !== void 0)) {
-          const want = textFont(isObj9(font) ? font : {});
+          const want = textFont(isObj10(font) ? font : {});
           if (want) {
             const hits = table.textStyles.filter((s) => sameFont(s, want));
             const one = hits[0];
@@ -8953,7 +9115,7 @@
             for (const [, f] of CORNERS2) tk[f] = ref2;
             outcome.bound++;
           }
-        } else if (isObj9(r)) {
+        } else if (isObj10(r)) {
           for (const [k, f] of CORNERS2) {
             const v = r[k];
             if (typeof v !== "number" || t[f] !== void 0) continue;
@@ -10107,6 +10269,11 @@
       }
     }
   }
+  function boundVariableIds(node) {
+    const out = /* @__PURE__ */ new Set();
+    boundIds(node, out);
+    return out;
+  }
   function styleBoundIds(st) {
     const out = /* @__PURE__ */ new Set();
     const scan = (v) => {
@@ -10274,7 +10441,7 @@
   }
 
   // src/keyed.ts
-  var isObj10 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  var isObj11 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
@@ -10334,7 +10501,7 @@
     };
     for (const [index, op] of ops.entries()) {
       const comp = op.op === "createTree" ? componentRootOf(op.tree) : null;
-      if (op.op !== "createTree" || !isObj10(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
+      if (op.op !== "createTree" || !isObj11(op.tree) || typeof op.tree.key !== "string" && !comp) continue;
       const key = comp ? componentKey(comp.name) : String(op.tree.key);
       const what = comp ? "component '" + comp.name + "'" : "tree.key '" + key + "'";
       const bad = (message) => {
@@ -10458,7 +10625,7 @@
   async function keyedImpact(ops, own4) {
     const steps2 = [];
     for (const [index, op] of ops.entries()) {
-      if (op.op !== "createTree" || !isObj10(op.tree)) continue;
+      if (op.op !== "createTree" || !isObj11(op.tree)) continue;
       const comp = componentRootOf(op.tree);
       if (typeof op.tree.key !== "string" && !comp) continue;
       try {
@@ -10502,8 +10669,8 @@
   var AFTER_FIELDS = ["clip", "sizeLimits", "strokesInLayout", "x", "y"];
   function boundTo(n, k) {
     const bv = "boundVariables" in n ? n.boundVariables : void 0;
-    const a = isObj10(bv) ? bv[k] : void 0;
-    return isObj10(a) && typeof a.id === "string" ? a.id : null;
+    const a = isObj11(bv) ? bv[k] : void 0;
+    return isObj11(a) && typeof a.id === "string" ? a.id : null;
   }
   function applyExtras(n, s, fields, only, variables, changes) {
     const todo = only.filter((f) => fields.indexOf(f) >= 0);
@@ -10795,6 +10962,43 @@
               read.component = main.name;
               await follow({ component: main });
             }
+            break;
+          }
+          // Every layer the rule matches (Show me selects them, up to SHOW_CAP); the old value of each field, shared by all
+          // of them or "mixed".
+          case "patchWhere": {
+            const r = t.rules.get(i);
+            if (!r) break;
+            read.matched = r.match.total;
+            read.pages = r.match.pages;
+            for (const id of r.ids) ids.push(id);
+            const set = r.matches[0] ? r.matches[0].set : {};
+            const old = {};
+            const mixed = [];
+            for (const k of Object.keys(set)) {
+              let shared;
+              let seen = "";
+              let ok = true;
+              for (const p of r.matches) {
+                const v = oldOf(p.node, k, set[k]);
+                if (v === void 0) {
+                  ok = false;
+                  break;
+                }
+                const key = JSON.stringify(v);
+                if (seen === "") {
+                  seen = key;
+                  shared = v;
+                } else if (key !== seen) {
+                  mixed.push(k);
+                  ok = false;
+                  break;
+                }
+              }
+              if (ok && seen !== "") old[k] = shared;
+            }
+            read.old = old;
+            if (mixed.length) read.mixed = mixed;
             break;
           }
           case "setFill":
@@ -11370,6 +11574,265 @@
         else node.setExplicitVariableModeForCollection(collection, prev);
       }
     };
+  }
+
+  // src/rules.ts
+  function inSource(n) {
+    for (let a = n; a && a.type !== "PAGE" && a.type !== "DOCUMENT"; a = a.parent) {
+      if (a.type === "COMPONENT" || a.type === "COMPONENT_SET") return true;
+      if (a !== n && a.type === "INSTANCE") return true;
+    }
+    return false;
+  }
+  var pageOf3 = (n) => {
+    let p = n.parent;
+    while (p && p.type !== "PAGE") p = p.parent;
+    return p && p.type === "PAGE" ? p : null;
+  };
+  async function loadPage(p) {
+    if (typeof p.loadAsync === "function") await p.loadAsync();
+  }
+  async function layersIn(rule, bad) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    const walk = (n, page) => {
+      if (n.type === "COMPONENT" || n.type === "COMPONENT_SET" || seen.has(n.id)) return;
+      seen.add(n.id);
+      out.push({ node: n, page });
+      if (n.type === "INSTANCE") return;
+      if ("children" in n) for (const k of n.children) walk(k, page);
+    };
+    const s = rule.scope;
+    if (s === "selection") {
+      const sel = figma.currentPage.selection;
+      if (!sel.length) {
+        bad('scope "selection": nothing is selected in Figma \u2014 select the layers to look in, or use "page" or "file"');
+        return out;
+      }
+      for (const n of sel) if (!inSource(n)) walk(n, pageOf3(n) || figma.currentPage);
+      return out;
+    }
+    let pages;
+    if (s === void 0 || s === "page") pages = [figma.currentPage];
+    else if (s === "file") pages = figma.root.children.slice();
+    else {
+      pages = [];
+      const all = figma.root.children.slice();
+      for (const ref2 of s) {
+        const m = matchByName(ref2, all, (p) => p.name, (p) => [p.id]);
+        if (m.kind === "one") {
+          if (pages.indexOf(m.item) < 0) pages.push(m.item);
+        } else if (m.kind === "many") bad("scope: page '" + ref2 + "' matches " + m.matches.length + " pages \u2014 name one by id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", "));
+        else bad("scope: no page is named '" + ref2 + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : ""));
+      }
+    }
+    for (const p of pages) {
+      try {
+        await loadPage(p);
+      } catch (e) {
+        bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
+        continue;
+      }
+      for (const k of p.children) walk(k, p);
+    }
+    return out;
+  }
+  async function ownerOf(n) {
+    let main = null;
+    try {
+      main = await n.getMainComponentAsync();
+    } catch {
+      main = null;
+    }
+    if (!main) return null;
+    return main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : main;
+  }
+  async function matchesOf(rule, layers, bad) {
+    const w = rule.where;
+    let variableId = null;
+    if (w.variable !== void 0) {
+      const pool = /* @__PURE__ */ new Map();
+      for (const v of await figma.variables.getLocalVariablesAsync()) pool.set(v.id, v);
+      const ids = /* @__PURE__ */ new Set();
+      for (const h of layers) for (const id of boundVariableIds(h.node)) ids.add(id);
+      for (const id of ids) {
+        if (pool.has(id)) continue;
+        let v = null;
+        try {
+          v = await figma.variables.getVariableByIdAsync(id);
+        } catch {
+          v = null;
+        }
+        if (v) pool.set(id, v);
+      }
+      const m = matchByName(w.variable, [...pool.values()], (v) => v.name, (v) => [v.id, v.key]);
+      if (m.kind === "one") variableId = m.item.id;
+      else if (m.kind === "many") {
+        bad("where.variable: '" + w.variable + "' matches " + m.matches.length + " variables \u2014 pass one's id or key: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", "));
+        return [];
+      } else {
+        bad("where.variable: no variable of this file, nor any a layer in " + describeScope(rule.scope) + " uses, is named '" + w.variable + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : ""));
+        return [];
+      }
+    }
+    const owners = /* @__PURE__ */ new Map();
+    let ownerId = null;
+    if (w.instanceOf !== void 0) {
+      const pool = /* @__PURE__ */ new Map();
+      for (const h of layers) {
+        if (h.node.type !== "INSTANCE") continue;
+        const o = await ownerOf(h.node);
+        owners.set(h.node.id, o);
+        if (o) pool.set(o.id, o);
+      }
+      const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
+      if (m.kind === "one") ownerId = m.item.id;
+      else if (m.kind === "many") {
+        bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of \u2014 pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", "));
+        return [];
+      } else {
+        bad("where.instanceOf: no instance in " + describeScope(rule.scope) + " is of a component named '" + w.instanceOf + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : ""));
+        return [];
+      }
+    }
+    const out = [];
+    for (const h of layers) {
+      const n = h.node;
+      if (w.name !== void 0 && !globMatch(w.name, n.name)) continue;
+      if (w.text !== void 0 && (n.type !== "TEXT" || n.characters !== w.text)) continue;
+      if (w.fill !== void 0) {
+        const fills = "fills" in n ? n.fills : null;
+        const hex2 = w.fill;
+        if (!Array.isArray(fills) || !fills.some((p) => p.type === "SOLID" && p.visible !== false && solidMatches(p.color, p.opacity, hex2))) continue;
+      }
+      if (variableId !== null && !boundVariableIds(n).has(variableId)) continue;
+      if (ownerId !== null) {
+        const o = owners.get(n.id);
+        if (!o || o.id !== ownerId) continue;
+      }
+      out.push(h);
+    }
+    return out;
+  }
+  function matchOf(op, hits) {
+    const pages = [];
+    const byPage = /* @__PURE__ */ new Map();
+    for (const h of hits) {
+      let row = byPage.get(h.page);
+      if (!row) {
+        row = { page: h.page.name, count: 0 };
+        byPage.set(h.page, row);
+        pages.push(row);
+      }
+      row.count++;
+    }
+    return {
+      total: hits.length,
+      pages,
+      samples: hits.slice(0, RULE_SAMPLES).map((h) => ({ id: h.node.id, name: h.node.name, page: h.page.name })),
+      token: ruleToken(op, hits.map((h) => h.node.id)),
+      needsToken: hits.length > RULE_TOKEN_MIN
+    };
+  }
+  async function resolveRuleOps(ops, mode = { kind: "submit" }) {
+    const targets = /* @__PURE__ */ new Map();
+    const matches = /* @__PURE__ */ new Map();
+    const problems = [];
+    const uses = [];
+    const loaded3 = /* @__PURE__ */ new Map();
+    const loadFont = (f) => {
+      const key = f.family + "|" + f.style;
+      let p = loaded3.get(key);
+      if (!p) {
+        p = figma.loadFontAsync(f).then(() => null, () => "font '" + f.family + " " + f.style + "' is not available in this file");
+        loaded3.set(key, p);
+      }
+      return p;
+    };
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "patchWhere") continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const rule = checkRule({ ...op }, "ops[" + index + "]").rule;
+      const set = op.set;
+      if (!rule || !isPatchSet(set)) {
+        bad("the op did not pass its check");
+        continue;
+      }
+      const before = problems.length;
+      const hits = await matchesOf(rule, await layersIn(rule, bad), bad);
+      if (problems.length > before) continue;
+      const match2 = matchOf(op, hits);
+      matches.set(index, match2);
+      const what = "its rule (" + describeWhere(rule.where) + ") matches ";
+      if (hits.length > MAX_RULE_MATCHES) {
+        bad(what + hits.length + " layers on " + describeScope(rule.scope) + ", over " + MAX_RULE_MATCHES + ": narrow it (another kind, a name) or its scope (pages, the selection)");
+        continue;
+      }
+      if (mode.kind === "approved") {
+        const want = mode.expect.get(index);
+        if (want !== void 0 && want !== match2.token) {
+          bad("the layers its rule matches are not the ones the card showed (" + String(tokenCount(want)) + " then, " + hits.length + " now): send it again");
+          continue;
+        }
+      } else if (mode.kind === "submit") {
+        if (!hits.length) {
+          bad(what + "no layer on " + describeScope(rule.scope) + ": nothing to change (a dry run shows what it matches)");
+          continue;
+        }
+        if (op.token === void 0 && match2.needsToken) {
+          bad(what + hits.length + " layers (over " + RULE_TOKEN_MIN + "): dry-run the batch first (dryRun: true) and send this op again with the `token` its `match` gives");
+          continue;
+        }
+        if (op.token !== void 0 && op.token !== match2.token) {
+          const was = tokenCount(op.token);
+          bad("the layers its rule matches changed since the dry run that gave its token (" + (was === null ? "a token it did not give" : was + " then") + ", " + hits.length + " now): dry-run it again and send the new `token`");
+          continue;
+        }
+      }
+      const later2 = changesBefore(ops, index);
+      const fontsLater = ops.slice(0, index).some((o) => o.op === "setVariable" || o.op === "createVariables");
+      const resolved = [];
+      const named2 = [];
+      let misfits = 0;
+      for (const h of hits) {
+        const said = [];
+        const t = await resolvePatchNode(h.node, set, later2, loadFont, (m) => {
+          said.push(m);
+        }, fontsLater);
+        if (t && !said.length) {
+          resolved.push(t);
+          continue;
+        }
+        misfits++;
+        if (named2.length < RULE_SAMPLES) named2.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+      }
+      if (misfits) {
+        bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch \u2014 narrow the rule (another kind, a name) or the scope: " + named2.join(" | ") + (misfits > named2.length ? " | \u2026" : ""));
+        continue;
+      }
+      if (mode.kind !== "dryRun") uses.push(...patchUses(index, set).map((u) => ({ ...u, op: op.op })));
+      targets.set(index, { matches: resolved, match: match2, ids: hits.map((h) => h.node.id) });
+    }
+    const r = uses.length ? await resolveRefs(uses, loadFont) : null;
+    if (r) {
+      problems.push(...r.problems);
+      for (const t of targets.values()) for (const p of t.matches) p.refs = r.refs;
+    }
+    return { targets, problems, imports: r ? r.imports : async () => ({ problems: [], revoked: false }), importCount: r ? r.importCount : 0, matches };
+  }
+  async function ruleImpact(ops) {
+    if (!ops.some((o) => o.op === "patchWhere")) return [];
+    const { problems, matches } = await resolveRuleOps(ops, { kind: "dryRun" });
+    const out = [];
+    for (const [index, op] of ops.entries()) {
+      if (op.op !== "patchWhere") continue;
+      const said = problems.filter((p) => p.index === index).map((p) => p.message);
+      const match2 = matches.get(index);
+      out.push({ index, op: op.op, ...match2 ? { match: match2 } : {}, ...said.length ? { problem: said.join("; ") } : {} });
+    }
+    return out;
   }
 
   // src/bind.ts
@@ -12233,7 +12696,8 @@
     const creates = await createImpact(ops);
     const components2 = await componentImpact(ops);
     const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
-    const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds].sort((a, b) => a.index - b.index);
+    const rules = await ruleImpact(ops);
+    const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds, ...rules].sort((a, b) => a.index - b.index);
     for (const k of await keyedImpact(ops, createdThisSession)) {
       const at3 = steps2.filter((x) => x.index === k.index)[0];
       if (at3 && k.changedLayers !== void 0) at3.changedLayers = k.changedLayers;
@@ -12419,7 +12883,7 @@
       n.remove();
     } };
   }
-  async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style }, changes) {
+  async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style, rule }, changes) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
@@ -12547,6 +13011,22 @@
         consent();
         return (await applyPatch(patch, consent, editsAllowedNow, changes)).applied;
       }
+      // Resolved up front (rules.ts): every layer the rule matches, each a patch whose node, fields, fonts and names
+      // resolved. Each keeps what it replaces, so a failure on any of them puts back all of them with the rest of the batch.
+      case "patchWhere": {
+        if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
+        for (const t of rule.matches) {
+          consent();
+          try {
+            await applyPatch(t, consent, editsAllowedNow, changes);
+          } catch (e) {
+            if (e instanceof EditsRevoked) throw e;
+            throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+          }
+        }
+        const first2 = rule.matches[0];
+        return { matched: rule.matches.length, pages: rule.match.pages.length, ...first2 && first2.unbound ? { unbound: first2.unbound } : {} };
+      }
       case "move": {
         if (!move) throw new Error("move: the op was not resolved before the batch ran");
         consent();
@@ -12587,13 +13067,14 @@
   }
   async function submitWrites(ops, images) {
     const list = Array.isArray(ops) ? ops : [];
-    const r = await runBatch(list, images, "submit");
+    const r = await runBatch(list, images, "submit", NO_EXPECT);
     return "card" in r ? r : { done: r.result };
   }
-  async function runBatch(list, images, mode) {
+  var NO_EXPECT = /* @__PURE__ */ new Map();
+  async function runBatch(list, images, mode, expect) {
     const out = { changes: [], layers: 0 };
     if (list.length) commitUndo();
-    const r = await gatedWrites(list, images, mode, out);
+    const r = await gatedWrites(list, images, mode, out, expect);
     if (list.length) commitUndo();
     if ("card" in r) return r;
     if (mode !== "preview" && r.refused !== "waiting") announce(r);
@@ -12625,15 +13106,15 @@
     const m = { type: "writes", applied: n, ok: r.ok, text };
     figma.ui.postMessage(m);
   }
-  async function gatedWrites(list, images, mode, out) {
+  async function gatedWrites(list, images, mode, out, expect) {
     try {
-      return await batchWrites(list, images, mode, out);
+      return await batchWrites(list, images, mode, out, expect);
     } finally {
       setBatchPlan(null);
       setBatchImages(null);
     }
   }
-  async function batchWrites(list, images, mode, out) {
+  async function batchWrites(list, images, mode, out, expect) {
     const applied = [];
     const waiting = mode === "submit" && list.length ? waitingTicket() : null;
     if (waiting !== null) return { ok: false, applied, refused: "waiting", error: waitingMessage(waiting) };
@@ -12666,6 +13147,7 @@
       const trees2 = await resolveTreeOps(list, await bindTreeOps(list, creates2));
       const keyed = await resolveKeyed(list, trees2.targets);
       const patches2 = await resolvePatchOps(list);
+      const rules2 = await resolveRuleOps(list, mode === "submit" ? { kind: "submit" } : { kind: "approved", expect });
       const structure2 = await resolveStructureOps(list, (i) => changesBefore(list, i));
       const sources2 = await resolveSourceOps(list);
       const problems2 = [
@@ -12675,24 +13157,27 @@
         ...trees2.problems,
         ...keyed.problems,
         ...patches2.problems,
+        ...rules2.problems,
         ...structure2.problems,
         ...sources2.problems,
         ...deleteConflicts(list, structure2.deletes, structure2.moves),
         ...removalConflicts(list, trees2.targets, structure2.moves),
-        ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves)
+        ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves),
+        ...ruleConflicts(rules2.targets, trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
-      return { creates: creates2, modes: modes2, trees: trees2, patches: patches2, structure: structure2, sources: sources2, problems: problems2 };
+      return { creates: creates2, modes: modes2, trees: trees2, patches: patches2, rules: rules2, structure: structure2, sources: sources2, problems: problems2 };
     };
-    const { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
+    const { creates, modes, trees, patches, rules, structure, sources, problems } = await resolveBatch();
     const firstProblem = problems[0];
     if (firstProblem) {
       const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
       return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
     }
     if (mode === "submit" && list.length) {
-      const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
+      const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
       out.layers = reads.layers;
-      const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, sinceApproval: layersSinceApproval() });
+      const bulkByRule = rules.targets.size > 0;
+      const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, sinceApproval: layersSinceApproval() });
       if (decision.wait) {
         if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
         const lines = cardLines(list, reads.ops.map((o) => o.read));
@@ -12710,20 +13195,22 @@
           return { ids, total: Math.max(total, ids.length), ...spot ? { spot } : {} };
         });
         const keyedResend = [...trees.targets.values()].some((t) => !!t.update);
+        const shown4 = /* @__PURE__ */ new Map();
+        for (const [i, t] of rules.targets) shown4.set(i, t.match.token);
         const card = openCard({
           ops: list,
           lines,
           shows,
           details: reviewLines(list),
           why: decision.reason,
-          previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
+          previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
           // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
           apply: () => queueWork(async () => {
-            const r = await runBatch(list, images, "approved");
+            const r = await runBatch(list, images, "approved", shown4);
             return "card" in r ? notApplied() : r.result;
           }),
           preview: () => queueWork(async () => {
-            const r = await runBatch(list, images, "preview");
+            const r = await runBatch(list, images, "preview", shown4);
             if ("card" in r) return { result: notApplied(), putBack: async () => null };
             const changes2 = r.changes;
             return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)) };
@@ -12788,7 +13275,7 @@
         throw e;
       }
     }
-    for (const step of [trees, patches, sources]) {
+    for (const step of [trees, patches, rules, sources]) {
       if (!step.importCount) continue;
       if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       const { problems: late, revoked } = await step.imports(editsAllowedNow);
@@ -12805,7 +13292,8 @@
           patch: patches.targets.get(i),
           move: structure.moves.get(i),
           variable: sources.variables.get(i),
-          style: sources.styles.get(i)
+          style: sources.styles.get(i),
+          rule: rules.targets.get(i)
         }, changes);
       } catch (e) {
         return fail(i, op, e);
@@ -12947,6 +13435,26 @@
         const by = id === void 0 ? void 0 : gone.get(id);
         if (by === void 0 || by === index) continue;
         out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+        break;
+      }
+    }
+    return out;
+  }
+  function ruleConflicts(rules, trees, deletes, moves) {
+    if (!rules.size) return [];
+    const gone = /* @__PURE__ */ new Map();
+    for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
+    for (const [i, t] of trees) {
+      if (!t.update) continue;
+      for (const n of removalsOf(t.update)) for (const id of idsDeletedWith(n, moves)) if (!gone.has(id)) gone.set(id, i);
+    }
+    const out = [];
+    if (!gone.size) return out;
+    for (const [index, r] of rules) {
+      for (const id of r.ids) {
+        const by = gone.get(id);
+        if (by === void 0) continue;
+        out.push({ index, op: "patchWhere", message: "its rule matches '" + id + "', which ops[" + by + "] of this batch removes (removals run after every other op); narrow the rule or drop one of the two" });
         break;
       }
     }

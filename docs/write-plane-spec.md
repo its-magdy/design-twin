@@ -22,7 +22,9 @@ layers wired to them, named by later specs and updated in place when its name is
 paint `{type: "image", file}` or `{type: "image", hash}` — are built; capturing a rendered page as a screen —
 `capture-page`, which writes a tree spec per viewport width and its images to disk for `treeFile` ops — is built; binding
 the capture to the file — a `createTree` op's `bind: true`, which binds raw values to the file's variables and text
-styles, and instances of the components the component map names, read in the write direction — is built)
+styles, and instances of the components the component map names, read in the write direction — is built; bulk patch
+by rule — `patchWhere`, a patch of every layer a rule matches within a scope, its dry run counting per page with a token
+the real run carries — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -166,6 +168,20 @@ screens.
    is an instance of, name matches) within a scope (selection, page, listed pages, file). Its dry run
    answers with counts per page and a few samples, never the full match list. A real run above a
    threshold must carry the token its dry run returned.
+
+   As built (#171): `{op: "patchWhere", where, scope?, set, token?}` (the pure check, words and token in
+   `bridge/src/rule-spec.ts`; the file side in `figma-plugin/src/rules.ts`). `where` holds any of `text` (a text's
+   characters equal), `fill` (a visible solid fill equal by its 8-bit channels and opacity), `variable` (bound to it,
+   directly), `instanceOf` (an instance of the component or its set) and `name` (`*` is any run of characters), all of
+   which must hold; `scope` is `"page"` (the current one, the default), `"file"`, `"selection"` or a list of pages. Layers
+   inside an instance, a main component or a set are never matched (patching the main component is the source edit). A
+   page, variable or component name resolves under decision 15: the variables are the file's own and those layers in scope
+   are bound to, the components those its instances in scope are of. The dry run's step is `match: {total, pages,
+   samples (3), token, needsToken}`; the token is the match count and a hash of the rule, scope, `set` and the sorted ids,
+   so it stands for this change on these layers. A real run over 25 matches (the review's layer limit) without it is
+   refused, as is one whose token no longer matches, one that matches nothing and one over 2000 matches. Each match then
+   resolves and applies as a patch by id (`patch.ts`): a misfit refuses the batch, counted with three named; each keeps
+   what it replaces, so the batch is put back whole and stays one undo step. The reply is `{matched, pages}`.
 9. **Source edits.** An existing local variable, local style or local main component may be changed; the
    dry run reports how many nodes or instances follow. Anything that lives in another library file is
    refused, with that file named.
@@ -228,15 +244,15 @@ screens.
     - **When a write waits** (`bridge/src/review-policy.ts`, pure): "Review each change first" is ticked — on when
       never set, saved per user, set only from the window — or, whatever the box says, the batch edits a source
       (setVariable, setStyle, a patch of a main component or a layer in one: a change other layers follow), or it is a
-      bulk change by rule (#171 sets `bulkByRule`; nothing does yet), or the existing layers changed since the
+      bulk change by rule (a `patchWhere` sets `bulkByRule`), or the existing layers changed since the
       designer's last approval exceed 25 (fixed). Counted: existing layers a batch patches, moves or deletes (a keyed
       re-send: each layer of its earlier result whose fields change, that changes place among its frame's children, or
       that it removes) plus the layers and instances that follow its source edits, each once; layers this plugin
       session created do not count. The count is per plugin session and goes back to 0 when the designer approves a
       batch or keeps a preview. The dry run reports `wouldWait` and `waitReason` (and `waitingTicket` when one waits)
       by the same rule over what it can see (a keyed re-send's count, `changedLayers`, is the plugin's, planned against
-      the spec as sent). On approval the batch is resolved again against the file as it is then; #171 must recount a rule's matches
-      there and refuse on drift (a hook comment in `figma-plugin/src/writes.ts`).
+      the spec as sent). On approval the batch is resolved again against the file as it is then; a rule's matches are counted again there
+      and the batch is refused when their token is not the one the card was built from.
     - **How the agent waits — a ticket the plugin owns.** MCP clients built on the TypeScript SDK time a tool call out
       at 60 s by default, so one call holds at most 45 s (`REVIEW_HOLD_MS`; `DTWIN_REVIEW_HOLD_MS` overrides it for
       tests, within 0…50 s): then the plugin answers `{pending, ticket, why, waited, note}` and keeps the card up.
@@ -280,7 +296,11 @@ screens.
     9-node settings panel with two instances of the file's Button landed with `bind: true` — one call with both ops,
     recorded at 1 call, 2 ops, about 196 tokens (43 out, 153 in; the reply binds 13 values and leaves 10 raw), against 5
     calls, 9 ops and about 698 tokens for the four-op route typing it node by node (no variables, no instances). Adding
-    `bind` to `figma_write`'s schema and description took `toolDefinition` from 1,229 to 1,257.
+    `bind` to `figma_write`'s schema and description took `toolDefinition` from 1,229 to 1,257. The same change on many
+    screens (`rule-patch` / `same-change-many`: one footer text on 12 screens across 3 pages) is one `patchWhere` call —
+    recorded at 1 call, 1 op, about 46 tokens (34 out, 12 in), against 14 calls, 12 ops and about 5,894 tokens for the
+    four-op route (a page list, an outline per screen, then the setText ops), and the op does not grow with the matches.
+    Adding `patchWhere` to the schema and description took `toolDefinition` from 1,287 to 1,400.
 
 ## Build order
 

@@ -518,7 +518,7 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 - The designer reviews the agent's writes (`figma-plugin/src/review.ts`, spec decision 18), on top of Allow edits.
   A batch waits on a card in the window when **Review each change first** is ticked (on when never set, saved like
   Allow edits, set only from the window), or — whatever the box says — when it edits a source (a variable, a style, a
-  main component), is a bulk change by rule, or takes the existing layers changed since the last approval over 25
+  main component), is a bulk change by rule (`patchWhere`, recounted on Apply), or takes the existing layers changed since the last approval over 25
   (`bridge/src/review-policy.ts`, pure; layers this session created do not count). It waits once the batch has
   resolved and before anything touches the file. The card lists the batch in plain words with old → new values
   (`bridge/src/review-card.ts`, over what `review-reads.ts` reads of the file), Show me (select and zoom: no undo

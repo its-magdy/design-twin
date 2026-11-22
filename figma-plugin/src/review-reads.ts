@@ -12,6 +12,7 @@ import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } f
 import { landingSpot, type TreeTarget } from "./tree";
 import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
+import type { RuleTarget } from "./rules";
 import type { ModeTarget } from "./variable-modes";
 import type { DeleteTarget, MoveTarget } from "./structure";
 import { createdThisSession } from "./session";
@@ -21,6 +22,7 @@ import { errMsg } from "./util";
 export interface ResolvedTargets {
   trees: ReadonlyMap<number, TreeTarget>;
   patches: ReadonlyMap<number, PatchTarget>;
+  rules: ReadonlyMap<number, RuleTarget>;
   modes: ReadonlyMap<number, ModeTarget>;
   moves: ReadonlyMap<number, MoveTarget>;
   deletes: ReadonlyMap<number, DeleteTarget>;
@@ -142,6 +144,33 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           read.old = old;
           const main = mainComponentOf(p.node);
           if (main) { read.component = main.name; await follow({ component: main }); }
+          break;
+        }
+        // Every layer the rule matches (Show me selects them, up to SHOW_CAP); the old value of each field, shared by all
+        // of them or "mixed".
+        case "patchWhere": {
+          const r = t.rules.get(i);
+          if (!r) break;
+          read.matched = r.match.total;
+          read.pages = r.match.pages;
+          for (const id of r.ids) ids.push(id);
+          const set = r.matches[0] ? (r.matches[0].set as Record<string, unknown>) : {};
+          const old: Record<string, unknown> = {};
+          const mixed: string[] = [];
+          for (const k of Object.keys(set)) {
+            let shared: unknown;
+            let seen = "";
+            let ok = true;
+            for (const p of r.matches) {
+              const v = oldOf(p.node, k, set[k]);
+              if (v === undefined) { ok = false; break; }
+              const key = JSON.stringify(v);
+              if (seen === "") { seen = key; shared = v; } else if (key !== seen) { mixed.push(k); ok = false; break; }
+            }
+            if (ok && seen !== "") old[k] = shared;
+          }
+          read.old = old;
+          if (mixed.length) read.mixed = mixed;
           break;
         }
         case "setFill":

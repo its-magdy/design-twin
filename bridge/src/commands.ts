@@ -16,7 +16,7 @@
 //     scheduler orders every run from them, and the bridge side reads `export` for its stall check,
 //     progress ticks and read plans.
 //
-// Dependency-free apart from read-opts.ts, tree-spec.ts, patch-spec.ts, source-spec.ts and create-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
+// Dependency-free apart from read-opts.ts, tree-spec.ts, patch-spec.ts, rule-spec.ts, source-spec.ts and create-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
 // must type-check under figma-plugin/tsconfig.json (ES2019 lib, no Node types). Reply shapes that ARE
 // documents on disk (ScreenExport, LayersDoc, DesignSystemDoc, VariablesDoc, Manifest, Asset) are
 // referenced from doc-types.ts, never restated.
@@ -24,6 +24,7 @@ import type { Asset, DesignSystemDoc, LayersDoc, Manifest, ScreenExport, Variabl
 import { isRecord } from "./json-util.ts";
 import { READ_OPTS, type ReadOptName } from "./read-opts.ts";
 import { checkPatch, describePatch, isPatchSet, patchRefusal, patchRows, type PatchRow, type PatchSet } from "./patch-spec.ts";
+import { checkRule, describeScope, describeWhere, RULE_TOKEN_MIN, type RuleMatch, type RuleScope, type RuleWhere } from "./rule-spec.ts";
 import { checkCreateStyles, checkCreateVariables, describeCreateStyles, describeCreateVariables } from "./create-spec.ts";
 import { checkStyleSet, checkVariableEdit, describeStyleEdit, describeVariableEdit, isStyleSet, sourceRefusal, styleRows, type SourceValue, type StyleField, type StyleSet } from "./source-spec.ts";
 import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
@@ -76,7 +77,7 @@ export interface ScreenshotArgs extends NodeArgs {
 }
 
 /** The write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
-export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"] as const;
+export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "patchWhere", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"] as const;
 export type WriteOpName = (typeof WRITE_OP_NAMES)[number];
 /** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
@@ -112,6 +113,13 @@ export interface WriteOp {
   set?: PatchSet | StyleSet | Record<string, unknown> | undefined;
   /** move: the place among the new parent's children (0 = first; the end when absent) */
   index?: number | undefined;
+  /** patchWhere: the rule that picks the layers — every kind given must hold (rule-spec.ts). Typed loosely on the wire:
+   *  rule-spec.ts checkRule narrows it, at all three readers of WRITE_OPS. */
+  where?: RuleWhere | Record<string, unknown> | undefined;
+  /** patchWhere: where the rule looks — "selection", "page" (the current page, the default), "file", or page names */
+  scope?: RuleScope | string | undefined;
+  /** patchWhere: the token its dry run returned for these matches (needed above RULE_TOKEN_MIN of them) */
+  token?: string | undefined;
   /** setVariable: the local variable to change — its exact name, key or id */
   variable?: string | undefined;
   /** setVariable: its new value by mode name (or modeId), as the read export writes a variable's `values`
@@ -151,7 +159,7 @@ export interface WriteTicketArgs {
 /** A WriteOp field that holds a string. */
 type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page" | "variable" | "style";
 /** A WriteOp field an op can require: the string fields, createTree's spec, a patch's fields and the create tables. */
-type WriteField = WriteStrField | "tree" | "set" | "variables" | "styles";
+type WriteField = WriteStrField | "tree" | "set" | "where" | "variables" | "styles";
 /** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
  *  (writeOpError — the gate a `write` command passes in the plugin's handleBridge, via parseCommandRequest, before
  *  writes.ts applyWrites runs; applyWrites repeats it for its direct callers). So a batch the preview calls invalid
@@ -180,6 +188,8 @@ export const WRITE_OPS: { readonly [K in WriteOpName]: WriteOpRow } = {
   clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
   createTree: { effect: "creates", required: ["tree"], shows: {} },
   patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
+  // A bulk patch by rule (rule-spec.ts): the same `set` on every layer the rule matches within its scope.
+  patchWhere: { effect: "overwrites", required: ["where", "set"], shows: {} },
   move: { effect: "moves", required: ["nodeId", "parentId"], shows: {} },
   delete: { effect: "deletes", required: ["nodeId"], shows: {} },
   // Source edits (source-spec.ts): one change that every user of the variable or style follows.
@@ -231,6 +241,9 @@ export interface WritePreviewStep {
   invalid?: string;
   /** createTree with `bind`, when a plugin answered the dry run: what the file would bind (bind-values.ts) */
   bind?: BindCounts;
+  /** patchWhere, when a plugin answered the dry run: how many layers the rule matches, per page, a few samples and the
+   *  token a real run sends back (rule-spec.ts) */
+  match?: RuleMatch;
   /** a keyed createTree re-send, when a plugin answered the dry run: the existing layers it would change (writeImpact),
    *  the ones this plugin session created left out */
   changedLayers?: number;
@@ -244,6 +257,7 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
   const missing = missingWriteFields(o.op, o);
   if (o.op === "createTree") return treePreview(o, index, missing);
   if (o.op === "patch") return patchPreview(o, index, missing);
+  if (o.op === "patchWhere") return rulePreview(o, index, missing);
   if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
   if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
   if (o.op === "createVariables" || o.op === "createStyles") return createPreview(o, index, missing);
@@ -280,6 +294,22 @@ function patchPreview(o: WriteOp, index: number, missing: readonly string[]): Wr
   const { problems, summary } = checkPatch(o.set);
   if (problems.length || !isPatchSet(o.set)) return { ...base, invalid: problems.join("\n") };
   return { ...base, fields: patchRows(o.set, summary), change: describePatch(o.nodeId, summary) };
+}
+
+/** A patchWhere op's preview: where it looks, one row per field it sets, the change in one sentence — or every problem.
+ *  How many layers match (per page, with samples and the token) is the plugin's answer (writeImpact `match`). */
+function rulePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
+  const base = { index, op: o.op, effect: "overwrites" as const, target: describeScope(o.scope) };
+  if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+  const r = checkRule({ ...o }, `ops[${index}]`);
+  const { problems, summary } = checkPatch(o.set);
+  if (r.problems.length || !r.rule || problems.length || !isPatchSet(o.set)) return { ...base, invalid: [...r.problems, ...problems].join("\n") };
+  const sets = "sets " + summary.fields.join(", ") + (summary.refs.variables.length ? "; variables " + summary.refs.variables.map((v) => "'" + v + "'").join(", ") : "") +
+    (summary.refs.textStyles.length ? "; text styles " + summary.refs.textStyles.map((v) => "'" + v + "'").join(", ") : "");
+  return {
+    ...base, fields: patchRows(o.set, summary),
+    change: `every layer matching ${describeWhere(r.rule.where)} on ${describeScope(r.rule.scope)}: ${sets} — the plugin counts the matches (a dry run it answers gives \`match\`: per page, samples and a \`token\`); a real run over ${RULE_TOKEN_MIN} matches must carry that token, and is refused when the matches changed since; always waits for the designer's review; one undo step, put back whole if it fails`,
+  };
 }
 
 /** A move or delete op's preview: the change in one sentence. Whether the node was created this session is checked
@@ -516,6 +546,9 @@ export interface AppliedWrite {
   /** createTree with `bind`: the raw values it bound to the file's variables and text styles, the instances the spec
    *  places, the raw values left (then not repeated as `unbound`), and the values several candidates matched */
   bind?: BindCounts;
+  /** patchWhere: how many layers it changed, and on how many pages */
+  matched?: number;
+  pages?: number;
   /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did). A keyed re-send lists
    *  only the handles that are new: on a node it built, or given to a node that had none. */
   handles?: Record<string, string>;
@@ -701,6 +734,8 @@ export interface WriteImpactStep {
   /** a keyed createTree (or component spec) the file has a result for: how many of its existing layers the re-send
    *  changes, those this plugin session created left out (the review's count, decision 18) */
   changedLayers?: number;
+  /** patchWhere: what the rule matches (counts per page, samples, the token) */
+  match?: RuleMatch;
 }
 /** writeImpact's reply: the dry run's file-side half. `warnings`: pages that could not be read, so a count may be low. */
 export interface WriteImpactReply {
@@ -919,6 +954,7 @@ export function writeOpError(o: unknown, i: number): string | null {
   // came round the MCP server.
   if (o.treeFile !== undefined) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
   if (o.bind !== undefined && op !== "createTree") return `\`${at}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
+  for (const k of ["where", "scope", "token"]) if (o[k] !== undefined && op !== "patchWhere") return `\`${at}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
   const missing = missingWriteFields(op, o);
   if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
   if (op === "createTree") {
@@ -927,6 +963,10 @@ export function writeOpError(o: unknown, i: number): string | null {
   }
   if (op === "patch") {
     const { problems } = checkPatch(o.set, `${at}.set`);
+    if (problems.length) return patchRefusal(problems);
+  }
+  if (op === "patchWhere") {
+    const problems = [...checkRule(o, at).problems, ...checkPatch(o.set, `${at}.set`).problems];
     if (problems.length) return patchRefusal(problems);
   }
   if (op === "setVariable") {

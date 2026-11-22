@@ -20,6 +20,7 @@
 //     deprecated); Variable.remove() deletes it. A variable's resolvedType never changes.
 //   * figma.createPaintStyle / createTextStyle / createEffectStyle make a local style (a text style starts as Inter
 //     Regular); BaseStyle.remove() deletes it. Setting a text style's font fields needs its font loaded.
+import { ruleImpact } from "./rules";
 import type { AppliedWrite, CreateOutcome, CreatePlan, WriteImpactReply, WriteOp } from "../../bridge/src/commands.ts";
 import { CREATE_OPS } from "../../bridge/src/commands.ts";
 import { checkCreateStyles, checkCreateVariables, figmaType, type StyleRow } from "../../bridge/src/create-spec.ts";
@@ -671,7 +672,9 @@ export async function designImpact(ops: readonly WriteOp[]): Promise<WriteImpact
   const components = await componentImpact(ops);
   // A `bind: true` spec: what the file would bind (bind.ts), against the file and the batch's create tables.
   const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
-  const steps = [...sources.steps, ...creates.steps, ...components, ...binds].sort((a, b) => a.index - b.index);
+  // A bulk patch by rule: its matches per page, a few samples and the token a real run sends back (rules.ts).
+  const rules = await ruleImpact(ops);
+  const steps = [...sources.steps, ...creates.steps, ...components, ...binds, ...rules].sort((a, b) => a.index - b.index);
   // A keyed re-send: how many existing layers it changes (keyed.ts), for the review's count — on the op's step when it
   // has one (a component spec's), else a step of its own.
   for (const k of await keyedImpact(ops, createdThisSession)) {

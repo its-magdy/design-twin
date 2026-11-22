@@ -1,6 +1,6 @@
 {
   "estimator": "ceil(characters / 4)",
-  "toolDefinition": 1287,
+  "toolDefinition": 1400,
   "routes": {
     "four-op": {
       "new-screen": {
@@ -206,6 +206,15 @@
         "out": 43,
         "in": 153,
         "total": 196
+      }
+    },
+    "rule-patch": {
+      "same-change-many": {
+        "calls": 1,
+        "ops": 1,
+        "out": 34,
+        "in": 12,
+        "total": 46
       }
     }
   }

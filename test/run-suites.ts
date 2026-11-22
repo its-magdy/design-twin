@@ -112,6 +112,8 @@ const SUITE_FILES: readonly string[] = [
   "write-bind.test.ts",
   // PROTOTYPE (#174): when a write waits for the designer (pure)
   "review-policy.test.ts",
+  // a bulk patch by rule (#171): the rule's check, words and token, its wire row, preview and card line (pure)
+  "write-rules.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];
