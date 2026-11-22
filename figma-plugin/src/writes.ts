@@ -12,6 +12,7 @@ import { queueWork } from "./state";
 import { toast } from "./toast";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
+import { makeDest } from "./places";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
@@ -84,7 +85,7 @@ function consent(): void {
 }
 
 // What an op resolved to before the batch ran: a variable-mode op's node/collection/mode (variable-modes.ts
-// resolveModeOps), a createTree op's page and fonts (tree.ts resolveTreeOps), a patch's node and names (patch.ts
+// resolveModeOps), a createTree op's page, section and fonts (tree.ts resolveTreeOps, places.ts), a patch's node and names (patch.ts
 // resolvePatchOps), a move's node and new parent (structure.ts).
 interface Resolved {
   mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined;
@@ -212,9 +213,13 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
       // one by one, as they land.
       if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
+      // The page and section it lands in that the batch makes, when this is the first op landing there (places.ts):
+      // each a change of its own, so a later failure removes it after the frames in it.
+      const made = await makeDest(tree.dest, consent, changes);
+      consent();
       const change = await buildTree(tree, consent);
       changes.push(change);
-      return change.applied;
+      return made.page || made.section ? { ...change.applied, ...(made.page ? { pageCreated: made.page } : {}), ...(made.section ? { sectionCreated: made.section } : {}) } : change.applied;
     }
     // Resolved up front: the node exists and has every field, the names resolved and the fonts loaded. The values it
     // replaces are kept; it puts itself back if it throws partway (patch.ts).
@@ -568,6 +573,8 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const bound = trees.targets.get(i);
     const row = rows[i];
     if (bound && bound.bind && row) { row.bind = bound.bind; delete row.unbound; }
+    // What landing it said: a section it grew now runs into a neighbour.
+    if (bound) for (const m of bound.landed) warnings.push("ops[" + i + "]: " + m);
   }
   // Every delete is checked before the first one runs: a deleted node cannot be brought back, so a check that fails
   // must fail while the batch can still be put back whole.

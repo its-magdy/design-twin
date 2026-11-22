@@ -131,6 +131,8 @@ export interface FakeFigma {
   createFrame?: () => FakeNode;
   createText?: () => FakeNode;
   createComponent?: () => FakeNode;
+  createSection?: () => FakeNode;
+  createPage?: () => FakeNode;
   combineAsVariants?: (nodes: FakeNode[], parent: FakeNode) => FakeNode;
   loadFontAsync?: (font: { family: string; style: string }) => Promise<void>;
   listAvailableFontsAsync?: () => Promise<Array<{ fontName: { family: string; style: string } }>>;

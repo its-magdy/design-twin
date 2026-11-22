@@ -561,6 +561,10 @@ export interface AppliedWrite {
   /** createTree: the id of each node the spec gave a `handle`, by handle (absent when none did). A keyed re-send lists
    *  only the handles that are new: on a node it built, or given to a node that had none. */
   handles?: Record<string, string>;
+  /** createTree with `createPage`: the id of the page it made (on the op that made it; a page the file had is not named) */
+  pageCreated?: string;
+  /** createTree with `createSection`: the id of the section it made (on the op that made it) */
+  sectionCreated?: string;
   /** createTree with a `key`: the key the result is stored under */
   key?: string;
   /** createTree, a keyed re-send: each node updated in place — its id, its handle, the spec fields that changed */

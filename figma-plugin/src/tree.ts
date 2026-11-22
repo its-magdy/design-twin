@@ -2,7 +2,8 @@
 //
 // The spec has been checked whole before this module sees it (bridge/src/tree-spec.ts checkTree, run by the wire
 // check and again by applyWrites). What is left can only be answered by the file, and is answered BEFORE the first op
-// of the batch runs (resolveTreeOps): the page the frame lands on resolves to exactly one page, every font the
+// of the batch runs (resolveTreeOps): the page the frame lands on resolves to exactly one page (and its section to one
+// section; either may be one the batch makes: places.ts), every font the
 // texts use loads, and every component, variable and text style the spec names resolves to one thing that fits
 // (tree-refs.ts). A spec that fails any of it is refused with the rest of the batch, every problem listed. A library
 // item the spec names by key is imported only after all of that passed (writes.ts runs `imports`).
@@ -10,7 +11,7 @@
 // Building (buildTree) makes every node without an await, so the designer cannot untick "Allow edits" halfway
 // through the nodes. The root is built hidden on the page Figma creates nodes on; then the texts that name a text
 // style get it (setTextStyleIdAsync, the one await, with consent checked after each); and only once every node is in
-// place is the root moved to its page, placed, and shown. Any throw on the way removes the root — and with it
+// place is the root moved to its page or section, placed (places.ts land), and shown. Any throw on the way removes the root — and with it
 // everything below — so a tree either lands whole or leaves no trace. Applied, it is a Change (write-batch.ts) whose
 // undo removes it, so a later op of the same batch failing takes it back too.
 //
@@ -28,7 +29,7 @@
 //     node.setBoundVariable(field, variable). Setting the raw value afterwards unbinds it, so binding comes last.
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
-import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-match.ts";
+import { nearestNames, quoteList } from "../../bridge/src/name-match.ts";
 import { imagePaint } from "./images";
 import { fontOf, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
 import { checkTree } from "../../bridge/src/tree-check.ts";
@@ -44,8 +45,9 @@ import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
 import type { BoundSpec } from "./bind";
 import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
+import { land, resolveDests, type Dest, type Landed } from "./places";
 
-/** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
+/** A createTree op whose page (and section) resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
   /** the spec as built: its fragments placed and its row tables spread (bridge/src/tree-expand.ts) */
   spec: TreeNodeSpec;
@@ -53,17 +55,17 @@ export interface TreeTarget {
   labels: ReadonlyMap<object, string>;
   /** each copy of an existing node in `spec`, resolved (clones.ts) */
   clones: Map<TreeNodeSpec, CloneTarget>;
-  page: PageNode;
+  /** where it lands: its page and section, either of which the batch may make (places.ts) */
+  dest: Dest;
   summary: TreeSummary;
   refs: ResolvedRefs;
   /** set when the spec's key names a result the file already holds: the op updates it in place (keyed.ts) */
   update?: KeyedUpdate | undefined;
   /** a `bind: true` op: what binding its values to the file did (bind.ts), for the reply */
   bind?: BindCounts | undefined;
+  /** what landing it said (a section it grew now runs into a neighbour), filled by the build, for the reply's warnings */
+  landed: string[];
 }
-
-/** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
-export const PLACE_GAP = 100;
 
 /**
  * Resolve every createTree op of a batch against the file: its page, its fonts. Every op is looked at, so the
@@ -104,6 +106,9 @@ export async function resolveTreeOps(ops: readonly WriteOp[], bound: ReadonlyMap
     if (c && !planned.has(c.name)) planned.set(c.name, index);
   }
   setPlannedComponents(planned);
+  // Where each op lands: its page and section, and the ones the batch makes (places.ts), every problem listed.
+  const places = await resolveDests(ops);
+  problems.push(...places.problems);
 
   for (const [index, op] of ops.entries()) {
     if (op.op !== "createTree") continue;
@@ -114,8 +119,7 @@ export async function resolveTreeOps(ops: readonly WriteOp[], bound: ReadonlyMap
     const b = bound.get(index);
     const { problems: invalid, summary, expanded: spec, labels } = checkTree(b ? b.spec : op.tree);
     if (invalid.length || !spec) { bad("the tree spec did not pass its check"); continue; }
-    const page = resolvePage(op.page);
-    if ("error" in page) bad(page.error);
+    const dest = places.dests.get(index);
     const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e): e is string => e !== null);
     for (const e of fontErrors) bad(e);
     const axisErrors = fontErrors.length ? [] : variationProblems(spec, labels);
@@ -128,9 +132,9 @@ export async function resolveTreeOps(ops: readonly WriteOp[], bound: ReadonlyMap
     const clones = copies.length ? await resolveClones(copies, (f) => load(f.family, f.style), bad, fontsLater) : new Map<TreeNodeSpec, CloneTarget>();
     for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
     for (const c of clones.values()) cloneTargets.push(c);
-    if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
-    await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
-    targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...(b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {}) });
+    // (Its page, when the file has it, was loaded by resolveDests: dynamic-page, before its children are read.)
+    if (!dest || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
+    targets.set(index, { spec, labels, clones, dest, summary, refs: noRefs(), landed: [], ...(b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {}) });
   }
   // Every op's references, resolved together (one lookup per name across the batch), into one shared map.
   const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
@@ -167,16 +171,8 @@ function variationProblems(spec: TreeNodeSpec, labels: ReadonlyMap<object, strin
   return out;
 }
 
-function resolvePage(ref: string | undefined): { ok: PageNode } | { error: string } {
-  if (ref === undefined) return { ok: figma.currentPage };
-  const m = matchByName(ref, figma.root.children, (p) => p.name, (p) => [p.id]);
-  if (m.kind === "one") return { ok: m.item };
-  if (m.kind === "many") return { error: "page '" + ref + "' matches " + m.matches.length + " pages — pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
-  return { error: "page '" + ref + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
-}
-
 /**
- * Build a resolved tree and attach it to its page. Throws (leaving nothing behind) when Figma refuses a value, or when
+ * Build a resolved tree and attach it to its page or section (made already: places.ts makeDest). Throws (leaving nothing behind) when Figma refuses a value, or when
  * `consent` throws: it is called after each await, so "Allow edits" turned off while the text styles are set stops
  * the build and removes the hidden, unplaced root (it never showed in the file).
  */
@@ -191,15 +187,14 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
   const key = t.spec.key;
   const indexWas = key !== undefined ? readIndex(key) : "";
   let shown = true;
+  let landed: Landed | null = null;
   try {
     shown = rootCopy ? root.visible : t.spec.hidden !== true;
     root.visible = false; // built to the side: nothing shows until the whole tree is in place
     if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
     await finish(made, 0, 0, consent);
-    const { x, y } = placement(t.page, root.id, t.spec);
-    t.page.appendChild(root);
-    root.x = x;
-    root.y = y;
+    landed = land(root, t.dest, t.spec);
+    t.landed.push(...landed.warnings);
     root.visible = shown;
     // A keyed spec leaves its key and each node's own spec on the nodes, and the root's id under the key on the
     // document, so the same key sent again finds this result and updates it (keyed.ts).
@@ -210,8 +205,10 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     markCreated(root);
   } catch (e) {
     try { root.remove(); } catch { /* already gone */ }
+    if (landed) { try { landed.undo(); } catch { /* the section's size is said by the restore of the batch */ } }
     throw e;
   }
+  const grew = landed;
   const applied: AppliedWrite = { id: root.id, created: createdCount(made) };
   if (key !== undefined) applied.key = key;
   if (made.handles.size) applied.handles = handleRecord(made.handles);
@@ -222,6 +219,7 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     what: "the tree '" + root.name + "' (" + root.id + ")",
     restore() {
       root.remove();
+      if (grew) grew.undo(); // the sections it grew, back to their size
       if (key !== undefined && readIndex(key) === root.id) writeIndex(key, indexWas);
     },
   };
@@ -238,6 +236,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
   const key = componentKey(name);
   const parts: SceneNode[] = [];
   let root: ComponentNode | ComponentSetNode | null = null;
+  let landed: Landed | null = null;
   try {
     if (type === "COMPONENT") {
       const c = figma.createComponent();
@@ -270,10 +269,8 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     await finish(made, 0, 0, consent);
     const keys = addDefs(root, fileDefs(t.spec, t.refs));
     wireAll(made.pairs, keys);
-    const { x, y } = placement(t.page, root.id, t.spec);
-    t.page.appendChild(root);
-    root.x = x;
-    root.y = y;
+    landed = land(root, t.dest, t.spec);
+    t.landed.push(...landed.warnings);
     root.visible = t.spec.hidden !== true;
     stampAll(made, key);
     markCreated(root);
@@ -283,9 +280,11 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     if (made.handles.size) applied.handles = handleRecord(made.handles);
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
     const built = root;
-    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); } };
+    const grew = landed;
+    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); grew.undo(); } };
   } catch (e) {
     for (const p of parts.slice().reverse()) { try { if (!p.removed) p.remove(); } catch { /* already gone */ } }
+    if (landed) { try { landed.undo(); } catch { /* the section's size is said by the restore of the batch */ } }
     throw e;
   }
 }
@@ -385,37 +384,6 @@ function handleRecord(m: ReadonlyMap<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
   return out;
-}
-
-/** What a top-level node occupies on the page: its bounding box (rotation included), else its own x/y/size. */
-function occupied(c: SceneNode): { x: number; y: number; width: number; height: number } {
-  const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
-  return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
-}
-
-/** Where a new tree's root will land, before it is built (the review card says it, and its Show me pans there):
- *  `beside` when it goes right of the frames already on the page, false when the spec placed it or the page is empty. */
-export function landingSpot(t: TreeTarget): { page: PageNode; x: number; y: number; beside: boolean } {
-  const at = placement(t.page, "", t.spec);
-  const beside = !(t.spec.x !== undefined && t.spec.y !== undefined) && t.page.children.length > 0;
-  return { page: t.page, x: at.x, y: at.y, beside };
-}
-
-/** Where the root lands: its own x/y, else right of everything already on the page, top-aligned with it. */
-function placement(page: PageNode, rootId: string, spec: TreeNodeSpec): { x: number; y: number } {
-  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
-  let right: number | null = null;
-  let top: number | null = null;
-  for (const c of page.children) {
-    if (c.id === rootId) continue; // built on the current page, which may be this one
-    const b = occupied(c);
-    right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
-    top = top === null ? b.y : Math.min(top, b.y);
-  }
-  return {
-    x: spec.x !== undefined ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
-    y: spec.y !== undefined ? spec.y : top === null ? 0 : Math.round(top),
-  };
 }
 
 export interface Made {

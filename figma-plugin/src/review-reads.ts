@@ -9,7 +9,8 @@ import type { WriteOp } from "../../bridge/src/commands.ts";
 import type { OpRead } from "../../bridge/src/review-card.ts";
 import { countLayers } from "../../bridge/src/review-policy.ts";
 import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } from "./sources";
-import { landingSpot, type TreeTarget } from "./tree";
+import type { TreeTarget } from "./tree";
+import { landing } from "./places";
 import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { RuleTarget } from "./rules";
@@ -230,10 +231,10 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
             if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
             break;
           }
-          const s = landingSpot(tt);
-          const page = s.page !== figma.currentPage ? " on page '" + s.page.name + "'" : "";
-          read.lands = (s.beside ? "right of the existing frames" : "at " + s.x + ", " + s.y) + page;
-          spot = { pageId: s.page.id, x: s.x, y: s.y };
+          // Where it lands (places.ts): a page or section still to make is said as new, and has no spot to pan to.
+          const l = landing(tt.dest, tt.spec);
+          read.lands = l.lands;
+          if (l.spot) spot = l.spot;
           break;
         }
         case "createFrame":

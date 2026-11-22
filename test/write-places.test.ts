@@ -4,7 +4,7 @@
 //   bun test/write-places.test.ts
 import { check, report } from "./assert.ts";
 import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, placeError, SECTION_PAD } from "../bridge/src/place-spec.ts";
-import { writeOpError, writeOpPreview, type WriteOp } from "../bridge/src/commands.ts";
+import { writeOpError, writeOpPreview } from "../bridge/src/commands.ts";
 import { cardLines, lineText } from "../bridge/src/review-card.ts";
 
 const tree = { name: "Pay", box: { w: 390, h: 844 } };
@@ -34,7 +34,7 @@ check("the pure check itself, by its path", placeError({ op: "createTree", creat
 check("the limits: 10 new pages and 25 new sections a batch; an 80 px margin in a section", MAX_NEW_PAGES === 10 && MAX_NEW_SECTIONS === 25 && SECTION_PAD === 80);
 
 console.log("\nthe dry run:");
-const pv = (o: Record<string, unknown>) => writeOpPreview({ op: "createTree", tree, ...o } as WriteOp, 0);
+const pv = (o: Record<string, unknown>) => writeOpPreview({ op: "createTree", tree, ...o }, 0);
 check(`a section on the current page (got ${JSON.stringify(pv({ section: "Pay" }).target)})`, pv({ section: "Pay" }).target === "new frame in section 'Pay' on the current page");
 check("a new page is said as made when the file has none", pv({ page: "Checkout", createPage: true }).target === "new frame on page 'Checkout' (made when the file has none)");
 check("a new section on a new page", pv({ page: "Checkout", createPage: true, section: "Pay", createSection: true }).target
@@ -47,11 +47,11 @@ const at = String(writeOpPreview({ op: "createTree", tree: { ...tree, x: 40, y: 
 check(`explicit coordinates in a section are the section's own (got ${JSON.stringify(at)})`, /in section 'Pay' on the current page at 40,60 inside it \(the section grows to fit\)/.test(at));
 check("without a section the sentence is as before", /on page 'Screens' at 0,0/.test(String(writeOpPreview({ op: "createTree", page: "Screens", tree: { name: "A", x: 0, y: 0 } }, 0).change))
   && /on the current page, placed beside the existing frames — /.test(String(pv({}).change)) && /the page and fonts are checked/.test(String(pv({}).change)));
-check("an op the check refuses previews as invalid", writeOpPreview({ op: "createTree", tree, createPage: true } as WriteOp, 0).invalid === "`ops[0].createPage` needs `page`: the name of the page to make (it is made when the file has no page of that name)");
+check("an op the check refuses previews as invalid", writeOpPreview({ op: "createTree", tree, createPage: true }, 0).invalid === "`ops[0].createPage` needs `page`: the name of the page to make (it is made when the file has no page of that name)");
 
 console.log("\nthe review card:");
 const line = (o: Record<string, unknown>, lands: string): string => {
-  const [l] = cardLines([{ op: "createTree", tree, ...o } as WriteOp], [{ lands }]);
+  const [l] = cardLines([{ op: "createTree", tree, ...o }], [{ lands }]);
   return l ? lineText(l) : "";
 };
 check(`a new page and section are said on the line (got ${JSON.stringify(line({ page: "Checkout", createPage: true, section: "Pay", createSection: true }, "in a new section 'Pay' on a new page 'Checkout'"))})`,

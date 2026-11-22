@@ -1,0 +1,337 @@
+// Where a createTree lands (docs/write-plane-spec.md decision 13): its page, the section on it, and the ones it asks to
+// make (bridge/src/place-spec.ts is the pure half: the fields, their check, the words).
+//
+// Resolved with the rest of the batch, before anything runs (resolveDests): a page by exact name or id (the current one
+// by default), a section on that page (nested ones too) the same way. A name that matches several is refused with their
+// ids; one that matches nothing is refused with the closest names — unless the batch asks to make it (`createPage`,
+// `createSection`), and then it is made once for the whole batch: every op of the batch naming that page (or that
+// section on that page) lands in the one made, whether or not it asked. A batch makes at most MAX_NEW_PAGES pages and
+// MAX_NEW_SECTIONS sections.
+//
+// Made when the first op that lands there runs (makeDest), as Changes on the batch's list: a failure later in the
+// batch removes them again, newest first, after the frames in them — and never with a layer in them that the batch did
+// not make (that one stays, and the reply says so). A page that is the current one when it goes is left first.
+//
+// Placed (land): on a page, right of everything on it, top-aligned (tree.ts did this before). In a section, the frame's
+// x/y are the section's own (as Figma reads a section child's): beside what it holds — right of it, top-aligned, or on
+// a new row below when growing right would run the section into one of its neighbours — at SECTION_PAD from its edges
+// when it is empty. The section then grows (never shrinks) to hold the frame with that margin, and so does each section
+// around it; the growth is put back with the frame. A section that still runs into a neighbour is said in a warning.
+//
+// Plugin API facts this leans on (@figma/plugin-typings):
+//   * figma.createPage appends a new page to the document; a Starter file stops at 3 pages and it throws then.
+//   * figma.createSection makes a SECTION on the current page; appendChild moves it. A section is sized with
+//     resizeWithoutConstraints (≥ 0.01 a side), and does not grow by itself when a plugin appends to it.
+//   * Under documentAccess "dynamic-page" a page is loaded (loadAsync) before its children are read.
+import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
+import type { WriteOp } from "../../bridge/src/commands.ts";
+import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
+import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, SECTION_PAD } from "../../bridge/src/place-spec.ts";
+import type { Change, OpProblem } from "./write-batch";
+
+/** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
+export const PLACE_GAP = 100;
+
+/** A page an op lands on: one the file has (`node`), or one the batch makes (`node` null until it is made). One object
+ *  per page across the batch, so every op naming it shares what is made. */
+export interface PageDest { name: string; node: PageNode | null; make: boolean; current: boolean }
+/** A section an op lands in, on `page`: one the page has, or one the batch makes. One object per section. */
+export interface SectionDest { name: string; node: SectionNode | null; make: boolean; page: PageDest }
+export interface Dest { page: PageDest; section: SectionDest | null }
+
+const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
+const pageWords = (p: PageDest): string => (p.current ? "the current page '" + p.name + "'" : "page '" + p.name + "'");
+
+/**
+ * Where each createTree op of the batch lands, by op index, and every problem with it. Existing pages that an op lands
+ * on are loaded. Nothing is made here.
+ */
+export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Map<number, Dest>; problems: OpProblem[] }> {
+  const problems: OpProblem[] = [];
+  const dests = new Map<number, Dest>();
+  const pages = new Map<PageNode, PageDest>();
+  const newPages = new Map<string, PageDest>();
+  const pageOf = (p: PageNode): PageDest => {
+    let d = pages.get(p);
+    if (!d) { d = { name: p.name, node: p, make: false, current: p === figma.currentPage }; pages.set(p, d); }
+    return d;
+  };
+  const trees = [...ops.entries()].filter(([, op]) => op.op === "createTree");
+  // The pages to make: a name an op asks to make that the file has none of (one it has several of is refused below).
+  for (const [index, op] of trees) {
+    if (op.createPage !== true || op.page === undefined || newPages.has(op.page)) continue;
+    if (matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]).kind !== "none") continue;
+    if (newPages.size >= MAX_NEW_PAGES) { problems.push({ index, op: op.op, message: "the batch makes " + (newPages.size + 1) + " pages; one batch makes at most " + MAX_NEW_PAGES + " (send the rest in another)" }); continue; }
+    newPages.set(op.page, { name: op.page, node: null, make: true, current: false });
+  }
+  const pageFor = new Map<number, PageDest>();
+  for (const [index, op] of trees) {
+    const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
+    if (op.page === undefined) { pageFor.set(index, pageOf(figma.currentPage)); continue; }
+    const m = matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]);
+    if (m.kind === "one") { pageFor.set(index, pageOf(m.item)); continue; }
+    if (m.kind === "many") { bad("page '" + op.page + "' matches " + m.matches.length + " pages — pass one's id: " + m.matches.slice(0, 3).map(label).join(", ")); continue; }
+    const planned = newPages.get(op.page);
+    if (planned) { pageFor.set(index, planned); continue; }
+    if (op.createPage === true) continue; // over the limit: said above
+    bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createPage: true`");
+  }
+  // Every page an op lands on, loaded (dynamic-page) before its sections are read or anything is appended to it.
+  for (const d of pages.values()) if (d.node) await d.node.loadAsync();
+  // The sections on each page, read once.
+  const sectionsOn = new Map<PageDest, SectionNode[]>();
+  const sectionsOf = (p: PageDest): SectionNode[] => {
+    let list = sectionsOn.get(p);
+    if (!list) { list = p.node ? p.node.findAllWithCriteria({ types: ["SECTION"] }) : []; sectionsOn.set(p, list); }
+    return list;
+  };
+  const existing = new Map<SectionNode, SectionDest>();
+  const sectionOf = (s: SectionNode, page: PageDest): SectionDest => {
+    let d = existing.get(s);
+    if (!d) { d = { name: s.name, node: s, make: false, page }; existing.set(s, d); }
+    return d;
+  };
+  // The sections to make, per page: a name an op asks to make that its page has none of.
+  const newSections = new Map<PageDest, Map<string, SectionDest>>();
+  let madeSections = 0;
+  for (const [index, op] of trees) {
+    const page = pageFor.get(index);
+    if (!page || op.createSection !== true || op.section === undefined) continue;
+    const planned = newSections.get(page) || new Map<string, SectionDest>();
+    if (planned.has(op.section)) continue;
+    if (matchByName(op.section, sectionsOf(page), (s) => s.name, (s) => [s.id]).kind !== "none") continue;
+    if (madeSections >= MAX_NEW_SECTIONS) { problems.push({ index, op: op.op, message: "the batch makes " + (madeSections + 1) + " sections; one batch makes at most " + MAX_NEW_SECTIONS + " (send the rest in another)" }); continue; }
+    planned.set(op.section, { name: op.section, node: null, make: true, page });
+    newSections.set(page, planned);
+    madeSections++;
+  }
+  for (const [index, op] of trees) {
+    const page = pageFor.get(index);
+    if (!page) continue;
+    if (op.section === undefined) { dests.set(index, { page, section: null }); continue; }
+    const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
+    const m = matchByName(op.section, sectionsOf(page), (s) => s.name, (s) => [s.id]);
+    if (m.kind === "one") { dests.set(index, { page, section: sectionOf(m.item, page) }); continue; }
+    if (m.kind === "many") { bad("section '" + op.section + "' matches " + m.matches.length + " sections on " + pageWords(page) + " — pass one's id: " + m.matches.slice(0, 3).map(label).join(", ")); continue; }
+    const planned = newSections.get(page);
+    const made = planned ? planned.get(op.section) : undefined;
+    if (made) { dests.set(index, { page, section: made }); continue; }
+    if (op.createSection === true) continue; // over the limit: said above
+    bad("section '" + op.section + "' matches no section on " + pageWords(page) + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
+  }
+  return { dests, problems };
+}
+
+/** A container's children, except `skip` (a node being placed among them). */
+function others(parent: BaseNode & ChildrenMixin, skip: string): SceneNode[] {
+  return parent.children.filter((c) => c.id !== skip);
+}
+
+/** What a node occupies in its parent's coordinates: on a page its bounding box (rotation included), else its x/y/size. */
+function occupied(c: SceneNode): { x: number; y: number; width: number; height: number } {
+  const b = c.parent && c.parent.type === "PAGE" && "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
+  return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
+}
+interface Box { x: number; y: number; width: number; height: number }
+const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/** Where a top-level node lands on `page`: the spec's own x/y, else right of everything already on it, top-aligned. */
+export function pagePlacement(page: PageNode, skip: string, spec: Pick<TreeNodeSpec, "x" | "y">): { x: number; y: number } {
+  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
+  let right: number | null = null;
+  let top: number | null = null;
+  for (const c of others(page, skip)) {
+    const b = occupied(c);
+    right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
+    top = top === null ? b.y : Math.min(top, b.y);
+  }
+  return {
+    x: spec.x !== undefined ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
+    y: spec.y !== undefined ? spec.y : top === null ? 0 : Math.round(top),
+  };
+}
+
+/** Where a node of `w`×`h` lands in `section` (its own coordinates), by the spec's x/y and what the section holds. */
+function sectionPlacement(section: SectionNode, skip: string, spec: Pick<TreeNodeSpec, "x" | "y">, w: number, h: number): { x: number; y: number } {
+  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
+  const held = others(section, skip).map(occupied);
+  const pick = (x: number, y: number): { x: number; y: number } => ({ x: spec.x !== undefined ? spec.x : Math.round(x), y: spec.y !== undefined ? spec.y : Math.round(y) });
+  if (!held.length) return pick(SECTION_PAD, SECTION_PAD);
+  const left = Math.min(...held.map((b) => b.x));
+  const top = Math.min(...held.map((b) => b.y));
+  const right = Math.max(...held.map((b) => b.x + b.width));
+  const bottom = Math.max(...held.map((b) => b.y + b.height));
+  const beside = pick(right + PLACE_GAP, top);
+  if (!runsInto(section, beside, w, h)) return beside;
+  const below = pick(left, bottom + PLACE_GAP);
+  return runsInto(section, below, w, h) ? beside : below;
+}
+/** Whether `section`, grown to hold a node of `w`×`h` at `at`, would run into one of its neighbours. */
+function runsInto(section: SectionNode, at: { x: number; y: number }, w: number, h: number): boolean {
+  const grown = grownBox(section, at.x + w + SECTION_PAD, at.y + h + SECTION_PAD);
+  return !!grown && neighbourHit(section, grown) !== null;
+}
+/** The section's box grown to `needW`×`needH` (never shrunk); null when it already holds that. */
+function grownBox(section: SectionNode, needW: number, needH: number): Box | null {
+  const w = Math.max(section.width, Math.ceil(needW));
+  const h = Math.max(section.height, Math.ceil(needH));
+  return w === section.width && h === section.height ? null : { x: section.x, y: section.y, width: w, height: h };
+}
+/** The first of `section`'s neighbours (its parent's other children) that `box` runs into and its own box did not. */
+function neighbourHit(section: SectionNode, box: Box): SceneNode | null {
+  const p = section.parent;
+  if (!p || !("children" in p)) return null;
+  const was: Box = { x: section.x, y: section.y, width: section.width, height: section.height };
+  for (const c of p.children) {
+    if (c.id === section.id) continue;
+    const b = occupied(c);
+    if (overlaps(box, b) && !overlaps(was, b)) return c;
+  }
+  return null;
+}
+
+/** What landing a node did: how to take back the growth of the sections around it, and what it ran into. */
+export interface Landed { undo(): void; warnings: string[] }
+
+/**
+ * Attach `root` (built to the side, sized) where `dest` says, placed: on its page beside what is there, or in its section
+ * beside what it holds, the section and those around it grown to hold it. The page and the section must have been made
+ * (makeDest). Throws when Figma refuses; what it grew before that is put back.
+ */
+export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" | "y">): Landed {
+  const page = dest.page.node;
+  if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+  if (!dest.section) {
+    const { x, y } = pagePlacement(page, root.id, spec);
+    page.appendChild(root);
+    root.x = x;
+    root.y = y;
+    return { undo() {}, warnings: [] };
+  }
+  const section = dest.section.node;
+  if (!section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
+  const { x, y } = sectionPlacement(section, root.id, spec, root.width, root.height);
+  section.appendChild(root);
+  root.x = x;
+  root.y = y;
+  // Each section around the node grows to hold what is in it, with its margin: the one it is in, then outwards.
+  const grown: Array<{ s: SectionNode; w: number; h: number }> = [];
+  const warnings: string[] = [];
+  const undo = (): void => { for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h); };
+  try {
+    let child: SceneNode = root;
+    let s: BaseNode | null = section;
+    while (s && s.type === "SECTION") {
+      const box = grownBox(s, child.x + child.width + SECTION_PAD, child.y + child.height + SECTION_PAD);
+      if (box) {
+        const hit = neighbourHit(s, box);
+        grown.push({ s, w: s.width, h: s.height });
+        s.resizeWithoutConstraints(box.width, box.height);
+        if (hit) warnings.push("section '" + s.name + "' grew to " + box.width + "×" + box.height + " to hold '" + root.name + "' and now overlaps '" + hit.name + "'");
+      }
+      child = s;
+      s = s.parent;
+    }
+  } catch (e) {
+    try { undo(); } catch { /* the growth that was made is what Figma refused */ }
+    throw e;
+  }
+  return { undo, warnings };
+}
+
+/** The first layer in `n` (a page or section the batch made) that is not gone: one the batch did not make. */
+function leftIn(n: BaseNode & ChildrenMixin): SceneNode | null {
+  for (const c of n.children) if (!c.removed) return c;
+  return null;
+}
+
+/**
+ * Make what `dest` lands in that the batch makes and is not made yet: its page, then its section — each a Change on
+ * `changes`, whose undo removes it (refusing when it holds a layer the batch did not make). `consent` is checked before
+ * each. Returns what this call made, for the op's reply.
+ */
+export async function makeDest(dest: Dest, consent: () => void, changes: Change[]): Promise<{ page?: string; section?: string }> {
+  const out: { page?: string; section?: string } = {};
+  const p = dest.page;
+  if (!p.node) {
+    consent();
+    const page = figma.createPage();
+    p.node = page;
+    changes.push({
+      applied: { pageCreated: page.id }, kind: "created page", what: "the new page " + label(page),
+      async restore() {
+        if (page.removed) return;
+        const left = leftIn(page);
+        if (left) throw new Error("the page " + label(page) + " holds " + label(left) + ", which this batch did not make; it stays");
+        // The current page cannot be removed: the designer is moved to another page first (no undo step: the current
+        // page is not document state).
+        if (figma.currentPage === page) {
+          const other = figma.root.children.filter((x) => x !== page)[0];
+          if (other) await figma.setCurrentPageAsync(other);
+        }
+        page.remove();
+      },
+    });
+    page.name = p.name;
+    await page.loadAsync();
+    consent();
+    out.page = page.id;
+  }
+  const s = dest.section;
+  if (s && !s.node) {
+    const page = p.node;
+    consent();
+    const section = figma.createSection();
+    s.node = section;
+    changes.push({
+      applied: { sectionCreated: section.id }, kind: "created section", what: "the new section " + label(section),
+      restore() {
+        if (section.removed) return;
+        const left = leftIn(section);
+        if (left) throw new Error("the section " + label(section) + " holds " + label(left) + ", which this batch did not make; it stays");
+        section.remove();
+      },
+    });
+    section.name = s.name;
+    // Beside what the page holds; it grows to hold the frames placed in it (land).
+    const at = pagePlacement(page, section.id, {});
+    page.appendChild(section);
+    section.x = at.x;
+    section.y = at.y;
+    section.resizeWithoutConstraints(SECTION_PAD * 2, SECTION_PAD * 2);
+    out.section = section.id;
+  }
+  return out;
+}
+
+/** Where a new tree will land, before it is built (the review card says it, and its Show me pans to `spot`): words, and
+ *  a point on a page the file has (none when the page is still to make). In a section, the spec's own size is used
+ *  where it gives one (the built size is known only once it is built). */
+export function landing(dest: Dest, spec: TreeNodeSpec): { lands: string; spot: { pageId: string; x: number; y: number } | null } {
+  const p = dest.page;
+  const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
+  const page = p.node;
+  const s = dest.section;
+  if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
+  if (!s) {
+    const at = pagePlacement(page, "", spec);
+    const beside = !(spec.x !== undefined && spec.y !== undefined) && page.children.length > 0;
+    return { lands: (beside ? "right of the existing frames" : "at " + at.x + ", " + at.y) + pageText, spot: { pageId: page.id, x: at.x, y: at.y } };
+  }
+  if (!s.node) {
+    const at = pagePlacement(page, "", {});
+    return { lands: "in a new section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: at.x + SECTION_PAD, y: at.y + SECTION_PAD } };
+  }
+  const w = spec.box ? spec.box.w : 100;
+  const h = spec.box ? spec.box.h : 100;
+  const at = sectionPlacement(s.node, "", spec, w, h);
+  const origin = s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y };
+  return { lands: "in section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at.x, y: origin.y + at.y } };
+}
+
+/** The page `n` is on, or null. */
+export function pageHolding(n: BaseNode): PageNode | null {
+  let p: BaseNode | null = n.parent;
+  while (p && p.type !== "PAGE") p = p.parent;
+  return p && p.type === "PAGE" ? p : null;
+}

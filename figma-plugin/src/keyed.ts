@@ -39,6 +39,7 @@ import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
+import { pageHolding } from "./places";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -144,8 +145,16 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       if ("ours" in found && (await loadPageOf(found.ours))) root = found.ours;
     } else root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
-    if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
-      bad(what + ": its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is — leave `page` out");
+    // An update stays where its result is: a page or section the op names must be the result's (one the batch would
+    // make is not: nothing is made for an update).
+    const on = pageHolding(root);
+    if (op.page !== undefined && on && on !== t.dest.page.node) {
+      bad(what + ": its result " + label(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is — leave `page` out");
+      continue;
+    }
+    const inSection = root.parent && root.parent.type === "SECTION" ? root.parent : null;
+    if (op.section !== undefined && t.dest.section && (!t.dest.section.node || inSection !== t.dest.section.node)) {
+      bad(what + ": its result " + label(root) + (inSection ? " is in section '" + inSection.name + "'" : " is not in a section") + ", not '" + t.dest.section.name + "'; an update stays where the result is — leave `section` out");
       continue;
     }
     const old = readOld(root, key);
