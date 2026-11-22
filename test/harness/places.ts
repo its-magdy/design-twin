@@ -183,6 +183,47 @@ export const cases: Case[] = [{
       && k.figma.currentPage.name !== "Checkout" && k.figma.root.children.includes(k.figma.currentPage) && !/could not undo/.test(current.error ?? ""));
   },
 }, {
+  name: "a made page is checked again after the designer is moved off it: a layer put in, or edits turned off, meanwhile — it stays",
+  async run() {
+    // The batch's page becomes the current one while it builds; the put-back moves the designer off it (an await), and
+    // during that await the designer puts a layer on it, or unticks "Allow edits". Either way the page is not removed.
+    const sent = (k: World): Promise<WriteResult> => write(k, [
+      { op: "createTree", page: "Checkout", createPage: true, tree: { name: "Cart", children: [{ text: "Total", styles: { text: "Body" } }] } },
+      { op: "setFill", nodeId: "gone:1", color: "#fff" },
+    ]);
+    const opened = (k: World) => async (): Promise<void> => {
+      const pg = pageNamed(k, "Checkout")[0];
+      if (pg && k.figma.setCurrentPageAsync) await k.figma.setCurrentPageAsync(Object.assign(pg, { selection: [] }));
+    };
+    const a = await flowsWorld({ kit: true });
+    a.hooks.onStyle = opened(a);
+    const foreign: FakeNode = { id: "9:9", type: "FRAME", name: "Designer note", x: 0, y: 0, width: 10, height: 10 };
+    a.hooks.onSwitch = async () => {
+      const pg = pageNamed(a, "Checkout")[0];
+      if (!pg || a.figma.currentPage === pg) return; // the designer opening it; the put-back's switch is away from it
+      a.hooks.onSwitch = undefined;
+      if (typeof pg.appendChild === "function") (pg.appendChild as (c: FakeNode) => void)(foreign);
+    };
+    const r = await sent(a);
+    const kept = pageNamed(a, "Checkout")[0];
+    ok(`[PLACE-BACK] a layer put on the page during the switch: the page stays with it, and the error says why (${r.error})`,
+      r.ok === false && !!kept && kids(kept).length === 1 && kids(kept)[0] === foreign
+      && /page 'Checkout' .* holds 'Designer note' \(9:9\), which this batch did not make/.test(r.error ?? "")
+      && r.applied.some((x) => x.pageCreated === kept.id) && !(r.restored ?? []).some((x) => x.pageCreated !== undefined));
+    const b = await flowsWorld({ kit: true });
+    b.hooks.onStyle = opened(b);
+    b.hooks.onSwitch = async () => {
+      if (b.figma.currentPage.name === "Checkout") return;
+      b.hooks.onSwitch = undefined;
+      await b.allowEdits(false);
+    };
+    const off = await sent(b);
+    const stays = pageNamed(b, "Checkout")[0];
+    ok(`[PLACE-BACK] "Allow edits" unticked during the switch: the page stays, reported as kept, not as put back (${off.error})`,
+      off.ok === false && !!stays && /'Allow edits' was turned off while the batch was being put back/.test(off.error ?? "")
+      && off.applied.some((x) => x.pageCreated === stays.id) && !(off.restored ?? []).some((x) => x.pageCreated !== undefined));
+  },
+}, {
   name: "a made section holding a layer the batch did not make stays (with the layer), and is said",
   async run() {
     const w = await flowsWorld({ kit: true });

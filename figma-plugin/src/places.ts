@@ -27,7 +27,7 @@ import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, SECTION_PAD } from "../../bridge/src/place-spec.ts";
-import type { Change, OpProblem } from "./write-batch";
+import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
 export const PLACE_GAP = 100;
@@ -257,22 +257,32 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     consent();
     const page = figma.createPage();
     p.node = page;
-    changes.push({
+    const made: Change = {
       applied: { pageCreated: page.id }, kind: "created page", what: "the new page " + label(page),
-      async restore() {
+      async restore(allowed) {
         if (page.removed) return;
-        const left = leftIn(page);
-        if (left) throw new Error("the page " + label(page) + " holds " + label(left) + ", which this batch did not make; it stays");
+        // Checked again after every await: the designer may have put a layer on it, or unticked "Allow edits", meanwhile.
+        const check = (): void => {
+          if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off");
+          const left = leftIn(page);
+          if (left) throw new Error("the page " + label(page) + " holds " + label(left) + ", which this batch did not make; it stays");
+        };
+        check();
         // The current page cannot be removed: the designer is moved to another page first (no undo step: the current
         // page is not document state).
         if (figma.currentPage === page) {
           const other = figma.root.children.filter((x) => x !== page)[0];
           if (other) await figma.setCurrentPageAsync(other);
+          if (page.removed) return;
+          check();
+          if (figma.currentPage === page) throw new Error("the page " + label(page) + " is open again in Figma; it stays");
         }
         page.remove();
       },
-    });
+    };
+    changes.push(made);
     page.name = p.name;
+    made.what = "the new page " + label(page);
     await page.loadAsync();
     consent();
     out.page = page.id;
@@ -283,7 +293,7 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     consent();
     const section = figma.createSection();
     s.node = section;
-    changes.push({
+    const made: Change = {
       applied: { sectionCreated: section.id }, kind: "created section", what: "the new section " + label(section),
       restore() {
         if (section.removed) return;
@@ -291,8 +301,10 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
         if (left) throw new Error("the section " + label(section) + " holds " + label(left) + ", which this batch did not make; it stays");
         section.remove();
       },
-    });
+    };
+    changes.push(made);
     section.name = s.name;
+    made.what = "the new section " + label(section);
     // Beside what the page holds; it grows to hold the frames placed in it (land).
     const at = pagePlacement(page, section.id, {});
     page.appendChild(section);

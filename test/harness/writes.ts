@@ -117,8 +117,8 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * Pages and sections (#184): figma.createPage appends a new page to the document (past `pageLimit` pages it throws
  * Figma's Starter-plan error), figma.createSection makes a SECTION on the current page (resizeWithoutConstraints sizes
  * it; its children's x/y are its own), a page's remove() takes it out of the document (the current page cannot be
- * removed), and setCurrentPageAsync switches page. With `flows`, the file has a "Flows" page (0:6) of sections
- * (FLOWS below).
+ * removed), and setCurrentPageAsync switches page (`onSwitch` runs inside it, once it has: what the designer does
+ * while it is awaited). With `flows`, the file has a "Flows" page (0:6) of sections (FLOWS below).
  */
 export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: ReadonlyArray<readonly [string, string]>; flows?: boolean; pageLimit?: number } = {}) {
   const fonts: ReadonlyArray<readonly [string, string]> = [...AVAILABLE_FONTS, ...(opts.fonts ?? [])];
@@ -132,7 +132,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   const cloned: FakeNode[] = [];
   const raw = new WeakMap<FakeNode, FakeNode>(); // a node's own fields, behind the proxy that checks what Figma refuses
   const imports: string[] = [];
-  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
+  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined; onSwitch?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
   const trap = new Set<string>();
   const pageLoads: string[] = [];
@@ -420,7 +420,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       register(pg);
       return pg;
     },
-    setCurrentPageAsync: async (pg: FakeNode & { selection: FakeNode[] }) => { const f = doc.figma; if (f) f.currentPage = pg; },
+    setCurrentPageAsync: async (pg: FakeNode & { selection: FakeNode[] }) => { const f = doc.figma; if (f) f.currentPage = pg; if (hooks.onSwitch) await hooks.onSwitch(); },
     // Figma's combineAsVariants: a set in `parent` holding the components, each variant's values read from its name.
     combineAsVariants: (list: FakeNode[], parent: FakeNode) => {
       if (trap.has("combineAsVariants")) throw new Error("in Figma: cannot combine these components");

@@ -9432,22 +9432,31 @@
       consent2();
       const page = figma.createPage();
       p.node = page;
-      changes.push({
+      const made2 = {
         applied: { pageCreated: page.id },
         kind: "created page",
         what: "the new page " + label3(page),
-        async restore() {
+        async restore(allowed2) {
           if (page.removed) return;
-          const left = leftIn(page);
-          if (left) throw new Error("the page " + label3(page) + " holds " + label3(left) + ", which this batch did not make; it stays");
+          const check = () => {
+            if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+            const left = leftIn(page);
+            if (left) throw new Error("the page " + label3(page) + " holds " + label3(left) + ", which this batch did not make; it stays");
+          };
+          check();
           if (figma.currentPage === page) {
             const other = figma.root.children.filter((x) => x !== page)[0];
             if (other) await figma.setCurrentPageAsync(other);
+            if (page.removed) return;
+            check();
+            if (figma.currentPage === page) throw new Error("the page " + label3(page) + " is open again in Figma; it stays");
           }
           page.remove();
         }
-      });
+      };
+      changes.push(made2);
       page.name = p.name;
+      made2.what = "the new page " + label3(page);
       await page.loadAsync();
       consent2();
       out.page = page.id;
@@ -9458,7 +9467,7 @@
       consent2();
       const section = figma.createSection();
       s.node = section;
-      changes.push({
+      const made2 = {
         applied: { sectionCreated: section.id },
         kind: "created section",
         what: "the new section " + label3(section),
@@ -9468,8 +9477,10 @@
           if (left) throw new Error("the section " + label3(section) + " holds " + label3(left) + ", which this batch did not make; it stays");
           section.remove();
         }
-      });
+      };
+      changes.push(made2);
       section.name = s.name;
+      made2.what = "the new section " + label3(section);
       const at3 = pagePlacement(page, section.id, {});
       page.appendChild(section);
       section.x = at3.x;
@@ -11039,7 +11050,7 @@
       applied: { id: n.id },
       kind: "updated node",
       what: "the place, clipping or size limits of " + label4(n),
-      async restore() {
+      async restore(allowed2) {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
         if (size2) {
           if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
@@ -11048,6 +11059,7 @@
         for (const [k, id] of bound) {
           if (boundTo(n, k) === id) continue;
           const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+          if (id && !allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
           n.setBoundVariable(k, v);
         }
       }

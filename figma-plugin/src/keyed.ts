@@ -38,7 +38,7 @@ import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
 import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "./tree";
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
-import type { Change, OpProblem } from "./write-batch";
+import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import { pageHolding } from "./places";
 
 /** A createTree op that updates the result its key names. */
@@ -334,7 +334,7 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
     applied: { id: n.id },
     kind: "updated node",
     what: "the place, clipping or size limits of " + label(n),
-    async restore() {
+    async restore(allowed) {
       for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
       if (size) {
         if ((n.width !== size.w || n.height !== size.h) && "resize" in n) n.resize(size.w, size.h);
@@ -343,6 +343,7 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
       for (const [k, id] of bound) {
         if (boundTo(n, k) === id) continue;
         const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+        if (id && !allowed()) throw new RestoreStopped("'Allow edits' was turned off");
         n.setBoundVariable(k, v);
       }
     },
