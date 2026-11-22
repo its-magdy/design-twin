@@ -13,7 +13,7 @@ file or the spec instead. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbb
 - [The call](#the-call) · [The ops](#the-ops) · [Replies](#replies)
 - [Tree spec (`createTree`)](#tree-spec-createtree) · [Design-system references](#design-system-references)
 - [Copies, rows, fragments](#copies-rows-fragments) · [Components](#components) · [Keyed re-send](#keyed-re-send) · [Spec from disk](#spec-from-disk)
-- [Patch](#patch) · [Source edits](#source-edits) · [Starting from nothing](#starting-from-nothing) · [Variable modes](#variable-modes) · [Move and delete](#move-and-delete)
+- [Patch](#patch) · [Patch by rule](#patch-by-rule) · [Source edits](#source-edits) · [Starting from nothing](#starting-from-nothing) · [Variable modes](#variable-modes) · [Move and delete](#move-and-delete)
 - [What a write cannot set yet](#what-a-write-cannot-set-yet) · [Limits](#limits)
 
 ## The call
@@ -39,6 +39,7 @@ at most 45 s; if they have not answered by then it returns `{pending: true, tick
 |---|---|---|
 | `createTree` | `tree` (a spec, below) or `treeFile` (a path to the same spec as JSON) | `page` (a page's exact name or id; the current page by default), `bind` (`true`: bind raw values to the file's variables and text styles, [below](#binding-to-the-file)) |
 | `patch` | `nodeId`, `set` (the fields to change) | — |
+| `patchWhere` | `where` (the rule: any of `text`, `fill`, `variable`, `instanceOf`, `name`), `set` (as a patch's) | `scope` (`"selection"`, `"page"` (the default), `"file"`, or page names), `token` (from its dry run; needed over 25 matches) |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a one-mode collection) | — |
 | `setStyle` | `style` (a local paint, text or effect style's exact name, key or id), `set` | — |
 | `createVariables` | `collection` (a local collection's name or id; made when none has it), `variables` (rows `[name, type, …a value per mode]`) | `modes` (mode names, in the rows' value order; none for a one-mode collection) |
@@ -76,7 +77,7 @@ calls and can bind variables. A create with no `parentId` lands on the current p
     row `[id, "created" | "updated" | "unchanged"]` in table order) · `createStyles` `{rows}` (per row `[id, …]`).
   - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?, partly?}`
     (`created` / `updated` list `[name, id]`, `unchanged` counts the rest; the styles table is `{styles: true, …}`).
-  - `patch` `{id, unbound?}` · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
+  - `patch` `{id, unbound?}` · `patchWhere` `{matched, pages, unbound?}` (how many layers, on how many pages; no ids) · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
     the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
 - Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
   edits off, rejected with the designer's reason, withdrawn or not reviewed in time, another write still waiting, Dev Mode, or every problem of the batch with its
@@ -87,7 +88,7 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   Read `applied` before a retry, so nothing is made twice.
 - A dry run: `{dryRun: true, creates, overwrites, moves?, deletes?, invalid, refusedByFile?, steps, editsAllowed,
   wouldWait?, waitReason?, waitingTicket?, note}`; each step has `effect`, `target`, a one-sentence `change`, `fields` (one row per field of a
-  patch or a style), `warnings`, `invalid` (every problem), for a source edit `affects` and `refusedByFile`, and for a
+  patch or a style), `warnings`, `invalid` (every problem), for a source edit `affects` and `refusedByFile`, for a `patchWhere` `match` ([below](#patch-by-rule)), and for a
   create table `plan: {create, update}` (the names it would make, and the ones the file has, updated in place). A
   `createTree` dry run reads nothing from the file: a keyed one is a `creates` step whose `change` says an existing
   result of that key would be updated in place, without listing what would change or be removed. A component spec
@@ -329,6 +330,35 @@ rule for that field.
 
 A patch does not move a node (`x`/`y` → `move`), change its `type`, `children` or `font` (name a text style instead), or
 swap an instance's component. Whether the node exists and has each field is checked before anything runs.
+
+## Patch by rule
+
+`{op: "patchWhere", where, scope?, set, token?}` sets the same `set` (any [patch](#patch) field) on every layer the rule
+matches, in one op whose size does not grow with the matches. Every kind given in `where` must hold:
+
+| Kind | Matches |
+|---|---|
+| `text` | a TEXT whose characters equal it |
+| `fill` | a layer with a visible solid fill of that hex colour (`#rrggbbaa`: the alpha pair is the paint's opacity) |
+| `variable` | a layer bound to that variable (its name, id or key: a local one, or one a layer in scope uses) |
+| `instanceOf` | an instance of that component or component set (its name, id or key) |
+| `name` | a layer whose name is it; `*` is any run of characters (`"Footer*"`), nothing else is special |
+
+`scope`: `"page"` (the current page; the default), `"file"` (every page), `"selection"` (the selected layers and
+everything inside them) or a list of page names or ids. Layers inside an instance, a main component or a component set
+are never matched: patch the main component once instead ([Source edits](#source-edits)). A page, variable or component
+name that matches nothing or several things refuses the batch with candidates. Every rule picks its layers from the
+file as it is before the batch runs: an earlier op of the same batch does not change what it matches (a rule for text
+another op just set matches nothing yet — send it in a later call).
+
+Dry-run it first. Its step carries `match: {total, pages: [{page, count}], samples: [{id, name, page}], token,
+needsToken}` — counts per page and three samples, never the full list. A real run that matches more than 25 layers must
+carry that `token`; one whose matches changed since the dry run is refused (dry-run again), and so is one that matches
+nothing, or more than 2000 layers. A layer among the matches the patch does not fit refuses the batch, counted with a few
+named. A patchWhere always waits for the designer's review (whatever the box says), its card line reading "40 layers
+matching text “Terms v1”: text “Terms v1” → “Terms v2” — on 'Flow A' (30), 'Flow B' (10)" with Show me; on Apply the
+matches are counted again, and the batch is refused if they are not the ones the card showed. The run is one undo step,
+put back whole when an op fails.
 
 ## Source edits
 

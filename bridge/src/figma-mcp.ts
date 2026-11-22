@@ -41,6 +41,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
 import { componentRootOf } from "./component-spec.ts";
 import { EDITS_OFF_MESSAGE, SOURCE_OPS, WRITE_OP_NAMES, isPending, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteEffect, type WriteImpactReply, type WriteOp, type WriteOpName, type WriteReply, type WriteResult } from "./commands.ts";
+import { RULE_TOKEN_MIN } from "./rule-spec.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -746,6 +747,10 @@ const writeOpShape = z.object({
   bind: z.boolean().optional(),
   // patch: the fields to change, checked by patch-spec.ts checkPatch at the same three places as a tree spec.
   set: z.record(z.string(), z.unknown()).optional(),
+  // patchWhere: the rule, where it looks and the dry run's token, checked by rule-spec.ts checkRule (same three places).
+  where: z.record(z.string(), z.unknown()).optional(),
+  scope: z.union([z.string(), z.array(z.string())]).optional(),
+  token: z.string().optional(),
   index: z.number().int().min(0).optional(),
   // setVariable / setStyle (source-spec.ts): the local variable or style, by exact name, key or id. A style's fields go
   // in `set`; a variable's values in `values` (by mode) or `value` (one mode), checked by checkVariableEdit.
@@ -788,6 +793,8 @@ function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: Im
       if (s.change) step.change = s.change + (step.change ? "; " + step.change : "");
       // A keyed re-send: the existing layers it changes, for wouldWait.
       if (s.changedLayers !== undefined) step.changedLayers = s.changedLayers;
+      // A rule: what it matches (per page, samples, the token a real run sends back).
+      if (s.match) step.match = s.match;
     }
   }
   const review = settings.review;
@@ -796,12 +803,14 @@ function previewWrites(ops: WriteOp[], settings: PluginWriteSettings, impact: Im
     const sourceEdits = steps.filter((s, i) => { const o = ops[i]; return !!o && (o.op === "setVariable" || o.op === "setStyle" || (!!s.affects && (o.op === "patch" || o.op === "createTree"))); }).length;
     const ids = new Set<string>();
     let follows = 0;
-    steps.forEach((s, i) => { const o = ops[i]; if (o && o.nodeId && s.effect !== "creates") ids.add(o.nodeId); if (s.affects) follows += (s.affects.nodes || 0) + (s.affects.instances || 0); if (s.changedLayers) follows += s.changedLayers; });
-    return reviewDecision({ checkbox: review.checkbox, sourceEdits, bulkByRule: false, layers: ids.size + follows, sinceApproval: review.layers });
+    steps.forEach((s, i) => { const o = ops[i]; if (o && o.nodeId && s.effect !== "creates") ids.add(o.nodeId); if (s.affects) follows += (s.affects.nodes || 0) + (s.affects.instances || 0); if (s.changedLayers) follows += s.changedLayers; if (s.match) follows += s.match.total; });
+    // A bulk change by rule always waits, whatever it matches.
+    const bulkByRule = ops.some((o) => o.op === "patchWhere");
+    return reviewDecision({ checkbox: review.checkbox, sourceEdits, bulkByRule, layers: ids.size + follows, sinceApproval: review.layers });
   })() : null;
   const sourceNote = impact.asked
     ? impact.reply
-      ? "A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind; a keyed re-send's `changedLayers` counts the existing layers it would change. " +
+      ? "A patchWhere's `match` counts what its rule matches per page, with a few samples and the `token` a real run over " + RULE_TOKEN_MIN + " matches must send back. A source edit's `affects` counts what follows it: the layers that use the variable or style (directly or through an alias or a style), the instances of a main component; a create table's `plan` lists the names it would create and the ones the file has, updated in place; a `bind: true` spec's `bind` counts what the file would bind; a keyed re-send's `changedLayers` counts the existing layers it would change. " +
         (impact.reply.warnings && impact.reply.warnings.length ? "Some pages could not be read, so a count may be low: " + impact.reply.warnings.join("; ") + ". " : "")
       : "How much a source edit carries to (which names of a create table the file has already, what a `bind: true` spec binds) is read by the plugin, and none answered (" + impact.why + "); connect it and dry-run again to see it. "
     : "";
@@ -843,7 +852,8 @@ async function readImpact(ops: WriteOp[], a: { client?: string | undefined } | u
   // A component spec asks too: only the file knows whether it makes the component or updates the one it has.
   // So does a `bind: true` spec: only the file knows what its values bind to.
   // So does a keyed spec: only the file knows which of its layers a re-send changes (the review's count).
-  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true || (!!o.tree && typeof o.tree.key === "string"))))) return { asked: false, reply: null, why: "" };
+  // So does a rule: only the file knows what it matches.
+  if (!ops.some((o) => SOURCE_OPS.indexOf(o.op) >= 0 || o.op === "patchWhere" || (o.op === "createTree" && (componentRootOf(o.tree) !== null || o.bind === true || (!!o.tree && typeof o.tree.key === "string"))))) return { asked: false, reply: null, why: "" };
   // Only a patch that changes a main component is a source edit: the plugin says which, so every patch asks.
   try {
     const p = pluginPresence(await route.listClients(), a && a.client);
@@ -939,6 +949,7 @@ registerTool(
       "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch, but each component property it declares, edits or deletes ends a step (the reply's `undoSteps`); a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
       "createTree {tree|treeFile, page?, bind?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place; bind:true binds raw values to the one variable or text style equal to each); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
       "patch {nodeId, set}: change the given fields of an existing node. An image is a fill {type:\"image\", file|hash}: a PNG/JPEG/GIF path, or a hash the file has | " +
+      "patchWhere {where:{text|fill|variable|instanceOf|name}, scope?, set, token?}: the same patch on every layer a rule matches (scope selection|page|file|[pages]); its dry run counts per page and gives a token, needed over " + RULE_TOKEN_MIN + " matches | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
       "seedTokens {file, collection?}: those tables from the project's tokens.dtcg.json or tokens.resolver.json | " +
@@ -946,7 +957,7 @@ registerTool(
       "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
-      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
+      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, patchWhere, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
       "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed). A write may wait for their review (dry run: wouldWait): on {pending, ticket}, call figma_write {ticket} (not the ops) until it answers; cancel:true withdraws it.",
     inputSchema: {
       ...clientShape,

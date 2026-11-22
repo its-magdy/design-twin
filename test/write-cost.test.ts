@@ -25,7 +25,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ok, report } from "./assert.ts";
 import { fakePlugin } from "./fake-plugin.ts";
 import type { World } from "./fake-figma.ts";
-import type { ListPagesReply, WhoamiReply } from "../bridge/src/commands.ts";
+import type { ListPagesReply, WhoamiReply, WriteImpactReply } from "../bridge/src/commands.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
 import { estimateTokens, Ledger, PHASES, type Cost } from "./write-cost/meter.ts";
 import { JOBS, type AnyJob, type JobId, type Fixture } from "./write-cost/jobs.ts";
@@ -44,6 +44,8 @@ interface Recorded {
   routes: Record<string, Partial<Record<JobId, Omit<Cost, "byPhase">>>>;
 }
 const recorded: Recorded | null = fs.existsSync(BASELINE_FILE) ? (JSON.parse(fs.readFileSync(BASELINE_FILE, "utf8")) as Recorded) : null;
+
+const isImpact = (v: unknown): v is WriteImpactReply => typeof v === "object" && v !== null && "steps" in v && Array.isArray(v.steps);
 
 /** The text of a tool reply's content blocks. */
 function replyText(r: unknown): Reply {
@@ -97,6 +99,14 @@ void (async () => {
         // Awaited here: the VM's promise is not this realm's Promise, which fake-plugin.ts tells answers apart by.
         write: async (a) => await on().api.applyWrites(a.ops.map((o) => ({ ...o })), a.images),
         exportNode: async (a) => await on().api.collectNode(a.nodeId, a),
+        // A dry run's file-side half, through the plugin's own bridge handler (a patchWhere's matches and token).
+        writeImpact: async (a): Promise<WriteImpactReply> => {
+          const posted = await on().send({ type: "bridge", id: "wi", cmd: "writeImpact", args: { ops: a.ops } });
+          const r = posted.find((m) => m.type === "bridge-result" && m.id === "wi");
+          const v: unknown = r && r.ok ? r.result : null;
+          if (!isImpact(v)) throw new Error("writeImpact did not answer: " + JSON.stringify(r));
+          return v;
+        },
         listPages: async (a): Promise<ListPagesReply> => {
           const r = await on().api.listPages(a.depth !== undefined ? { depth: a.depth } : {});
           return { ...r, depth: r.depth === 1 ? 1 : 2 };

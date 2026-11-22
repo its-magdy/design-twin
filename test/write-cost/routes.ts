@@ -598,6 +598,38 @@ export const captureBindRoute: Route = {
   },
 };
 
+// ---- bulk patch by rule (#171): the same change on every screen is one patchWhere — the rule the brief gives (the text
+// that reads `from`), the whole file as its scope, the new text as its patch. No find: no list of pages, no outline, no
+// ids; the reply is one row with the count. Its cost does not grow with the matches (12 here; past 25 a dry run first
+// gives the token the run carries). The plugin's review always holds it for the designer (the suite's designer applies).
+export const rulePatch: Route = {
+  name: "rule-patch",
+  ticket: "#171",
+  jobs: {
+    "same-change-many": async (s, b) => {
+      const r = JSON.parse(must(await s.call("figma_write", { ops: [{ op: "patchWhere", where: { text: b.from }, scope: "file", set: { text: b.to } }] }, "write"), "figma_write")) as { ok?: boolean; applied?: Array<{ matched?: number }> };
+      if (r.ok !== true || !r.applied?.[0]?.matched) throw new Error(`patchWhere did not apply: ${JSON.stringify(r).slice(0, 300)}`);
+    },
+  },
+};
+
+// ---- the same, the way a run over 25 matches has to go (#171): a dry run first, whose `match` gives the counts and the
+// token, then the run carrying it. Measured on the same 12-match job, so the dry run's own cost shows beside rule-patch.
+export const rulePatchToken: Route = {
+  name: "rule-patch-token",
+  ticket: "#171",
+  jobs: {
+    "same-change-many": async (s, b) => {
+      const op = { op: "patchWhere", where: { text: b.from }, scope: "file", set: { text: b.to } };
+      const dry = JSON.parse(must(await s.call("figma_write", { ops: [op], dryRun: true }, "find"), "figma_write dry run")) as { steps?: Array<{ match?: { total: number; token: string } }> };
+      const match = dry.steps?.[0]?.match;
+      if (!match || !match.total) throw new Error(`the dry run gave no match: ${JSON.stringify(dry).slice(0, 300)}`);
+      const r = JSON.parse(must(await s.call("figma_write", { ops: [{ ...op, token: match.token }] }, "write"), "figma_write")) as { ok?: boolean; applied?: Array<{ matched?: number }> };
+      if (r.ok !== true || r.applied?.[0]?.matched !== match.total) throw new Error(`patchWhere did not apply: ${JSON.stringify(r).slice(0, 300)}`);
+    },
+  },
+};
+
 /** The agent's own file tools, as the suite's sessions run them: the file written or edited, and the tool's reply. */
 export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path: string; content?: string; old_string?: string; new_string?: string }): Reply {
   const file = path.join(dir, args.file_path);
@@ -613,5 +645,5 @@ export function fileTool(dir: string, tool: "Write" | "Edit", args: { file_path:
 }
 
 /** Every route the suite measures; the first is the baseline the others are compared with. */
-export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents, captureRoute, captureBindRoute];
+export const ROUTES: readonly Route[] = [fourOp, treeSpec, dsRefs, patchById, keyedFile, sourceEdit, cloneRepeat, createTokens, seedTokens, createComponents, captureRoute, captureBindRoute, rulePatch, rulePatchToken];
 export const BASELINE = fourOp.name;

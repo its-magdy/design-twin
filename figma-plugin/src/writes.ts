@@ -16,12 +16,13 @@ import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touc
 import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
+import { resolveRuleOps, type RuleTarget, type ShownRule } from "./rules";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
 import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./creates";
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, restoreChanges, restoredRows, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { resolveImages, setBatchImages } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -87,7 +88,7 @@ function consent(): void {
 // resolvePatchOps), a move's node and new parent (structure.ts).
 interface Resolved {
   mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined;
-  variable?: VariableTarget | undefined; style?: StyleTarget | undefined;
+  variable?: VariableTarget | undefined; style?: StyleTarget | undefined; rule?: RuleTarget | undefined;
 }
 
 /** A node an op just created, as a Change whose undo removes it. */
@@ -98,7 +99,7 @@ function createdNode(n: SceneNode): Change {
 
 // Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
 // set, a tree built, a node moved), so a later failure can undo all of them.
-async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, style }: Resolved, changes: Change[]): Promise<AppliedWrite> {
+async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, style, rule }: Resolved, changes: Change[]): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
@@ -222,6 +223,21 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       consent();
       return (await applyPatch(patch, consent, editsAllowedNow, changes)).applied;
     }
+    // Resolved up front (rules.ts): every layer the rule matches, each a patch whose node, fields, fonts and names
+    // resolved. Each keeps what it replaces, so a failure on any of them puts back all of them with the rest of the batch.
+    case "patchWhere": {
+      if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
+      const group = {};
+      for (const t of rule.matches) {
+        consent();
+        try { (await applyPatch(t, consent, editsAllowedNow, changes)).group = group; } catch (e) {
+          if (e instanceof EditsRevoked) throw e;
+          throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+        }
+      }
+      const first = rule.matches[0];
+      return { matched: rule.matches.length, pages: rule.match.pages.length, ...(first && first.unbound ? { unbound: first.unbound } : {}) };
+    }
     case "move": {
       if (!move) throw new Error("move: the op was not resolved before the batch ran");
       consent();
@@ -278,7 +294,7 @@ export type Submitted = { done: WriteResult } | { card: Card };
 
 export async function submitWrites(ops: WriteOp[], images?: ImageTable): Promise<Submitted> {
   const list = Array.isArray(ops) ? ops : [];
-  const r = await runBatch(list, images, "submit");
+  const r = await runBatch(list, images, "submit", NO_EXPECT);
   return "card" in r ? r : { done: r.result };
 }
 
@@ -287,15 +303,19 @@ type Mode = "submit" | "approved" | "preview";
 /** What a run leaves beside its result: the changes it made (a preview puts them back) and the existing layers it
  *  counted for the review (review-policy.ts). */
 interface RunOut { changes: Change[]; layers: number }
+/** What a card showed of each patchWhere op's matches (op index → its token and the selection it looked in, rules.ts): on
+ *  approval they must still match. */
+type Expect = ReadonlyMap<number, ShownRule>;
+const NO_EXPECT: Expect = new Map();
 
-async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode): Promise<{ result: WriteResult; changes: Change[] } | { card: Card }> {
+async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode, expect: Expect): Promise<{ result: WriteResult; changes: Change[] } | { card: Card }> {
   // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
   // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
   // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
   // the next one never joins it. Committing with nothing pending is a no-op.
   const out: RunOut = { changes: [], layers: 0 };
   if (list.length) commitUndo();
-  const r = await gatedWrites(list, images, mode, out);
+  const r = await gatedWrites(list, images, mode, out, expect);
   if (list.length) commitUndo();
   if ("card" in r) return r;
   // A preview is said by its card; a batch refused because another waits is said by that card already.
@@ -335,11 +355,11 @@ function announce(r: WriteResult): void {
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
 // So do the images it made (images.ts).
-async function gatedWrites(list: WriteOp[], images: ImageTable | undefined, mode: Mode, out: RunOut): Promise<WriteResult | { card: Card }> {
-  try { return await batchWrites(list, images, mode, out); } finally { setBatchPlan(null); setBatchImages(null); }
+async function gatedWrites(list: WriteOp[], images: ImageTable | undefined, mode: Mode, out: RunOut, expect: Expect): Promise<WriteResult | { card: Card }> {
+  try { return await batchWrites(list, images, mode, out, expect); } finally { setBatchPlan(null); setBatchImages(null); }
 }
 
-async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode: Mode, out: RunOut): Promise<WriteResult | { card: Card }> {
+async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode: Mode, out: RunOut, expect: Expect): Promise<WriteResult | { card: Card }> {
   const applied: AppliedWrite[] = [];
   // One card at a time (review.ts): while a write waits for the designer, a new one is refused at once, naming it.
   const waiting = mode === "submit" && list.length ? waitingTicket() : null;
@@ -394,14 +414,17 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     // A createTree whose key names a result the file holds becomes an update of it (keyed.ts).
     const keyed = await resolveKeyed(list, trees.targets);
     const patches = await resolvePatchOps(list);
+    // A rule's matches (rules.ts): at a first send its token is checked; once approved, its matches must be the card's.
+    const rules = await resolveRuleOps(list, mode === "submit" ? { kind: "submit" } : { kind: "approved", expect });
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
     // A variable or style edit, and a patch's library check (a library's component cannot be changed here).
     const sources = await resolveSourceOps(list);
-    const problems = [...imgs.problems, ...creates.problems, ...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
-      ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
-    return { creates, modes, trees, patches, structure, sources, problems };
+    const problems = [...imgs.problems, ...creates.problems, ...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...rules.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+      ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves),
+      ...ruleConflicts(rules.targets, trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
+    return { creates, modes, trees, patches, rules, structure, sources, problems };
   };
-  const { creates, modes, trees, patches, structure, sources, problems } = await resolveBatch();
+  const { creates, modes, trees, patches, rules, structure, sources, problems } = await resolveBatch();
   const firstProblem = problems[0];
   if (firstProblem) {
     // Approved (or previewed) after a wait: the designer may have changed the file while the card was up, so the batch
@@ -409,14 +432,15 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
     return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
   }
-  // #171 (bulk patch by rule): here, on approval (mode "approved" / "preview"), a rule op must count its matches again
-  // and refuse the batch when they drift from what its card showed the designer; at "submit" it sets `bulkByRule` below.
+  // A bulk change by rule always waits for the designer (`bulkByRule`); on approval its matches were counted again just
+  // now (resolveRuleOps with the card's tokens), and a batch whose matches drifted from the card's was refused above.
   // The designer's review (review.ts, spec decision 18): decided here, once the whole batch resolved (a batch that would
   // be refused never puts a card up) and before anything touches the file (the library imports below included).
   if (mode === "submit" && list.length) {
-    const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
+    const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
     out.layers = reads.layers;
-    const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, sinceApproval: layersSinceApproval() });
+    const bulkByRule = rules.targets.size > 0;
+    const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, sinceApproval: layersSinceApproval() });
     if (decision.wait) {
       // Unticked while the batch resolved: refused now, with no card (main.ts ends only a card that is already up).
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
@@ -435,13 +459,16 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
         return { ids, total: Math.max(total, ids.length), ...(spot ? { spot } : {}) };
       });
       const keyedResend = [...trees.targets.values()].some((t) => !!t.update);
+      // What the card shows of each rule's matches: an approval or a preview runs against exactly these.
+      const shown = new Map<number, ShownRule>();
+      for (const [i, t] of rules.targets) shown.set(i, { token: t.match.token, ...(t.selection ? { selection: t.selection } : {}) });
       const card = openCard({
         ops: list, lines, shows, details: reviewLines(list), why: decision.reason,
-        previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule: false, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
+        previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
         // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
-        apply: () => queueWork(async () => { const r = await runBatch(list, images, "approved"); return "card" in r ? notApplied() : r.result; }),
+        apply: () => queueWork(async () => { const r = await runBatch(list, images, "approved", shown); return "card" in r ? notApplied() : r.result; }),
         preview: () => queueWork(async () => {
-          const r = await runBatch(list, images, "preview");
+          const r = await runBatch(list, images, "preview", shown);
           if ("card" in r) return { result: notApplied(), putBack: async () => null };
           const changes = r.changes;
           return { result: r.result, putBack: () => queueWork(() => putBack(changes)) };
@@ -474,7 +501,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       failedOp: op && op.op,
       error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
       ...(revoked ? { refused: "edits-off" as const } : {}),
-      ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
+      ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
   };
   // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole.
@@ -517,7 +544,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   // resolved, and "Allow edits" is still on (the window may have changed it at any await above). An import cannot be
   // put back, but it only makes the item available in the file; a problem it reveals still refuses the whole batch.
   // (A name a create table made resolves here too, as an import: tree-refs.ts.)
-  for (const step of [trees, patches, sources]) {
+  for (const step of [trees, patches, rules, sources]) {
     if (!step.importCount) continue;
     if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     const { problems: late, revoked } = await step.imports(editsAllowedNow);
@@ -532,7 +559,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     try {
       rows[i] = await applyWrite(op, {
         mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i),
-        variable: sources.variables.get(i), style: sources.styles.get(i),
+        variable: sources.variables.get(i), style: sources.styles.get(i), rule: rules.targets.get(i),
       }, changes);
     } catch (e) {
       return fail(i, op, e);
@@ -677,6 +704,26 @@ function removalConflicts(list: readonly WriteOp[], targets: ReadonlyMap<number,
       const by = id === undefined ? undefined : gone.get(id);
       if (by === undefined || by === index) continue;
       out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+      break;
+    }
+  }
+  return out;
+}
+
+/** A rule op that matches a node a delete or a keyed re-send of the same batch removes (it, or anything below it): those
+ *  run last, so the patch would change a node about to go. Refused up front, like the conflicts below. */
+function ruleConflicts(rules: ReadonlyMap<number, RuleTarget>, trees: ReadonlyMap<number, TreeTarget>, deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+  if (!rules.size) return [];
+  const gone = new Map<string, number>();
+  for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
+  for (const [i, t] of trees) { if (!t.update) continue; for (const n of removalsOf(t.update)) for (const id of idsDeletedWith(n, moves)) if (!gone.has(id)) gone.set(id, i); }
+  const out: OpProblem[] = [];
+  if (!gone.size) return out;
+  for (const [index, r] of rules) {
+    for (const id of r.ids) {
+      const by = gone.get(id);
+      if (by === undefined) continue;
+      out.push({ index, op: "patchWhere", message: "its rule matches '" + id + "', which ops[" + by + "] of this batch removes (removals run after every other op); narrow the rule or drop one of the two" });
       break;
     }
   }

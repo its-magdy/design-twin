@@ -13,6 +13,7 @@
 // the layers read "mixed".
 import type { WriteOp } from "./commands.ts";
 import { checkPatch, isPatchSet } from "./patch-spec.ts";
+import { checkRule, describeWhere } from "./rule-spec.ts";
 import { checkStyleSet, isStyleSet } from "./source-spec.ts";
 import { checkCreateStyles, checkCreateVariables } from "./create-spec.ts";
 import { checkTree } from "./tree-check.ts";
@@ -36,6 +37,11 @@ export interface OpRead {
   updates?: string;
   /** move / createFrame / createText: the parent, by name */
   parent?: string;
+  /** patchWhere: how many layers the rule matches, and how many on each page (in the file's order) */
+  matched?: number;
+  pages?: Array<{ page: string; count: number }>;
+  /** patchWhere: the fields whose old value differs between the matches (they read "mixed"; `old` has the shared ones) */
+  mixed?: string[];
 }
 
 /** One value change on a line: `from` absent when the old value could not be read. */
@@ -144,6 +150,22 @@ export function cardLines(ops: readonly WriteOp[], reads: ReadonlyArray<OpRead |
           g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
           g.rows = fieldRows(set, fields, g.reads);
         });
+        return;
+      }
+      case "patchWhere": {
+        // Its own line, never grouped: the count, the rule, the change, and the pages it lands on.
+        const rule = checkRule({ ...o }, "op").rule;
+        if (!rule || !isPatchSet(o.set)) { lines.push({ head: "Layers picked by a rule", rows: [], ops: [i] }); return; }
+        const set: Record<string, unknown> = { ...o.set };
+        const checked = checkPatch(o.set).summary.fields as string[];
+        const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
+        const mixed = r && r.mixed ? r.mixed : [];
+        const rows = fields.map((f): CardRow => (mixed.indexOf(f) >= 0 ? { field: f, from: "mixed", to: valueText(f, set[f]) } : fieldRows(set, [f], [r])[0] || { field: f, to: valueText(f, set[f]) }));
+        const count = r && typeof r.matched === "number" ? plural(r.matched, "layer") : "Layers";
+        const pages = r && r.pages ? r.pages : [];
+        const shown = pages.slice(0, 3).map((p) => "'" + p.page + "' (" + p.count + ")").join(", ");
+        const more = pages.length > 3 ? " and " + plural(pages.length - 3, "more page") : "";
+        lines.push({ head: count + " matching " + describeWhere(rule.where), rows, ...(pages.length ? { tail: "on " + shown + more } : {}), ops: [i] });
         return;
       }
       case "setFill":

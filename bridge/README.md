@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments; or a component, or a set of variants from a table, used by name later and updated in place when sent again) / patch (change an existing node by id) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments; or a component, or a set of variants from a table, used by name later and updated in place when sent again) / patch (change an existing node by id) / patchWhere (the same patch on every layer a rule matches) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -958,6 +958,7 @@ the current page):
 | `clearVariableMode` | `nodeId`, `collection` | — |
 | `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
+| `patchWhere` | `where` (a rule: `text`, `fill`, `variable`, `instanceOf`, `name`; every one given must hold), `set` (as a patch's) | `scope` (`"selection"`, `"page"` — the current page, the default — `"file"`, or page names or ids), `token` (the dry run's, needed above 25 matches; below) |
 | `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
 | `delete` | `nodeId` (a node this plugin session created) | — |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a collection with one mode) | — |
@@ -1184,6 +1185,17 @@ patch is imported only once the whole batch resolved), and that the fonts a text
 spacing, radii or stroke weights were set where a variable could stand). The dry run shows one row per field
 (`fields: [{field, to}]`) and the change in one sentence.
 
+`patchWhere` is a patch by rule: the same `set` on every layer its `where` matches within its `scope`, one op however
+many match. The kinds: `text` (a text's characters equal), `fill` (a visible solid fill of that hex colour, its alpha
+pair the paint's opacity), `variable` (bound to that variable, by name, id or key), `instanceOf` (an instance of that
+component or set) and `name` (`*` is any run of characters). Layers inside an instance, a main component or a set are
+never matched (patch the main component). A page, variable or component name is never guessed. A rule picks from the
+file as it is before the batch runs (an earlier op of the batch does not change its matches). The dry run's step
+carries `match: {total, pages: [{page, count}], samples (3), token, needsToken}`, never the full list; a real run over
+25 matches must carry `token`, and one whose matches changed since is refused, as is one matching nothing or over
+2000. Each match is checked and applied as a patch by id (a misfit refuses the batch, counted with a few named), it
+always waits for the designer's review, and the reply is `{matched, pages}`.
+
 `move` and `delete` work only on nodes this plugin session created — since the plugin window was opened, by
 `createFrame`, `createText` or `createTree` (with everything below them). A delete takes everything below the node,
 so it is refused when anything there was not created this session; a move is refused into the node itself, into an
@@ -1402,7 +1414,8 @@ resolves against the file then waits on a card in the window instead of running.
 **always** waits when it:
 
 - edits a source — `setVariable`, `setStyle`, or a `patch` of a main component (or a layer inside one): other layers follow it;
-- is a bulk change by rule (reserved for #171; no op does it yet);
+- is a bulk change by rule (`patchWhere`); on Apply its matches are counted again, and the batch is refused when they
+  are not the ones the card showed;
 - takes the existing layers changed since the designer's last approval over **25** (patched, moved or deleted, plus the
   layers and instances that follow a source edit; layers this plugin session created do not count; an approval starts
   the count again).
