@@ -13,7 +13,7 @@
 // changed since is refused, as is one that matches nothing; once the designer approves (or previews) a batch that
 // waited, the matches are counted again and must still be the ones its card showed (`expect`).
 import type { WriteImpactStep, WriteOp } from "../../bridge/src/commands.ts";
-import { isPatchSet, type PatchSet } from "../../bridge/src/patch-spec.ts";
+import { isPatchSet } from "../../bridge/src/patch-spec.ts";
 import { checkRule, describeScope, describeWhere, globMatch, MAX_RULE_MATCHES, RULE_SAMPLES, RULE_TOKEN_MIN, ruleToken, solidMatches, tokenCount, type CheckedRule, type RuleMatch } from "../../bridge/src/rule-spec.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import { changesBefore, resolvePatchNode, type PatchTarget } from "./patch";
@@ -223,13 +223,13 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
     let misfits = 0;
     for (const h of hits) {
       const said: string[] = [];
-      const t = await resolvePatchNode(h.node, set as PatchSet, later, loadFont, (m) => { said.push(m); }, fontsLater);
+      const t = await resolvePatchNode(h.node, set, later, loadFont, (m) => { said.push(m); }, fontsLater);
       if (t && !said.length) { resolved.push(t); continue; }
       misfits++;
       if (named.length < RULE_SAMPLES) named.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
     }
     if (misfits) { bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch — narrow the rule (another kind, a name) or the scope: " + named.join(" | ") + (misfits > named.length ? " | …" : "")); continue; }
-    if (mode.kind !== "dryRun") uses.push(...patchUses(index, set as PatchSet).map((u) => ({ ...u, op: op.op })));
+    if (mode.kind !== "dryRun") uses.push(...patchUses(index, set).map((u) => ({ ...u, op: op.op })));
     targets.set(index, { matches: resolved, match, ids: hits.map((h) => h.node.id) });
   }
   const r = uses.length ? await resolveRefs(uses, loadFont) : null;

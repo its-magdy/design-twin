@@ -12,8 +12,7 @@ import { treeWorld } from "./writes.ts";
 
 type World = Awaited<ReturnType<typeof treeWorld>>;
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
-const kids = (n: FakeNode | undefined): readonly FakeNode[] => (n && Array.isArray(n.children) ? n.children : []);
-const all = (n: FakeNode): FakeNode[] => [n, ...kids(n).flatMap(all)];
+const isImpact = (v: unknown): v is WriteImpactReply => isObj(v) && Array.isArray(v.steps);
 
 /** A screen: a title, a red card, a footer reading `footer`, a chip bound to the brand colour, a Badge instance. */
 const screen = (name: string, footer = "Terms v1"): Record<string, unknown> => ({
@@ -48,7 +47,7 @@ async function impact(w: World, ops: WriteOp[]): Promise<WriteImpactReply | null
   const posted = await w.send({ type: "bridge", id: "imp" + w.posted.length, cmd: "writeImpact", args: { ops } });
   const r = [...posted].reverse().find((m) => m.type === "bridge-result");
   const result: unknown = r && r.ok ? r.result : null;
-  return isObj(result) && Array.isArray(result.steps) ? (result as unknown as WriteImpactReply) : null;
+  return isImpact(result) ? result : null;
 }
 const matchOf = async (w: World, op: WriteOp): Promise<{ match?: RuleMatch; problem?: string }> => {
   const step = (await impact(w, [op]))?.steps[0];
