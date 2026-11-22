@@ -220,9 +220,9 @@ screens.
       not that op asked to make it. A batch makes at most 10 pages and 25 sections (refused above that). It is made
       when the first op landing there runs, so a batch that is refused or waits for review makes nothing.
     - **Placing in a section.** The frame's `x`/`y` are the section's own (as Figma reads a section child's). Without
-      them it goes 100 px right of what the section holds, level with its top; when growing right would run the
-      section into one of its neighbours, on a new row 100 px below instead; in an empty section at 80 px from its
-      edges. The section then grows — never shrinks, keeping its top-left — to hold the frame with that 80 px margin,
+      them it goes 100 px right of what the section holds (what each layer covers on the canvas, rotation included),
+      level with its top; when growing right would run the section into one of its neighbours, on a new row 100 px
+      below instead; in an empty section at 80 px from its edges. The section then grows — never shrinks, keeping its top-left — to hold the frame with that 80 px margin,
       and so does each section around it. A section that still runs into a neighbour (explicit coordinates, or no row
       that avoids it) is a `warning`, never a refusal: no existing layer is moved to make room. A new section is placed
       on its page as a new frame is (right of everything, level with the topmost), then grows to hold its frames.

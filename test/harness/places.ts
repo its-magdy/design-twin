@@ -93,6 +93,28 @@ export const cases: Case[] = [{
     ok(`[PLACE-AXIS] x only in an empty section: the other at its margin (${empty.xy})`, empty.r.ok === true && empty.xy === "200,80");
   },
 }, {
+  name: "a rotated layer in a section: what it covers on the canvas is what a new frame is placed beside",
+  async run() {
+    const w = await flowsWorld();
+    // In Payments (1200,0): a 100×100 frame at 80,80 whose rotation makes it cover 900×300 from its own 80,80 — its
+    // canvas box, Figma's absoluteBoundingBox, is page coordinates (1200+80, 0+80).
+    const rotated: FakeNode = { id: "9:8", type: "FRAME", name: "Tilted", x: 80, y: 80, width: 100, height: 100, rotation: -30,
+      absoluteBoundingBox: { x: 1280, y: 80, width: 900, height: 300 } };
+    (w.f.payments.appendChild as (c: FakeNode) => void)(rotated);
+    const r = await write(w, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Next") }]);
+    const n = found(w, r);
+    ok(`[PLACE-ROTATED] right of what the rotated frame covers (80+900+100), not of its unrotated width (${num(n, "x")},${num(n, "y")})`,
+      r.ok === true && num(n, "x") === 1080 && num(n, "y") === 80);
+    // A rotated layer beside a section: growing into what it covers is said.
+    const w2 = await flowsWorld();
+    const beside: FakeNode = { id: "9:7", type: "FRAME", name: "Tilted beside", x: 2500, y: 0, width: 100, height: 100, rotation: 45,
+      absoluteBoundingBox: { x: 1900, y: 0, width: 700, height: 700 } };
+    (w2.f.page.appendChild as (c: FakeNode) => void)(beside);
+    const r2 = await write(w2, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Wide", { box: { w: 700, h: 400 } }) }]);
+    ok(`[PLACE-ROTATED] a section grown into a rotated neighbour's canvas box is a warning (${JSON.stringify(r2.warnings)})`,
+      r2.ok === true && /now overlaps 'Tilted beside'/.test((r2.warnings ?? []).join()));
+  },
+}, {
   name: "a page and a section to make: made once, used by the batch and by the same batch sent again",
   async run() {
     const w = await flowsWorld();

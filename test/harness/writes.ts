@@ -388,6 +388,12 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       sec.width = w; sec.height = h;
     };
     sec.remove = () => { const pr = parentOf(sec); if (pr) pr.children = kids(pr).filter((k) => k !== sec); sec.parent = null; sec.removed = true; unregister(sec); };
+    // Figma's absoluteBoundingBox: on the page, through the sections around it (a section does not rotate).
+    Object.defineProperty(sec, "absoluteBoundingBox", { enumerable: false, get: () => {
+      let ax = num(sec, "x"), ay = num(sec, "y");
+      for (let pr = parentOf(sec); pr && pr.type !== "PAGE"; pr = parentOf(pr)) { ax += num(pr, "x"); ay += num(pr, "y"); }
+      return { x: ax, y: ay, width: num(sec, "width"), height: num(sec, "height") };
+    } });
     for (const k of inside) appendTo(sec)(k);
     return sec;
   };

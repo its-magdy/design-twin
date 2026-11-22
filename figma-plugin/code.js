@@ -9324,8 +9324,10 @@
     return parent.children.filter((c) => c.id !== skip);
   }
   function occupied(c) {
-    const b = c.parent && c.parent.type === "PAGE" && "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
-    return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
+    const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
+    const p = c.parent;
+    const origin = !p ? null : p.type === "PAGE" ? { x: 0, y: 0 } : "absoluteBoundingBox" in p ? p.absoluteBoundingBox : null;
+    return b && origin ? { x: b.x - origin.x, y: b.y - origin.y, width: b.width, height: b.height } : { x: c.x, y: c.y, width: c.width, height: c.height };
   }
   var overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
   function besideHeld(held, spec, w, h, pad) {
