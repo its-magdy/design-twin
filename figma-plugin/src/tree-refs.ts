@@ -142,8 +142,9 @@ export interface RefResolution {
   refs: ResolvedRefs;
   problems: OpProblem[];
   /** Run the imports, then check what they brought in (property names, variable types, fonts). Every problem, or none;
-   *  `revoked` when `allowed` said no before an import (the imports before it stay: an import cannot be put back). */
-  imports(allowed: () => boolean): Promise<{ problems: OpProblem[]; revoked: boolean }>;
+   *  `revoked` when `allowed` said no before an import (the imports before it stay: an import cannot be put back);
+   *  `imported`, how many items it did bring in (what stays in the file whatever the batch comes to). */
+  imports(allowed: () => boolean): Promise<{ problems: OpProblem[]; revoked: boolean; imported?: number }>;
   /** How many items the imports will bring in (0: nothing to import). */
   importCount: number;
 }
@@ -205,13 +206,14 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
       // Each distinct item imports once, however many places name it; one at a time (an import is a network round
       // trip Figma serialises anyway), in spec order, with consent checked before each.
       const once = new Map<string, { item: unknown } | { error: unknown }>();
+      let landed = 0;
       for (const { use, get } of imported) {
         const k = use.kind + "\u0000" + use.ref;
         let got = once.get(k);
         if (!got) {
-          if (!allowed()) return { problems: [], revoked: true };
-          try { got = { item: await get(allowed) }; } catch (e) {
-            if (e instanceof ImportsRevoked) return { problems: [], revoked: true };
+          if (!allowed()) return { problems: [], revoked: true, imported: landed };
+          try { got = { item: await get(allowed) }; landed++; } catch (e) {
+            if (e instanceof ImportsRevoked) return { problems: [], revoked: true, imported: landed };
             got = { error: e };
           }
           once.set(k, got);
@@ -221,7 +223,7 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
         if (err) lateReport.bad(use, err);
       }
       lateReport.finish();
-      return { problems: late, revoked: false };
+      return { problems: late, revoked: false, imported: landed };
     },
   };
 }

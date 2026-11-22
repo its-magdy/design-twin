@@ -257,7 +257,11 @@ list of merged PRs.
   changed while it waited for review. Figma's toast and the plugin window's status line say it was refused, that
   nothing changed, and why. Before, the toast stayed silent and the window kept showing "Applying edits…". A write
   that throws now says it could not run. A preview that throws ends its review card as failed, where before the card
-  stayed on "Putting it on the canvas…". An empty batch still says nothing.
+  stayed on "Putting it on the canvas…". An empty batch still says nothing, and the window goes back to the line it
+  showed before. An op the plugin refuses on arrival (a field missing that the server's schema let through) is said the
+  same way. A refusal that came after a library import or an image landed says what landed instead of "nothing
+  changed". A batch refused before it runs no longer adds its images from disk to the file first: they are made only
+  once the whole batch resolved.
 
 ## [0.1.6] - 2026-11-02
 

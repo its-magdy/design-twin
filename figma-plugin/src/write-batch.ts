@@ -81,3 +81,7 @@ export function countChanges(changes: readonly Change[]): string {
   for (const c of changes) counts.set(c.kind, (counts.get(c.kind) || 0) + 1);
   return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
 }
+
+/** What a batch added to the file besides its changes, which nothing puts back: the library items it imported, the
+ *  images it made (images.ts). Neither is a layer; a refusal that came after one says so (writes.ts announce). */
+export interface Landed { imported: number; images: number }

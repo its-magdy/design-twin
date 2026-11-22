@@ -194,4 +194,114 @@ export const cases: Case[] = [{
     await w.send({ type: "review-answer", id: String(card?.id), action: "reject" });
     await first;
   },
+}, {
+  name: "A write sent while a card is already up is refused before any run, and leaves the panel alone (#206)",
+  async run() {
+    const w = await treeWorld({ extra: { reviewer: "real" } });
+    const from = w.posted.length;
+    const first = bridgeWrite(w, "c1", [{ op: "createFrame", name: "One" }]);
+    await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
+    const card = w.posted.slice(from).find((m) => m.type === "review");
+    const t = w.notified.length;
+    const p = w.posted.length;
+    const posted = await bridgeWrite(w, "c2", [{ op: "createFrame", name: "Two" }]);
+    const reply = posted.find((m) => m.type === "bridge-result");
+    const r = reply && typeof reply.result === "object" && reply.result !== null ? reply.result as { refused?: unknown } : {};
+    const after = w.posted.slice(p);
+    // The bridge's own check (bridge.ts bridgeWrite): no run begins, so the panel never shows "Applying edits…" for it,
+    // and it keeps the card's "review it below" line. No second toast either: the card's is up.
+    ok(`[ANNOUNCE] refused as waiting, with no run, no panel line and no toast (got ${JSON.stringify(after.map((m) => m.type))}, ${JSON.stringify(w.notified.slice(t))})`,
+      card !== undefined && r.refused === "waiting" && !after.some((m) => m.type === "run-begin" || m.type === "writes") && w.notified.length === t);
+    await w.send({ type: "review-answer", id: String(card?.id), action: "reject" });
+    await first;
+  },
+}, {
+  name: "A write the plugin's wire guard refuses (an op missing a field the MCP schema let through) says so (#206)",
+  async run() {
+    const w = await treeWorld();
+    const t = w.notified.length;
+    const p = w.posted.length;
+    // setFill with no colour: the MCP server's field schema passes it; the plugin's parseCommandRequest refuses it.
+    const posted = await w.send({ type: "bridge", id: "m1", cmd: "write", args: { ops: [{ op: "setFill", nodeId: "1:2" }] } });
+    const reply = posted.find((m) => m.type === "bridge-result");
+    const err = String(reply?.error);
+    ok(`[ANNOUNCE] a malformed op: the bridge gets the error, and the toast and the panel say it was refused, nothing changed, and why (got ${JSON.stringify(w.notified.slice(t))}, reply ${JSON.stringify(reply)})`,
+      reply?.ok === false && /^bad write args: /.test(err) && saidOnce(w, t, p, HEAD + err) && !posted.some((m) => m.type === "run-begin"));
+    // An empty one still says nothing.
+    const t2 = w.notified.length;
+    const p2 = w.posted.length;
+    await w.send({ type: "bridge", id: "m2", cmd: "write", args: { ops: [] } });
+    ok("[ANNOUNCE] …an empty one still says nothing", w.notified.length === t2 && writesOf(w.posted.slice(p2)).length === 0);
+  },
+}, {
+  name: "A batch refused after a library import landed says what landed, never \"nothing changed\" (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const before = w.alive().length;
+    const t = w.notified.length;
+    const p = w.posted.length;
+    // The first instance's key is a library's (imported), the second's is no library's: refused once the import ran.
+    const r = await w.api.applyWrites([{ op: "createTree", tree: { children: [{ component: "e".repeat(40) }, { component: "a".repeat(40) }] } }]);
+    const text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] a late import failure after another import landed: says it imported one, and why (got ${JSON.stringify(text)})`,
+      r.ok === false && r.applied.length === 0 && w.alive().length === before && w.imports.includes("component " + "e".repeat(40))
+      && saidOnce(w, t, p, text) && !/nothing changed/.test(text)
+      && text.startsWith("Design Twin refused an edit request — no layer changed, but it had already imported 1 library item: ops[0] (createTree): tree.children[1].component: no component in this file or an enabled library has the key '" + "a".repeat(40) + "'"));
+    // No import landed (the only key is no library's): nothing changed, as before.
+    const t2 = w.notified.length;
+    const p2 = w.posted.length;
+    await w.api.applyWrites([{ op: "createTree", tree: { children: [{ component: "b".repeat(40) }] } }]);
+    const text2 = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] …a late import failure with nothing imported still says nothing changed (got ${JSON.stringify(text2)})`,
+      saidOnce(w, t2, p2, text2) && text2.startsWith(HEAD + "ops[0] (createTree): tree.children[0].component: no component"));
+  },
+}, {
+  name: "A batch refused before it runs makes no image first; one refused after it made one says so (#206)",
+  async run() {
+    const w = await treeWorld();
+    let made = 0;
+    const realCreate = w.figma.createImage;
+    w.figma.createImage = (data: Uint8Array) => { made++; return realCreate(data); };
+    const gif = Buffer.concat([Buffer.from("GIF89a", "latin1"), Buffer.from([2, 0, 2, 0, 0, 0, 0]), Buffer.from([0x3b])]).toString("base64");
+    const ID = "a".repeat(64), BAD_ID = "b".repeat(64);
+    const fromFile = { type: "image" as const, file: "hero.gif", image: ID };
+
+    // A valid image from disk beside a hash the file does not have: refused, and the image was never made.
+    let t = w.notified.length;
+    let p = w.posted.length;
+    await w.api.applyWrites([{ op: "createTree", tree: { name: "Pic", fills: [fromFile, { type: "image", hash: UNKNOWN_HASH }] } }], { [ID]: gif });
+    let text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] an unknown hash beside an image from disk: refused, nothing changed, and no image made (made ${made}, got ${JSON.stringify(text)})`,
+      made === 0 && saidOnce(w, t, p, text) && text.startsWith(HEAD + "ops[0] (createTree): tree.fills[1]: the file has no image with hash"));
+
+    // A hash lookup that throws: a problem like any other, refused before an image is made.
+    const realGet = w.figma.getImageByHash;
+    w.figma.getImageByHash = () => { throw new Error("image lookup failed"); };
+    t = w.notified.length;
+    p = w.posted.length;
+    await w.api.applyWrites([{ op: "createTree", tree: { name: "Pic", fills: [fromFile, { type: "image", hash: UNKNOWN_HASH }] } }], { [ID]: gif });
+    w.figma.getImageByHash = realGet;
+    text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] a hash lookup that throws: refused with why, nothing changed, and no image made (made ${made}, got ${JSON.stringify(text)})`,
+      made === 0 && saidOnce(w, t, p, text) && text === HEAD + "ops[0] (createTree): tree.fills[1]: Figma could not look up the image with hash '" + UNKNOWN_HASH + "' (image lookup failed)");
+
+    // Any other problem in the batch (a node the file does not have): no image is made either.
+    t = w.notified.length;
+    p = w.posted.length;
+    await w.api.applyWrites([{ op: "createTree", tree: { name: "Pic", fills: [fromFile] } }, { op: "patch", nodeId: "404:1", set: { name: "x" } }], { [ID]: gif });
+    text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] another op's problem: refused before any image is made (made ${made}, got ${JSON.stringify(text)})`,
+      made === 0 && saidOnce(w, t, p, text) && text === HEAD + "ops[1] (patch): no node with id '404:1' (invalid or removed)");
+
+    // An image Figma cannot open, after one it made: refused, and the panel says the made one is in the file.
+    t = w.notified.length;
+    p = w.posted.length;
+    const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Pic", fills: [fromFile, { type: "image", file: "notes.gif", image: BAD_ID }] } }],
+      { [ID]: gif, [BAD_ID]: Buffer.from("hello").toString("base64") });
+    text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] an image Figma cannot open, after one it made: says the one it added (made ${made}, got ${JSON.stringify(text)})`,
+      r.ok === false && made === 2 && saidOnce(w, t, p, text) && !w.alive().some((n) => n.name === "Pic")
+      && text.startsWith("Design Twin refused an edit request — no layer changed, but it had already added 1 image to the file: ops[0] (createTree): tree.fills[1]: 'notes.gif' is not an image Figma can open"));
+    w.figma.createImage = realCreate;
+  },
 }];

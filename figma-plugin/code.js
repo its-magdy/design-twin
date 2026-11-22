@@ -2134,16 +2134,16 @@
     const size2 = sized ? " " + sized : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
     const nodes = s.frames + s.texts + s.instances + s.clones;
-    const plural3 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
+    const plural4 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
     const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
-      return e ? " with " + plural3(e, "layer") + " changed" : "";
+      return e ? " with " + plural4(e, "layer") + " changed" : "";
     };
     const c = s.component;
-    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural3(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
+    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural4(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
     const parts = [
-      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural3(s.frames, "frame") + ", " + plural3(s.texts, "text") + (s.instances ? ", " + plural3(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
+      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural4(s.frames, "frame") + ", " + plural4(s.texts, "text") + (s.instances ? ", " + plural4(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
     ];
     if (s.clones > (spec.clone !== void 0 ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
     if (c && c.props.length) parts.push("properties " + quoteList(c.props));
@@ -2155,7 +2155,7 @@
     if (components2.length) parts.push("components " + quoteList(components2));
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
-    if (s.unbound) parts.push(plural3(s.unbound, "raw value") + " left unbound");
+    if (s.unbound) parts.push(plural4(s.unbound, "raw value") + " left unbound");
     const checked = (components2.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
@@ -6588,7 +6588,17 @@
     return p;
   }
   var str2 = (v) => typeof v === "string" ? v : void 0;
-  async function resolveImages(list, table) {
+  function refuser(problems) {
+    return (uses, message) => {
+      const seen = /* @__PURE__ */ new Set();
+      for (const u of uses) {
+        if (seen.has(u.index)) continue;
+        seen.add(u.index);
+        problems.push({ index: u.index, op: u.op, message: u.path + ": " + message });
+      }
+    };
+  }
+  async function checkImages(list, table) {
     const ids = /* @__PURE__ */ new Map();
     const hashes = /* @__PURE__ */ new Map();
     for (const [index, op] of list.entries()) {
@@ -6613,41 +6623,24 @@
       }
     }
     const problems = [];
-    const refuse2 = (uses, message) => {
-      const seen = /* @__PURE__ */ new Set();
-      for (const u of uses) {
-        if (seen.has(u.index)) continue;
-        seen.add(u.index);
-        problems.push({ index: u.index, op: u.op, message: u.path + ": " + message });
-      }
-    };
-    const out = /* @__PURE__ */ new Map();
-    const images = [];
+    const refuse2 = refuser(problems);
+    const pending2 = [];
     for (const [id, e] of ids) {
       const b64 = table && Object.prototype.hasOwnProperty.call(table, id) ? table[id] : void 0;
       if (b64 === void 0) {
         refuse2(e.uses, "the image '" + e.file + "' came without its bytes (figma_write on the MCP server reads the file and sends them with the batch)");
         continue;
       }
-      let img;
-      try {
-        img = figma.createImage(figma.base64Decode(b64));
-      } catch (err) {
-        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-        continue;
-      }
-      let size2;
-      try {
-        size2 = await img.getSizeAsync();
-      } catch (err) {
-        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-        continue;
-      }
-      out.set(id, img.hash);
-      images.push({ file: e.file, hash: img.hash, w: size2.width, h: size2.height });
+      pending2.push({ id, file: e.file, b64, uses: e.uses });
     }
     for (const [hash, uses] of hashes) {
-      const img = figma.getImageByHash(hash);
+      let img;
+      try {
+        img = figma.getImageByHash(hash);
+      } catch (err) {
+        refuse2(uses, "Figma could not look up the image with hash '" + hash + "' (" + errMsg(err) + ")");
+        continue;
+      }
       let ok = img !== null;
       if (img) {
         try {
@@ -6658,7 +6651,34 @@
       }
       if (!ok) refuse2(uses, "the file has no image with hash '" + hash + "' (a `hash` names an image already in the file: the `hash` of an image fill in the read, or one a write's reply gave in `images`)");
     }
-    return { problems, made: out, images };
+    return { problems, pending: pending2 };
+  }
+  async function makeImages(pending2) {
+    const problems = [];
+    const refuse2 = refuser(problems);
+    const out = /* @__PURE__ */ new Map();
+    const images = [];
+    let added = 0;
+    for (const e of pending2) {
+      let img;
+      try {
+        img = figma.createImage(figma.base64Decode(e.b64));
+      } catch (err) {
+        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
+        continue;
+      }
+      added++;
+      let size2;
+      try {
+        size2 = await img.getSizeAsync();
+      } catch (err) {
+        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
+        continue;
+      }
+      out.set(e.id, img.hash);
+      images.push({ file: e.file, hash: img.hash, w: size2.width, h: size2.height });
+    }
+    return { problems, made: out, images, added };
   }
 
   // ../bridge/src/tree-diff.ts
@@ -7140,15 +7160,17 @@
         const late = [];
         const lateReport = reporter(late);
         const once = /* @__PURE__ */ new Map();
+        let landed = 0;
         for (const { use, get } of imported) {
           const k = use.kind + "\0" + use.ref;
           let got = once.get(k);
           if (!got) {
-            if (!allowed2()) return { problems: [], revoked: true };
+            if (!allowed2()) return { problems: [], revoked: true, imported: landed };
             try {
               got = { item: await get(allowed2) };
+              landed++;
             } catch (e) {
-              if (e instanceof ImportsRevoked) return { problems: [], revoked: true };
+              if (e instanceof ImportsRevoked) return { problems: [], revoked: true, imported: landed };
               got = { error: e };
             }
             once.set(k, got);
@@ -7161,7 +7183,7 @@
           if (err) lateReport.bad(use, err);
         }
         lateReport.finish();
-        return { problems: late, revoked: false };
+        return { problems: late, revoked: false, imported: landed };
       }
     };
   }
@@ -11390,7 +11412,7 @@
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
           const r = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
-          card.input.announce(r);
+          card.input.announce(r, p.landed);
           finish2(card, r);
           return;
         }
@@ -13120,23 +13142,23 @@
   }
   var NO_EXPECT = /* @__PURE__ */ new Map();
   async function runBatch(list, images, mode, expect) {
-    const out = { changes: [], layers: 0 };
+    const out = { changes: [], layers: 0, landed: { imported: 0, images: 0 } };
     if (list.length) commitUndo();
     let r;
     try {
       r = await gatedWrites(list, images, mode, out, expect);
     } catch (e) {
-      if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0);
+      if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(out.landed));
       throw e;
     }
     if (list.length) commitUndo();
     if ("card" in r) return r;
-    if (mode !== "preview" && list.length) announce(r);
+    if (mode !== "preview" && list.length) announce(r, out.landed);
     if (mode === "submit" && list.length && r.refused !== "waiting") {
       rememberWrite(r);
       if (r.applied.length) countUnreviewed(out.layers);
     }
-    return { result: r, changes: out.changes };
+    return { result: r, changes: out.changes, landed: out.landed };
   }
   function commitUndo() {
     try {
@@ -13145,7 +13167,7 @@
       console.error("[export] figma.commitUndo failed:", e);
     }
   }
-  function announce(r) {
+  function announce(r, landed) {
     const n = r.applied.length;
     const edits = n + " edit" + (n === 1 ? "" : "s");
     let text = null;
@@ -13159,9 +13181,21 @@
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
-    else if (!r.ok) text = "Design Twin refused an edit request \u2014 nothing changed: " + refusalReason(r.error);
+    else if (!r.ok) text = landed && hasLanded(landed) ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(landed) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
     if (text === null) return;
     say(text, n, r.ok);
+  }
+  var REFUSED = "Design Twin refused an edit request \u2014 nothing changed: ";
+  function announceRefused(error) {
+    say(REFUSED + refusalReason(error), 0, false);
+  }
+  var hasLanded = (l) => l.imported > 0 || l.images > 0;
+  var plural3 = (n, what) => n + " " + what + (n === 1 ? "" : "s");
+  function landedText(l) {
+    const parts = [];
+    if (l.images) parts.push("added " + plural3(l.images, "image") + " to the file");
+    if (l.imported) parts.push("imported " + plural3(l.imported, "library item"));
+    return parts.join(" and ");
   }
   function say(text, applied, ok, toasts = true) {
     if (toasts) toast(text, !ok);
@@ -13205,8 +13239,7 @@
     }
     const badTable = imageTableError(images);
     if (badTable !== null) return { ok: false, applied, error: badTable + ". Nothing was changed." };
-    const imgs = await resolveImages(list, images);
-    setBatchImages(imgs.made);
+    const imgs = await checkImages(list, images);
     const resolveBatch = async () => {
       setBatchPlan(null);
       const creates2 = await resolveCreateOps(list);
@@ -13240,6 +13273,16 @@
     if (firstProblem) {
       const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
       return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
+    }
+    let madeImages = [];
+    if (imgs.pending.length) {
+      if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      const m = await makeImages(imgs.pending);
+      out.landed.images += m.added;
+      setBatchImages(m.made);
+      madeImages = m.images;
+      const firstBad = m.problems[0];
+      if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
     }
     if (mode === "submit" && list.length) {
       const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
@@ -13281,7 +13324,7 @@
             const r = await runBatch(list, images, "preview", shown4);
             if ("card" in r) return { result: notApplied(), putBack: async () => null };
             const changes2 = r.changes;
-            return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)) };
+            return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)), landed: r.landed };
           }),
           announce
         });
@@ -13329,7 +13372,8 @@
     if (creates.targets.size) {
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       if (creates.importCount) {
-        const { problems: late, revoked } = await creates.imports(editsAllowedNow);
+        const { problems: late, revoked, imported } = await creates.imports(editsAllowedNow);
+        out.landed.imported += imported || 0;
         if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
         const firstLate = late[0];
         if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
@@ -13346,7 +13390,8 @@
     for (const step of [trees, patches, rules, sources]) {
       if (!step.importCount) continue;
       if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const { problems: late, revoked } = await step.imports(editsAllowedNow);
+      const { problems: late, revoked, imported } = await step.imports(editsAllowedNow);
+      out.landed.imported += imported || 0;
       if (revoked) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       if (late.length) return refuseLate(late);
     }
@@ -13458,7 +13503,7 @@
     }
     const done = rows.filter((a) => a !== void 0);
     const undo = propertyUndoSteps();
-    return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}, ...imgs.images.length ? { images: imgs.images } : {} };
+    return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}, ...madeImages.length ? { images: madeImages } : {} };
   }
   function notApplied() {
     return { ok: false, applied: [], error: "the write could not run. Nothing was changed." };
@@ -13557,12 +13602,19 @@
   }
   async function handleBridge(cmd, args, id) {
     const parsed = parseCommandRequest(cmd, args);
-    if (!parsed.ok) throw new Error(parsed.error);
+    if (!parsed.ok) {
+      if (cmd === "write" && !isEmptyBatch(args)) announceRefused(parsed.error);
+      throw new Error(parsed.error);
+    }
     const req = parsed.req;
     if (req.cmd === "write") return bridgeWrite(req.args, id);
     if (req.cmd === "writeTicket") return answerTicket(req.args.ticket, holdOf(req.args.holdMs), req.args.cancel === true);
     return scheduleRun(runKind(req.cmd), work(req), bridgeRun(req.cmd, id));
   }
+  var isEmptyBatch = (args) => {
+    const ops = typeof args === "object" && args !== null ? args.ops : void 0;
+    return Array.isArray(ops) && ops.length === 0;
+  };
   async function bridgeWrite(args, id) {
     const waiting = waitingTicket();
     if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };

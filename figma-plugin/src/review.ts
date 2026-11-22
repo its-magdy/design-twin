@@ -40,6 +40,7 @@ import { editsAllowedNow } from "./edits";
 import { clearErrorToast, toast } from "./toast";
 import type { ReviewCardLine, ReviewEnd, ReviewEndMsg, ReviewMsg, ReviewState, ReviewStateMsg } from "./messages";
 import { errMsg } from "./util";
+import type { Landed } from "./write-batch";
 
 export type { ReviewEnd };
 
@@ -101,10 +102,10 @@ export interface CardInput {
   previewable: boolean;
   /** apply the batch, resolved again against the file as it is now (a scheduled run of its own) */
   apply(): Promise<WriteResult>;
-  /** apply it as a preview: the result, and how to put it back */
-  preview(): Promise<{ result: WriteResult; putBack: () => Promise<WriteResult | null> }>;
+  /** apply it as a preview: the result, how to put it back, and what it added that nothing puts back */
+  preview(): Promise<{ result: WriteResult; putBack: () => Promise<WriteResult | null>; landed?: Landed }>;
   /** say what a batch came to (writes.ts announce: Figma's toast and the window's status line) */
-  announce(r: WriteResult): void;
+  announce(r: WriteResult, landed?: Landed): void;
 }
 
 export interface Card {
@@ -284,7 +285,7 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
         // It could not land whole (what it did was put back, as for any failed batch): the card ends with that result.
         post({ type: "review-end", id: card.ticket, end: "failed" });
         const r: WriteResult = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
-        card.input.announce(r);
+        card.input.announce(r, p.landed);
         finish(card, r);
         return;
       }
