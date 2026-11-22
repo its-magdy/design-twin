@@ -214,7 +214,7 @@ screens.
     - **Checked on the wire** (writeOpError, the dry run and the plugin alike): only a createTree carries `section`,
       `createPage`, `createSection`; `createPage` needs `page`, `createSection` needs `section`; a name to make is not
       blank, has no spaces at its ends (names match exactly) and does not read as a node id. A section name is never
-      blank.
+      blank. The dry run runs the wire check on every op, so an op the write refuses here is `invalid` in it too.
     - **Once per batch.** A page or section to make is planned when the batch resolves, before anything runs: one per
       page name, one per section name on its page. Every op of the batch that names it lands in that one, whether or
       not that op asked to make it. A batch makes at most 10 pages and 25 sections (refused above that). It is made

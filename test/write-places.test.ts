@@ -6,6 +6,7 @@ import { check, report } from "./assert.ts";
 import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, placeError, SECTION_PAD } from "../bridge/src/place-spec.ts";
 import { writeOpError, writeOpPreview } from "../bridge/src/commands.ts";
 import { cardLines, lineText } from "../bridge/src/review-card.ts";
+import { PLACE_REFUSED, PLACE_TAKEN } from "./place-refusals.ts";
 
 const tree = { name: "Pay", box: { w: 390, h: 844 } };
 const op = (o: Record<string, unknown>): Record<string, unknown> => ({ op: "createTree", tree, ...o });
@@ -47,6 +48,13 @@ const at = String(writeOpPreview({ op: "createTree", tree: { ...tree, x: 40, y: 
 check(`explicit coordinates in a section are the section's own (got ${JSON.stringify(at)})`, /in section 'Pay' on the current page at 40,60 inside it \(the section grows to fit\)/.test(at));
 check("without a section the sentence is as before", /on page 'Screens' at 0,0/.test(String(writeOpPreview({ op: "createTree", page: "Screens", tree: { name: "A", x: 0, y: 0 } }, 0).change))
   && /on the current page, placed beside the existing frames — /.test(String(pv({}).change)) && /the page and fonts are checked/.test(String(pv({}).change)));
+// The dry run refuses what the write refuses (the real write's half of this table: test/harness/places.ts).
+for (const { op: o, why } of PLACE_REFUSED) {
+  const real = writeOpError(o, 0);
+  const dry = writeOpPreview(o as never, 0).invalid;
+  check(`the dry run and the write both refuse ${JSON.stringify(o)} (dry run: ${JSON.stringify(dry)})`, real !== null && why.test(real) && dry !== undefined && why.test(dry));
+}
+check("…and both take the ops the check takes", PLACE_TAKEN.every((o) => writeOpError(o, 0) === null && writeOpPreview(o, 0).invalid === undefined));
 check("an op the check refuses previews as invalid", writeOpPreview({ op: "createTree", tree, createPage: true }, 0).invalid === "`ops[0].createPage` needs `page`: the name of the page to make (it is made when the file has no page of that name)");
 
 console.log("\nthe review card:");

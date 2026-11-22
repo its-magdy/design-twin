@@ -5,7 +5,9 @@
 // batch made put back whole when a later op fails (a Starter file's page limit included).
 import type { WriteOp, WriteResult } from "../../bridge/src/commands.ts";
 import { MAX_NEW_PAGES, SECTION_PAD } from "../../bridge/src/place-spec.ts";
+import { writeOpPreview } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
+import { PLACE_REFUSED, PLACE_TAKEN } from "../place-refusals.ts";
 import type { FakeNode } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { treeWorld } from "./writes.ts";
@@ -113,6 +115,22 @@ export const cases: Case[] = [{
     const r2 = await write(w2, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Wide", { box: { w: 700, h: 400 } }) }]);
     ok(`[PLACE-ROTATED] a section grown into a rotated neighbour's canvas box is a warning (${JSON.stringify(r2.warnings)})`,
       r2.ok === true && /now overlaps 'Tilted beside'/.test((r2.warnings ?? []).join()));
+  },
+}, {
+  name: "the dry run and the write refuse the same placement fields (one table: test/place-refusals.ts)",
+  async run() {
+    const w = await flowsWorld();
+    const before = w.made.length, pages = w.figma.root.children.length;
+    for (const { op, why } of PLACE_REFUSED) {
+      const r = await w.api.applyWrites([{ ...op } as never]);
+      const dry = writeOpPreview(op as never, 0).invalid;
+      ok(`[PLACE-DRY] refused by the write and by the dry run: ${JSON.stringify(op)} (${r.error})`,
+        r.ok === false && why.test(r.error ?? "") && dry !== undefined && why.test(dry) && w.made.length === before && w.figma.root.children.length === pages);
+    }
+    for (const op of PLACE_TAKEN) {
+      const r = await write(w, [op]);
+      ok(`[PLACE-DRY] taken by the write and by the dry run: ${JSON.stringify(op)} (${r.error ?? "ok"})`, r.ok === true && writeOpPreview(op, 0).invalid === undefined);
+    }
   },
 }, {
   name: "a page and a section to make: made once, used by the batch and by the same batch sent again",

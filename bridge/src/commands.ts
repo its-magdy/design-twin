@@ -258,7 +258,16 @@ export interface WritePreviewStep {
    *  file must have (checked when the write runs) — figma_write's dry run (image-file.ts imagePreview) */
   images?: string[];
 }
+/** One op of figma_write's dry run. It refuses what the write refuses: an op the wire check (writeOpError, which the
+ *  plugin runs on every op before anything) refuses is `invalid` here too, in its words, where the op's own preview
+ *  found nothing wrong (a placement field on an op that takes none, a field of the wrong type). */
 export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
+  const step = opPreview(o, index);
+  if (step.invalid !== undefined) return step;
+  const refused = writeOpError(o, index);
+  return refused === null ? step : { ...step, invalid: refused };
+}
+function opPreview(o: WriteOp, index: number): WritePreviewStep {
   const row = WRITE_OPS[o.op];
   const creates = row.effect === "creates";
   const missing = missingWriteFields(o.op, o);

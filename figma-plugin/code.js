@@ -2995,6 +2995,12 @@
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
   }
   function writeOpPreview(o, index) {
+    const step = opPreview(o, index);
+    if (step.invalid !== void 0) return step;
+    const refused = writeOpError(o, index);
+    return refused === null ? step : { ...step, invalid: refused };
+  }
+  function opPreview(o, index) {
     const row = WRITE_OPS[o.op];
     const creates = row.effect === "creates";
     const missing = missingWriteFields(o.op, o);
