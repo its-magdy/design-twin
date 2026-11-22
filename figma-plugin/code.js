@@ -2473,9 +2473,9 @@
     const hex2 = (x) => ("0000000" + (x >>> 0).toString(16)).slice(-8);
     return hex2(a) + hex2(b);
   }
-  function ruleToken(o, ids) {
+  function ruleToken(o, ids, salt = "") {
     const sorted = ids.slice().sort();
-    return sorted.length + "." + hash16(canonical({ where: o.where, scope: o.scope === void 0 ? "page" : o.scope, set: o.set }) + "|" + sorted.join(","));
+    return sorted.length + "." + hash16(canonical({ where: o.where, scope: o.scope === void 0 ? "page" : o.scope, set: o.set }) + "|" + sorted.join(",") + "|" + salt);
   }
   function tokenCount(t) {
     const m = /^(\d+)\.[0-9a-f]{16}$/.exec(t);
@@ -7566,6 +7566,25 @@
     if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
     return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
   }
+  function restoredRows(changes) {
+    const out = [];
+    const rows = /* @__PURE__ */ new Map();
+    for (const c of changes) {
+      if (!c.group) {
+        out.push(c.applied);
+        continue;
+      }
+      const row = rows.get(c.group);
+      if (row) {
+        row.matched = (row.matched || 0) + 1;
+        continue;
+      }
+      const fresh = { matched: 1 };
+      rows.set(c.group, fresh);
+      out.push(fresh);
+    }
+    return out;
+  }
   var RestoreStopped = class extends Error {
   };
   async function restoreChanges(changes, allowed2) {
@@ -11577,6 +11596,7 @@
   }
 
   // src/rules.ts
+  var SESSION_SALT = Math.random().toString(36).slice(2) + Date.now().toString(36);
   function inSource(n) {
     for (let a = n; a && a.type !== "PAGE" && a.type !== "DOCUMENT"; a = a.parent) {
       if (a.type === "COMPONENT" || a.type === "COMPONENT_SET") return true;
@@ -11592,7 +11612,7 @@
   async function loadPage(p) {
     if (typeof p.loadAsync === "function") await p.loadAsync();
   }
-  async function layersIn(rule, bad) {
+  async function layersIn(rule, bad, selected) {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     const walk = (n, page) => {
@@ -11604,13 +11624,25 @@
     };
     const s = rule.scope;
     if (s === "selection") {
-      const sel = figma.currentPage.selection;
+      let sel = figma.currentPage.selection.slice();
+      if (selected) {
+        sel = [];
+        for (const id of selected) {
+          let n = null;
+          try {
+            n = await figma.getNodeByIdAsync(id);
+          } catch {
+            n = null;
+          }
+          if (n && n.type !== "PAGE" && n.type !== "DOCUMENT") sel.push(n);
+        }
+      }
       if (!sel.length) {
-        bad('scope "selection": nothing is selected in Figma \u2014 select the layers to look in, or use "page" or "file"');
-        return out;
+        bad('scope "selection": ' + (selected ? "the selected layers it looked in are gone" : 'nothing is selected in Figma \u2014 select the layers to look in, or use "page" or "file"'));
+        return { hits: out };
       }
       for (const n of sel) if (!inSource(n)) walk(n, pageOf3(n) || figma.currentPage);
-      return out;
+      return { hits: out, selection: sel.map((n) => n.id) };
     }
     let pages;
     if (s === void 0 || s === "page") pages = [figma.currentPage];
@@ -11635,17 +11667,17 @@
       }
       for (const k of p.children) walk(k, p);
     }
-    return out;
+    return { hits: out };
   }
-  async function ownerOf(n) {
+  async function ownersOf(n) {
     let main = null;
     try {
       main = await n.getMainComponentAsync();
     } catch {
       main = null;
     }
-    if (!main) return null;
-    return main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : main;
+    if (!main) return [];
+    return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
   }
   async function matchesOf(rule, layers, bad) {
     const w = rule.where;
@@ -11681,9 +11713,9 @@
       const pool = /* @__PURE__ */ new Map();
       for (const h of layers) {
         if (h.node.type !== "INSTANCE") continue;
-        const o = await ownerOf(h.node);
-        owners.set(h.node.id, o);
-        if (o) pool.set(o.id, o);
+        const os = await ownersOf(h.node);
+        owners.set(h.node.id, os);
+        for (const o of os) pool.set(o.id, o);
       }
       const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
       if (m.kind === "one") ownerId = m.item.id;
@@ -11707,8 +11739,8 @@
       }
       if (variableId !== null && !boundVariableIds(n).has(variableId)) continue;
       if (ownerId !== null) {
-        const o = owners.get(n.id);
-        if (!o || o.id !== ownerId) continue;
+        const os = owners.get(n.id);
+        if (!os || !os.some((o) => o.id === ownerId)) continue;
       }
       out.push(h);
     }
@@ -11730,7 +11762,7 @@
       total: hits.length,
       pages,
       samples: hits.slice(0, RULE_SAMPLES).map((h) => ({ id: h.node.id, name: h.node.name, page: h.page.name })),
-      token: ruleToken(op, hits.map((h) => h.node.id)),
+      token: ruleToken(op, hits.map((h) => h.node.id + "@" + h.page.id), SESSION_SALT),
       needsToken: hits.length > RULE_TOKEN_MIN
     };
   }
@@ -11761,7 +11793,9 @@
         continue;
       }
       const before = problems.length;
-      const hits = await matchesOf(rule, await layersIn(rule, bad), bad);
+      const shown4 = mode.kind === "approved" ? mode.expect.get(index) : void 0;
+      const scoped = await layersIn(rule, bad, shown4 ? shown4.selection : void 0);
+      const hits = await matchesOf(rule, scoped.hits, bad);
       if (problems.length > before) continue;
       const match2 = matchOf(op, hits);
       matches.set(index, match2);
@@ -11771,9 +11805,8 @@
         continue;
       }
       if (mode.kind === "approved") {
-        const want = mode.expect.get(index);
-        if (want !== void 0 && want !== match2.token) {
-          bad("the layers its rule matches are not the ones the card showed (" + String(tokenCount(want)) + " then, " + hits.length + " now): send it again");
+        if (shown4 !== void 0 && shown4.token !== match2.token) {
+          bad("the layers its rule matches are not the ones the card showed (" + String(tokenCount(shown4.token)) + " then, " + hits.length + " now, or on other pages): send it again");
           continue;
         }
       } else if (mode.kind === "submit") {
@@ -11812,8 +11845,8 @@
         bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch \u2014 narrow the rule (another kind, a name) or the scope: " + named2.join(" | ") + (misfits > named2.length ? " | \u2026" : ""));
         continue;
       }
-      if (mode.kind !== "dryRun") uses.push(...patchUses(index, set).map((u) => ({ ...u, op: op.op })));
-      targets.set(index, { matches: resolved, match: match2, ids: hits.map((h) => h.node.id) });
+      uses.push(...patchUses(index, set).map((u) => ({ ...u, op: op.op })));
+      targets.set(index, { matches: resolved, match: match2, ids: hits.map((h) => h.node.id), ...scoped.selection ? { selection: scoped.selection } : {} });
     }
     const r = uses.length ? await resolveRefs(uses, loadFont) : null;
     if (r) {
@@ -12696,7 +12729,15 @@
     const creates = await createImpact(ops);
     const components2 = await componentImpact(ops);
     const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
-    const rules = await ruleImpact(ops);
+    let rules = [];
+    if (ops.some((o) => o.op === "patchWhere")) {
+      setBatchPlan((await resolveCreateOps(ops)).plan);
+      try {
+        rules = await ruleImpact(ops);
+      } finally {
+        setBatchPlan(null);
+      }
+    }
     const steps2 = [...sources.steps, ...creates.steps, ...components2, ...binds, ...rules].sort((a, b) => a.index - b.index);
     for (const k of await keyedImpact(ops, createdThisSession)) {
       const at3 = steps2.filter((x) => x.index === k.index)[0];
@@ -13015,10 +13056,11 @@
       // resolved. Each keeps what it replaces, so a failure on any of them puts back all of them with the rest of the batch.
       case "patchWhere": {
         if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
+        const group = {};
         for (const t of rule.matches) {
           consent();
           try {
-            await applyPatch(t, consent, editsAllowedNow, changes);
+            (await applyPatch(t, consent, editsAllowedNow, changes)).group = group;
           } catch (e) {
             if (e instanceof EditsRevoked) throw e;
             throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
@@ -13196,7 +13238,7 @@
         });
         const keyedResend = [...trees.targets.values()].some((t) => !!t.update);
         const shown4 = /* @__PURE__ */ new Map();
-        for (const [i, t] of rules.targets) shown4.set(i, t.match.token);
+        for (const [i, t] of rules.targets) shown4.set(i, { token: t.match.token, ...t.selection ? { selection: t.selection } : {} });
         const card = openCard({
           ops: list,
           lines,
@@ -13237,7 +13279,7 @@
         failedOp: op && op.op,
         error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
         ...revoked ? { refused: "edits-off" } : {},
-        ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
+        ...restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}
       };
     };
     const refuseLate = async (late) => {

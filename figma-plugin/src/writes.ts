@@ -16,13 +16,13 @@ import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touc
 import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
 import { markCreated } from "./session";
-import { resolveRuleOps, type RuleTarget } from "./rules";
+import { resolveRuleOps, type RuleTarget, type ShownRule } from "./rules";
 import { applyStyle, applyVariable, resolveSourceOps, type StyleTarget, type VariableTarget } from "./sources";
 import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./creates";
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, restoreChanges, RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, restoreChanges, restoredRows, RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { resolveImages, setBatchImages } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -227,9 +227,10 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     // resolved. Each keeps what it replaces, so a failure on any of them puts back all of them with the rest of the batch.
     case "patchWhere": {
       if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
+      const group = {};
       for (const t of rule.matches) {
         consent();
-        try { await applyPatch(t, consent, editsAllowedNow, changes); } catch (e) {
+        try { (await applyPatch(t, consent, editsAllowedNow, changes)).group = group; } catch (e) {
           if (e instanceof EditsRevoked) throw e;
           throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
         }
@@ -302,8 +303,9 @@ type Mode = "submit" | "approved" | "preview";
 /** What a run leaves beside its result: the changes it made (a preview puts them back) and the existing layers it
  *  counted for the review (review-policy.ts). */
 interface RunOut { changes: Change[]; layers: number }
-/** What a card showed of each patchWhere op's matches (op index → token, rules.ts): on approval they must still match. */
-type Expect = ReadonlyMap<number, string>;
+/** What a card showed of each patchWhere op's matches (op index → its token and the selection it looked in, rules.ts): on
+ *  approval they must still match. */
+type Expect = ReadonlyMap<number, ShownRule>;
 const NO_EXPECT: Expect = new Map();
 
 async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode, expect: Expect): Promise<{ result: WriteResult; changes: Change[] } | { card: Card }> {
@@ -458,8 +460,8 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       });
       const keyedResend = [...trees.targets.values()].some((t) => !!t.update);
       // What the card shows of each rule's matches: an approval or a preview runs against exactly these.
-      const shown = new Map<number, string>();
-      for (const [i, t] of rules.targets) shown.set(i, t.match.token);
+      const shown = new Map<number, ShownRule>();
+      for (const [i, t] of rules.targets) shown.set(i, { token: t.match.token, ...(t.selection ? { selection: t.selection } : {}) });
       const card = openCard({
         ops: list, lines, shows, details: reviewLines(list), why: decision.reason,
         previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
@@ -499,7 +501,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       failedOp: op && op.op,
       error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
       ...(revoked ? { refused: "edits-off" as const } : {}),
-      ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
+      ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
   };
   // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole.

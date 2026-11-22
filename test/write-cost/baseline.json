@@ -216,6 +216,15 @@
         "in": 12,
         "total": 46
       }
+    },
+    "rule-patch-token": {
+      "same-change-many": {
+        "calls": 2,
+        "ops": 1,
+        "out": 78,
+        "in": 441,
+        "total": 519
+      }
     }
   }
 }

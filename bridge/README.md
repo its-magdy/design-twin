@@ -1189,7 +1189,8 @@ spacing, radii or stroke weights were set where a variable could stand). The dry
 many match. The kinds: `text` (a text's characters equal), `fill` (a visible solid fill of that hex colour, its alpha
 pair the paint's opacity), `variable` (bound to that variable, by name, id or key), `instanceOf` (an instance of that
 component or set) and `name` (`*` is any run of characters). Layers inside an instance, a main component or a set are
-never matched (patch the main component). A page, variable or component name is never guessed. The dry run's step
+never matched (patch the main component). A page, variable or component name is never guessed. A rule picks from the
+file as it is before the batch runs (an earlier op of the batch does not change its matches). The dry run's step
 carries `match: {total, pages: [{page, count}], samples (3), token, needsToken}`, never the full list; a real run over
 25 matches must carry `token`, and one whose matches changed since is refused, as is one matching nothing or over
 2000. Each match is checked and applied as a patch by id (a misfit refuses the batch, counted with a few named), it

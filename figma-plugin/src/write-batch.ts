@@ -28,6 +28,25 @@ export interface Change {
   what: string;
   /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. */
   restore(allowed: () => boolean): void | Promise<void>;
+  /** One of the layers a patchWhere changed (the same object for every one of them): a reply that lists what was put
+   *  back counts them in one row instead of a row each. */
+  group?: object;
+}
+
+/** The rows of `changes` as a reply lists what was put back: each change's own row, but the layers one patchWhere
+ *  changed as one `{matched: n}` row, so the reply does not grow with its matches. */
+export function restoredRows(changes: readonly Change[]): AppliedWrite[] {
+  const out: AppliedWrite[] = [];
+  const rows = new Map<object, AppliedWrite>();
+  for (const c of changes) {
+    if (!c.group) { out.push(c.applied); continue; }
+    const row = rows.get(c.group);
+    if (row) { row.matched = (row.matched || 0) + 1; continue; }
+    const fresh: AppliedWrite = { matched: 1 };
+    rows.set(c.group, fresh);
+    out.push(fresh);
+  }
+  return out;
 }
 /** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
 export class RestoreStopped extends Error {}

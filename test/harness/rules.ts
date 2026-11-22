@@ -147,8 +147,8 @@ export const cases: Case[] = [{
     w.trap.add("opacity");
     const r = await write(w, [TEXT_RULE, { op: "patch", nodeId: String(card?.id), set: { opacity: 0.5 } }]);
     w.trap.delete("opacity");
-    ok(`[RULE] the op after it fails: all 4 matches are put back and listed as restored (got ${JSON.stringify(r).slice(0, 300)})`,
-      !r.ok && r.failedAt === 1 && (r.restored?.length ?? 0) === 4 && r.applied.length === 0 && w.footers().every((n) => n.characters === "Terms v1"));
+    ok(`[RULE] the op after it fails: all 4 matches are put back and listed as restored (one row however many matched; got ${JSON.stringify(r).slice(0, 300)})`,
+      !r.ok && r.failedAt === 1 && r.restored?.length === 1 && r.restored[0]?.matched === 4 && r.applied.length === 0 && w.footers().every((n) => n.characters === "Terms v1"));
     // A delete of the same batch that takes a matched layer: refused up front.
     const made = await write(w, [{ op: "createTree", tree: { name: "Temp", handle: "t", children: [{ name: "Footer", text: "Terms v1" }] } }]);
     const temp = made.applied[0]?.handles?.t;
@@ -177,12 +177,68 @@ export const cases: Case[] = [{
     const r = await first.reply;
     const res = r && !("pending" in r) ? r : undefined;
     ok(`[RULE] approved after a drift: refused, nothing changed (got ${JSON.stringify(res).slice(0, 300)})`,
-      !!res && !res.ok && /the file changed while the write waited for review: .*not the ones the card showed \(4 then, 5 now\)/.test(String(res.error)) && w.footers().every((n) => n.characters === "Terms v1"));
+      !!res && !res.ok && /the file changed while the write waited for review: .*not the ones the card showed \(4 then, 5 now, or on other pages\)/.test(String(res.error)) && w.footers().every((n) => n.characters === "Terms v1"));
     if (title) title.characters = "Home";
     const second = await send("w2");
     await w.send({ type: "review-answer", id: String(second.card?.id), action: "apply" });
     const r2 = await second.reply;
     const res2 = r2 && !("pending" in r2) ? r2 : undefined;
     ok("[RULE] approved with the card's matches: applied", !!res2 && res2.ok && res2.applied[0]?.matched === 4 && w.footers().every((n) => n.characters === "Terms v2"));
+  },
+}, {
+  name: "patchWhere review fixes: Show me does not move a selection rule's scope; a match moved to another page is drift; a variant by itself",
+  async run() {
+    const w = await ruleWorld({ extra: { reviewer: "real", clientStorage: { reviewWrites: false } } });
+    const send = async (id: string, ops: WriteOp[]): Promise<{ reply: Promise<WriteReply | undefined>; card: PostedMessage | undefined }> => {
+      const from = w.posted.length;
+      const reply = w.send({ type: "bridge", id, cmd: "write", args: { ops } }).then((posted) => {
+        const r = posted.find((m) => m.type === "bridge-result" && m.id === id);
+        return r && r.ok ? (r.result as WriteReply) : undefined;
+      });
+      for (let i = 0; i < 200 && !w.posted.slice(from).some((m) => m.type === "review"); i++) await new Promise((res) => setTimeout(res, 0));
+      return { reply, card: w.posted.slice(from).find((m) => m.type === "review") };
+    };
+    const result = async (p: Promise<WriteReply | undefined>): Promise<WriteResult | undefined> => { const r = await p; return r && !("pending" in r) ? r : undefined; };
+    // The selection is one screen; Show me selects its matched layer instead, then Apply.
+    const home = w.alive().find((n) => n.name === "Home");
+    w.figma.currentPage.selection = home ? [home] : [];
+    const sel = await send("s1", [{ ...TEXT_RULE, scope: "selection" }]);
+    await w.send({ type: "review-show", id: String(sel.card?.id), index: 0 });
+    const shownSel = w.figma.currentPage.selection.map((n) => String(n.name));
+    await w.send({ type: "review-answer", id: String(sel.card?.id), action: "apply" });
+    const r1 = await result(sel.reply);
+    ok(`[RULE] Show me changed the selection (${JSON.stringify(shownSel)}), yet Apply looks where the card did (got ${JSON.stringify(r1).slice(0, 200)})`,
+      shownSel.join() === "Footer" && !!r1 && r1.ok && r1.applied[0]?.matched === 1);
+    // A whole-file rule waits; one match moves to another page meanwhile: the card's pages are no longer true.
+    const moving = w.footers().find((n) => n.characters === "Terms v1");
+    const file = await send("s2", [TEXT_RULE]);
+    const screensPage = w.pages.screens;
+    if (moving && typeof screensPage.appendChild === "function") (screensPage.appendChild as (c: FakeNode) => void)(moving);
+    await w.send({ type: "review-answer", id: String(file.card?.id), action: "apply" });
+    const r2 = await result(file.reply);
+    ok(`[RULE] a match moved to another page while the card was up: refused (got ${JSON.stringify(r2).slice(0, 300)})`, !!r2 && !r2.ok && /not the ones the card showed/.test(String(r2.error)));
+  },
+}, {
+  name: "patchWhere: a variant by itself or its whole set; the dry run checks the patch's names; rules pick from the file before the batch; a token is this session's",
+  async run() {
+    const w = await ruleWorld();
+    const made = await write(w, [{ op: "createTree", tree: { name: "Buttons", children: [{ component: "Button", props: { Size: "Large" } }, { component: "Button", props: { Size: "Large" } }, { component: "Button" }] } }]);
+    const total = async (where: Record<string, string>): Promise<string> => { const m = await matchOf(w, { op: "patchWhere", where, scope: "file", set: { opacity: 0.5 } }); return m.match ? String(m.match.total) : String(m.problem); };
+    ok(`[RULE] instanceOf a set: every variant's instances; one variant by id or its own name: its own (got ${await total({ instanceOf: "Button" })} / ${await total({ instanceOf: "5:6" })} / ${await total({ instanceOf: "Size=Large" })})`,
+      made.ok && (await total({ instanceOf: "Button" })) === "3" && (await total({ instanceOf: "5:6" })) === "2" && (await total({ instanceOf: "Size=Large" })) === "2");
+    const refs = await matchOf(w, { op: "patchWhere", where: { name: "Card" }, scope: "file", set: { tokens: { opacity: "not/a/token" } } });
+    ok(`[RULE] the dry run refuses a name the patch uses that the file lacks (got ${String(refs.problem)})`, /not\/a\/token/.test(String(refs.problem)));
+    const chain = await write(w, [{ ...TEXT_RULE, set: { text: "Terms v2" } }, { ...TEXT_RULE, where: { text: "Terms v2" }, set: { text: "Terms v3" } }]);
+    ok(`[RULE] every rule picks from the file as it was before the batch: the second matches nothing yet (got ${String(chain.error)})`, !chain.ok && /ops\[1\].*matches no layer/.test(String(chain.error)) && w.footers().every((n) => n.characters === "Terms v1"));
+    // A token another plugin session gave (another file with the same ids, or this file after a reload) is refused.
+    const many = { op: "createTree" as const, tree: { name: "List", children: Array.from({ length: 26 }, (_, i) => ({ name: "Row " + i, text: "Legacy" })) } };
+    const other = await ruleWorld();
+    await write(w, [many]);
+    await write(other, [many]);
+    const op: WriteOp = { op: "patchWhere", where: { text: "Legacy" }, set: { text: "Current" } };
+    const theirs = (await matchOf(other, op)).match?.token;
+    const ours = (await matchOf(w, op)).match;
+    const foreign = await write(w, [{ ...op, token: theirs }]);
+    ok(`[RULE] another session's token for the same ids is refused (got ${String(foreign.error)})`, !!theirs && !!ours && theirs !== ours.token && !foreign.ok && /changed since the dry run/.test(String(foreign.error)));
   },
 }];

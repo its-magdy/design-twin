@@ -157,11 +157,13 @@ function hash16(s: string): string {
   return hex(a) + hex(b);
 }
 
-/** The token of op `o`'s matches `ids`: "<count>.<hash of the rule, the scope, the change and the sorted ids>". The same
- *  change on the same layers gives the same token; anything else another. */
-export function ruleToken(o: { where?: unknown; scope?: unknown; set?: unknown }, ids: readonly string[]): string {
+/** The token of op `o`'s matches `ids`: "<count>.<hash of the rule, the scope, the change, the sorted ids and `salt`>".
+ *  The same change on the same layers gives the same token; anything else another. The plugin passes each match as
+ *  "<id>@<page id>" (a layer moved to another page is another match) and a salt of its own session, so a token is good
+ *  only in the plugin session (and so the file) whose dry run gave it. */
+export function ruleToken(o: { where?: unknown; scope?: unknown; set?: unknown }, ids: readonly string[], salt = ""): string {
   const sorted = ids.slice().sort();
-  return sorted.length + "." + hash16(canonical({ where: o.where, scope: o.scope === undefined ? "page" : o.scope, set: o.set }) + "|" + sorted.join(","));
+  return sorted.length + "." + hash16(canonical({ where: o.where, scope: o.scope === undefined ? "page" : o.scope, set: o.set }) + "|" + sorted.join(",") + "|" + salt);
 }
 
 /** The match count a token carries, or null when the string is not one. */

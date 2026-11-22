@@ -347,7 +347,9 @@ matches, in one op whose size does not grow with the matches. Every kind given i
 `scope`: `"page"` (the current page; the default), `"file"` (every page), `"selection"` (the selected layers and
 everything inside them) or a list of page names or ids. Layers inside an instance, a main component or a component set
 are never matched: patch the main component once instead ([Source edits](#source-edits)). A page, variable or component
-name that matches nothing or several things refuses the batch with candidates.
+name that matches nothing or several things refuses the batch with candidates. Every rule picks its layers from the
+file as it is before the batch runs: an earlier op of the same batch does not change what it matches (a rule for text
+another op just set matches nothing yet — send it in a later call).
 
 Dry-run it first. Its step carries `match: {total, pages: [{page, count}], samples: [{id, name, page}], token,
 needsToken}` — counts per page and three samples, never the full list. A real run that matches more than 25 layers must

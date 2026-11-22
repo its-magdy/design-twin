@@ -299,7 +299,9 @@ screens.
     `bind` to `figma_write`'s schema and description took `toolDefinition` from 1,229 to 1,257. The same change on many
     screens (`rule-patch` / `same-change-many`: one footer text on 12 screens across 3 pages) is one `patchWhere` call —
     recorded at 1 call, 1 op, about 46 tokens (34 out, 12 in), against 14 calls, 12 ops and about 5,894 tokens for the
-    four-op route (a page list, an outline per screen, then the setText ops), and the op does not grow with the matches.
+    four-op route (a page list, an outline per screen, then the setText ops), and the op does not grow with the matches. The
+    way a run over 25 matches goes (`rule-patch-token`: the dry run, then the run carrying its token) is recorded on the
+    same job at 2 calls, 1 op, about 519 tokens (78 out, 441 in: the dry run's preview and `match`).
     Adding `patchWhere` to the schema and description took `toolDefinition` from 1,287 to 1,400.
 
 ## Build order

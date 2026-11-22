@@ -27,9 +27,19 @@ export interface RuleTarget {
   /** one resolved patch per matched layer, in document order */
   matches: PatchTarget[];
   match: RuleMatch;
-  /** the matched layers' ids, in document order, and the page each is on */
+  /** the matched layers' ids, in document order */
   ids: string[];
+  /** scope "selection": the selected layers it looked in, by id — an approval looks in these again, whatever is selected
+   *  by then (Show me and a preview change the selection) */
+  selection?: string[];
 }
+
+/** What a card showed of a rule op: the token of its matches and, for scope "selection", the layers it looked in. */
+export interface ShownRule { token: string; selection?: string[] }
+
+/** This plugin session's own salt in every token (rule-spec.ts ruleToken): a token from another session or file is not
+ *  one of these. Not a secret: it only tells this session's dry runs from any other's. */
+const SESSION_SALT = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 /** A layer the rule matched, and its page. */
 interface Hit { node: SceneNode; page: PageNode }
@@ -52,7 +62,7 @@ async function loadPage(p: PageNode): Promise<void> {
 }
 
 /** The layers the scope holds, in document order, each once: what a rule is tested against. Problems go to `bad`. */
-async function layersIn(rule: CheckedRule, bad: (m: string) => void): Promise<Hit[]> {
+async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: readonly string[]): Promise<{ hits: Hit[]; selection?: string[] }> {
   const out: Hit[] = [];
   const seen = new Set<string>();
   const walk = (n: SceneNode, page: PageNode): void => {
@@ -64,10 +74,19 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void): Promise<Hi
   };
   const s = rule.scope;
   if (s === "selection") {
-    const sel = figma.currentPage.selection;
-    if (!sel.length) { bad("scope \"selection\": nothing is selected in Figma — select the layers to look in, or use \"page\" or \"file\""); return out; }
+    // On approval: the layers that were selected when the card went up, wherever the selection is now.
+    let sel: SceneNode[] = figma.currentPage.selection.slice();
+    if (selected) {
+      sel = [];
+      for (const id of selected) {
+        let n: BaseNode | null = null;
+        try { n = await figma.getNodeByIdAsync(id); } catch { n = null; }
+        if (n && n.type !== "PAGE" && n.type !== "DOCUMENT") sel.push(n);
+      }
+    }
+    if (!sel.length) { bad("scope \"selection\": " + (selected ? "the selected layers it looked in are gone" : "nothing is selected in Figma — select the layers to look in, or use \"page\" or \"file\"")); return { hits: out }; }
     for (const n of sel) if (!inSource(n)) walk(n, pageOf(n) || figma.currentPage);
-    return out;
+    return { hits: out, selection: sel.map((n) => n.id) };
   }
   let pages: PageNode[];
   if (s === undefined || s === "page") pages = [figma.currentPage];
@@ -86,15 +105,15 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void): Promise<Hi
     try { await loadPage(p); } catch (e) { bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")"); continue; }
     for (const k of p.children) walk(k, p);
   }
-  return out;
+  return { hits: out };
 }
 
-/** The component an instance is of, as a rule names it: its component set when it is a variant, else its main. */
-async function ownerOf(n: InstanceNode): Promise<ComponentNode | ComponentSetNode | null> {
+/** The components an instance is of, as a rule may name them: its main component, and the set it is a variant of. */
+async function ownersOf(n: InstanceNode): Promise<Array<ComponentNode | ComponentSetNode>> {
   let main: ComponentNode | null = null;
   try { main = await n.getMainComponentAsync(); } catch { main = null; }
-  if (!main) return null;
-  return main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : main;
+  if (!main) return [];
+  return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
 }
 
 /** The layers of `layers` op `rule` matches, in document order. A `variable` or `instanceOf` name that matches nothing
@@ -119,15 +138,17 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
     else if (m.kind === "many") { bad("where.variable: '" + w.variable + "' matches " + m.matches.length + " variables — pass one's id or key: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", ")); return []; }
     else { bad("where.variable: no variable of this file, nor any a layer in " + describeScope(rule.scope) + " uses, is named '" + w.variable + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "")); return []; }
   }
-  const owners = new Map<string, ComponentNode | ComponentSetNode | null>();
+  // A component set by its name, id or key matches every variant's instances; one variant (by its id or key, or its own
+  // name, "State=On") only its own.
+  const owners = new Map<string, Array<ComponentNode | ComponentSetNode>>();
   let ownerId: string | null = null;
   if (w.instanceOf !== undefined) {
     const pool = new Map<string, ComponentNode | ComponentSetNode>();
     for (const h of layers) {
       if (h.node.type !== "INSTANCE") continue;
-      const o = await ownerOf(h.node);
-      owners.set(h.node.id, o);
-      if (o) pool.set(o.id, o);
+      const os = await ownersOf(h.node);
+      owners.set(h.node.id, os);
+      for (const o of os) pool.set(o.id, o);
     }
     const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
     if (m.kind === "one") ownerId = m.item.id;
@@ -145,7 +166,7 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
       if (!Array.isArray(fills) || !fills.some((p: Paint) => p.type === "SOLID" && p.visible !== false && solidMatches(p.color, p.opacity, hex))) continue;
     }
     if (variableId !== null && !boundVariableIds(n).has(variableId)) continue;
-    if (ownerId !== null) { const o = owners.get(n.id); if (!o || o.id !== ownerId) continue; }
+    if (ownerId !== null) { const os = owners.get(n.id); if (!os || !os.some((o) => o.id === ownerId)) continue; }
     out.push(h);
   }
   return out;
@@ -163,14 +184,14 @@ function matchOf(op: WriteOp, hits: readonly Hit[]): RuleMatch {
   return {
     total: hits.length, pages,
     samples: hits.slice(0, RULE_SAMPLES).map((h) => ({ id: h.node.id, name: h.node.name, page: h.page.name })),
-    token: ruleToken(op, hits.map((h) => h.node.id)),
+    token: ruleToken(op, hits.map((h) => h.node.id + "@" + h.page.id), SESSION_SALT),
     needsToken: hits.length > RULE_TOKEN_MIN,
   };
 }
 
 /** How a batch's rules are resolved: as a real run first sent (its tokens checked), as the designer approved it (its
- *  matches compared with the card's: `expect`, op index → token), or for the dry run (no token checks, no names). */
-export type RuleMode = { kind: "submit" } | { kind: "approved"; expect: ReadonlyMap<number, string> } | { kind: "dryRun" };
+ *  matches compared with the card's: `expect`, op index → what it showed), or for the dry run (no token checks). */
+export type RuleMode = { kind: "submit" } | { kind: "approved"; expect: ReadonlyMap<number, ShownRule> } | { kind: "dryRun" };
 
 /**
  * Resolve every patchWhere op of a batch: its scope and rule against the file, every match as a patch (patch.ts
@@ -197,15 +218,16 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
     // Checked by writeOpError already; this is the narrowing, and a last line.
     if (!rule || !isPatchSet(set)) { bad("the op did not pass its check"); continue; }
     const before = problems.length;
-    const hits = await matchesOf(rule, await layersIn(rule, bad), bad);
+    const shown = mode.kind === "approved" ? mode.expect.get(index) : undefined;
+    const scoped = await layersIn(rule, bad, shown ? shown.selection : undefined);
+    const hits = await matchesOf(rule, scoped.hits, bad);
     if (problems.length > before) continue;
     const match = matchOf(op, hits);
     matches.set(index, match);
     const what = "its rule (" + describeWhere(rule.where) + ") matches ";
     if (hits.length > MAX_RULE_MATCHES) { bad(what + hits.length + " layers on " + describeScope(rule.scope) + ", over " + MAX_RULE_MATCHES + ": narrow it (another kind, a name) or its scope (pages, the selection)"); continue; }
     if (mode.kind === "approved") {
-      const want = mode.expect.get(index);
-      if (want !== undefined && want !== match.token) { bad("the layers its rule matches are not the ones the card showed (" + String(tokenCount(want)) + " then, " + hits.length + " now): send it again"); continue; }
+      if (shown !== undefined && shown.token !== match.token) { bad("the layers its rule matches are not the ones the card showed (" + String(tokenCount(shown.token)) + " then, " + hits.length + " now, or on other pages): send it again"); continue; }
     } else if (mode.kind === "submit") {
       if (!hits.length) { bad(what + "no layer on " + describeScope(rule.scope) + ": nothing to change (a dry run shows what it matches)"); continue; }
       if (op.token === undefined && match.needsToken) { bad(what + hits.length + " layers (over " + RULE_TOKEN_MIN + "): dry-run the batch first (dryRun: true) and send this op again with the `token` its `match` gives"); continue; }
@@ -229,8 +251,9 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
       if (named.length < RULE_SAMPLES) named.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
     }
     if (misfits) { bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch — narrow the rule (another kind, a name) or the scope: " + named.join(" | ") + (misfits > named.length ? " | …" : "")); continue; }
-    if (mode.kind !== "dryRun") uses.push(...patchUses(index, set).map((u) => ({ ...u, op: op.op })));
-    targets.set(index, { matches: resolved, match, ids: hits.map((h) => h.node.id) });
+    // The names its `set` uses resolve in the dry run too (nothing is imported until a real run applies).
+    uses.push(...patchUses(index, set).map((u) => ({ ...u, op: op.op })));
+    targets.set(index, { matches: resolved, match, ids: hits.map((h) => h.node.id), ...(scoped.selection ? { selection: scoped.selection } : {}) });
   }
   const r = uses.length ? await resolveRefs(uses, loadFont) : null;
   if (r) {

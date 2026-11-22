@@ -21,13 +21,13 @@
 //   * figma.createPaintStyle / createTextStyle / createEffectStyle make a local style (a text style starts as Inter
 //     Regular); BaseStyle.remove() deletes it. Setting a text style's font fields needs its font loaded.
 import { ruleImpact } from "./rules";
-import type { AppliedWrite, CreateOutcome, CreatePlan, WriteImpactReply, WriteOp } from "../../bridge/src/commands.ts";
+import type { AppliedWrite, CreateOutcome, CreatePlan, WriteImpactReply, WriteImpactStep, WriteOp } from "../../bridge/src/commands.ts";
 import { CREATE_OPS } from "../../bridge/src/commands.ts";
 import { checkCreateStyles, checkCreateVariables, figmaType, type StyleRow } from "../../bridge/src/create-spec.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import type { SourceValue } from "../../bridge/src/source-spec.ts";
-import type { BatchPlan, Planned } from "./batch-plan";
+import { setBatchPlan, type BatchPlan, type Planned } from "./batch-plan";
 import { applyStyle, fontAfter, styleSnapshot, styleUses, writeImpact, type StyleTarget } from "./sources";
 import { componentImpact } from "./component-build";
 import { keyedImpact } from "./keyed";
@@ -672,8 +672,13 @@ export async function designImpact(ops: readonly WriteOp[]): Promise<WriteImpact
   const components = await componentImpact(ops);
   // A `bind: true` spec: what the file would bind (bind.ts), against the file and the batch's create tables.
   const binds = ops.some((o) => o.op === "createTree" && o.bind === true) ? await bindImpact(ops, await resolveCreateOps(ops)) : [];
-  // A bulk patch by rule: its matches per page, a few samples and the token a real run sends back (rules.ts).
-  const rules = await ruleImpact(ops);
+  // A bulk patch by rule: its matches per page, a few samples and the token a real run sends back (rules.ts). The names
+  // its patch uses resolve as the real run's do: against the file and what the batch's create tables make.
+  let rules: WriteImpactStep[] = [];
+  if (ops.some((o) => o.op === "patchWhere")) {
+    setBatchPlan((await resolveCreateOps(ops)).plan);
+    try { rules = await ruleImpact(ops); } finally { setBatchPlan(null); }
+  }
   const steps = [...sources.steps, ...creates.steps, ...components, ...binds, ...rules].sort((a, b) => a.index - b.index);
   // A keyed re-send: how many existing layers it changes (keyed.ts), for the review's count — on the op's step when it
   // has one (a component spec's), else a step of its own.
