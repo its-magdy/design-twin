@@ -1077,8 +1077,9 @@ needs `page` and `createSection` needs `section`; a name to make is not blank, h
 as a node id; only a `createTree` takes them. The op that made a page or section names it in its reply (`pageCreated`,
 `sectionCreated`: the ids). If a later op fails, what the batch made goes back with the rest, newest first — the frames,
 the sections' growth, the section, the page (the designer is moved off it first when it is the current page) — except a
-page or section that holds a layer the batch did not make: it stays, with that layer, and the error says so. A Starter
-plan file takes 3 pages; Figma refuses a fourth, and the batch is put back.
+page or section that holds a layer the batch did not make: it stays, with that layer, and the error says so. A file in a
+Starter-plan team holds at most 3 pages (drafts are not held to it); there Figma refuses a fourth, and the batch is put
+back.
 The reply is small: `{id, created: {frames, texts, instances, clones}, handles, unbound}` for the tree (`instances`,
 `clones`, `handles` and `unbound` only when there are any), plus `warnings` for anything that had no effect (an `x`/`y` inside auto-layout,
 `strokesInLayout` without auto-layout, `maxLines` without `truncate`, a `font` field a text style sets). So a

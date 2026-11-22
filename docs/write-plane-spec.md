@@ -235,8 +235,9 @@ screens.
       it. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)
       is not removed: it stays with that layer, listed in `applied`, and the error says why. A page that is the
       current one when it goes is left first (the current page is not undo history); after that wait, its layers and
-      "Allow edits" are checked again before it is removed, and it stays (listed as kept) when either has changed. On a Starter plan Figma refuses a
-      fourth page, which is only known when it is made: the batch is then put back like any op Figma refuses.
+      "Allow edits" are checked again before it is removed, and it stays (listed as kept) when either has changed. A file in a Starter-plan team
+      holds at most 3 pages (Figma's limit for team files; drafts are not held to it): Figma refuses a fourth, which is
+      only known when it is made, and the batch is then put back like any op Figma refuses.
     - **One undo step (decision 16).** Making a page or section and resizing a section are ordinary plugin edits
       inside the batch's commitUndo pair; whether Figma folds a new page into that one step is checked live.
     - **A keyed re-send stays where its result is.** `page` and `section` must be absent or the result's; an update

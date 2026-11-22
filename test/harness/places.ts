@@ -2,7 +2,7 @@
 // target page by name or id, placed beside what it holds without overlap and the section grown to fit (and the sections
 // around it), a page or section the op asks to make — once per batch, used again by the same batch sent again — every
 // name problem listed before anything runs, the limits, a keyed re-send that stays where its result is, and what the
-// batch made put back whole when a later op fails (a Starter file's page limit included).
+// batch made put back whole when a later op fails (a Starter-plan team file's page limit included).
 import type { WriteOp, WriteResult } from "../../bridge/src/commands.ts";
 import { MAX_NEW_PAGES, SECTION_PAD } from "../../bridge/src/place-spec.ts";
 import { writeOpPreview } from "../../bridge/src/commands.ts";
@@ -226,7 +226,7 @@ export const cases: Case[] = [{
     ok(`[PLACE-BACK] the reply lists the frames, the section and the page as put back (${JSON.stringify(r.restored)})`,
       (r.restored ?? []).length === 4 && JSON.stringify(r.restored?.map((x) => Object.keys(x).sort().join("+"))) === JSON.stringify(["pageCreated", "sectionCreated", "created+id", "created+id"]));
 
-    // A Starter file's page limit: Figma refuses the new page, and the frame made before it in the batch goes too.
+    // A Starter-plan team file's page limit: Figma refuses the new page, and the frame made before it in the batch goes too.
     const s = await flowsWorld({ pageLimit: 5 });
     const limited = await write(s, [
       { op: "createTree", page: "Screens", tree: screen("First") },

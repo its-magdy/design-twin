@@ -19,7 +19,8 @@
 // around it; the growth is put back with the frame. A section that still runs into a neighbour is said in a warning.
 //
 // Plugin API facts this leans on (@figma/plugin-typings):
-//   * figma.createPage appends a new page to the document; a Starter file stops at 3 pages and it throws then.
+//   * figma.createPage appends a new page to the document; a file in a Starter-plan team stops at 3 pages (drafts
+//     do not) and it throws then.
 //   * figma.createSection makes a SECTION on the current page; appendChild moves it. A section is sized with
 //     resizeWithoutConstraints (≥ 0.01 a side), and does not grow by itself when a plugin appends to it.
 //   * Under documentAccess "dynamic-page" a page is loaded (loadAsync) before its children are read.

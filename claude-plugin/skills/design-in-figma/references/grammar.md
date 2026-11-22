@@ -148,8 +148,8 @@ lands in that one. At most 10 new pages and 25 new sections a batch. `createPage
 `section`; a name to make is not blank, has no spaces at its ends and does not read as a node id. The reply names what
 was made on the op that made it (`pageCreated`, `sectionCreated`: ids). If a later op fails, the batch removes them again
 (after the frames in them) and shrinks any section it grew — but never a page or section holding a layer the batch did
-not make: that one stays, and the error says so. On a Starter plan Figma refuses a fourth page; the batch is then put
-back.
+not make: that one stays, and the error says so. A file in a Starter-plan team holds at most 3 pages (drafts are not
+held to it): there Figma refuses a fourth, and the batch is put back.
 
 ```json
 {"op": "createTree", "page": "Checkout", "createPage": true, "section": "Payment", "createSection": true,
