@@ -743,6 +743,11 @@ const writeOpShape = z.object({
   // createTree: the same spec as a JSON file, read by this server into `tree` before anything else (spec-file.ts).
   treeFile: z.string().optional(),
   page: z.string().optional(),
+  // createTree: the section on that page it lands in, and whether to make the page or section when the file has none of
+  // that name (place-spec.ts checks them at the same three places as a tree spec).
+  section: z.string().optional(),
+  createPage: z.boolean().optional(),
+  createSection: z.boolean().optional(),
   // createTree: bind its raw values to the file's variables and text styles where exactly one equals them (bind-values.ts).
   bind: z.boolean().optional(),
   // patch: the fields to change, checked by patch-spec.ts checkPatch at the same three places as a tree spec.
@@ -947,7 +952,7 @@ registerTool(
       // fields, the replies and the limits are the designtwin plugin's design-in-figma skill (references/grammar.md),
       // and a field this summary leaves out is still checked: the refusal names it by path.
       "Apply a batch of typed ops to the open Figma file (≤50, in order). Checked whole before anything runs; one Cmd-Z undoes a batch, but each component property it declares, edits or deletes ends a step (the reply's `undoSteps`); a failure partway lists what was put back (`restored`) and what stays (`applied`). Ops: " +
-      "createTree {tree|treeFile, page?, bind?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place; bind:true binds raw values to the one variable or text style equal to each); a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
+      "createTree {tree|treeFile, page?, section?, createPage?, createSection?, bind?}: a whole screen as one nested spec in the read export's field names (component+props, variables, text styles; a root `key` makes a re-send update it in place; bind:true binds raw values to the one variable or text style equal to each); createPage/createSection make a page or section the file lacks; a root of type COMPONENT, or COMPONENT_SET with a variant table, makes a local component that later specs use by name, updated in place when its name is sent again | " +
       "patch {nodeId, set}: change the given fields of an existing node. An image is a fill {type:\"image\", file|hash}: a PNG/JPEG/GIF path, or a hash the file has | " +
       "patchWhere {where:{text|fill|variable|instanceOf|name}, scope?, set, token?}: the same patch on every layer a rule matches (scope selection|page|file|[pages]); its dry run counts per page and gives a token, needed over " + RULE_TOKEN_MIN + " matches | " +
       "setVariable {variable, values|value} / setStyle {style, set}: change a local variable or style once; everything bound to it follows | " +

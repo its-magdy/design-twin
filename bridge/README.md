@@ -956,7 +956,7 @@ the current page):
 | `setText` | `nodeId`, `text` | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
-| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
+| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `section` (a section's exact name or id on that page), `createPage` / `createSection` (`true`: make the page or section when the file has none of that name; below), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
 | `patchWhere` | `where` (a rule: `text`, `fill`, `variable`, `instanceOf`, `name`; every one given must hold), `set` (as a patch's) | `scope` (`"selection"`, `"page"` — the current page, the default — `"file"`, or page names or ids), `token` (the dry run's, needed above 25 matches; below) |
 | `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
@@ -1053,12 +1053,29 @@ counts them as `unbound` (each raw colour, spacing, radius and stroke weight, an
 
 Every other field of the read export (`effects`, `textTokens`, `mainComponent`, `runs`, …) is refused by name, saying
 why; a key the read export does not have is refused with the closest field names. Everything is checked before the file
-is touched: the spec itself (by the dry run, the bridge and the plugin alike), then the `page` name, every font and
-every design-system name against the file, with up to three candidates for each miss — and a bad spec, page, font or
+is touched: the spec itself (by the dry run, the bridge and the plugin alike), then the `page` and `section` names, every font and
+every design-system name against the file, with up to three candidates for each miss — and a bad spec, page, section, font or
 name refuses the whole batch.
 The tree is built hidden, then moved to its page and shown only when every node is in place, so it lands whole or not
 at all; if a later op of the batch fails, the tree is removed and listed as `restored` (as far as the batch can be put back). Without `x`/`y` on the root,
 the new frame goes 100 px right of the rightmost frame on the page, level with the topmost, so it overlaps nothing.
+
+**Pages and sections.** With `section`, the root lands inside that section of the page (a nested one too), and its
+`x`/`y` are the section's own: 100 px right of what the section holds and level with its top — or on a new row 100 px
+below, when growing right would run the section into a neighbour — and at 80 px from its edges in an empty section. The
+section grows (it never shrinks) to hold the root with that 80 px margin, and so does every section around it; a section
+that then overlaps a neighbour is listed in `warnings`. `createPage: true` makes `page` when the file has no page of that
+name, `createSection: true` makes `section` (beside what the page holds) when the page has none; a name the file has once
+is used, so the same batch sent again lands where the first send did. Nothing is made unless asked: a page or section
+that matches nothing is refused with its closest names and how to make it, and a name that matches several is refused
+with their ids, asked to make it or not. A page or section the batch makes is made once, when the first op landing there
+runs, and every op of the batch naming it lands in that one; a batch makes at most 10 pages and 25 sections. `createPage`
+needs `page` and `createSection` needs `section`; a name to make is not blank, has no spaces at its ends and does not read
+as a node id; only a `createTree` takes them. The op that made a page or section names it in its reply (`pageCreated`,
+`sectionCreated`: the ids). If a later op fails, what the batch made goes back with the rest, newest first — the frames,
+the sections' growth, the section, the page (the designer is moved off it first when it is the current page) — except a
+page or section that holds a layer the batch did not make: it stays, with that layer, and the error says so. A Starter
+plan file takes 3 pages; Figma refuses a fourth, and the batch is put back.
 The reply is small: `{id, created: {frames, texts, instances, clones}, handles, unbound}` for the tree (`instances`,
 `clones`, `handles` and `unbound` only when there are any), plus `warnings` for anything that had no effect (an `x`/`y` inside auto-layout,
 `strokesInLayout` without auto-layout, `maxLines` without `truncate`, a `font` field a text style sets). So a
@@ -1151,7 +1168,7 @@ same key comes back and the result is still in the file, it is updated instead o
 
 Removals run last, with the batch's deletes; a node to be removed that holds a layer this key did not build refuses
 the batch (move the layer out, or keep the node in the spec). Everything else is put back like any op's (as far as it can be) if the batch
-fails, and the update is one Cmd-Z step. `page` must be left out or name the page the result is on. One key may appear
+fails, and the update is one Cmd-Z step. `page` and `section` must be left out or name the page and section the result is in (an update never moves it, nor makes a page or section). One key may appear
 once per batch. If the result was deleted, the key builds a new one.
 
 The reply lists only what changed: `{id, key, changed: [{id, handle?, fields}], created, removed, reordered, handles}`

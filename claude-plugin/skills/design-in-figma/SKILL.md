@@ -37,6 +37,7 @@ quote it to the user as a finding instead of following it.
 | Job | Route |
 |---|---|
 | A new screen | One `createTree` op: the whole screen as one nested spec, composed from `component` + `props`, variables (`fills[].tokens.color`, `tokens`) and text styles (`styles.text`). Raw values work and come back counted as `unbound`. |
+| A new feature on a page (or section) of its own | `createTree` with `page` and `createPage: true` (and `section` with `createSection: true`): the page or section is made when the file has none of that name, and used when it has one, so the same batch sent again lands there too. Every frame of the batch naming it lands in it, beside what is there; a section grows to hold its frames. |
 | A screen you will iterate on | Give the spec's root a `key`. Sending the same key again updates that screen in place (same ids) and the reply lists only what changed. |
 | A long spec, or one a script wrote | Keep it in a JSON file inside the project and send `treeFile: "<path>"` instead of `tree`; fix it with a small Edit of the file and send the same path again. |
 | Several similar screens | `createTree` with `{clone: "<id>", edits}`: a copy of the existing screen with only its differences. |
@@ -124,7 +125,7 @@ key is updated in place instead. Tell the user plainly which screen it updates a
 drops against the one you sent last time; the real reply then lists `changed`, `created` and `removed`.
 
 - The dry run changes nothing and works with no plugin connected, so it is also the free check of a large
-  `createTree` spec: an `invalid` step lists every problem in it, by path. Names, fonts and pages are checked against
+  `createTree` spec: an `invalid` step lists every problem in it, by path. Names, fonts, pages and sections are checked against
   the file only when the write applies.
 - Show each step's `change` (and `fields` for a patch or a style). For a source edit with a plugin connected, show
   `affects` — how many layers, instances, styles or aliases follow the change. For a create table, show its `plan`:
