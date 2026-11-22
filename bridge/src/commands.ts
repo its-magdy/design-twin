@@ -16,7 +16,7 @@
 //     scheduler orders every run from them, and the bridge side reads `export` for its stall check,
 //     progress ticks and read plans.
 //
-// Dependency-free apart from read-opts.ts, tree-spec.ts, patch-spec.ts, rule-spec.ts, source-spec.ts and create-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
+// Dependency-free apart from read-opts.ts, tree-spec.ts, patch-spec.ts, rule-spec.ts, source-spec.ts, create-spec.ts and place-spec.ts (all pure) and type imports: the plugin bundle imports it too, so it
 // must type-check under figma-plugin/tsconfig.json (ES2019 lib, no Node types). Reply shapes that ARE
 // documents on disk (ScreenExport, LayersDoc, DesignSystemDoc, VariablesDoc, Manifest, Asset) are
 // referenced from doc-types.ts, never restated.
@@ -31,6 +31,7 @@ import { describeTree, treeRefusal, type TreeNodeSpec } from "./tree-spec.ts";
 import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
 import { imageTableError, type ImageTable } from "./image-spec.ts";
+import { describePlace, placeError } from "./place-spec.ts";
 import type { BindCounts } from "./bind-values.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -105,6 +106,12 @@ export interface WriteOp {
   tree?: TreeNodeSpec | Record<string, unknown> | undefined;
   /** createTree: the page the new frame lands on — its exact name or id (the current page when absent) */
   page?: string | undefined;
+  /** createTree: the section on that page the new frame lands in — its exact name or id (place-spec.ts) */
+  section?: string | undefined;
+  /** createTree: make `page` when the file has no page of that name (one it has exactly once is used) */
+  createPage?: boolean | undefined;
+  /** createTree: make `section` on the page when it has no section of that name (one it has exactly once is used) */
+  createSection?: boolean | undefined;
   /** createTree: bind the spec's raw colours, spacing, radii and text fonts to the file's variables and text styles where
    *  exactly one equals them (bind-values.ts), before the spec resolves; the reply's `bind` counts what was bound */
   bind?: boolean | undefined;
@@ -157,7 +164,7 @@ export interface WriteTicketArgs {
 }
 
 /** A WriteOp field that holds a string. */
-type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page" | "variable" | "style";
+type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page" | "section" | "variable" | "style";
 /** A WriteOp field an op can require: the string fields, createTree's spec, a patch's fields and the create tables. */
 type WriteField = WriteStrField | "tree" | "set" | "where" | "variables" | "styles";
 /** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
@@ -279,12 +286,14 @@ export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
 function treePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
   const comp = componentRootOf(o.tree);
   const what = comp ? (comp.type === "COMPONENT_SET" ? "component set" : "component") : "frame";
-  const base = { index, op: o.op, effect: "creates" as const, target: o.page ? `new ${what} on page '${o.page}'` : `new ${what} on the current page` };
+  const base = { index, op: o.op, effect: "creates" as const, target: `new ${what} ${describePlace(o)}` };
   if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+  const badPlace = placeError({ ...o }, `ops[${index}]`);
+  if (badPlace !== null) return { ...base, invalid: badPlace };
   const { problems, summary, expanded } = checkTree(o.tree);
   if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
   const bind = o.bind === true ? "; `bind`: its raw colours, spacing, radii and text fonts are bound to the file's variables and text styles where exactly one equals them — decided by the file when it is applied (a dry run a plugin answers counts them)" : "";
-  return { ...base, change: describeTree(expanded, o.page, summary) + bind, ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
+  return { ...base, change: describeTree(expanded, o, summary) + bind, ...(summary.warnings.length ? { warnings: summary.warnings } : {}) };
 }
 
 /** A patch op's preview: the node, one row per field it sets, the change in one sentence — or every problem. */
@@ -930,7 +939,7 @@ const isPageSel = (v: unknown): boolean => isStr(v) || (Array.isArray(v) && v.ev
 
 const isWriteOpName = (v: unknown): v is WriteOpName => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
 const isPadding = (v: unknown): boolean => Array.isArray(v) && v.length === 4 && v.every(isNum);
-const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
+const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "section", "variable", "style"];
 const WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
 const isIndex = (v: unknown): boolean => isNum(v) && Number.isInteger(v) && v >= 0;
 /** Op `i` of a write batch against WriteOp: `op` names one of the ops, every other declared field has its
@@ -948,6 +957,8 @@ export function writeOpError(o: unknown, i: number): string | null {
     opt(o, "padding", isPadding, "four numbers", `${at}.padding`),
     opt(o, "index", isIndex, "a whole number ≥ 0", `${at}.index`),
     opt(o, "bind", isBool, "a boolean", `${at}.bind`),
+    opt(o, "createPage", isBool, "a boolean", `${at}.createPage`),
+    opt(o, "createSection", isBool, "a boolean", `${at}.createSection`),
   ]);
   if (typeErr !== null) return typeErr;
   // A spec path is read by figma_write (spec-file.ts), which hands the plugin the spec itself: one that arrives here
@@ -955,6 +966,8 @@ export function writeOpError(o: unknown, i: number): string | null {
   if (o.treeFile !== undefined) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
   if (o.bind !== undefined && op !== "createTree") return `\`${at}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
   for (const k of ["where", "scope", "token"]) if (o[k] !== undefined && op !== "patchWhere") return `\`${at}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
+  const badPlace = placeError(o, at);
+  if (badPlace !== null) return badPlace;
   const missing = missingWriteFields(op, o);
   if (missing.length) return `\`${at}\` (${op}): missing ${missing.join(", ")}`;
   if (op === "createTree") {

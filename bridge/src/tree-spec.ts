@@ -28,6 +28,7 @@ import { nearestNames, quoteList } from "./name-match.ts";
 import { expandTree, type TreeRow } from "./tree-expand.ts";
 import { IMAGE_HASH, IMAGE_ID, IMAGE_BYTES_REASON, inlineImageProblem } from "./image-spec.ts";
 import { componentRootOf, PROP_REF_FIELDS, PROP_REF_TYPES, propDefComponents, propDefsOf, propDefsProblems, propRefsShape, RESERVED_KEY_PREFIX, variantColumns, type ComponentRootType, type PropDefType, type TreePropDef } from "./component-spec.ts";
+import { describePlace, type Place } from "./place-spec.ts";
 
 /** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity, and the colour
  *  variable it is bound to (`tokens.color`: a variable's name, key or id; the colour may then be left out). */
@@ -867,15 +868,19 @@ export function sizePhrase(spec: TreeNodeSpec): string {
   return "";
 }
 
-/** One sentence of what a valid spec creates: the dry run's `change`. `page` is the op's page, if it named one. */
-export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: TreeSummary): string {
+/** One sentence of what a valid spec creates: the dry run's `change`. `place` is where the op lands (its page and
+ *  section, and whether it makes them: place-spec.ts); the current page when it names none. */
+export function describeTree(spec: TreeNodeSpec, place: Place | undefined, s: TreeSummary): string {
   const sized = sizePhrase(spec);
   const size = sized ? " " + sized : "";
   const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
   const nodes = s.frames + s.texts + s.instances + s.clones;
   const plural = (n: number, one: string): string => n + " " + one + (n === 1 ? "" : "s");
-  const where = (page ? "on page '" + page + "'" : "on the current page") +
-    (spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : ", placed beside the existing frames");
+  const p: Place = place || {};
+  const at = spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : "";
+  const where = describePlace(p) + (p.section !== undefined
+    ? (at ? at + " inside it" : ", placed beside the frames already in it") + " (the section grows to fit)"
+    : at || ", placed beside the existing frames");
   const edited = (n: TreeNodeSpec): string => {
     const e = n.edits ? Object.keys(n.edits).length : 0;
     return e ? " with " + plural(e, "layer") + " changed" : "";
@@ -900,8 +905,8 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
   if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
   if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
   const checked = (components.length + variables.length + textStyles.length
-    ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)"
-    : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
+    ? (p.section !== undefined ? "the page, its section, fonts and names" : "the page, fonts and names") + " are checked against the file when applied (a library item is imported only then)"
+    : (p.section !== undefined ? "the page, its section and fonts" : "the page and fonts") + " are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
   return parts.join("; ") + " — " + checked + ", and nothing lands unless all of it does";
 }
 

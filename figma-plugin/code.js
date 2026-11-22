@@ -1387,6 +1387,40 @@
     return null;
   }
 
+  // ../bridge/src/place-spec.ts
+  var CREATE_TREE_ONLY = ["section", "createPage", "createSection"];
+  var ID_LIKE = /^I?\d+[:-]\d+(;\d+[:-]\d+)*$/;
+  function newNameError(name, what, at3) {
+    if (!name.trim()) return "`" + at3 + "." + what + "`: a " + what + " to make needs a name";
+    if (name !== name.trim()) return "`" + at3 + "." + what + "`: '" + name + "' has spaces at its start or end; a " + what + " is matched by its exact name, so make it without them";
+    if (ID_LIKE.test(name)) return "`" + at3 + "." + what + "`: '" + name + "' reads as a node id, which names an existing " + what + "; a " + what + " to make needs a name";
+    return null;
+  }
+  function placeError(o, at3) {
+    for (const k of CREATE_TREE_ONLY) {
+      if (o[k] !== void 0 && o.op !== "createTree") return "`" + at3 + "." + k + "`: only a createTree lands in a section or makes a page or section (`section`, `createPage`, `createSection`)";
+    }
+    if (o.op !== "createTree") return null;
+    const page = typeof o.page === "string" ? o.page : void 0;
+    const section = typeof o.section === "string" ? o.section : void 0;
+    if (o.createPage === true && page === void 0) return "`" + at3 + ".createPage` needs `page`: the name of the page to make (it is made when the file has no page of that name)";
+    if (o.createSection === true && section === void 0) return "`" + at3 + ".createSection` needs `section`: the name of the section to make (it is made when the page has no section of that name)";
+    if (section !== void 0 && !section.trim()) return "`" + at3 + ".section` must be a non-empty name or id";
+    if (o.createPage === true && page !== void 0) {
+      const e = newNameError(page, "page", at3);
+      if (e) return e;
+    }
+    if (o.createSection === true && section !== void 0) {
+      const e = newNameError(section, "section", at3);
+      if (e) return e;
+    }
+    return null;
+  }
+  function describePlace(p) {
+    const page = p.page !== void 0 ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "") : "on the current page";
+    return p.section !== void 0 ? "in section '" + p.section + "'" + (p.createSection === true ? " (made when the page has none)" : "") + " " + page : page;
+  }
+
   // ../bridge/src/tree-spec.ts
   var NUMBER_TOKEN_FIELDS = [
     "itemSpacing",
@@ -2129,13 +2163,15 @@
     if (typeof h === "number") return h + " tall, " + other(spec.widthMode, "width");
     return "";
   }
-  function describeTree(spec, page, s) {
+  function describeTree(spec, place2, s) {
     const sized = sizePhrase(spec);
     const size2 = sized ? " " + sized : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
     const nodes = s.frames + s.texts + s.instances + s.clones;
     const plural3 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
-    const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
+    const p = place2 || {};
+    const at3 = spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : "";
+    const where = describePlace(p) + (p.section !== void 0 ? (at3 ? at3 + " inside it" : ", placed beside the frames already in it") + " (the section grows to fit)" : at3 || ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
       return e ? " with " + plural3(e, "layer") + " changed" : "";
@@ -2156,7 +2192,7 @@
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
     if (s.unbound) parts.push(plural3(s.unbound, "raw value") + " left unbound");
-    const checked = (components2.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
+    const checked = (components2.length + variables.length + textStyles.length ? (p.section !== void 0 ? "the page, its section, fonts and names" : "the page, fonts and names") + " are checked against the file when applied (a library item is imported only then)" : (p.section !== void 0 ? "the page, its section and fonts" : "the page and fonts") + " are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
 
@@ -2980,12 +3016,14 @@
   function treePreview(o, index, missing) {
     const comp = componentRootOf(o.tree);
     const what = comp ? comp.type === "COMPONENT_SET" ? "component set" : "component" : "frame";
-    const base = { index, op: o.op, effect: "creates", target: o.page ? `new ${what} on page '${o.page}'` : `new ${what} on the current page` };
+    const base = { index, op: o.op, effect: "creates", target: `new ${what} ${describePlace(o)}` };
     if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    const badPlace = placeError({ ...o }, `ops[${index}]`);
+    if (badPlace !== null) return { ...base, invalid: badPlace };
     const { problems, summary, expanded } = checkTree(o.tree);
     if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
     const bind = o.bind === true ? "; `bind`: its raw colours, spacing, radii and text fonts are bound to the file's variables and text styles where exactly one equals them \u2014 decided by the file when it is applied (a dry run a plugin answers counts them)" : "";
-    return { ...base, change: describeTree(expanded, o.page, summary) + bind, ...summary.warnings.length ? { warnings: summary.warnings } : {} };
+    return { ...base, change: describeTree(expanded, o, summary) + bind, ...summary.warnings.length ? { warnings: summary.warnings } : {} };
   }
   function patchPreview(o, index, missing) {
     const base = { index, op: o.op, effect: "overwrites", target: o.nodeId || null };
@@ -3133,7 +3171,7 @@
   var isPageSel = (v) => isStr2(v) || Array.isArray(v) && v.every(isStr2);
   var isWriteOpName = (v) => isStr2(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
   var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum4);
-  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "section", "variable", "style"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   var isIndex = (v) => isNum4(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
@@ -3147,12 +3185,16 @@
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at3}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at3}.padding`),
       opt(o, "index", isIndex, "a whole number \u2265 0", `${at3}.index`),
-      opt(o, "bind", isBool, "a boolean", `${at3}.bind`)
+      opt(o, "bind", isBool, "a boolean", `${at3}.bind`),
+      opt(o, "createPage", isBool, "a boolean", `${at3}.createPage`),
+      opt(o, "createSection", isBool, "a boolean", `${at3}.createSection`)
     ]);
     if (typeErr !== null) return typeErr;
     if (o.treeFile !== void 0) return `\`${at3}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
     if (o.bind !== void 0 && op !== "createTree") return `\`${at3}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
     for (const k of ["where", "scope", "token"]) if (o[k] !== void 0 && op !== "patchWhere") return `\`${at3}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
+    const badPlace = placeError(o, at3);
+    if (badPlace !== null) return badPlace;
     const missing = missingWriteFields(op, o);
     if (missing.length) return `\`${at3}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {

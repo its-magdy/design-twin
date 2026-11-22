@@ -114,6 +114,8 @@ const SUITE_FILES: readonly string[] = [
   "review-policy.test.ts",
   // a bulk patch by rule (#171): the rule's check, words and token, its wire row, preview and card line (pure)
   "write-rules.test.ts",
+  // where a new screen lands (#184): a page or section to use or make — the check, the dry run's words, the card (pure)
+  "write-places.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];
