@@ -219,8 +219,12 @@ screens.
     is in the document: not `removed`, and its parent chain climbs to the document node. A node with no parent, or
     under a removed one, is no node, so a write approved after its target was deleted is refused, not applied to it.
     The batch holds what it resolved, and the file can change at any await after (an image being made, an import, a
-    font load), so each op checks the node it holds again right before its first change, after its last await: one
-    deleted by then fails the op with the error its lookup would have given, and the batch is put back.
+    font load, a text style being set), so each op checks the node it holds again before it reads it at all, and
+    after each of its own awaits: one deleted by then fails the op with the error its lookup would have given, and
+    the batch is put back. A tree or a keyed re-send checks its page, and each frame it builds into, the same way, so
+    it never builds into one that has gone. (A removed node's handle reads only its `id`, `removed` and `type`; Figma
+    throws on reading anything else, so the check comes first.) An op that fails partway puts back what it already
+    did, a keyed re-send's reorder included, so a refusal that says nothing changed is true.
     A library component is the one exception: it has no parent by design, and is found (to make an instance of it;
     changing it is refused as the library's).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write

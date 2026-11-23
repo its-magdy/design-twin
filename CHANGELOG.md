@@ -273,7 +273,11 @@ list of merged PRs.
   always marked removed, so a write now counts a layer only when it is on a page of the file (a library component,
   which sits on none, is still found). Before, Apply changed it and said it was applied. The same goes for a layer
   deleted while the write runs, after it was checked (while its images load, say): that op fails as missing, and the
-  batch is put back and says what stays. Before, it was changed and the write said it was applied. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
+  batch is put back and says what stays. Before, it was changed and the write said it was applied. That now holds during
+  an op's own waits too: a patch whose layer goes while its text style is set no longer writes it, and a new tree or a
+  keyed re-send no longer builds into a page or frame that went while a text's style was set; each fails as missing
+  and is put back. Such a layer is also said to be missing, not met with Figma's own "does not exist" read error. A
+  keyed re-send whose reorder Figma refuses partway puts its first moves back, so its "nothing changed" is true. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
   Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
   status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed".
 
