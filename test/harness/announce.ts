@@ -1147,3 +1147,39 @@ cases.push({
     }
   },
 });
+
+cases.push({
+  name: "A keyed reorder that fails at its second move is put back, so \"nothing changed\" is true (#206)",
+  async run() {
+    const w = await treeWorld();
+    const tree = (names: string[]) => ({ key: "order", name: "Order", children: names.map((name) => ({ name, handle: name })) });
+    const first = await w.api.applyWrites([{ op: "createTree", tree: tree(["A", "B", "C"]) }]);
+    const root = w.scene.nodes[String(first.applied[0]?.id)];
+    if (!root) throw new Error("no keyed root");
+    const insert = root.insertChild as (index: number, node: unknown) => void;
+    let calls = 0;
+    // Figma refusing the second move (injected: a reorder of three is two moves).
+    root.insertChild = (index: number, node: unknown) => { if (++calls === 2) throw new Error("insertChild refused"); insert(index, node); };
+    const t = w.notified.length;
+    const p = w.posted.length;
+    const r = replyOf(await bridgeWrite(w, "r7-order", [{ op: "createTree", tree: tree(["C", "B", "A"]) }])) as { ok?: unknown; error?: unknown; applied?: unknown; restored?: unknown };
+    root.insertChild = insert;
+    const text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] a reorder refused at its second move: the first move is put back, A B C as before (got ${JSON.stringify(namesOf(kidsOf(root)))}, ${JSON.stringify(r)})`,
+      calls >= 2 && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && JSON.stringify(namesOf(kidsOf(root))) === JSON.stringify(["A", "B", "C"]));
+    ok(`[ANNOUNCE] …the designer is told nothing changed, and why, and it is true (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text === HEAD + "insertChild refused");
+
+    // Every move refused after the first: the first cannot be put back either, and the reply says it stays.
+    calls = 0;
+    root.insertChild = (index: number, node: unknown) => { if (++calls >= 2) throw new Error("insertChild refused"); insert(index, node); };
+    const t2 = w.notified.length;
+    const r2 = replyOf(await bridgeWrite(w, "r7-order-stuck", [{ op: "createTree", tree: tree(["C", "B", "A"]) }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+    root.insertChild = insert;
+    const text2 = String(lastWrites(w)?.text);
+    const stuck = "insertChild refused; could not undo the order of the layers in 'Order' (" + String(root.id) + ") (insertChild refused)";
+    ok(`[ANNOUNCE] …a first move that cannot be put back stays, listed as applied, and the agent is told (got ${JSON.stringify(r2)}, ${JSON.stringify(namesOf(kidsOf(root)))})`,
+      r2.ok === false && Array.isArray(r2.applied) && r2.applied.length === 1 && r2.error === stuck);
+    ok(`[ANNOUNCE] …and the designer the same, never "nothing changed" (got ${JSON.stringify(text2)})`,
+      w.notified.slice(t2).length === 1 && text2 === "Design Twin applied 1 edit that could not be put back after one failed: " + stuck);
+  },
+});

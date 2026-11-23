@@ -381,8 +381,10 @@ function arrange(parent: FrameNode, want: readonly SceneNode[]): void {
   }
 }
 
-/** Put a frame's spec children in the new order; the designer's own layers keep their places. */
-function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>): Change {
+/** Put a frame's spec children in the new order; the designer's own layers keep their places. Its Change is on `changes`
+ *  before the first move: a move Figma refuses partway puts back the ones before it here, so the op leaves nothing (as a
+ *  patch does); one that cannot be put back stays on the list, and the batch reports it. */
+async function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>, allowed: () => boolean, changes: Change[]): Promise<void> {
   const parent = o.parent as FrameNode;
   const was = parent.children.slice(); // a copy: Figma's array is frozen, and live
   const nodes: SceneNode[] = [];
@@ -400,13 +402,21 @@ function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], repla
   const slots = was.map((c, i) => (seq.indexOf(c) >= 0 ? i : -1)).filter((i) => i >= 0);
   const want = was.slice();
   slots.forEach((slot, k) => { const n = seq[k]; if (n) want[slot] = n; });
-  arrange(parent, want);
-  return {
+  const change: Change = {
     applied: { id: parent.id },
     kind: "reordered frame",
     what: "the order of the layers in " + label(parent),
     restore() { arrange(parent, was.filter((c) => childOf(c, parent))); },
   };
+  changes.push(change);
+  try {
+    arrange(parent, want);
+  } catch (e) {
+    if (allowed()) {
+      try { await change.restore(allowed); changes.splice(changes.indexOf(change), 1); } catch { /* the batch's restore tries again and reports it */ }
+    }
+    throw e;
+  }
 }
 
 /** Store the new own spec on every kept node whose spec changed; its Change (on `changes` first) puts the old back. */
@@ -453,7 +463,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     built.push(n);
   }
   const replaced = plan.builds.map((b) => b.replaces);
-  for (const o of plan.orders) { stillInDocument(o.parent); consent(); changes.push(applyOrder(o, built, replaced)); }
+  for (const o of plan.orders) { stillInDocument(o.parent); consent(); await applyOrder(o, built, replaced, allowed, changes); }
   if (plan.stamps.length) {
     for (const st of plan.stamps) stillInDocument(st.ref);
     consent();

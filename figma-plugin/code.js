@@ -10869,7 +10869,7 @@
       if (parent.children[i] !== n) parent.insertChild(i, n);
     }
   }
-  function applyOrder(o, built, replaced) {
+  async function applyOrder(o, built, replaced, allowed2, changes) {
     const parent = o.parent;
     const was = parent.children.slice();
     const nodes = [];
@@ -10887,8 +10887,7 @@
       const n = seq2[k];
       if (n) want[slot] = n;
     });
-    arrange(parent, want);
-    return {
+    const change = {
       applied: { id: parent.id },
       kind: "reordered frame",
       what: "the order of the layers in " + label3(parent),
@@ -10896,6 +10895,19 @@
         arrange(parent, was.filter((c) => childOf(c, parent)));
       }
     };
+    changes.push(change);
+    try {
+      arrange(parent, want);
+    } catch (e) {
+      if (allowed2()) {
+        try {
+          await change.restore(allowed2);
+          changes.splice(changes.indexOf(change), 1);
+        } catch {
+        }
+      }
+      throw e;
+    }
   }
   function restamp2(stamps, key, changes) {
     const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
@@ -10947,7 +10959,7 @@
     for (const o of plan.orders) {
       stillInDocument(o.parent);
       consent2();
-      changes.push(applyOrder(o, built, replaced));
+      await applyOrder(o, built, replaced, allowed2, changes);
     }
     if (plan.stamps.length) {
       for (const st of plan.stamps) stillInDocument(st.ref);
