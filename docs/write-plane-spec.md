@@ -218,6 +218,9 @@ screens.
     showed it). So every lookup a write makes counts a node only when it
     is in the document: not `removed`, and its parent chain climbs to the document node. A node with no parent, or
     under a removed one, is no node, so a write approved after its target was deleted is refused, not applied to it.
+    The batch holds what it resolved, and the file can change at any await after (an image being made, an import, a
+    font load), so each op checks the node it holds again right before its first change, after its last await: one
+    deleted by then fails the op with the error its lookup would have given, and the batch is put back.
     A library component is the one exception: it has no parent by design, and is found (to make an instance of it;
     changing it is refused as the library's).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write

@@ -271,7 +271,9 @@ list of merged PRs.
   waiting card stays as it is. A layer deleted after a preview was put back is now refused on Apply, even when Figma
   still finds it by id: a deleted main component is kept so its instances and an undo can bring it back, and is not
   always marked removed, so a write now counts a layer only when it is on a page of the file (a library component,
-  which sits on none, is still found). Before, Apply changed it and said it was applied. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
+  which sits on none, is still found). Before, Apply changed it and said it was applied. The same goes for a layer
+  deleted while the write runs, after it was checked (while its images load, say): that op fails as missing, and the
+  batch is put back and says what stays. Before, it was changed and the write said it was applied. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
   Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
   status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed".
 
