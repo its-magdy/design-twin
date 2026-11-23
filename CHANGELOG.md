@@ -277,7 +277,15 @@ list of merged PRs.
   an op's own waits too: a patch whose layer goes while its text style is set no longer writes it, and a new tree or a
   keyed re-send no longer builds into a page or frame that went while a text's style was set; each fails as missing
   and is put back. Such a layer is also said to be missing, not met with Figma's own "does not exist" read error. A
-  keyed re-send whose reorder Figma refuses partway puts its first moves back, so its "nothing changed" is true. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
+  keyed re-send whose reorder Figma refuses partway puts its first moves back, so its "nothing changed" is true. A
+  new tree no longer lands, or counts, a text or a copy's layer that went while a style was set, a `createText` with no
+  parent no longer writes into a page that went while its font loaded, and a keyed re-send no longer silently leaves a
+  deleted layer out of its reorder or reports a layer it changed or built that went meanwhile: each fails as missing.
+  A keyed re-send's removals are checked again after their last wait, so a layer the designer drops into a variant
+  about to be removed refuses the removal instead of going with it. A layer deleted while the write is still being
+  checked (while a page or a font loads) is refused as missing rather than met with Figma's read error. A failed
+  build that Figma will not remove is listed in `applied` and said not to be put back, never "nothing changed"; a
+  layer the batch made that the designer deleted before a put-back counts as put back. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
   Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
   status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed".
 

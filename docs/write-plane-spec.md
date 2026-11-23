@@ -222,9 +222,16 @@ screens.
     font load, a text style being set), so each op checks the node it holds again before it reads it at all, and
     after each of its own awaits: one deleted by then fails the op with the error its lookup would have given, and
     the batch is put back. A tree or a keyed re-send checks its page, and each frame it builds into, the same way, so
-    it never builds into one that has gone. (A removed node's handle reads only its `id`, `removed` and `type`; Figma
-    throws on reading anything else, so the check comes first.) An op that fails partway puts back what it already
-    did, a keyed re-send's reorder included, so a refusal that says nothing changed is true.
+    it never builds into one that has gone; once its last await is done it checks every node it made or keeps, so it
+    never lands or reports a layer that went meanwhile. A keyed re-send's removals run after the batch's last awaits
+    (the orphan counts) and are checked again right before the first one: a layer the designer put in a node about to
+    go refuses them. The resolve before the first op holds nodes across awaits too (a page load, a font load); one
+    gone by then is refused as missing with the rest. (A removed node's handle reads only its `id`, `removed` and
+    `type`; Figma throws on reading anything else, so the check comes first.) An op that fails partway puts back what
+    it already did, a keyed re-send's reorder included, so a refusal that says nothing changed is true. A failed
+    build whose remove() Figma refuses leaves its layers in the file: those are listed in `applied` and said not to be
+    put back, never "nothing changed". A put-back skips a layer the designer deleted meanwhile: one the batch made is
+    gone as it was before the batch; any other is said not to be put back.
     A library component is the one exception: it has no parent by design, and is found (to make an instance of it;
     changing it is refused as the library's).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
