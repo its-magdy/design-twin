@@ -285,7 +285,16 @@ list of merged PRs.
   about to be removed refuses the removal instead of going with it. A layer deleted while the write is still being
   checked (while a page or a font loads) is refused as missing rather than met with Figma's read error. A failed
   build that Figma will not remove is listed in `applied` and said not to be put back, never "nothing changed"; a
-  layer the batch made that the designer deleted before a put-back counts as put back. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
+  layer the batch made that the designer deleted before a put-back counts as put back. An op that works through
+  several layers in turn (a rule's matches, a keyed re-send's new groups, a copy's edited layers) checks each again
+  once the last is done, so one that went at a later one's wait fails the op instead of being reported changed or
+  built. A rule whose page or layer goes while its pages load or its names resolve, a keyed re-send whose named page
+  goes while its result's page loads, and a component that goes between two uses of it are refused as missing (a swap
+  to such a component is no longer applied). A `createText` whose own new text goes while its font loads fails as
+  missing. A failed tree takes back every layer it made, a text Figma would not put in its frame or one the designer
+  moved out of it included, so its "nothing changed" is true; putting back a keyed tree the designer deleted puts the
+  key's earlier result back in the file's index, and a keyed re-send no longer removes or counts a variant that left
+  the document meanwhile. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
   Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
   status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed".
 
