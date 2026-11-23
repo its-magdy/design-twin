@@ -1,6 +1,6 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
-import { announceRefused, submitWrites } from "./writes";
+import { announceRefused, announceWaiting, submitWrites } from "./writes";
 import { designImpact } from "./creates";
 import { editsAllowed } from "./edits";
 import { answerTicket, holdNew, holdOf, lastWrite, layersSinceApproval, reviewWrites, waitingTicket } from "./review";
@@ -77,9 +77,13 @@ const isEmptyBatch = (args: unknown): boolean => {
 // gate lives there, not here, so no caller of it can skip it. A batch that waits for review is answered after the hold:
 // its result if the designer answered by then, else `{pending, ticket}` (review.ts).
 async function bridgeWrite(args: WriteArgs, id: string | undefined): Promise<WriteReply> {
-  // One card at a time: refused before a run starts (the window keeps showing the card that waits).
+  // One card at a time: refused before a run starts (the window keeps showing the card that waits), and the designer is
+  // told in Figma's toast that another request was refused.
   const waiting = waitingTicket();
-  if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+  if (waiting !== null) {
+    if (args.ops.length) announceWaiting();
+    return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+  }
   const s = await scheduleRun(runKind("write"), () => submitWrites(args.ops, args.images), bridgeRun("write", id));
   return "done" in s ? s.done : holdNew(s.card, holdOf(args.holdMs));
 }

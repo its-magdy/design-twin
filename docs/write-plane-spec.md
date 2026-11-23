@@ -197,7 +197,8 @@ screens.
     side; ≤ 32 MB a batch), rewrites the paint to carry the sha-256 of the bytes as `image`, and sends the bytes once
     per image beside the ops; the plugin checks every `hash` with the rest of the batch, and makes the images only
     when the batch runs: once it resolved and, if it waits for review, once it is approved (or previewed). A batch
-    refused or rejected first loads no image; one refused after an image loaded says so to the designer and the agent.
+    refused or rejected first loads no image; one refused after an image loaded says so to the designer and the agent,
+    as does an op that failed and put its layers back, and a card's later refusal after a preview it put back.
     The reply lists each made image's Figma hash for reuse. A crop, rotation and filters are not written yet.
 13. **Placement.** The spec names a target page (the current one by default) and optionally a section; the
     plugin places a new top-level frame beside the existing ones without overlap. Explicit coordinates are
@@ -265,7 +266,8 @@ screens.
       withdrawn: its result is the outcome). Finished outcomes are kept a while (the newest 20, 30 min), so a repeat answers at once, and an MCP server
       restart loses nothing. A card whose ticket is not asked about within 2 min of its last pending answer ends
       "withdrawn — the agent stopped waiting"; no card stays up longer than 15 min. One waiting card at a time: a second
-      batch is refused at once, naming the waiting ticket (`refused: "waiting"`). A late poll gets a refusal that says
+      batch is refused at once, naming the waiting ticket (`refused: "waiting"`), and a Figma toast tells the designer
+      it was refused; the waiting card stays as it is. A late poll gets a refusal that says
       nothing changed. `figma_status` reports the last write's outcome (`lastFigmaWrite`), including one the designer
       answered after the agent stopped asking (`unseen`). A card going up also shows a Figma toast and takes down a
       stale red one. Closing the plugin window or reloading Figma drops a waiting card, applying nothing.

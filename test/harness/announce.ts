@@ -2,7 +2,8 @@
 // image hash, a name that resolves to nothing, a bad op, a bad image table, Dev Mode, an op that failed and put itself
 // back, a batch whose file changed while it waited for review, a write that threw — says so in Figma's toast AND
 // replaces the plugin window's "Applying edits…" line (a `writes` message inside the write's run). An empty batch says
-// nothing; a batch refused because another waits for review says so on the status line only (the card's toast is up).
+// nothing; a batch refused in its run because another waits for review says so on the status line only (the card's
+// toast is up), and one refused before any run because a card is up says so in a toast only (the card stays).
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
 import type { PostedMessage } from "../fake-figma.ts";
@@ -227,11 +228,17 @@ export const cases: Case[] = [{
     const r = reply && typeof reply.result === "object" && reply.result !== null ? reply.result as { refused?: unknown } : {};
     const after = w.posted.slice(p);
     // The bridge's own check (bridge.ts bridgeWrite): no run begins, so the panel never shows "Applying edits…" for it,
-    // and it keeps the card's "review it below" line. No second toast either: the card's is up.
-    ok(`[ANNOUNCE] refused as waiting, with no run, no panel line and no toast (got ${JSON.stringify(after.map((m) => m.type))}, ${JSON.stringify(w.notified.slice(t))})`,
-      card !== undefined && r.refused === "waiting" && !after.some((m) => m.type === "run-begin" || m.type === "writes") && w.notified.length === t);
+    // and it keeps the card's "review it below" line (no `writes` line, no new card). Figma's toast says it was refused.
+    ok(`[ANNOUNCE] refused as waiting, with no run, no panel line and no second card (got ${JSON.stringify(after.map((m) => m.type))})`,
+      card !== undefined && r.refused === "waiting" && !after.some((m) => m.type === "run-begin" || m.type === "writes" || m.type === "review" || m.type === "review-end"));
+    ok(`[ANNOUNCE] …and the designer is told, in one toast (got ${JSON.stringify(w.notified.slice(t))})`,
+      w.notified.length === t + 1 && w.notified[t] === "Design Twin refused another edit request while one waits for your review — nothing changed.");
+    // The first card still answers: rejected, it ends as ever.
+    const t2 = w.notified.length;
     await w.send({ type: "review-answer", id: String(card?.id), action: "reject" });
-    await first;
+    const r1 = replyOf((await first).filter((m) => m.type !== "bridge-result" || m.id === "c1"));
+    ok(`[ANNOUNCE] …the first card is intact: rejected, it ends as ever (got ${JSON.stringify(r1)}, ${JSON.stringify(w.notified.slice(t2))})`,
+      r1.refused === "rejected" && w.notified.slice(t2).join("|") === "Design Twin did not apply the edit request — it was rejected. Nothing changed.");
   },
 }, {
   name: "A write the plugin's wire guard refuses (an op missing a field the MCP schema let through) says so (#206)",
@@ -504,5 +511,121 @@ cases.push({
       r.refused === "rejected" && text === "Design Twin did not apply the edit request — it was rejected. No layer changed, but its preview had already loaded 1 image file into Figma."
       && r.error === "The designer rejected this write in the Design Twin plugin window. No layer was changed, but the batch had already loaded 1 image file into Figma. They gave no reason.");
     count.restore();
+  },
+});
+
+/** A card with an image that offers a preview (26 existing layers renamed: over the review limit), previewed and put
+ *  back: the image its preview loaded is in the file, no layer of the batch is. */
+async function previewedAndPutBack(id: string): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
+  const nodes: Record<string, { id: string; type: string; name: string; visible: boolean }> = {};
+  for (let i = 1; i <= 26; i++) nodes["x:" + i] = { id: "x:" + i, type: "FRAME", name: "Old " + i, visible: true };
+  const w = await treeWorld({ extra: { reviewer: "real", nodes } });
+  let hash: string | undefined;
+  const real = w.figma.createImage;
+  w.figma.createImage = (data: Uint8Array) => { const img = real(data); hash = img.hash; return img; };
+  const A = "a".repeat(64);
+  const ops: WriteOp[] = [{ op: "createTree", tree: { name: "Pic", fills: [{ type: "image", file: "one.gif", image: A }] } },
+    ...Object.keys(nodes).map((nodeId): WriteOp => ({ op: "patch", nodeId, set: { name: "New" } }))];
+  const from = w.posted.length;
+  const reply = bridgeWrite(w, id, ops, { [A]: gif(2, 2) });
+  await tick(() => w.posted.slice(from).some((m) => m.type === "review" || m.type === "bridge-result"));
+  const card = w.posted.slice(from).find((m) => m.type === "review");
+  const state = (s: string) => w.posted.slice(from).some((m) => m.type === "review-state" && m.state === s && m.note !== undefined && /Put back\. It still waits/.test(String(m.note)) === (s === "waiting"));
+  await w.send({ type: "review-answer", id: String(card?.id), action: "preview" });
+  await tick(() => state("previewing"));
+  await w.send({ type: "review-answer", id: String(card?.id), action: "put-back" });
+  await tick(() => state("waiting"));
+  w.figma.createImage = real;
+  // The designer removes a layer the batch renames: the batch no longer resolves.
+  delete w.scene.nodes["x:1"];
+  return { w, card, reply, hash: () => hash, from };
+}
+
+const LOADED_NOTE = "No layer was changed, but the batch had already loaded 1 image file into Figma.";
+const CHANGED = "the file changed while the write waited for review: ops[1] (patch): no node with id 'x:1' (invalid or removed)";
+
+cases.push({
+  name: "A previewed write put back, then approved and refused because the file changed, says the preview's image stays (#206)",
+  async run() {
+    const { w, card, reply, hash } = await previewedAndPutBack("pa1");
+    const t = w.notified.length;
+    const p = w.posted.length;
+    await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
+    const r = replyOf(await reply);
+    const text = String(lastWrites(w)?.text);
+    const h = hash();
+    ok(`[ANNOUNCE] the preview's image is still in the file (hash ${String(h)})`, h !== undefined && w.figma.getImageByHash(h) !== null && !w.alive().some((n) => n.name === "Pic"));
+    ok(`[ANNOUNCE] …approved, then refused: the agent is told the preview's image stays (got ${JSON.stringify(r.error)})`,
+      r.ok === false && r.error === CHANGED + ". " + LOADED_NOTE);
+    ok(`[ANNOUNCE] …and the designer the same, in the toast and on the panel (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+      saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: " + CHANGED);
+  },
+}, {
+  name: "A previewed write put back, then previewed again and refused because the file changed, says the first preview's image stays (#206)",
+  async run() {
+    const { w, card, reply, hash } = await previewedAndPutBack("pa2");
+    const t = w.notified.length;
+    const p = w.posted.length;
+    await w.send({ type: "review-answer", id: String(card?.id), action: "preview" });
+    const r = replyOf(await reply);
+    const text = String(lastWrites(w)?.text);
+    const h = hash();
+    const head = "The designer asked to preview this write on the canvas, and it failed: ";
+    ok(`[ANNOUNCE] previewed again, refused: the first preview's image is still in the file (hash ${String(h)})`, h !== undefined && w.figma.getImageByHash(h) !== null);
+    ok(`[ANNOUNCE] …the agent is told it stays (got ${JSON.stringify(r.error)})`, r.ok === false && r.error === head + CHANGED + ". " + LOADED_NOTE);
+    ok(`[ANNOUNCE] …and the designer the same (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+      saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: " + head + CHANGED);
+  },
+}, {
+  name: "An op that fails after an image was loaded puts its layers back and says the image stays (#206)",
+  async run() {
+    const w = await treeWorld();
+    const A = "a".repeat(64);
+    let hash: string | undefined;
+    const real = w.figma.createImage;
+    w.figma.createImage = (data: Uint8Array) => { const img = real(data); hash = img.hash; return img; };
+    // Op 0 lands (with the image), op 1 fails as it runs: op 0 is put back, the image stays.
+    w.trap.add("cornerRadius");
+    let t = w.notified.length;
+    let p = w.posted.length;
+    const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Pic", fills: [{ type: "image", file: "one.gif", image: A }] } }, { op: "createTree", tree: { name: "Trapped", radius: 4 } }],
+      { [A]: gif(2, 2) });
+    let text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] a failed op after an image: its layers are put back, the image is in the file (got ${JSON.stringify(r)})`,
+      r.ok === false && r.applied.length === 0 && (r.restored || []).length === 1 && !w.alive().some((n) => n.name === "Pic") && hash !== undefined && w.figma.getImageByHash(hash) !== null);
+    ok(`[ANNOUNCE] …the agent is told the image stays (got ${JSON.stringify(r.error)})`,
+      /cornerRadius/.test(String(r.error)) && String(r.error).endsWith(" The batch had already loaded 1 image file into Figma; that stays."));
+    ok(`[ANNOUNCE] …and the designer the same (got ${JSON.stringify(text)})`,
+      saidOnce(w, t, p, text) && text.startsWith("Design Twin undid 1 earlier change after an edit failed, but it had already loaded 1 image file into Figma: ") && /cornerRadius/.test(text) && !/that stays/.test(text));
+
+    // The first op fails, after the image was loaded, with nothing to put back: the agent hears what landed.
+    t = w.notified.length;
+    p = w.posted.length;
+    const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Pic", radius: 4, fills: [{ type: "image", file: "one.gif", image: A }] } }], { [A]: gif(2, 2) });
+    text = String(lastWrites(w)?.text);
+    w.trap.delete("cornerRadius");
+    w.figma.createImage = real;
+    ok(`[ANNOUNCE] …the first op fails after the image: the agent is told no layer changed but the image was loaded (got ${JSON.stringify(first.error)})`,
+      first.ok === false && first.applied.length === 0 && !first.restored && /cornerRadius/.test(String(first.error)) && String(first.error).endsWith(". " + LOADED_NOTE));
+    ok(`[ANNOUNCE] …and the designer the same (got ${JSON.stringify(text)})`,
+      saidOnce(w, t, p, text) && text.startsWith("Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: ") && /cornerRadius/.test(text) && !/No layer was changed/.test(text));
+  },
+}, {
+  name: "A local variable a batch made and its rollback removed is never counted as a library import (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const t = w.notified.length;
+    const p = w.posted.length;
+    // The variable is the batch's own (op 0); the tree names it, and a component key no library has: refused once the
+    // create table ran, which is put back.
+    const r = await w.api.applyWrites([
+      { op: "createVariables", collection: "Local", variables: [["local/bg", "color", "#ffffff"]] },
+      { op: "createTree", tree: { name: "Card", fills: [{ type: "solid", tokens: { color: "local/bg" } }], children: [{ component: "a".repeat(40) }] } },
+    ]);
+    const text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] refused late, the create table put back (got ${JSON.stringify(r)})`,
+      r.ok === false && r.applied.length === 0 && !w.alive().some((n) => n.name === "Card") && !Object.values(w.scene.variables).some((v) => v.name === "local/bg"));
+    ok(`[ANNOUNCE] …the agent is not told a library item was imported (got ${JSON.stringify(r.error)})`, !/imported/.test(String(r.error)));
+    ok(`[ANNOUNCE] …nor the designer (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && !/imported/.test(text));
   },
 });

@@ -264,7 +264,11 @@ list of merged PRs.
   write the designer rejects on its review card, no longer loads its images from disk into Figma first: they are made
   only when the batch runs, once it resolved and was approved (a preview makes them too, and a card that then ends
   unapplied says they stay). Unticking "Allow edits" while images load stops before the next one, and an image Figma
-  cannot open stops the images after it.
+  cannot open stops the images after it. An image a preview loaded is also said when the card is then refused on
+  Apply or on a second preview (the file changed meanwhile), and so is one loaded before an op that failed and put its
+  layers back. A variable or style the batch made itself, and put back when it failed, is no longer counted as an
+  imported library item. A write sent while another waits for review now gets a toast saying it was refused; the
+  waiting card stays as it is.
 
 ## [0.1.6] - 2026-11-02
 

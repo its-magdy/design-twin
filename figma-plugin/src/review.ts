@@ -10,7 +10,8 @@
 // THE CARD lists the batch in plain words (bridge/src/review-card.ts lines, old → new values with colour swatches; the
 // dry run's sentences under a collapsed Details), says why it waited, has a Show me per line and Show all (select and
 // zoom, or pan to where a new frame lands: no undo step), and Apply / Reject with an optional reason that goes back to
-// the agent. ONE card at a time: a write that arrives while one is up is refused at once, naming the waiting ticket.
+// the agent. ONE card at a time: a write that arrives while one is up is refused at once, naming the waiting ticket
+// (Figma's toast tells the designer; the card stays as it is).
 // When it goes up, the last red toast comes down and Figma's toast says a write waits (a minimised window is noticed).
 //
 // PREVIEW ON CANVAS, offered for a source edit or a bulk change (review-policy.ts previewOffered): the batch is applied
@@ -40,7 +41,7 @@ import { editsAllowedNow } from "./edits";
 import { clearErrorToast, toast } from "./toast";
 import type { ReviewCardLine, ReviewEnd, ReviewEndMsg, ReviewMsg, ReviewState, ReviewStateMsg } from "./messages";
 import { errMsg } from "./util";
-import { landedResult, type Landed } from "./write-batch";
+import { landedResult, mergeLanded, type Landed } from "./write-batch";
 
 export type { ReviewEnd };
 
@@ -100,10 +101,12 @@ export interface CardInput {
   details: string[];
   why: string;
   previewable: boolean;
-  /** apply the batch, resolved again against the file as it is now (a scheduled run of its own) */
-  apply(): Promise<WriteResult>;
-  /** apply it as a preview: the result, how to put it back, and what it added that nothing puts back */
-  preview(): Promise<{ result: WriteResult; putBack: () => Promise<WriteResult | null>; landed?: Landed }>;
+  /** apply the batch, resolved again against the file as it is now (a scheduled run of its own). `prior`: what the
+   *  card's previews landed (Card.landed), which a refusal or failure of this run says too */
+  apply(prior: Landed): Promise<WriteResult>;
+  /** apply it as a preview: the result, how to put it back, and what it and the previews before it added that nothing
+   *  puts back (`prior`, as for apply) */
+  preview(prior: Landed): Promise<{ result: WriteResult; putBack: () => Promise<WriteResult | null>; landed?: Landed }>;
   /** say what a batch came to (writes.ts announce: Figma's toast and the window's status line) */
   announce(r: WriteResult, landed?: Landed): void;
 }
@@ -219,7 +222,8 @@ async function end(card: Card, e: Ending): Promise<void> {
       card.input.announce(r);
     } else {
       setState(card, "busy");
-      try { r = await card.input.apply(); } catch (e2) { r = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) }; }
+      // A refusal of the approved run says what the card's previews left too (writes.ts runBatch, from card.landed).
+      try { r = await card.input.apply(card.landed); } catch (e2) { r = landedResult({ ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) }, card.landed); }
     }
     finish(card, r);
     return;
@@ -231,7 +235,7 @@ async function end(card: Card, e: Ending): Promise<void> {
   if (p) {
     if (e.end === "edits-off" || !editsAllowedNow()) {
       post(msg);
-      const r: WriteResult = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
+      const r: WriteResult = landedResult({ ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." }, card.landed);
       card.input.announce(r);
       finish(card, r);
       return;
@@ -240,7 +244,7 @@ async function end(card: Card, e: Ending): Promise<void> {
     const failed = await p.putBack();
     card.previewed = null;
     post(msg);
-    if (failed) { card.input.announce(failed); finish(card, failed); return; }
+    if (failed) { const f = landedResult(failed, card.landed); card.input.announce(f, card.landed); finish(card, f); return; }
     const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" }, card.landed);
     card.input.announce(r, card.landed);
     finish(card, r);
@@ -285,7 +289,8 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       setState(card, "busy", "Putting it on the canvas…");
       // One that throws ends the card as a failed preview (else the card stayed on "Putting it on the canvas…").
       let p: Awaited<ReturnType<CardInput["preview"]>>;
-      try { p = await card.input.preview(); } catch (e2) { p = { result: { ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, putBack: async () => null }; }
+      // It is given what the card's earlier previews landed (their put-backs left it): a refusal of this one says it too.
+      try { p = await card.input.preview(card.landed); } catch (e2) { p = { result: landedResult({ ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, card.landed), putBack: async () => null, landed: card.landed }; }
       if (!p.result.ok) {
         // It could not land whole (what it did was put back, as for any failed batch): the card ends with that result.
         post({ type: "review-end", id: card.ticket, end: "failed" });
@@ -297,7 +302,7 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       card.previewed = p;
       // What it loaded or imported stays whatever the card comes to (a put-back takes back only its layers). A second
       // preview of the same batch loads the same images and items: the most either loaded, not their sum.
-      if (p.landed) card.landed = { images: Math.max(card.landed.images, p.landed.images), imported: Math.max(card.landed.imported, p.landed.imported) };
+      if (p.landed) card.landed = mergeLanded(card.landed, p.landed);
       // Show what it changed: the lines' layers and anything it made.
       const ids: string[] = [];
       for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);
@@ -313,8 +318,9 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
     card.previewed = null;
     if (failed) {
       post({ type: "review-end", id: card.ticket, end: "failed" });
-      card.input.announce(failed);
-      finish(card, failed);
+      const f = landedResult(failed, card.landed);
+      card.input.announce(f, card.landed);
+      finish(card, f);
       return;
     }
     setState(card, "waiting", "Put back. It still waits for your answer.");

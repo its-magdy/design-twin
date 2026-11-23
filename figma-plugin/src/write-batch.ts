@@ -101,15 +101,30 @@ export function landedText(l: Landed): string {
 /** The sentence a refusal's error carries in place of "Nothing was changed." once something landed (landedResult). */
 export const landedNote = (l: Landed): string => "No layer was changed, but the batch had already " + landedText(l) + ".";
 
+/** The sentence a failure's error ends with once something landed and it says no "Nothing was changed." to replace: an
+ *  op failed as it ran (its layers put back, or some kept), or a preview could not all be put back (landedResult). */
+export const landedStays = (l: Landed): string => "The batch had already " + landedText(l) + "; that stays.";
+
+/** What a card's runs landed between them (review.ts: its previews, then the run it ends with). A run of the same batch
+ *  loads the same images and imports the same items, so the most any run landed, not their sum. */
+export function mergeLanded(a: Landed, b: Landed): Landed {
+  return { images: Math.max(a.images, b.images), imported: Math.max(a.imported, b.imported) };
+}
+
 /**
- * A refusal as the agent gets it, once something landed before it (an import, an image): its "Nothing was changed."
+ * A failure as the agent gets it, once something landed before it (an import, an image): its "Nothing was changed."
  * (or "Nothing in the file was changed.", or a list's "N problems — nothing was changed:") says what landed instead.
- * Anything else — a result that applied or put back ops, says nothing of the kind, or came after nothing landed — is
- * returned as it is, word for word.
+ * One with no such sentence (an op that failed as it ran) gets one: landedNote when no layer stays and none was put
+ * back, else landedStays. Anything else — a success, an error that says it already, or nothing landed — is returned
+ * as it is, word for word.
  */
 export function landedResult(r: WriteResult, l: Landed): WriteResult {
   if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
   let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
   if (error === r.error) error = r.error.replace(/^(\d+ problems) — nothing was changed:\n/, "$1 — no layer was changed, but the batch had already " + landedText(l) + ":\n");
+  if (error === r.error && r.error.indexOf(landedText(l)) < 0) {
+    const untouched = !r.applied.length && !(r.restored && r.restored.length);
+    error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
+  }
   return error === r.error ? r : { ...r, error };
 }

@@ -22,7 +22,7 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, hasLanded, landedResult, landedText, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeLanded, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -308,33 +308,37 @@ interface RunOut { changes: Change[]; layers: number; landed: Landed }
 type Expect = ReadonlyMap<number, ShownRule>;
 const NO_EXPECT: Expect = new Map();
 
-async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode, expect: Expect): Promise<{ result: WriteResult; changes: Change[]; landed: Landed } | { card: Card }> {
+// `prior`: what the card's earlier previews of this batch landed (review.ts card.landed), which their put-backs left in
+// the file: a refusal or failure of this run says it, as it says what this run landed itself.
+async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode, expect: Expect, prior?: Landed): Promise<{ result: WriteResult; changes: Change[]; landed: Landed } | { card: Card }> {
   // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
   // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
   // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
   // the next one never joins it. Committing with nothing pending is a no-op.
   const out: RunOut = { changes: [], layers: 0, landed: { imported: 0, images: 0 } };
+  const landed = (): Landed => prior ? mergeLanded(prior, out.landed) : out.landed;
   if (list.length) commitUndo();
   let r: WriteResult | { card: Card };
   try {
     r = await gatedWrites(list, images, mode, out, expect);
   } catch (e) {
     // A write that throws is said too (its run's "Applying edits…" line must not stay up), then fails as it did.
-    if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(out.landed));
+    if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(landed()));
     throw e;
   }
   if (list.length) commitUndo();
   if ("card" in r) return r;
   // A refusal after an import or an image landed tells the agent so, as the designer is told (write-batch.ts).
-  r = landedResult(r, out.landed);
+  const all = landed();
+  r = landedResult(r, all);
   // A preview is said by its card. An empty batch says nothing.
-  if (mode !== "preview" && list.length) announce(r, out.landed);
+  if (mode !== "preview" && list.length) announce(r, all);
   if (mode === "submit" && list.length && r.refused !== "waiting") {
     rememberWrite(r);
     // What a batch that did not wait changed counts toward the next forced review (review-policy.ts).
     if (r.applied.length) countUnreviewed(out.layers);
   }
-  return { result: r, changes: out.changes, landed: out.landed };
+  return { result: r, changes: out.changes, landed: all };
 }
 
 function commitUndo(): void {
@@ -344,7 +348,8 @@ function commitUndo(): void {
 // A write is never silent: whatever changed the file (or was refused from changing it) is said in Figma's own
 // toast AND on the plugin window's status line (ui.template.html `writes`), which it replaces — the write's run put
 // "Applying edits…" there. An empty batch changed nothing and says nothing (runBatch does not call this for one).
-// A batch refused because another waits for review is said on the status line only: that card's toast is up already.
+// A batch refused in its run because another waits for review is said on the status line only: that card's toast went
+// up a moment ago. One refused before any run (bridge.ts, the usual case) is said in a toast only (announceWaiting).
 // `landed`: what the batch added that nothing puts back (library imports, images), so a refusal never says "nothing
 // changed" after one.
 function announce(r: WriteResult, landed?: Landed): void {
@@ -353,7 +358,7 @@ function announce(r: WriteResult, landed?: Landed): void {
   const some = landed && hasLanded(landed) ? landed : null;
   let text: string | null = null;
   if (r.refused === "waiting") {
-    say("Design Twin refused another edit request while one waits for your review — nothing changed.", 0, false, false);
+    say(WAITING, 0, false, false);
     return;
   }
   if (r.refused === "edits-off") text = n
@@ -366,7 +371,9 @@ function announce(r: WriteResult, landed?: Landed): void {
   else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
-  else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+  // Put back after an op failed: an image loaded (or an item imported) before it stays, and is said.
+  else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed"
+    + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
   // Refused before anything changed (#206): a check before the first op (an image hash the file does not have, a name
   // that resolves to nothing, a bad op, Dev Mode, a file that changed while the batch waited for review), or an op
   // that failed and put itself back before anything else had landed. No layer changed then, but a library item imported
@@ -379,10 +386,17 @@ function announce(r: WriteResult, landed?: Landed): void {
 }
 
 const REFUSED = "Design Twin refused an edit request — nothing changed: ";
+const WAITING = "Design Twin refused another edit request while one waits for your review — nothing changed.";
 
 /** A write refused before it reached the batch (bridge.ts: the wire guard), said like any other refusal. */
 export function announceRefused(error: string): void {
   say(REFUSED + refusalReason(error), 0, false);
+}
+
+/** A write refused before any run because a card already waits (bridge.ts): Figma's toast only. No run began, so the
+ *  window's line is still the card's "review it below", which stays; the card itself is left as it is. */
+export function announceWaiting(): void {
+  toast(WAITING, true);
 }
 
 /** The toast and the status line for `text` (red unless `ok`); `toasts: false` for the status line only. */
@@ -402,7 +416,7 @@ function announceThrown(e: unknown, landed: boolean): void {
 /** Why a batch was refused, as one line: its error without the "nothing was changed" (or what landed, write-batch.ts
  *  landedResult) the sentence already says (write-batch.ts batchRefusal), its problems joined with "; ". */
 function refusalReason(error: string | undefined): string {
-  return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*)\.$/, "")
+  return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "")
     .replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
 }
 
@@ -518,9 +532,9 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
         ops: list, lines, shows, details: reviewLines(list), why: decision.reason,
         previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
         // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
-        apply: () => queueWork(async () => { const r = await runBatch(list, images, "approved", shown); return "card" in r ? notApplied() : r.result; }),
-        preview: () => queueWork(async () => {
-          const r = await runBatch(list, images, "preview", shown);
+        apply: (prior) => queueWork(async () => { const r = await runBatch(list, images, "approved", shown, prior); return "card" in r ? notApplied() : r.result; }),
+        preview: (prior) => queueWork(async () => {
+          const r = await runBatch(list, images, "preview", shown, prior);
           if ("card" in r) return { result: notApplied(), putBack: async () => null };
           const changes = r.changes;
           return { result: r.result, putBack: () => queueWork(() => putBack(changes)), landed: r.landed };

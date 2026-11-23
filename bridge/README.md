@@ -1447,7 +1447,8 @@ If the designer has not answered by then, it returns:
 - The plugin keeps the ticket and the outcome, so asking again after an answer, or after the MCP server restarted,
   answers at once. An unknown ticket is an error (closing the plugin window or reloading Figma drops a waiting card
   and applies nothing).
-- One card at a time: a new batch while one waits is refused at once (`refused: "waiting"`), naming its ticket.
+- One card at a time: a new batch while one waits is refused at once (`refused: "waiting"`), naming its ticket; a
+  Figma toast tells the designer, and the waiting card stays as it is.
 - `figma_status` reports `lastFigmaWrite`: how the last write ended, or the ticket waiting now; `unseen: true` when the
   designer answered after the agent stopped asking.
 

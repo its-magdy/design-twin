@@ -7146,7 +7146,7 @@
           bad(u, typeMismatch(u, typed));
           continue;
         }
-        imported.push({ use: u, get: f.later });
+        imported.push({ use: u, get: f.later, local: f.local === true });
         continue;
       }
       const err = await accept(u, f.ok, refs2, loadFont, swapOf);
@@ -7163,14 +7163,14 @@
         const lateReport = reporter(late);
         const once = /* @__PURE__ */ new Map();
         let landed = 0;
-        for (const { use, get } of imported) {
+        for (const { use, get, local } of imported) {
           const k = use.kind + "\0" + use.ref;
           let got = once.get(k);
           if (!got) {
             if (!allowed2()) return { problems: [], revoked: true, imported: landed };
             try {
               got = { item: await get(allowed2) };
-              landed++;
+              if (!local) landed++;
             } catch (e) {
               if (e instanceof ImportsRevoked) return { problems: [], revoked: true, imported: landed };
               got = { error: e };
@@ -7509,6 +7509,7 @@
     }
     if (one.type) types.set(ref2, one.type);
     return {
+      local: true,
       later: async () => {
         if (!one.made) throw new Error(what + " '" + ref2 + "' was to be made by ops[" + one.op + "], which has not run");
         return one.made;
@@ -7647,10 +7648,18 @@
     return parts.join(" and ");
   }
   var landedNote = (l) => "No layer was changed, but the batch had already " + landedText(l) + ".";
+  var landedStays = (l) => "The batch had already " + landedText(l) + "; that stays.";
+  function mergeLanded(a, b) {
+    return { images: Math.max(a.images, b.images), imported: Math.max(a.imported, b.imported) };
+  }
   function landedResult(r, l) {
     if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
     let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
     if (error === r.error) error = r.error.replace(/^(\d+ problems) — nothing was changed:\n/, "$1 \u2014 no layer was changed, but the batch had already " + landedText(l) + ":\n");
+    if (error === r.error && r.error.indexOf(landedText(l)) < 0) {
+      const untouched = !r.applied.length && !(r.restored && r.restored.length);
+      error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
+    }
     return error === r.error ? r : { ...r, error };
   }
 
@@ -11356,9 +11365,9 @@
       } else {
         setState(card, "busy");
         try {
-          r2 = await card.input.apply();
+          r2 = await card.input.apply(card.landed);
         } catch (e2) {
-          r2 = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) };
+          r2 = landedResult({ ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) }, card.landed);
         }
       }
       finish2(card, r2);
@@ -11369,7 +11378,7 @@
     if (p) {
       if (e.end === "edits-off" || !editsAllowedNow()) {
         post2(msg);
-        const r3 = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
+        const r3 = landedResult({ ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." }, card.landed);
         card.input.announce(r3);
         finish2(card, r3);
         return;
@@ -11379,8 +11388,9 @@
       card.previewed = null;
       post2(msg);
       if (failed) {
-        card.input.announce(failed);
-        finish2(card, failed);
+        const f = landedResult(failed, card.landed);
+        card.input.announce(f, card.landed);
+        finish2(card, f);
         return;
       }
       const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" }, card.landed);
@@ -11423,9 +11433,9 @@
         setState(card, "busy", "Putting it on the canvas\u2026");
         let p;
         try {
-          p = await card.input.preview();
+          p = await card.input.preview(card.landed);
         } catch (e2) {
-          p = { result: { ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, putBack: async () => null };
+          p = { result: landedResult({ ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, card.landed), putBack: async () => null, landed: card.landed };
         }
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
@@ -11435,7 +11445,7 @@
           return;
         }
         card.previewed = p;
-        if (p.landed) card.landed = { images: Math.max(card.landed.images, p.landed.images), imported: Math.max(card.landed.imported, p.landed.imported) };
+        if (p.landed) card.landed = mergeLanded(card.landed, p.landed);
         const ids = [];
         for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);
         for (const a of p.result.applied) if (a.id && ids.length < SHOW_CAP) ids.push(a.id);
@@ -11456,8 +11466,9 @@
       card.previewed = null;
       if (failed) {
         post2({ type: "review-end", id: card.ticket, end: "failed" });
-        card.input.announce(failed);
-        finish2(card, failed);
+        const f = landedResult(failed, card.landed);
+        card.input.announce(f, card.landed);
+        finish2(card, f);
         return;
       }
       setState(card, "waiting", "Put back. It still waits for your answer.");
@@ -13160,25 +13171,27 @@
     return "card" in r ? r : { done: r.result };
   }
   var NO_EXPECT = /* @__PURE__ */ new Map();
-  async function runBatch(list, images, mode, expect) {
+  async function runBatch(list, images, mode, expect, prior) {
     const out = { changes: [], layers: 0, landed: { imported: 0, images: 0 } };
+    const landed = () => prior ? mergeLanded(prior, out.landed) : out.landed;
     if (list.length) commitUndo();
     let r;
     try {
       r = await gatedWrites(list, images, mode, out, expect);
     } catch (e) {
-      if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(out.landed));
+      if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(landed()));
       throw e;
     }
     if (list.length) commitUndo();
     if ("card" in r) return r;
-    r = landedResult(r, out.landed);
-    if (mode !== "preview" && list.length) announce(r, out.landed);
+    const all = landed();
+    r = landedResult(r, all);
+    if (mode !== "preview" && list.length) announce(r, all);
     if (mode === "submit" && list.length && r.refused !== "waiting") {
       rememberWrite(r);
       if (r.applied.length) countUnreviewed(out.layers);
     }
-    return { result: r, changes: out.changes, landed: out.landed };
+    return { result: r, changes: out.changes, landed: all };
   }
   function commitUndo() {
     try {
@@ -13193,7 +13206,7 @@
     const some = landed && hasLanded(landed) ? landed : null;
     let text = null;
     if (r.refused === "waiting") {
-      say("Design Twin refused another edit request while one waits for your review \u2014 nothing changed.", 0, false, false);
+      say(WAITING, 0, false, false);
       return;
     }
     if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
@@ -13201,14 +13214,18 @@
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
-    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed" + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
     else if (!r.ok) text = some ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
     if (text === null) return;
     say(text, n, r.ok);
   }
   var REFUSED = "Design Twin refused an edit request \u2014 nothing changed: ";
+  var WAITING = "Design Twin refused another edit request while one waits for your review \u2014 nothing changed.";
   function announceRefused(error) {
     say(REFUSED + refusalReason(error), 0, false);
+  }
+  function announceWaiting() {
+    toast(WAITING, true);
   }
   function say(text, applied, ok, toasts = true) {
     if (toasts) toast(text, !ok);
@@ -13219,7 +13236,7 @@
     say(landed ? "Design Twin could not finish an edit request: " + errMsg(e) + " \u2014 some of it may be in the file." : "Design Twin could not run an edit request \u2014 nothing changed: " + errMsg(e), 0, false);
   }
   function refusalReason(error) {
-    return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*)\.$/, "").replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
+    return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "").replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
   }
   async function gatedWrites(list, images, mode, out, expect) {
     try {
@@ -13319,12 +13336,12 @@
           why: decision.reason,
           previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
           // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
-          apply: () => queueWork(async () => {
-            const r = await runBatch(list, images, "approved", shown4);
+          apply: (prior) => queueWork(async () => {
+            const r = await runBatch(list, images, "approved", shown4, prior);
             return "card" in r ? notApplied() : r.result;
           }),
-          preview: () => queueWork(async () => {
-            const r = await runBatch(list, images, "preview", shown4);
+          preview: (prior) => queueWork(async () => {
+            const r = await runBatch(list, images, "preview", shown4, prior);
             if ("card" in r) return { result: notApplied(), putBack: async () => null };
             const changes2 = r.changes;
             return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)), landed: r.landed };
@@ -13630,7 +13647,10 @@
   };
   async function bridgeWrite(args, id) {
     const waiting = waitingTicket();
-    if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+    if (waiting !== null) {
+      if (args.ops.length) announceWaiting();
+      return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+    }
     const s = await scheduleRun(runKind("write"), () => submitWrites(args.ops, args.images), bridgeRun("write", id));
     return "done" in s ? s.done : holdNew(s.card, holdOf(args.holdMs));
   }
