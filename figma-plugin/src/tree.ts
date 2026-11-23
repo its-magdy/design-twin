@@ -353,11 +353,13 @@ export interface MadeFrom { styled: number; patches: number; pairs: number; stra
 const START: MadeFrom = { styled: 0, patches: 0, pairs: 0, strays: 0 };
 export const madeFrom = (made: Made): MadeFrom => ({ styled: made.styled.length, patches: made.patches.length, pairs: made.pairs.length, strays: made.strays.length });
 
-/** Every node `made` holds from `from` on is still in the document (stillInDocument throws as missing): run once a build's
- *  last await is done (finish), and once a keyed re-send's last subtree is built (keyed.ts applyUpdate): a node of an
- *  earlier subtree deleted or detached at a later one's await is not counted, nor its handle returned. */
+/** Every node `made` holds from `from` on is still in the document (stillInDocument throws as missing): each node it
+ *  made, and each layer of a copy it patched. Run once a build's last await is done (finish), and once a keyed re-send's
+ *  last subtree is built (keyed.ts applyUpdate): a node of an earlier subtree, or a layer an earlier patch changed,
+ *  deleted or detached at a later await is not counted, nor its handle returned. */
 export function checkMade(made: Made, from: MadeFrom = START): void {
   for (const n of madeNodes(made, from)) stillInDocument(n);
+  for (const p of made.patches.slice(from.patches)) stillInDocument(p.node);
 }
 
 /** Once every node of a build is made: the text styles its texts name, then the patches of its copies, from `from` on

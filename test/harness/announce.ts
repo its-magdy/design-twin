@@ -2018,3 +2018,128 @@ cases.push({
     }
   },
 });
+
+cases.push({
+  name: "A copy whose earlier patched layer goes during a later layer's patch fails as missing, never landed without it (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "a", handle: "title" }, { name: "Sub", text: "b", handle: "sub" }] } }]);
+      const sourceTitle = String(first.applied[0]?.handles?.title);
+      let calls = 0;
+      let gone: FakeNode | undefined;
+      // The second layer's style await: the designer deletes the copy's first patched layer.
+      w.hooks.onStyle = async () => {
+        if (++calls !== 2) return;
+        gone = w.made.find((n) => n.type === "TEXT" && peekRemoved(n, "name") === "Title" && n.id !== sourceTitle);
+        if (gone) out(gone);
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { clone: String(first.applied[0]?.id), name: "Copy", edits: { Title: { text: "A", styles: { text: "Body" } }, Sub: { text: "B", styles: { text: "Body" } } } } }]);
+      w.hooks.onStyle = undefined;
+      ok(`[ANNOUNCE] a copy, its first patched layer ${how} during the second's style await: fails as missing, no copy stays (got ${JSON.stringify(r)})`,
+        gone !== undefined && r.ok === false && r.applied.length === 0 && r.error === "no node with id '" + String(gone.id) + "' (invalid or removed)" && !w.alive().some((n) => n.name === "Copy"));
+    }
+  },
+}, {
+  name: "A component re-send whose text following a property goes while another's font loads is refused as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const spec = (label: string) => ({ type: "COMPONENT", name: "Wrap", props: { Label: { type: "TEXT", default: label } }, children: [
+        { name: "A", text: label, handle: "a", propRefs: { characters: "Label" } },
+        { name: "B", text: label, handle: "b", propRefs: { characters: "Label" } },
+      ] });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: spec("L") }]);
+      const b = w.scene.nodes[String(first.applied[0]?.handles?.b)];
+      if (!b) throw new Error("no component built: " + JSON.stringify(first));
+      const realLoad = w.figma.loadFontAsync;
+      if (!realLoad) throw new Error("the world loads no fonts");
+      let hit = false;
+      // The re-send's own font load for the texts that follow the edited property (read before the await loses the caller).
+      w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        const keyed = new Error().stack?.includes("resolveKeyed") === true;
+        await realLoad(f);
+        if (keyed && !hit) { hit = true; out(b); }
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: spec("M") }]);
+      w.figma.loadFontAsync = realLoad;
+      ok(`[ANNOUNCE] a component re-send, a text following its edited property ${how} while another's font loads: refused as missing (got ${JSON.stringify(r)})`,
+        hit && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (createTree): component 'Wrap': no node with id '" + String(b.id) + "' (invalid or removed). Nothing was changed.");
+      // Its own font, one the file no longer has, failing to load as the designer deletes it: missing, its name never read.
+      const w2 = await treeWorld({ fonts: [["Ghost", "Regular"]] });
+      const first2 = await w2.api.applyWrites([{ op: "createTree", tree: spec("L") }]);
+      const b2 = w2.scene.nodes[String(first2.applied[0]?.handles?.b)];
+      const load2 = w2.figma.loadFontAsync;
+      if (!b2 || !load2) throw new Error("no component built: " + JSON.stringify(first2));
+      await load2({ family: "Ghost", style: "Regular" });
+      b2.fontName = { family: "Ghost", style: "Regular" }; // the designer's own font on it
+      w2.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        if (f.family !== "Ghost") return load2(f);
+        out(b2);
+        throw new Error("font not found");
+      };
+      const r2 = await w2.api.applyWrites([{ op: "createTree", tree: spec("M") }]);
+      w2.figma.loadFontAsync = load2;
+      ok(`[ANNOUNCE] a component re-send, a text following its edited property ${how} while its own font fails to load: refused as missing (got ${JSON.stringify(r2)})`,
+        r2.ok === false && r2.applied.length === 0 && r2.error === "ops[0] (createTree): component 'Wrap': no node with id '" + String(b2.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+});
+
+cases.push({
+  name: "A component two instances name, deleted while a text style between them loads its font, is refused as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const badge = w.scene.nodes["5:3"];
+      const realLoad = w.figma.loadFontAsync;
+      if (!badge || !realLoad) throw new Error("no kit");
+      let hit = false;
+      // The heading's style font (only the style names it): the designer deletes the component the instances use.
+      w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        await realLoad(f);
+        if (f.style === "Bold" && !hit) { hit = true; out(badge); }
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Badges", children: [
+        { component: "Badge" }, { text: "Title", styles: { text: "Heading/H1" } }, { component: "Badge" },
+      ] } }]);
+      w.figma.loadFontAsync = realLoad;
+      ok(`[ANNOUNCE] two instances of a component ${how} while a style's font loads between them: refused as missing (got ${JSON.stringify(r)})`,
+        hit && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (createTree): tree.children[2].component: no component with id '5:3' (invalid or removed). Nothing was changed.");
+    }
+  },
+});
+
+cases.push({
+  name: "An instance whose component, or its swap value, goes while a swap value resolves is refused as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      // The swap value named twice, gone between: the second use is refused as missing.
+      const w = await treeWorld({ kit: true });
+      const badge = w.scene.nodes["5:3"];
+      const realLoad = w.figma.loadFontAsync;
+      if (!badge || !realLoad) throw new Error("no kit");
+      let hit = false;
+      w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        await realLoad(f);
+        if (f.style === "Bold" && !hit) { hit = true; out(badge); }
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Buttons", children: [
+        { component: "Button", props: { Glyph: "Badge" } }, { text: "Title", styles: { text: "Heading/H1" } }, { component: "Button", props: { Glyph: "Badge" } },
+      ] } }]);
+      w.figma.loadFontAsync = realLoad;
+      ok(`[ANNOUNCE] a swap value ${how} between two instances that name it: refused as missing (got ${JSON.stringify(r)})`,
+        hit && r.ok === false && r.applied.length === 0 && typeof r.error === "string" && r.error.startsWith("ops[0] (createTree): tree.children[2].component: ") && r.error.includes("no component with id '5:3' (invalid or removed)"));
+      // The instance's own component set, gone while its swap value (by id) is looked up.
+      const w2 = await treeWorld({ kit: true });
+      const button = w2.scene.nodes["5:1"];
+      const lookup = w2.figma.getNodeByIdAsync;
+      if (!button) throw new Error("no kit");
+      w2.figma.getNodeByIdAsync = async (id: string) => { if (id === "5:3") out(button); return lookup(id); };
+      const r2 = await w2.api.applyWrites([{ op: "createTree", tree: { name: "Buttons", children: [{ component: "Button", props: { Glyph: "5:3" } }] } }]);
+      w2.figma.getNodeByIdAsync = lookup;
+      ok(`[ANNOUNCE] an instance's component set ${how} while its swap value is looked up: refused as missing (got ${JSON.stringify(r2)})`,
+        r2.ok === false && r2.applied.length === 0 && r2.error === "ops[0] (createTree): tree.children[0].component: no component with id '5:1' (invalid or removed). Nothing was changed.");
+    }
+  },
+});

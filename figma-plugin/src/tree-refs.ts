@@ -33,7 +33,7 @@ import type { OpProblem } from "./write-batch";
 import { plannedComponent, plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
 import { componentRootOf, propDefComponents, propDefsOf } from "../../bridge/src/component-spec.ts";
 import { valueProps } from "../../bridge/src/tree-diff.ts";
-import { inDocument, nodeById } from "./node-lookup";
+import { inDocument, nodeById, noNode } from "./node-lookup";
 
 /** What a node of a spec resolved to, for the build. */
 export interface ResolvedRefs {
@@ -168,6 +168,8 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
     if ("error" in f) return f;
     if ("later" in f) return { error: "component '" + ref + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
     const c = f.ok;
+    // Found once per name and held across every later lookup's awaits: gone since, it is missing (node-lookup.ts).
+    if (!inDocument(c)) return { error: noNode(c.id, "component") };
     return { ok: c.type === "COMPONENT_SET" ? c.defaultVariant : c };
   };
   // One lookup per distinct name; one problem per op per name (the first place it is used, and how many more).
@@ -276,6 +278,9 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
     return null;
   }
   const c = item as ComponentNode | ComponentSetNode;
+  // A component is looked up once per name (and imported once per key), then held across every later use's awaits (a
+  // text style's font, a swap's lookup): one deleted or detached since is missing, never read (node-lookup.ts).
+  if (!inDocument(c)) return noNode(c.id, "component");
   const node = u.node;
   // A swap property's default or suggestion: the component itself (a set shows its default variant).
   if (!node) { refs.components.set(u.ref, c); return null; }
@@ -287,6 +292,7 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   if ("errors" in mapped) return mapped.errors.join("; ");
   const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
   if (swapErr) return swapErr;
+  if (!inDocument(c)) return noNode(c.id, "component"); // gone during the swaps' lookups
   // An instance hugs only when the variant it ends up as has auto-layout (checkTree cannot know; Figma would refuse
   // mid-build): the variant the given variant values pick, the default's values for the rest.
   const shown = set ? variantFor(set, main, mapped.ok, defs) : main;

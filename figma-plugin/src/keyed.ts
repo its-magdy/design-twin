@@ -179,9 +179,15 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
         if (stays.indexOf("visible") >= 0) delete u.set.hidden;
         if (!Object.keys(u.set).length) u.set = null;
       }
+      // Each text is held across the earlier texts' font loads and its own (node-lookup.ts): gone, it is missing, never read.
       for (const n of textsFollowing(defs)) {
+        if (goneFrom(n, bad, "node", what + ": ")) continue;
         const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
-        for (const f of fonts) { const m = await loadFont(f); if (m) bad(what + ": " + label(n) + " follows a property whose default changes, and its " + m); }
+        for (const f of fonts) {
+          const m = await loadFont(f);
+          if (goneFrom(n, bad, "node", what + ": ")) break;
+          if (m) bad(what + ": " + label(n) + " follows a property whose default changes, and its " + m);
+        }
       }
     }
     const patches = new Map<number, PatchTarget>();

@@ -7164,6 +7164,7 @@
       if ("error" in f) return f;
       if ("later" in f) return { error: "component '" + ref2 + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
       const c = f.ok;
+      if (!inDocument(c)) return { error: noNode(c.id, "component") };
       return { ok: c.type === "COMPONENT_SET" ? c.defaultVariant : c };
     };
     const found = /* @__PURE__ */ new Map();
@@ -7275,6 +7276,7 @@
       return null;
     }
     const c = item;
+    if (!inDocument(c)) return noNode(c.id, "component");
     const node = u.node;
     if (!node) {
       refs2.components.set(u.ref, c);
@@ -7292,6 +7294,7 @@
     if ("errors" in mapped) return mapped.errors.join("; ");
     const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
     if (swapErr) return swapErr;
+    if (!inDocument(c)) return noNode(c.id, "component");
     const shown4 = set ? variantFor(set, main, mapped.ok, defs) : main;
     if ("missing" in shown4) {
       const have = set ? set.children.filter((k) => k.type === "COMPONENT").map((k) => k.name) : [];
@@ -9538,6 +9541,7 @@
   var madeFrom = (made2) => ({ styled: made2.styled.length, patches: made2.patches.length, pairs: made2.pairs.length, strays: made2.strays.length });
   function checkMade(made2, from = START) {
     for (const n of madeNodes(made2, from)) stillInDocument(n);
+    for (const p of made2.patches.slice(from.patches)) stillInDocument(p.node);
   }
   async function finish(made2, from, consent2) {
     for (const [text, style] of made2.styled.slice(from.styled)) {
@@ -10756,9 +10760,11 @@
           if (!Object.keys(u.set).length) u.set = null;
         }
         for (const n of textsFollowing(defs)) {
+          if (goneFrom(n, bad, "node", what + ": ")) continue;
           const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
           for (const f of fonts) {
             const m = await loadFont(f);
+            if (goneFrom(n, bad, "node", what + ": ")) break;
             if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
           }
         }
