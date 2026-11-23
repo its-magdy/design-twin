@@ -99,33 +99,35 @@ export function restoredRows(changes: readonly Change[]): AppliedWrite[] {
 export class RestoreStopped extends Error {}
 
 /** Undo `changes`, newest first. Returns the ones undone, a sentence for each that could not be, the ones that went with
- *  their node (`gone`: its layer was deleted while the batch ran, before its turn or during its own put-back's awaits;
- *  nothing of it stays, and it is not called "could not be undone"), and what stays: every change neither undone nor
+ *  their node (`gone`: its layer was deleted while the batch ran, before its turn or at any put-back's await, its own
+ *  or a later one's, so decided once all are done; nothing of it stays, and it is neither called undone nor "could not
+ *  be undone"), and what stays: every change neither undone nor
  *  gone, which a reply lists as applied. `allowed` is asked before each: once the designer has turned "Allow edits" off,
  *  the plugin changes nothing more, not even to undo its own work, and the rest are reported as kept. */
 export async function restoreChanges(changes: readonly Change[], allowed: () => boolean): Promise<{ restored: Change[]; failed: string[]; gone: Change[]; stays: Change[] }> {
   const restored: Change[] = [];
-  const failed: string[] = [];
-  const gone: Change[] = [];
+  const failures: Array<[Change, string]> = [];
+  let stop: { rest: Change[]; tail: string } | null = null;
   const left = [...changes].reverse();
-  // Not put back: the ones of `rest` that went with their node are gone; the others stay applied, and are counted.
-  const stopped = (rest: readonly Change[], tail: string): void => {
-    const kept = staying(rest);
-    gone.push(...kept.gone);
-    if (kept.stays.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept.stays).replace(/ earlier /g, " ") + " stay applied" + tail);
-  };
   for (const [i, c] of left.entries()) {
-    if (!allowed()) { stopped(left.slice(i), ""); break; }
-    if (wentWithNode(c)) { gone.push(c); continue; }
+    if (!allowed()) { stop = { rest: left.slice(i), tail: "" }; break; }
+    if (wentWithNode(c)) continue; // gone already: classified below
     try { await c.restore(allowed); restored.push(c); } catch (e) {
-      if (e instanceof RestoreStopped) { stopped(left.slice(i), " (in part, for " + c.what + ")"); break; }
-      // Its node removed during the put-back's own awaits: what was set on it went with it.
-      if (wentWithNode(c)) { gone.push(c); continue; }
-      failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
+      if (e instanceof RestoreStopped) { stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" }; break; }
+      failures.push([c, "could not undo " + c.what + " (" + errMsg(e) + ")"]);
     }
   }
+  // Gone or not is decided once every put-back is done: a node can be deleted at any put-back's await, its own (after it
+  // was put back, or one that threw) or a later one's. One removed by now took with it what was set on it, and what was
+  // put back on it: it is gone, neither restored, nor "could not undo", nor applied.
+  const gone = left.filter(wentWithNode);
+  const isGone = new Set(gone);
+  const failed = failures.filter(([c]) => !isGone.has(c)).map(([, s]) => s);
+  // Not put back ("Allow edits" turned off): the ones that did not go with their node stay applied, and are counted.
+  const kept = stop ? stop.rest.filter((c) => !isGone.has(c)) : [];
+  if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
   const done = new Set([...restored, ...gone]);
-  return { restored, failed, gone, stays: changes.filter((c) => !done.has(c)) };
+  return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
 }
 
 /** "1 earlier variable mode change", "2 earlier created trees and 1 earlier variable mode change": `changes` counted

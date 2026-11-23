@@ -66,11 +66,37 @@ export function goneAmong(nodes: readonly BaseNode[], bad: (message: string) => 
   return false;
 }
 
-/** Take back nodes a write made (a build's, a createText's): each one is removed, unless it or a node it is under is
- *  removed already (gone with it: there is nothing to take back, and its fields throw when read). One only detached (out
- *  of the document, not removed) is removed: it is the write's own. A remove() Figma refuses throws, for the caller. */
-export function takeBack(nodes: readonly SceneNode[]): void {
+/** Take back nodes a write made (a build's, a createText's), the outer ones first: each one is removed, unless it or a
+ *  node it is under is removed already (gone with it: there is nothing to take back, and its fields throw when read).
+ *  One only detached (out of the document, not removed) is removed: it is the write's own. `ours` is the id of every
+ *  node the write made (idsOf(nodes) unless given). One of `nodes` that now holds a layer not among them (the designer moved one of theirs
+ *  into it while the batch ran) is never removed: that would delete the designer's layer with it. Then none of `nodes`
+ *  is: takeBack throws, saying which layer holds which, so the caller reports the change as kept (applied, could not be
+ *  put back), all of it as it is, never as gone. A remove() Figma refuses throws, for the caller. */
+export function takeBack(nodes: readonly SceneNode[], ours: ReadonlySet<string> = idsOf(nodes)): void {
+  for (const n of nodes) {
+    if (removedWith(n)) continue;
+    const other = otherBelow(n, ours);
+    if (other) throw new Error("'" + n.name + "' (" + n.id + ") now holds '" + other.name + "' (" + other.id + "), a layer the batch did not make, so it stays: taking it back would delete that layer too");
+  }
   for (const n of nodes) if (!removedWith(n)) n.remove();
+}
+/** The ids of `nodes` (an id reads even on a removed node). */
+export function idsOf(nodes: readonly BaseNode[]): Set<string> {
+  const out = new Set<string>();
+  for (const n of nodes) out.add(n.id);
+  return out;
+}
+/** The first layer below `n` that is not one of `ours` (by id), or null. Not into an instance: its layers are its main
+ *  component's, and no layer can be moved into one. */
+function otherBelow(n: BaseNode, ours: ReadonlySet<string>): BaseNode | null {
+  if (n.type === "INSTANCE" || !("children" in n)) return null;
+  for (const c of n.children) {
+    if (!ours.has(c.id)) return c;
+    const d = otherBelow(c, ours);
+    if (d) return d;
+  }
+  return null;
 }
 /** `n` or a node it is under is removed (`removed` read first at each step: a removed node's parent throws). Such a node
  *  took what a write set on it with it: its fields throw when read, and nothing of it is in the file to put back. One

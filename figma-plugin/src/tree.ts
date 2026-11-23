@@ -44,7 +44,7 @@ import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
 import type { BoundSpec } from "./bind";
 import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
-import { goneFrom, holding, inDocument, noNode, stillInDocument, takeBack } from "./node-lookup";
+import { goneFrom, holding, idsOf, inDocument, noNode, removedWith, stillInDocument, takeBack } from "./node-lookup";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
@@ -232,6 +232,7 @@ export async function buildTree(t: TreeTarget, consent: () => void, changes: Cha
     on: root, made: true,
     // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
     // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
+    // One of them holding a layer the designer moved into it: all of it stays (node-lookup.ts takeBack throws first).
     restore() {
       takeBack([root, ...madeNodes(made)]);
       if (key !== undefined && readIndex(key) === root.id) writeIndex(key, indexWas);
@@ -308,7 +309,9 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
  * node made and not yet in its parent (an append that threw), or one the designer moved out during an await, is not
  * below the root, and removing the root leaves it on the page. A node Figma will not remove (its remove() throws) and
  * that is still in the document stays in the file: it goes on `changes` as a Change whose restore tries again, so the
- * batch lists it as applied and says it could not be put back, never that nothing changed. One gone already, or left
+ * batch lists it as applied and says it could not be put back, never that nothing changed. So does one that now holds a
+ * layer the build did not make (the designer moved one of theirs into it during an await): removing it would delete
+ * their layer too, so it stays, their layer in it as they left it (node-lookup.ts takeBack). One gone already, or left
  * only inside a node that is itself out of the document (a deleted frame), is in no page: gone.
  */
 function discard(nodes: ReadonlyArray<[SceneNode, string]>, made: Made, from: MadeFrom, kind: string, changes: Change[]): void {
@@ -316,13 +319,20 @@ function discard(nodes: ReadonlyArray<[SceneNode, string]>, made: Made, from: Ma
   // A copy not yet in its parent is one of both lists: said as the copy it is.
   const rest = made.strays.slice(from.strays).map((c): [SceneNode, string] => [c, "the unfinished copy"])
     .concat(madeNodes(made, from).map((c): [SceneNode, string] => [c, "the unfinished layer"]));
-  for (const [n, what] of nodes.concat(rest)) {
+  const all = nodes.concat(rest);
+  // Every node the build made: one holding a layer that is none of them (the designer's, moved into it) stays (takeBack).
+  // A copy left out of its parent (clones.ts makeCopy) had its layers recorded by no one: they are its own, read now
+  // (it is cleaned up in the same turn it was made, so nothing of the designer's can be in it).
+  const everyNode = all.map(([n]) => n);
+  for (const c of made.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
+  const own = idsOf(everyNode);
+  for (const [n, what] of all) {
     // Below one that stayed: it stays with it, as it is (inDocument first: a removed node's parent throws when read).
     if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
-    try { takeBack([n]); } catch { /* checked below */ }
+    try { takeBack([n], own); } catch { /* checked below */ }
     if (!inDocument(n)) continue;
     stayed.push(n);
-    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { takeBack([n]); } });
+    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { takeBack([n], own); } });
   }
 }
 /** The nodes a build made, from `from` on: each node it made, then every layer of each copy it made (a layer the

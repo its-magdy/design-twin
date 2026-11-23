@@ -439,6 +439,8 @@ export async function componentImpact(ops: readonly WriteOp[]): Promise<WriteImp
     // The variants the new table no longer has (its rows dropped), and the instances each leaves without a main.
     const old = readOld(found.ours, componentKey(c.name));
     const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];
+    // Those awaits too (a dropped variant's instances counted): gone at one, it is missing, never "would update".
+    if (goneFrom(found.ours, (m) => { steps.push({ index, op: op.op, problem: m }); }, "component")) continue;
     steps.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
   }
   return steps;

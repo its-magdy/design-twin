@@ -6,7 +6,7 @@ import { EDITS_OFF_MESSAGE, reviewLines, waitingMessage, writeOpError, type Appl
 import { cardLines } from "../../bridge/src/review-card.ts";
 import { previewOffered, reviewDecision } from "../../bridge/src/review-policy.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
-import { countUnreviewed, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card } from "./review";
+import { countUnreviewed, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card, type PutBack } from "./review";
 import { readBatch, SHOW_CAP } from "./review-reads";
 import { queueWork } from "./state";
 import { toast } from "./toast";
@@ -557,7 +557,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
         apply: (prior) => queueWork(async () => { const r = await runBatch(list, images, "approved", shown, prior); return "card" in r ? notApplied() : r.result; }),
         preview: (prior) => queueWork(async () => {
           const r = await runBatch(list, images, "preview", shown, prior);
-          if ("card" in r) return { result: notApplied(), putBack: async () => null };
+          if ("card" in r) return { result: notApplied(), putBack: async (): Promise<PutBack> => ({ failed: null, gone: [] }) };
           const changes = r.changes;
           return { result: r.result, putBack: () => queueWork(() => putBack(changes)), landed: r.landed };
         }),
@@ -780,13 +780,15 @@ function notApplied(): WriteResult {
 
 /** Put a preview back (review.ts Put back, or a card that ended while previewing): its own Cmd-Z step, after the
  *  preview's — so the designer's undo history has two entries for a preview that was put back (a Cmd-Z after it brings
- *  the preview back; the plugin cannot remove a step). Null when all of it went back; else what stays. */
-async function putBack(changes: readonly Change[]): Promise<WriteResult | null> {
+ *  the preview back; the plugin cannot remove a step). `failed` null when all of it went back, else what stays; `gone`,
+ *  what went with a layer the designer deleted meanwhile (write-batch.ts goneSentence), never called put back. */
+async function putBack(changes: readonly Change[]): Promise<PutBack> {
   commitUndo();
-  const { failed, stays } = await restoreChanges(changes, editsAllowedNow);
+  const { failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
   commitUndo();
-  if (!failed.length) return null;
-  return { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " — what stays is listed in `applied`." };
+  const went = gone.map(goneSentence);
+  if (!failed.length) return { failed: null, gone: went };
+  return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " — what stays is listed in `applied`." }, gone: went };
 }
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */

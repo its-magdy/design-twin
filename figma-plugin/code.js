@@ -7079,8 +7079,27 @@
     for (const n of nodes) if (goneFrom(n, bad, what, prefix)) return true;
     return false;
   }
-  function takeBack(nodes) {
+  function takeBack(nodes, ours = idsOf(nodes)) {
+    for (const n of nodes) {
+      if (removedWith(n)) continue;
+      const other = otherBelow(n, ours);
+      if (other) throw new Error("'" + n.name + "' (" + n.id + ") now holds '" + other.name + "' (" + other.id + "), a layer the batch did not make, so it stays: taking it back would delete that layer too");
+    }
     for (const n of nodes) if (!removedWith(n)) n.remove();
+  }
+  function idsOf(nodes) {
+    const out = /* @__PURE__ */ new Set();
+    for (const n of nodes) out.add(n.id);
+    return out;
+  }
+  function otherBelow(n, ours) {
+    if (n.type === "INSTANCE" || !("children" in n)) return null;
+    for (const c of n.children) {
+      if (!ours.has(c.id)) return c;
+      const d = otherBelow(c, ours);
+      if (d) return d;
+    }
+    return null;
   }
   function removedWith(n) {
     for (let a = n; a; a = a.parent) if (a.removed) return true;
@@ -7680,40 +7699,33 @@
   };
   async function restoreChanges(changes, allowed2) {
     const restored = [];
-    const failed = [];
-    const gone = [];
+    const failures = [];
+    let stop = null;
     const left = [...changes].reverse();
-    const stopped = (rest, tail) => {
-      const kept = staying(rest);
-      gone.push(...kept.gone);
-      if (kept.stays.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept.stays).replace(/ earlier /g, " ") + " stay applied" + tail);
-    };
     for (const [i, c] of left.entries()) {
       if (!allowed2()) {
-        stopped(left.slice(i), "");
+        stop = { rest: left.slice(i), tail: "" };
         break;
       }
-      if (wentWithNode(c)) {
-        gone.push(c);
-        continue;
-      }
+      if (wentWithNode(c)) continue;
       try {
         await c.restore(allowed2);
         restored.push(c);
       } catch (e) {
         if (e instanceof RestoreStopped) {
-          stopped(left.slice(i), " (in part, for " + c.what + ")");
+          stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" };
           break;
         }
-        if (wentWithNode(c)) {
-          gone.push(c);
-          continue;
-        }
-        failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
+        failures.push([c, "could not undo " + c.what + " (" + errMsg(e) + ")"]);
       }
     }
+    const gone = left.filter(wentWithNode);
+    const isGone = new Set(gone);
+    const failed = failures.filter(([c]) => !isGone.has(c)).map(([, s]) => s);
+    const kept = stop ? stop.rest.filter((c) => !isGone.has(c)) : [];
+    if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
     const done = /* @__PURE__ */ new Set([...restored, ...gone]);
-    return { restored, failed, gone, stays: changes.filter((c) => !done.has(c)) };
+    return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
   }
   function countChanges(changes) {
     const counts = /* @__PURE__ */ new Map();
@@ -9065,6 +9077,9 @@
       }, "component")) continue;
       const old = readOld(found.ours, componentKey(c.name));
       const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];
+      if (goneFrom(found.ours, (m) => {
+        steps2.push({ index, op: op.op, problem: m });
+      }, "component")) continue;
       steps2.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
     }
     return steps2;
@@ -9479,6 +9494,7 @@
       made: true,
       // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
       // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
+      // One of them holding a layer the designer moved into it: all of it stays (node-lookup.ts takeBack throws first).
       restore() {
         takeBack([root, ...madeNodes(made2)]);
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
@@ -9545,16 +9561,20 @@
   function discard(nodes, made2, from, kind, changes) {
     const stayed = [];
     const rest = made2.strays.slice(from.strays).map((c) => [c, "the unfinished copy"]).concat(madeNodes(made2, from).map((c) => [c, "the unfinished layer"]));
-    for (const [n, what] of nodes.concat(rest)) {
+    const all = nodes.concat(rest);
+    const everyNode = all.map(([n]) => n);
+    for (const c of made2.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
+    const own4 = idsOf(everyNode);
+    for (const [n, what] of all) {
       if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
       try {
-        takeBack([n]);
+        takeBack([n], own4);
       } catch {
       }
       if (!inDocument(n)) continue;
       stayed.push(n);
       changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
-        takeBack([n]);
+        takeBack([n], own4);
       } });
     }
   }
@@ -11466,6 +11486,7 @@
   function countUnreviewed(n) {
     sinceApproval += n;
   }
+  var BACK = { failed: null, gone: [] };
   var current3 = null;
   var seq = 0;
   var FINISHED_KEEP = 20;
@@ -11578,16 +11599,17 @@
         return;
       }
       setState(card, "busy", "Putting the preview back\u2026");
-      const failed = await p.putBack();
+      const back = await p.putBack();
       card.previewed = null;
       post2(msg);
-      if (failed) {
-        const f = landedResult(failed, card.landed);
+      if (back.failed) {
+        const f = landedResult(back.failed, card.landed);
         card.input.announce(f, card.landed);
         finish2(card, f);
         return;
       }
-      const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" }, card.landed);
+      const note = back.gone.length ? "it was put back, but " + back.gone.join("; ") : "it was put back";
+      const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + note + ".)" }, card.landed);
       card.input.announce(r2, card.landed);
       finish2(card, r2);
       return;
@@ -11629,7 +11651,7 @@
         try {
           p = await card.input.preview(card.landed);
         } catch (e2) {
-          p = { result: landedResult({ ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, card.landed), putBack: async () => null, landed: card.landed };
+          p = { result: landedResult({ ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, card.landed), putBack: async () => BACK, landed: card.landed };
         }
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
@@ -11656,11 +11678,11 @@
         return;
       }
       setState(card, "busy", "Putting it back\u2026");
-      const failed = await card.previewed.putBack();
+      const back = await card.previewed.putBack();
       card.previewed = null;
-      if (failed) {
+      if (back.failed) {
         post2({ type: "review-end", id: card.ticket, end: "failed" });
-        const f = landedResult(failed, card.landed);
+        const f = landedResult(back.failed, card.landed);
         card.input.announce(f, card.landed);
         finish2(card, f);
         return;
@@ -11928,15 +11950,18 @@
     }
     return { hits: out };
   }
-  async function ownersOf(n) {
-    let main = null;
+  async function mainOf2(n) {
     try {
-      main = await n.getMainComponentAsync();
+      return await n.getMainComponentAsync();
     } catch {
-      main = null;
+      return null;
     }
-    if (!main || !inDocument(main)) return [];
-    return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
+  }
+  function ownersNow(main) {
+    if (!main || removedWith(main)) return { live: [], retained: null };
+    if (!inDocument(main)) return { live: [], retained: main };
+    const set = main.parent;
+    return { live: set && set.type === "COMPONENT_SET" ? [main, set] : [main], retained: null };
   }
   async function matchesOf(rule, layers, bad) {
     const w = rule.where;
@@ -11970,19 +11995,25 @@
     const owners = /* @__PURE__ */ new Map();
     let ownerId = null;
     if (w.instanceOf !== void 0) {
+      const mains = /* @__PURE__ */ new Map();
       for (const h of layers) {
         if (h.node.type !== "INSTANCE") continue;
-        owners.set(h.node.id, await ownersOf(h.node));
+        mains.set(h.node.id, await mainOf2(h.node));
       }
       if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
       const pool = /* @__PURE__ */ new Map();
-      for (const [id, os] of owners) {
-        const main = os[0];
-        const live = main && inDocument(main) ? os : [];
-        owners.set(id, live);
-        for (const o of live) pool.set(o.id, o);
+      const retained = /* @__PURE__ */ new Map();
+      for (const [id, main] of mains) {
+        const now = ownersNow(main);
+        owners.set(id, now.retained ? [now.retained] : now.live);
+        for (const o of now.live) pool.set(o.id, o);
+        if (now.retained) retained.set(now.retained.id, now.retained);
       }
-      const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
+      const ref2 = w.instanceOf;
+      const byExact = (c) => c.id === ref2 || c.key === ref2;
+      const kept = [...retained.values()].filter(byExact);
+      const keptOne = kept.length === 1 && ![...pool.values()].some(byExact) ? kept[0] : void 0;
+      const m = keptOne ? { kind: "one", item: keptOne } : matchByName(ref2, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
       if (m.kind === "one") ownerId = m.item.id;
       else if (m.kind === "many") {
         bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of \u2014 pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", "));
@@ -13581,7 +13612,7 @@
           }),
           preview: (prior) => queueWork(async () => {
             const r = await runBatch(list, images, "preview", shown4, prior);
-            if ("card" in r) return { result: notApplied(), putBack: async () => null };
+            if ("card" in r) return { result: notApplied(), putBack: async () => ({ failed: null, gone: [] }) };
             const changes2 = r.changes;
             return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)), landed: r.landed };
           }),
@@ -13797,10 +13828,11 @@
   }
   async function putBack3(changes) {
     commitUndo();
-    const { failed, stays } = await restoreChanges(changes, editsAllowedNow);
+    const { failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
     commitUndo();
-    if (!failed.length) return null;
-    return { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " \u2014 what stays is listed in `applied`." };
+    const went = gone.map(goneSentence);
+    if (!failed.length) return { failed: null, gone: went };
+    return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " \u2014 what stays is listed in `applied`." }, gone: went };
   }
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";

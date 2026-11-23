@@ -21,7 +21,7 @@ import { patchUses, resolveRefs, type RefResolution, type Use } from "./tree-ref
 import { boundVariableIds } from "./sources";
 import { errMsg } from "./util";
 import type { OpProblem } from "./write-batch";
-import { goneAmong, goneFrom, inDocument, nodeById } from "./node-lookup";
+import { goneAmong, goneFrom, inDocument, nodeById, removedWith } from "./node-lookup";
 
 /** A patchWhere op whose rule matched and whose every match resolved as a patch. */
 export interface RuleTarget {
@@ -119,13 +119,22 @@ async function scopeLayers(rule: CheckedRule, bad: (m: string) => void, selected
   return { hits: out };
 }
 
-/** The components an instance is of, as a rule may name them: its main component, and the set it is a variant of. None
- *  when its main component is not in the document (deleted: an instance keeps one, node-lookup.ts). */
-async function ownersOf(n: InstanceNode): Promise<Array<ComponentNode | ComponentSetNode>> {
-  let main: ComponentNode | null = null;
-  try { main = await n.getMainComponentAsync(); } catch { main = null; }
-  if (!main || !inDocument(main)) return [];
-  return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
+/** The main component an instance is of (null: none, or its lookup failed). */
+async function mainOf(n: InstanceNode): Promise<ComponentNode | null> {
+  try { return await n.getMainComponentAsync(); } catch { return null; }
+}
+
+/** The components an instance whose main component is `main` is of, as a rule may name them, read once every instance's
+ *  lookup is done (a main found at one await can be deleted, detached or moved out of its set at a later one's): `live`,
+ *  its main and the set it is a variant of now, when the main is in the document; `retained`, a main out of the document
+ *  that the instance still returns, not removed (soft-deleted: Figma keeps it for its instances and an undo), which a
+ *  rule names only by its exact id or key, never its name, and never by a set it was in; a removed one, neither (its
+ *  fields throw when read). */
+function ownersNow(main: ComponentNode | null): { live: Array<ComponentNode | ComponentSetNode>; retained: ComponentNode | null } {
+  if (!main || removedWith(main)) return { live: [], retained: null };
+  if (!inDocument(main)) return { live: [], retained: main };
+  const set = main.parent;
+  return { live: set && set.type === "COMPONENT_SET" ? [main, set] : [main], retained: null };
 }
 
 /** The layers of `layers` op `rule` matches, in document order. A `variable` or `instanceOf` name that matches nothing
@@ -157,22 +166,30 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
   const owners = new Map<string, Array<ComponentNode | ComponentSetNode>>();
   let ownerId: string | null = null;
   if (w.instanceOf !== undefined) {
+    const mains = new Map<string, ComponentNode | null>();
     for (const h of layers) {
       if (h.node.type !== "INSTANCE") continue;
-      owners.set(h.node.id, await ownersOf(h.node));
+      mains.set(h.node.id, await mainOf(h.node));
     }
     if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
-    // Each instance's component was found at an await and held across the later ones': one deleted or detached by now
-    // (or before: a soft-deleted main component, which an instance keeps) is no component of the file (node-lookup.ts),
-    // so no instance is of it, and nothing of it is read. A variant in the document has its set in it too.
+    // Each instance's component was found at an await and held across the later ones': what it is of is read only now
+    // (ownersNow). One deleted or detached by now, or before (soft-deleted), is no component of the file by its name
+    // (node-lookup.ts), and a variant moved out of its set is no longer of the set; only a main the instance still
+    // returns and that is not removed is named by its exact id or key, as it was before it went.
     const pool = new Map<string, ComponentNode | ComponentSetNode>();
-    for (const [id, os] of owners) {
-      const main = os[0];
-      const live = main && inDocument(main) ? os : [];
-      owners.set(id, live);
-      for (const o of live) pool.set(o.id, o);
+    const retained = new Map<string, ComponentNode>();
+    for (const [id, main] of mains) {
+      const now = ownersNow(main);
+      owners.set(id, now.retained ? [now.retained] : now.live);
+      for (const o of now.live) pool.set(o.id, o);
+      if (now.retained) retained.set(now.retained.id, now.retained);
     }
-    const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
+    const ref = w.instanceOf;
+    const byExact = (c: ComponentNode | ComponentSetNode): boolean => c.id === ref || c.key === ref;
+    const kept = [...retained.values()].filter(byExact);
+    // An exact id or key wins outright (matchByName): a retained main by its own, when no live component has it.
+    const keptOne = kept.length === 1 && ![...pool.values()].some(byExact) ? kept[0] : undefined;
+    const m = keptOne ? { kind: "one" as const, item: keptOne } : matchByName(ref, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
     if (m.kind === "one") ownerId = m.item.id;
     else if (m.kind === "many") { bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of — pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", ")); return []; }
     else { bad("where.instanceOf: no instance in " + describeScope(rule.scope) + " is of a component named '" + w.instanceOf + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "")); return []; }
