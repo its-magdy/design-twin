@@ -456,7 +456,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   for (const b of plan.builds) {
     consent();
     const from = made.pairs.length;
-    const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent);
+    const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent, changes);
     // On the list before it is stamped: a stamp that throws removes it with the batch.
     changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
     stampAll(made, key, from);

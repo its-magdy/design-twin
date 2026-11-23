@@ -721,18 +721,24 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
  * the copy is new, and a throw removes it with the tree it is in.
  */
 export async function patchCopy(t: PatchTarget, node: SceneNode, consent: () => void): Promise<void> {
+  // The copy's layer, made before the build's first await: deleted or detached at one of them (node-lookup.ts), it fails
+  // as missing. Checked before it is read, and before anything is set after the awaits here (holding: the text-style
+  // await in setFields too); between them nothing of it is read but its name, kept from before.
+  stillInDocument(node);
+  const name = node.name;
   const on: PatchTarget = { ...t, node };
   const fit = unfit(node, t.set);
   const problems = fit.kind.concat(fit.state);
   if (on.props && node.type === "INSTANCE") { const v = await variantProblem(node, on.props); if (v) problems.push(v); }
-  if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+  if (problems.length) throw new Error("'" + name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
   if (on.fontsLater && node.type === "TEXT") {
     for (const f of await fontsToKeep(node)) {
-      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
     }
   }
-  consent();
-  await setFields(on, consent);
+  const held = holding(node, consent);
+  held();
+  await setFields(on, held);
 }
 
 /**

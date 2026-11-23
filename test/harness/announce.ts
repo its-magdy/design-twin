@@ -1183,3 +1183,291 @@ cases.push({
       w.notified.slice(t2).length === 1 && text2 === "Design Twin applied 1 edit that could not be put back after one failed: " + stuck);
   },
 });
+
+// ---- #206 review 8: every node an op holds across an await is checked after it, before it is read, changed, removed or
+// reported (node-lookup.ts holding); a build whose cleanup cannot remove what it made says what stays.
+
+/** The node of a world named `name` (alive or not: the batch's own `made`, read past a removal). */
+const madeNamed = (w: World, name: string): FakeNode | undefined => w.made.find((n) => peekRemoved(n, "name") === name);
+
+cases.push({
+  name: "A tree whose styled text goes while its own style is set fails as missing: the tree does not land, nothing stays (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      let gone = "";
+      w.hooks.onStyle = async () => { const s = madeNamed(w, "Styled"); if (s && !gone) { gone = String(s.id); out(s); } };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r8-styled-" + how, [{ op: "createTree", tree: { name: "Container", children: [{ name: "Styled", text: "Text", styles: { text: "Body" }, handle: "styled" }] } }])) as { ok?: unknown; error?: unknown; applied?: unknown; failedAt?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const want = "no node with id '" + gone + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a tree, its styled text ${how} during its own style await: fails as missing, nothing applied (got ${JSON.stringify(r)})`,
+        gone !== "" && r.ok === false && r.failedAt === 0 && Array.isArray(r.applied) && r.applied.length === 0 && r.error === want);
+      ok(`[ANNOUNCE] …${how}: the tree is not in the file (alive ${JSON.stringify(w.alive().map((n) => n.name))})`, !w.alive().some((n) => n.name === "Container" || n.name === "Styled"));
+      ok(`[ANNOUNCE] …${how}: the designer is told nothing changed, and why (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text === HEAD + want);
+    }
+  },
+}, {
+  name: "A tree whose other styled text goes during a style await fails as missing, whether it was styled before or is styled after (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      for (const [which, at] of [["styled before it", 2], ["still to be styled", 1]] as const) {
+        const w = await treeWorld({ kit: true });
+        let calls = 0;
+        let gone = "";
+        // The second style await takes out the first text (already styled); the first takes out the second (not yet).
+        w.hooks.onStyle = async () => {
+          if (++calls !== at) return;
+          const s = madeNamed(w, at === 2 ? "A" : "B");
+          if (s) { gone = String(s.id); out(s); }
+        };
+        const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Pair", children: [{ name: "A", text: "A", styles: { text: "Body" } }, { name: "B", text: "B", styles: { text: "Body" } }] } }]);
+        w.hooks.onStyle = undefined;
+        ok(`[ANNOUNCE] a tree, a text ${which} ${how} during another's style await: fails as missing, nothing applied, nothing stays (got ${JSON.stringify(r)})`,
+          gone !== "" && r.ok === false && r.applied.length === 0 && r.error === "no node with id '" + gone + "' (invalid or removed)" && !w.alive().some((n) => n.name === "Pair"));
+      }
+    }
+  },
+}, {
+  name: "A copy whose patched text goes during the patch's style await fails as missing: its text is never set (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original", handle: "title" }] } }]);
+      const sourceTitle = String(first.applied[0]?.handles?.title);
+      let gone: FakeNode | undefined;
+      w.hooks.onStyle = async () => {
+        if (gone) return;
+        gone = w.made.find((n) => n.type === "TEXT" && peekRemoved(n, "name") === "Title" && n.id !== sourceTitle);
+        if (gone) out(gone);
+      };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r8-copy-" + how, [{ op: "createTree", tree: { clone: String(first.applied[0]?.id), name: "Copy", edits: { Title: { text: "updated", styles: { text: "Body" } } } } }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const want = "no node with id '" + String(gone?.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a copy, its patched text ${how} during the style await: fails as missing, nothing applied, its text never set (got ${JSON.stringify(r)}, text ${JSON.stringify(gone ? peekRemoved(gone, "characters") : null)})`,
+        gone !== undefined && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && r.error === want && peekRemoved(gone, "characters") !== "updated");
+      ok(`[ANNOUNCE] …${how}: no copy stays, the source is untouched, and the designer is told nothing changed (got ${JSON.stringify(text)})`,
+        !w.alive().some((n) => n.name === "Copy") && w.scene.nodes[sourceTitle]?.characters === "original" && saidOnce(w, t, p, text) && text === HEAD + want);
+    }
+  },
+}, {
+  name: "A copy whose patched layer goes during another text's style await fails as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original", handle: "title" }] } }]);
+      const sourceTitle = String(first.applied[0]?.handles?.title);
+      let gone: FakeNode | undefined;
+      // The tree's own text awaits its style before the copy's patch runs: the copy's layer goes then.
+      w.hooks.onStyle = async () => {
+        if (gone) return;
+        gone = w.made.find((n) => n.type === "TEXT" && peekRemoved(n, "name") === "Title" && n.id !== sourceTitle);
+        if (gone) out(gone);
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Holder", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }, { clone: String(first.applied[0]?.id), name: "Copy", edits: { Title: { text: "updated" } } }] } }]);
+      w.hooks.onStyle = undefined;
+      ok(`[ANNOUNCE] a copy's patched layer ${how} before its patch runs: fails as missing, nothing applied, nothing stays (got ${JSON.stringify(r)})`,
+        gone !== undefined && r.ok === false && r.applied.length === 0 && r.error === "no node with id '" + String(gone.id) + "' (invalid or removed)"
+        && !w.alive().some((n) => n.name === "Holder") && w.scene.nodes[sourceTitle]?.characters === "original");
+    }
+  },
+}, {
+  name: "A createText with no parent whose page goes while its font loads fails as missing: no text is left on that page (#206)",
+  async run() {
+    const w = await treeWorld();
+    const dest = w.pages.current;
+    const survivor = w.pages.screens;
+    const realLoad = w.figma.loadFontAsync;
+    if (!realLoad) throw new Error("the world loads no fonts");
+    let hit = false;
+    w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+      await realLoad(f);
+      if (hit || !w.made.some((n) => n.type === "TEXT")) return;
+      hit = true;
+      w.figma.currentPage = survivor;
+      dest.parent = null;
+    };
+    const t = w.notified.length;
+    const p = w.posted.length;
+    const r = replyOf(await bridgeWrite(w, "r8-create-text", [{ op: "createText", text: "Hello" }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+    w.figma.loadFontAsync = realLoad;
+    const text = String(lastWrites(w)?.text);
+    const want = "no page with id '" + String(dest.id) + "' (invalid or removed)";
+    ok(`[ANNOUNCE] createText, its current page detached during the font load: fails as missing, nothing applied (got ${JSON.stringify(r)})`,
+      hit && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && r.error === want);
+    ok(`[ANNOUNCE] …no text is left on the old page or the new one, and the designer is told nothing changed (got ${JSON.stringify(text)})`,
+      !(dest.children ?? []).some((n) => n.type === "TEXT") && !(survivor.children ?? []).some((n) => n.type === "TEXT") && saidOnce(w, t, p, text) && text === HEAD + want);
+  },
+}, {
+  name: "A build whose cleanup cannot remove what it made says it stays, never \"nothing changed\" (#206)",
+  async run() {
+    // A new tree, a new component and a keyed re-send's new child, each failing during a style await (its page detached,
+    // or Figma refusing the style), and Figma refusing the remove() that would have taken back what it built. What stays
+    // in the document is listed as applied; a node left only inside a detached frame is in no page, so nothing stays.
+    type Build = { what: string; stuck: string; kind: string; fail: "detach" | "refuse"; first?: WriteOp[]; dest: (w: World, f: Record<string, unknown> | undefined) => FakeNode | undefined; op: WriteOp; stays: boolean };
+    const keyedFirst: WriteOp[] = [{ op: "createTree", tree: { key: "stuck", name: "Stuck", children: [{ name: "Box", handle: "box" }] } }];
+    const keyedOp: WriteOp = { op: "createTree", tree: { key: "stuck", name: "Stuck", children: [{ name: "Box", handle: "box", children: [{ name: "Added", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] }] }] } };
+    const boxOf = (w: World, f: Record<string, unknown> | undefined): FakeNode | undefined => w.scene.nodes[String((f?.handles as Record<string, string> | undefined)?.box)];
+    const builds: Build[] = [
+      { what: "a new tree", stuck: "New tree", kind: "the unfinished tree", fail: "detach", stays: true, dest: (w) => w.pages.screens,
+        op: { op: "createTree", page: "Screens", tree: { name: "New tree", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] } } },
+      { what: "a new component", stuck: "Stuck badge", kind: "the unfinished component", fail: "detach", stays: true, dest: (w) => w.pages.screens,
+        op: { op: "createTree", page: "Screens", tree: { type: "COMPONENT", name: "Stuck badge", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] } } },
+      { what: "a keyed re-send's new child", stuck: "Added", kind: "the unfinished node", fail: "refuse", stays: true, first: keyedFirst, dest: boxOf, op: keyedOp },
+      { what: "a keyed re-send's new child in a detached frame", stuck: "Added", kind: "the unfinished node", fail: "detach", stays: false, first: keyedFirst, dest: boxOf, op: keyedOp },
+    ];
+    for (const b of builds) {
+      const w = await treeWorld({ kit: true });
+      const firstReply = b.first ? (await w.api.applyWrites(b.first)).applied[0] as Record<string, unknown> | undefined : undefined;
+      const dest = b.dest(w, firstReply);
+      let stuck: FakeNode | undefined;
+      w.hooks.onStyle = async () => {
+        if (stuck || !dest) return;
+        stuck = madeNamed(w, b.stuck);
+        if (stuck) stuck.remove = () => { throw new Error("remove refused"); };
+        if (b.fail === "refuse") throw new Error("style refused");
+        const q = dest.parent as FakeNode | null;
+        if (q && Array.isArray(q.children)) q.children = q.children.filter((c) => c !== dest);
+        dest.parent = null;
+      };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r8-stuck-" + b.stuck + b.fail, [b.op])) as { ok?: unknown; error?: unknown; applied?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const why = b.fail === "refuse" ? "style refused" : b.first ? "no node with id '" + String(dest?.id) + "' (invalid or removed)" : "no page with id '" + String(dest?.id) + "' (invalid or removed)";
+      const applied = Array.isArray(r.applied) ? r.applied as Array<Record<string, unknown>> : [];
+      if (!b.stays) {
+        ok(`[ANNOUNCE] ${b.what}, not removable: in no page, so nothing stays and nothing is listed (got ${JSON.stringify(r)})`,
+          stuck !== undefined && r.ok === false && applied.length === 0 && r.error === why && saidOnce(w, t, p, text) && text === HEAD + why);
+        continue;
+      }
+      const want = why + "; could not undo " + b.kind + " '" + b.stuck + "' (" + String(stuck?.id) + ") (remove refused)";
+      ok(`[ANNOUNCE] ${b.what} that cannot be removed after it failed: listed as applied, the reply says it stays (got ${JSON.stringify(r)})`,
+        stuck !== undefined && r.ok === false && applied.length === 1 && applied[0]?.id === stuck.id && r.error === want);
+      ok(`[ANNOUNCE] …the designer is told it could not be put back, never "nothing changed" (got ${JSON.stringify(text)})`,
+        w.notified.slice(t).length === 1 && text === "Design Twin applied 1 edit that could not be put back after one failed: " + want);
+    }
+  },
+});
+
+cases.push({
+  name: "A copy that fails before it is in its tree and cannot be removed is said to stay, never \"nothing changed\" (#206)",
+  async run() {
+    // Figma refusing to put the copy in its frame, or to clear its plugin data (a child copy, and a copy as the root), and
+    // then refusing its remove(): it is left on the page it was made on, outside the tree the cleanup removes.
+    const runs: Array<{ what: string; refuse: "append" | "data"; asRoot: boolean; why: string }> = [
+      { what: "a child copy its frame refused", refuse: "append", asRoot: false, why: "appendChild refused" },
+      { what: "a child copy whose plugin data Figma refused", refuse: "data", asRoot: false, why: "in Figma: cannot set plugin data on Source" },
+      { what: "a root copy whose plugin data Figma refused", refuse: "data", asRoot: true, why: "in Figma: cannot set plugin data on Source" },
+    ];
+    for (const c of runs) {
+      const w = await treeWorld();
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original" }] } }]);
+      const src = w.scene.nodes[String(first.applied[0]?.id)];
+      if (!src || typeof src.clone !== "function") throw new Error("no source to copy");
+      const realClone = src.clone as () => FakeNode;
+      let copy: FakeNode | undefined;
+      src.clone = () => {
+        const made = realClone();
+        copy = made;
+        made.remove = () => { throw new Error("remove refused"); };
+        if (c.refuse === "append") {
+          const at = made.parent;
+          Object.defineProperty(made, "parent", { configurable: true, enumerable: true, get: () => at, set: () => { throw new Error("appendChild refused"); } });
+        }
+        return made;
+      };
+      if (c.refuse === "data") w.trap.add("setPluginData");
+      const t = w.notified.length;
+      const tree = c.asRoot ? { clone: String(src.id), name: "Copy" } : { name: "Holder", children: [{ clone: String(src.id), name: "Copy" }] };
+      const r = replyOf(await bridgeWrite(w, "r8-stray-" + c.refuse + String(c.asRoot), [{ op: "createTree", tree }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+      w.trap.clear();
+      const text = String(lastWrites(w)?.text);
+      const want = c.why + "; could not undo the unfinished copy 'Source' (" + String(copy?.id) + ") (remove refused)";
+      const applied = Array.isArray(r.applied) ? r.applied as Array<Record<string, unknown>> : [];
+      ok(`[ANNOUNCE] ${c.what}, not removable: listed as applied, the reply says it stays (got ${JSON.stringify(r)})`,
+        copy !== undefined && r.ok === false && applied.length === 1 && applied[0]?.id === copy.id && r.error === want && !w.alive().some((n) => n.name === "Holder"));
+      ok(`[ANNOUNCE] …the designer is told it could not be put back (got ${JSON.stringify(text)})`,
+        w.notified.slice(t).length === 1 && text === "Design Twin applied 1 edit that could not be put back after one failed: " + want);
+    }
+  },
+});
+
+cases.push({
+  name: "A copy's text patched after a variable edit, gone while its fonts load, fails as missing: its text is never set (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original", handle: "title" }] } }]);
+      const sourceTitle = String(first.applied[0]?.handles?.title);
+      const realLoad = w.figma.loadFontAsync;
+      if (!realLoad) throw new Error("the world loads no fonts");
+      let gone: FakeNode | undefined;
+      // A variable edit earlier in the batch: the copy's text fonts load as its patch applies (no style await after them).
+      w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        await realLoad(f);
+        if (gone) return;
+        gone = w.made.find((n) => n.type === "TEXT" && peekRemoved(n, "name") === "Title" && n.id !== sourceTitle);
+        if (gone) out(gone);
+      };
+      const r = await w.api.applyWrites([
+        { op: "createVariables", collection: "Tokens", modes: ["Default"], variables: [["color/ink", "color", "#111111"]] },
+        { op: "createTree", tree: { clone: String(first.applied[0]?.id), name: "Copy", edits: { Title: { text: "updated" } } } },
+      ]);
+      w.figma.loadFontAsync = realLoad;
+      ok(`[ANNOUNCE] a copy's text ${how} while its fonts load (after a variable edit): fails as missing, put back, its text never set (got ${JSON.stringify(r)})`,
+        gone !== undefined && r.ok === false && r.failedAt === 1 && r.applied.length === 0 && r.error === "no node with id '" + String(gone.id) + "' (invalid or removed)"
+        && peekRemoved(gone, "characters") !== "updated" && !w.alive().some((n) => n.name === "Copy"));
+    }
+  },
+}, {
+  name: "A component set whose parts all refuse removal after it failed is said to stay once, as the set (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const dest = w.pages.screens;
+    let set: FakeNode | undefined;
+    w.hooks.onStyle = async () => {
+      if (set) return;
+      set = w.made.find((n) => n.type === "COMPONENT_SET");
+      for (const n of w.made) if (n.type === "COMPONENT" || n.type === "COMPONENT_SET") n.remove = () => { throw new Error("remove refused"); };
+      const q = dest.parent as FakeNode | null;
+      if (q && Array.isArray(q.children)) q.children = q.children.filter((c) => c !== dest);
+      dest.parent = null;
+    };
+    const r = await w.api.applyWrites([{ op: "createTree", page: "Screens", tree: { type: "COMPONENT_SET", name: "Stuck set", children: [
+      { type: "COMPONENT", name: "Size=S", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] }, { type: "COMPONENT", name: "Size=M" }] } }]);
+    w.hooks.onStyle = undefined;
+    const want = "no page with id '" + String(dest.id) + "' (invalid or removed); could not undo the unfinished component 'Stuck set' (" + String(set?.id) + ") (remove refused)";
+    ok(`[ANNOUNCE] a set and its variants that cannot be removed: one row, the set, its variants not listed again (got ${JSON.stringify(r)})`,
+      set !== undefined && r.ok === false && r.applied.length === 1 && r.applied[0]?.id === set.id && r.error === want);
+  },
+}, {
+  name: "A keyed re-send's new group whose copy fails before it is in the group says the copy stays (#206)",
+  async run() {
+    const w = await treeWorld();
+    const src = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original" }] } }]);
+    const srcNode = w.scene.nodes[String(src.applied[0]?.id)];
+    if (!srcNode || typeof srcNode.clone !== "function") throw new Error("no source to copy");
+    await w.api.applyWrites([{ op: "createTree", tree: { key: "grp", name: "Grp", children: [{ name: "Box" }] } }]);
+    const realClone = srcNode.clone as () => FakeNode;
+    let copy: FakeNode | undefined;
+    srcNode.clone = () => {
+      const made = realClone();
+      copy = made;
+      const at = made.parent;
+      made.remove = () => { throw new Error("remove refused"); };
+      Object.defineProperty(made, "parent", { configurable: true, enumerable: true, get: () => at, set: () => { throw new Error("appendChild refused"); } });
+      return made;
+    };
+    const r = await w.api.applyWrites([{ op: "createTree", tree: { key: "grp", name: "Grp", children: [{ name: "Box" }, { name: "Group", children: [{ clone: String(srcNode.id), name: "Copy" }] }] } }]);
+    const want = "appendChild refused; could not undo the unfinished copy 'Source' (" + String(copy?.id) + ") (remove refused)";
+    ok(`[ANNOUNCE] a keyed re-send's new group, its copy refused and not removable: the copy is listed, the group is gone (got ${JSON.stringify(r)})`,
+      copy !== undefined && r.ok === false && r.applied.length === 1 && r.applied[0]?.id === copy.id && r.error === want && !w.alive().some((n) => n.name === "Group"));
+  },
+});

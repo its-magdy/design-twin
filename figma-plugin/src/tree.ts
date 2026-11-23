@@ -179,16 +179,21 @@ function resolvePage(ref: string | undefined): { ok: PageNode } | { error: strin
 /**
  * Build a resolved tree and attach it to its page. Throws (leaving nothing behind) when Figma refuses a value, or when
  * `consent` throws: it is called after each await, so "Allow edits" turned off while the text styles are set stops
- * the build and removes the hidden, unplaced root (it never showed in the file).
+ * the build and removes the hidden, unplaced root (it never showed in the file). What Figma will not remove then goes
+ * on `changes` (discard), so the batch says it stays.
  */
-export async function buildTree(t: TreeTarget, consent: () => void): Promise<Change> {
+export async function buildTree(t: TreeTarget, consent: () => void, changes: Change[]): Promise<Change> {
   const comp = componentRootOf(t.spec);
-  if (comp) return buildComponent(t, comp.type, comp.name, consent);
+  if (comp) return buildComponent(t, comp.type, comp.name, consent, changes);
   // Handles are the agent's own strings: a Map, so one called "__proto__" is a key like any other.
   const made = newMade(t.refs, t.clones);
   // A copy as the root (a screen like an existing one): the source's copy, made where Figma makes a new frame.
   const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : undefined;
-  const root: SceneNode = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame();
+  let root: SceneNode;
+  try { root = rootCopy ? copyOf(rootCopy, t.spec, made) : figma.createFrame(); } catch (e) {
+    discard([], made.strays, "created tree", changes);
+    throw e;
+  }
   const key = t.spec.key;
   const indexWas = key !== undefined ? readIndex(key) : "";
   let shown = true;
@@ -197,7 +202,7 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     root.visible = false; // built to the side: nothing shows until the whole tree is in place
     if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
     // Its page checked after each await (node-lookup.ts holding): deleted meanwhile, the tree lands nowhere.
-    await finish(made, 0, 0, holding(t.page, consent, "page"));
+    await finish(made, START, holding(t.page, consent, "page"));
     const { x, y } = placement(t.page, root.id, t.spec);
     t.page.appendChild(root);
     root.x = x;
@@ -211,7 +216,7 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     }
     markCreated(root);
   } catch (e) {
-    try { root.remove(); } catch { /* already gone */ }
+    discard([[root, "the unfinished tree"]], made.strays, "created tree", changes);
     throw e;
   }
   const applied: AppliedWrite = { id: root.id, created: createdCount(made) };
@@ -235,7 +240,7 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
  * and only then moved to its page, placed and shown; any throw removes everything it made. It is stamped with its name
  * as key, so the same name sent again updates it in place.
  */
-async function buildComponent(t: TreeTarget, type: ComponentRootType, name: string, consent: () => void): Promise<Change> {
+async function buildComponent(t: TreeTarget, type: ComponentRootType, name: string, consent: () => void, changes: Change[]): Promise<Change> {
   const made = newMade(t.refs, t.clones);
   const key = componentKey(name);
   const parts: SceneNode[] = [];
@@ -269,7 +274,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
       }
       arrangeVariants(set, t.spec, null);
     }
-    await finish(made, 0, 0, holding(t.page, consent, "page"));
+    await finish(made, START, holding(t.page, consent, "page"));
     const keys = addDefs(root, fileDefs(t.spec, t.refs));
     wireAll(made.pairs, keys);
     const { x, y } = placement(t.page, root.id, t.spec);
@@ -287,9 +292,31 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     const built = root;
     return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); } };
   } catch (e) {
-    for (const p of parts.slice().reverse()) { try { if (!p.removed) p.remove(); } catch { /* already gone */ } }
+    discard(parts.slice().reverse().map((p): [SceneNode, string] => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made.strays, "created component", changes);
     throw e;
   }
+}
+
+/**
+ * Take back what a build that failed made (`nodes`, each with what a sentence calls it, the outer ones first; then the
+ * copies it could not put in their parents, `strays`). A node Figma will not remove (its remove() throws) and that is
+ * still in the document stays in the file: it goes on `changes` as a Change whose restore tries again, so the batch lists
+ * it as applied and says it could not be put back, never that nothing changed. One gone already, or left only inside a
+ * node that is itself out of the document (a deleted frame), is in no page: gone.
+ */
+function discard(nodes: ReadonlyArray<[SceneNode, string]>, strays: readonly SceneNode[], kind: string, changes: Change[]): void {
+  const stayed: SceneNode[] = [];
+  for (const [n, what] of nodes.concat(strays.map((c): [SceneNode, string] => [c, "the unfinished copy"]))) {
+    try { if (!n.removed) n.remove(); } catch { /* checked below */ }
+    if (!inDocument(n) || stayed.some((s) => below(n, s))) continue;
+    stayed.push(n);
+    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", restore() { if (!n.removed) n.remove(); } });
+  }
+}
+/** `n` is `of` or below it. */
+function below(n: BaseNode, of: BaseNode): boolean {
+  for (let p: BaseNode | null = n; p; p = p.parent) if (p === of) return true;
+  return false;
 }
 
 /** What a build made, as the reply counts it (`instances` and `clones` only when it made any). */
@@ -302,20 +329,30 @@ export function createdCount(made: Made): { frames: number; texts: number; insta
 
 /** An empty build record over the resolved names `refs` and copies `clones`. */
 export function newMade(refs: ResolvedRefs, clones: ReadonlyMap<TreeNodeSpec, CloneTarget>): Made {
-  return { frames: 0, texts: 0, instances: 0, clones: 0, handles: new Map<string, string>(), refs, copies: clones, styled: [], patches: [], pairs: [] };
+  return { frames: 0, texts: 0, instances: 0, clones: 0, handles: new Map<string, string>(), refs, copies: clones, styled: [], patches: [], pairs: [], strays: [] };
 }
 
-/** Once every node of a build is made: the text styles its texts name, then the patches of its copies, from `styled` /
- *  `patches` on (the one awaits; `consent` is checked after each). */
-async function finish(made: Made, styledFrom: number, patchesFrom: number, consent: () => void): Promise<void> {
-  for (const [text, style] of made.styled.slice(styledFrom)) {
+/** Where a build's own entries start in `made` (a keyed re-send builds several subtrees into one record). */
+interface MadeFrom { styled: number; patches: number; pairs: number }
+const START: MadeFrom = { styled: 0, patches: 0, pairs: 0 };
+const madeFrom = (made: Made): MadeFrom => ({ styled: made.styled.length, patches: made.patches.length, pairs: made.pairs.length });
+
+/** Once every node of a build is made: the text styles its texts name, then the patches of its copies, from `from` on
+ *  (the one awaits; `consent` is checked after each). The designer can delete any node at any of them (node-lookup.ts):
+ *  a text is checked before its style is set, a copy's layer before its patch, and once the last await is done every node
+ *  the build made, so a build missing a node fails as missing (its caller removes what is left) and never lands without
+ *  it. The page or frame it goes into is checked first (`consent`): gone, that is what the op fails on. */
+async function finish(made: Made, from: MadeFrom, consent: () => void): Promise<void> {
+  for (const [text, style] of made.styled.slice(from.styled)) {
+    stillInDocument(text);
     await text.setTextStyleIdAsync(style.id);
     consent();
   }
-  for (const p of made.patches.slice(patchesFrom)) {
+  for (const p of made.patches.slice(from.patches)) {
     await patchCopy(p.target, p.node, consent);
     consent();
   }
+  for (const [n] of made.pairs.slice(from.pairs)) stillInDocument(n);
 }
 
 /** Stamp every node a keyed build made with the key and its own spec; a copy's layers are marked as the key's, with no
@@ -329,7 +366,7 @@ export function stampAll(made: Made, key: string, from = 0): void {
 
 /** The copy a spec node names (clones.ts), counted and recorded; its handle's id is the copy's. */
 function copyOf(r: CloneTarget, s: TreeNodeSpec, made: Made): SceneNode {
-  const copy = makeCopy(r, made.patches);
+  const copy = makeCopy(r, made.patches, made.strays);
   made.clones++;
   made.pairs.push([copy, s]);
   if (s.handle) made.handles.set(s.handle, copy.id);
@@ -345,7 +382,8 @@ function applyClone(s: TreeNodeSpec, parent: Parent, made: Made): SceneNode {
     parent.appendChild(copy);
     place(copy, s, parent);
   } catch (e) {
-    try { copy.remove(); } catch { /* already gone */ }
+    try { copy.remove(); } catch { /* left for the build's cleanup (discard) */ }
+    if (copy.parent !== parent && !copy.removed) made.strays.push(copy);
     throw e;
   }
   return copy;
@@ -356,14 +394,14 @@ function applyClone(s: TreeNodeSpec, parent: Parent, made: Made): SceneNode {
  * a keyed re-send adds or builds anew (keyed.ts). Its texts' styles are set before it returns (the one await; `consent`
  * is checked after each). Throws, leaving nothing behind, when Figma refuses a value.
  */
-export async function buildSubtree(spec: TreeNodeSpec, parent: Parent, made: Made, consent: () => void): Promise<SceneNode> {
+export async function buildSubtree(spec: TreeNodeSpec, parent: Parent, made: Made, consent: () => void, changes: Change[]): Promise<SceneNode> {
   // The frame it goes into was resolved before the batch ran: deleted or detached since (at an earlier op's await, or an
   // earlier subtree's), nothing is built into it; deleted during this one's own awaits, what was built is removed.
   stillInDocument(parent);
   const kind = nodeKind(spec);
-  const first = made.pairs.length;
-  const styledFrom = made.styled.length;
-  const patchesFrom = made.patches.length;
+  const from = madeFrom(made);
+  const first = from.pairs;
+  const strays = made.strays.length;
   let node: SceneNode | null = null;
   try {
     if (kind === "TEXT") { const t = figma.createText(); node = t; applyText(t, spec, parent, made); }
@@ -372,12 +410,12 @@ export async function buildSubtree(spec: TreeNodeSpec, parent: Parent, made: Mad
     // A new variant of a set a re-send updates: a component, appended to the set.
     else if (spec.type === "COMPONENT") { const c = figma.createComponent(); node = c; applyFrame(c, spec, parent, made); }
     else { const f = figma.createFrame(); node = f; applyFrame(f, spec, parent, made); }
-    await finish(made, styledFrom, patchesFrom, holding(parent, consent));
+    await finish(made, from, holding(parent, consent));
   } catch (e) {
     // An instance is made only once its component resolved: before that there is nothing to remove.
     const made0 = made.pairs[first];
     const n = node || (made0 ? made0[0] : null);
-    if (n) { try { n.remove(); } catch { /* already gone */ } }
+    discard(n ? [[n, "the unfinished node"]] : [], made.strays.slice(strays), "created node", changes);
     throw e;
   }
   if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
@@ -453,6 +491,9 @@ export interface Made {
   patches: CopyPatch[];
   /** every node made, with the spec it was made from (a keyed spec stamps each with its own fields) */
   pairs: Array<[SceneNode, TreeNodeSpec]>;
+  /** a copy that failed before it was put in its parent and that Figma would not remove: taken back (discard) with the
+   *  build it was for */
+  strays: SceneNode[];
 }
 type Parent = FrameNode | ComponentNode | ComponentSetNode;
 type Built = FrameNode | ComponentNode | ComponentSetNode | TextNode | InstanceNode;

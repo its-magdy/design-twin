@@ -26,7 +26,7 @@ import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeL
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
-import { inDocument, nodeById, stillInDocument } from "./node-lookup";
+import { inDocument, nodeById, noNode, stillInDocument } from "./node-lookup";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -142,8 +142,9 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       }
       // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
       if (!editsAllowedNow()) { t.remove(); changes.pop(); consent(); }
-      // The parent deleted during it (node-lookup.ts): likewise, and the op fails as its lookup would have.
-      if (op.parentId && !inDocument(parent)) { t.remove(); changes.pop(); throw new Error(parentGone(op.parentId)); }
+      // The parent deleted during it (node-lookup.ts): likewise, and the op fails as its lookup would have. The current
+      // page too, when no parent was named: the text was made on it, and it is not one the designer can see any more.
+      if (!inDocument(parent)) { t.remove(); changes.pop(); throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page")); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
@@ -229,7 +230,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
       // one by one, as they land.
       if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
-      const change = await buildTree(tree, consent);
+      const change = await buildTree(tree, consent, changes);
       changes.push(change);
       return change.applied;
     }

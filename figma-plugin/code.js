@@ -8378,6 +8378,8 @@
     }
   }
   async function patchCopy(t, node, consent2) {
+    stillInDocument(node);
+    const name = node.name;
     const on = { ...t, node };
     const fit = unfit(node, t.set);
     const problems = fit.kind.concat(fit.state);
@@ -8385,18 +8387,19 @@
       const v = await variantProblem(node, on.props);
       if (v) problems.push(v);
     }
-    if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+    if (problems.length) throw new Error("'" + name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
     if (on.fontsLater && node.type === "TEXT") {
       for (const f of await fontsToKeep(node)) {
         try {
           await figma.loadFontAsync(f);
         } catch {
-          throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
+          throw new Error("'" + name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
         }
       }
     }
-    consent2();
-    await setFields(on, consent2);
+    const held = holding(node, consent2);
+    held();
+    await setFields(on, held);
   }
   async function applyPatch(t, consent2, allowed2, changes) {
     const still = () => stillInDocument(t.node);
@@ -8575,7 +8578,7 @@
     if (n.type === "INSTANCE" || !("children" in n)) return;
     for (const c of n.children) restamp(c, key, false);
   }
-  function makeCopy(r, patches) {
+  function makeCopy(r, patches, strays) {
     const places = [];
     for (const e of r.edits) {
       const p = placeIn(r.source, e.node);
@@ -8600,6 +8603,7 @@
         copy2.remove();
       } catch {
       }
+      if (!copy2.removed) strays.push(copy2);
       throw e;
     }
     return copy2;
@@ -9367,12 +9371,18 @@
     if (m.kind === "many") return { error: "page '" + ref2 + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
     return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
   }
-  async function buildTree(t, consent2) {
+  async function buildTree(t, consent2, changes) {
     const comp = componentRootOf(t.spec);
-    if (comp) return buildComponent(t, comp.type, comp.name, consent2);
+    if (comp) return buildComponent(t, comp.type, comp.name, consent2, changes);
     const made2 = newMade(t.refs, t.clones);
     const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : void 0;
-    const root = rootCopy ? copyOf(rootCopy, t.spec, made2) : figma.createFrame();
+    let root;
+    try {
+      root = rootCopy ? copyOf(rootCopy, t.spec, made2) : figma.createFrame();
+    } catch (e) {
+      discard([], made2.strays, "created tree", changes);
+      throw e;
+    }
     const key = t.spec.key;
     const indexWas = key !== void 0 ? readIndex(key) : "";
     let shown4 = true;
@@ -9380,7 +9390,7 @@
       shown4 = rootCopy ? root.visible : t.spec.hidden !== true;
       root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made2);
-      await finish(made2, 0, 0, holding(t.page, consent2, "page"));
+      await finish(made2, START, holding(t.page, consent2, "page"));
       const { x, y } = placement(t.page, root.id, t.spec);
       t.page.appendChild(root);
       root.x = x;
@@ -9392,10 +9402,7 @@
       }
       markCreated(root);
     } catch (e) {
-      try {
-        root.remove();
-      } catch {
-      }
+      discard([[root, "the unfinished tree"]], made2.strays, "created tree", changes);
       throw e;
     }
     const applied = { id: root.id, created: createdCount(made2) };
@@ -9412,7 +9419,7 @@
       }
     };
   }
-  async function buildComponent(t, type, name, consent2) {
+  async function buildComponent(t, type, name, consent2, changes) {
     const made2 = newMade(t.refs, t.clones);
     const key = componentKey(name);
     const parts = [];
@@ -9445,7 +9452,7 @@
         }
         arrangeVariants(set, t.spec, null);
       }
-      await finish(made2, 0, 0, holding(t.page, consent2, "page"));
+      await finish(made2, START, holding(t.page, consent2, "page"));
       const keys = addDefs(root, fileDefs(t.spec, t.refs));
       wireAll(made2.pairs, keys);
       const { x, y } = placement(t.page, root.id, t.spec);
@@ -9465,14 +9472,27 @@
         built.remove();
       } };
     } catch (e) {
-      for (const p of parts.slice().reverse()) {
-        try {
-          if (!p.removed) p.remove();
-        } catch {
-        }
-      }
+      discard(parts.slice().reverse().map((p) => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made2.strays, "created component", changes);
       throw e;
     }
+  }
+  function discard(nodes, strays, kind, changes) {
+    const stayed = [];
+    for (const [n, what] of nodes.concat(strays.map((c) => [c, "the unfinished copy"]))) {
+      try {
+        if (!n.removed) n.remove();
+      } catch {
+      }
+      if (!inDocument(n) || stayed.some((s) => below(n, s))) continue;
+      stayed.push(n);
+      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", restore() {
+        if (!n.removed) n.remove();
+      } });
+    }
+  }
+  function below(n, of) {
+    for (let p = n; p; p = p.parent) if (p === of) return true;
+    return false;
   }
   function createdCount(made2) {
     const out = { frames: made2.frames, texts: made2.texts };
@@ -9481,17 +9501,21 @@
     return out;
   }
   function newMade(refs2, clones) {
-    return { frames: 0, texts: 0, instances: 0, clones: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, copies: clones, styled: [], patches: [], pairs: [] };
+    return { frames: 0, texts: 0, instances: 0, clones: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, copies: clones, styled: [], patches: [], pairs: [], strays: [] };
   }
-  async function finish(made2, styledFrom, patchesFrom, consent2) {
-    for (const [text, style] of made2.styled.slice(styledFrom)) {
+  var START = { styled: 0, patches: 0, pairs: 0 };
+  var madeFrom = (made2) => ({ styled: made2.styled.length, patches: made2.patches.length, pairs: made2.pairs.length });
+  async function finish(made2, from, consent2) {
+    for (const [text, style] of made2.styled.slice(from.styled)) {
+      stillInDocument(text);
       await text.setTextStyleIdAsync(style.id);
       consent2();
     }
-    for (const p of made2.patches.slice(patchesFrom)) {
+    for (const p of made2.patches.slice(from.patches)) {
       await patchCopy(p.target, p.node, consent2);
       consent2();
     }
+    for (const [n] of made2.pairs.slice(from.pairs)) stillInDocument(n);
   }
   function stampAll(made2, key, from = 0) {
     for (const [n, s] of made2.pairs.slice(from)) {
@@ -9500,7 +9524,7 @@
     }
   }
   function copyOf(r, s, made2) {
-    const copy2 = makeCopy(r, made2.patches);
+    const copy2 = makeCopy(r, made2.patches, made2.strays);
     made2.clones++;
     made2.pairs.push([copy2, s]);
     if (s.handle) made2.handles.set(s.handle, copy2.id);
@@ -9518,16 +9542,17 @@
         copy2.remove();
       } catch {
       }
+      if (copy2.parent !== parent && !copy2.removed) made2.strays.push(copy2);
       throw e;
     }
     return copy2;
   }
-  async function buildSubtree(spec, parent, made2, consent2) {
+  async function buildSubtree(spec, parent, made2, consent2, changes) {
     stillInDocument(parent);
     const kind = nodeKind(spec);
-    const first2 = made2.pairs.length;
-    const styledFrom = made2.styled.length;
-    const patchesFrom = made2.patches.length;
+    const from = madeFrom(made2);
+    const first2 = from.pairs;
+    const strays = made2.strays.length;
     let node = null;
     try {
       if (kind === "TEXT") {
@@ -9545,16 +9570,11 @@
         node = f;
         applyFrame(f, spec, parent, made2);
       }
-      await finish(made2, styledFrom, patchesFrom, holding(parent, consent2));
+      await finish(made2, from, holding(parent, consent2));
     } catch (e) {
       const made0 = made2.pairs[first2];
       const n = node || (made0 ? made0[0] : null);
-      if (n) {
-        try {
-          n.remove();
-        } catch {
-        }
-      }
+      discard(n ? [[n, "the unfinished node"]] : [], made2.strays.slice(strays), "created node", changes);
       throw e;
     }
     if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
@@ -10948,7 +10968,7 @@
     for (const b of plan.builds) {
       consent2();
       const from = made2.pairs.length;
-      const n = await buildSubtree(b.spec, b.parent, made2, consent2);
+      const n = await buildSubtree(b.spec, b.parent, made2, consent2, changes);
       changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
         n.remove();
       } });
@@ -13125,10 +13145,10 @@
           changes.pop();
           consent();
         }
-        if (op.parentId && !inDocument(parent)) {
+        if (!inDocument(parent)) {
           t.remove();
           changes.pop();
-          throw new Error(parentGone(op.parentId));
+          throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page"));
         }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
@@ -13209,7 +13229,7 @@
         if (gone !== null) throw new Error(gone);
         consent();
         if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
-        const change = await buildTree(tree, consent);
+        const change = await buildTree(tree, consent, changes);
         changes.push(change);
         return change.applied;
       }

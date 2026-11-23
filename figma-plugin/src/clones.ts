@@ -183,9 +183,10 @@ export function restamp(n: SceneNode, key: string | null, self: boolean): void {
 /**
  * Make the copy a resolved spec node names: its source cloned, its keyed stamps cleared, and its patches (its own, then
  * each edit's, mapped onto the copy's layer by place) queued on `patches` for once the tree is made. The copy is on
- * the current page until its caller puts it in its parent. Throws when the source no longer holds an edit's layer.
+ * the current page until its caller puts it in its parent. Throws when the source no longer holds an edit's layer; a copy
+ * Figma will not remove then goes on `strays`, for the build's cleanup to take back or report (tree.ts discard).
  */
-export function makeCopy(r: CloneTarget, patches: CopyPatch[]): SceneNode {
+export function makeCopy(r: CloneTarget, patches: CopyPatch[], strays: SceneNode[]): SceneNode {
   const places: Array<{ target: PatchTarget; path: number[] }> = [];
   for (const e of r.edits) {
     const p = placeIn(r.source, e.node);
@@ -207,7 +208,8 @@ export function makeCopy(r: CloneTarget, patches: CopyPatch[]): SceneNode {
     }
   } catch (e) {
     patches.length = from;
-    try { copy.remove(); } catch { /* already gone */ }
+    try { copy.remove(); } catch { /* left for the build's cleanup */ }
+    if (!copy.removed) strays.push(copy);
     throw e;
   }
   return copy;
