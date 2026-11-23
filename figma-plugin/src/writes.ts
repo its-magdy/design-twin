@@ -22,7 +22,7 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, goneSentence, hasLanded, landedResult, landedText, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -593,18 +593,18 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     // what stopped the batch or the op failed for its own reason after the box was unticked (a font load that rejects
     // late): after that the plugin changes nothing, not even to undo its own work, and the reply says what stayed.
     const off = revoked || !editsAllowedNow();
-    const { restored, failed } = off ? { restored: [], failed: [] } : await restoreChanges(changes, editsAllowedNow);
-    const back = new Set(restored);
-    const kept = !revoked && off && changes.length
-      ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied"
+    // A change whose layer the designer deleted while the batch ran went with it: neither put back nor applied.
+    const { restored, failed, gone, stays } = off ? { restored: [], failed: [], ...staying(changes) } : await restoreChanges(changes, editsAllowedNow);
+    const kept = !revoked && off && stays.length
+      ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied"
       : "";
     return {
       ok: false,
       // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
-      applied: [...changes.filter((c) => !back.has(c)).map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
+      applied: [...stays.map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
       failedAt: i,
       failedOp: op && op.op,
-      error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
+      error: errMsg(e) + [...failed, ...gone.map(goneSentence)].map((s) => "; " + s).join("") + kept,
       ...(revoked ? { refused: "edits-off" as const } : {}),
       ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
@@ -613,10 +613,9 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   // that could not be put back stays (listed in `applied`), and the refusal says so — never that nothing was changed.
   const refuseLate = async (late: OpProblem[]): Promise<WriteResult> => {
     const firstLate = late[0];
-    const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
-    const back = new Set(restored);
+    const { restored, failed, stays } = await restoreChanges(changes, editsAllowedNow);
     return {
-      ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
+      ok: false, applied: stays.map((c) => c.applied),
       ...(firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {}),
       error: batchRefusal(late, { landed: landedOf(out), failed }),
       ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
@@ -784,11 +783,10 @@ function notApplied(): WriteResult {
  *  the preview back; the plugin cannot remove a step). Null when all of it went back; else what stays. */
 async function putBack(changes: readonly Change[]): Promise<WriteResult | null> {
   commitUndo();
-  const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+  const { failed, stays } = await restoreChanges(changes, editsAllowedNow);
   commitUndo();
   if (!failed.length) return null;
-  const back = new Set(restored);
-  return { ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " — what stays is listed in `applied`." };
+  return { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " — what stays is listed in `applied`." };
 }
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */

@@ -70,12 +70,22 @@ export function goneAmong(nodes: readonly BaseNode[], bad: (message: string) => 
  *  removed already (gone with it: there is nothing to take back, and its fields throw when read). One only detached (out
  *  of the document, not removed) is removed: it is the write's own. A remove() Figma refuses throws, for the caller. */
 export function takeBack(nodes: readonly SceneNode[]): void {
-  for (const n of nodes) if (!goneWithRemoved(n)) n.remove();
+  for (const n of nodes) if (!removedWith(n)) n.remove();
 }
-/** `n` or a node it is under is removed (`removed` read first at each step: a removed node's parent throws). */
-function goneWithRemoved(n: BaseNode): boolean {
+/** `n` or a node it is under is removed (`removed` read first at each step: a removed node's parent throws). Such a node
+ *  took what a write set on it with it: its fields throw when read, and nothing of it is in the file to put back. One
+ *  only detached (out of the document, not removed) still reads, and a put-back still puts it back. */
+export function removedWith(n: BaseNode): boolean {
   for (let a: BaseNode | null = n; a; a = a.parent) if (a.removed) return true;
   return false;
+}
+
+/** For a put-back that awaits (a variable looked up to bind back, a text style set back): the node it puts back,
+ *  checked after each of its awaits. Removed by then (removedWith), there is nothing left to put back on it and its
+ *  fields throw: it throws noNode, and the batch's put-back (write-batch.ts restoreChanges) says the change went with the
+ *  node, never that it stays. */
+export function stillToRestore(n: BaseNode, what = "node"): void {
+  if (removedWith(n)) throw new Error(noNode(n.id, what));
 }
 
 /** `consent` for a change that holds `n` across its awaits (a text style set, a patch's fonts): each call checks `n` is

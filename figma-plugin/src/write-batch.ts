@@ -2,6 +2,7 @@
 // change that can be undone when a later op of the batch fails (docs/write-plane-spec.md decisions 14, 15, 16). Every
 // op that changes the file returns a Change, so a batch that fails partway puts back everything it did.
 import type { AppliedWrite, WriteResult } from "../../bridge/src/commands.ts";
+import { removedWith } from "./node-lookup";
 import { errMsg } from "./util";
 
 /** One reason an op cannot run, against its op index. */
@@ -57,13 +58,26 @@ export interface Change {
   /** One of the layers a patchWhere changed (the same object for every one of them): a reply that lists what was put
    *  back counts them in one row instead of a row each. */
   group?: object;
-  /** The node the change is on. Removed from the file since (the designer deleted it at one of the batch's awaits), the
-   *  change went with it: restoreChanges does not run the restore (a removed node's fields throw when read) and says
-   *  so. A node the batch made (`made`) is gone as it was before the batch, but its restore still runs: it takes back
+  /** The node the change is on. Removed from the file since (the designer deleted it at one of the batch's awaits, or
+   *  at one of the put-back's own), the change went with it: nothing of it is in the file, so it is neither put back
+   *  nor listed as applied (restoreChanges `gone`), and its restore is not run (a removed node's fields throw when
+   *  read). A node the batch made (`made`) is gone as it was before the batch, but its restore still runs: it takes back
    *  what else the build made (a layer moved out of it) and what it set outside its nodes (a key's index entry), and
    *  never reads a node already gone (node-lookup.ts takeBack). */
   on?: BaseNode;
   made?: true;
+}
+
+/** `c` went with its node: one the batch did not make, removed from the file (node-lookup.ts removedWith). */
+const wentWithNode = (c: Change): boolean => !c.made && c.on !== undefined && removedWith(c.on);
+
+/** What a reply says of a change that went with its node: what it was, and that none of it stays. */
+export const goneSentence = (c: Change): string => c.what + " went with that layer: it was deleted from the file while the batch ran, so none of it stays";
+
+/** `changes` that stay in the file when none is put back (the plugin changes nothing more once "Allow edits" is off):
+ *  every one but those that went with their node. */
+export function staying(changes: readonly Change[]): { stays: Change[]; gone: Change[] } {
+  return { stays: changes.filter((c) => !wentWithNode(c)), gone: changes.filter(wentWithNode) };
 }
 
 /** The rows of `changes` as a reply lists what was put back: each change's own row, but the layers one patchWhere
@@ -84,31 +98,34 @@ export function restoredRows(changes: readonly Change[]): AppliedWrite[] {
 /** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
 export class RestoreStopped extends Error {}
 
-/** Undo `changes`, newest first. Returns the ones undone and a sentence for each that could not be. `allowed` is asked
- *  before each: once the designer has turned "Allow edits" off, the plugin changes nothing more, not even to undo its
- *  own work, and the rest are reported as kept. */
-export async function restoreChanges(changes: readonly Change[], allowed: () => boolean): Promise<{ restored: Change[]; failed: string[] }> {
+/** Undo `changes`, newest first. Returns the ones undone, a sentence for each that could not be, the ones that went with
+ *  their node (`gone`: its layer was deleted while the batch ran, before its turn or during its own put-back's awaits;
+ *  nothing of it stays, and it is not called "could not be undone"), and what stays: every change neither undone nor
+ *  gone, which a reply lists as applied. `allowed` is asked before each: once the designer has turned "Allow edits" off,
+ *  the plugin changes nothing more, not even to undo its own work, and the rest are reported as kept. */
+export async function restoreChanges(changes: readonly Change[], allowed: () => boolean): Promise<{ restored: Change[]; failed: string[]; gone: Change[]; stays: Change[] }> {
   const restored: Change[] = [];
   const failed: string[] = [];
+  const gone: Change[] = [];
   const left = [...changes].reverse();
+  // Not put back: the ones of `rest` that went with their node are gone; the others stay applied, and are counted.
+  const stopped = (rest: readonly Change[], tail: string): void => {
+    const kept = staying(rest);
+    gone.push(...kept.gone);
+    if (kept.stays.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept.stays).replace(/ earlier /g, " ") + " stay applied" + tail);
+  };
   for (const [i, c] of left.entries()) {
-    if (!allowed()) {
-      failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
-      break;
-    }
-    if (c.on && c.on.removed && !c.made) {
-      failed.push("could not undo " + c.what + " (it was deleted from the file after the batch changed it)");
-      continue;
-    }
+    if (!allowed()) { stopped(left.slice(i), ""); break; }
+    if (wentWithNode(c)) { gone.push(c); continue; }
     try { await c.restore(allowed); restored.push(c); } catch (e) {
-      if (e instanceof RestoreStopped) {
-        failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
-        break;
-      }
+      if (e instanceof RestoreStopped) { stopped(left.slice(i), " (in part, for " + c.what + ")"); break; }
+      // Its node removed during the put-back's own awaits: what was set on it went with it.
+      if (wentWithNode(c)) { gone.push(c); continue; }
       failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
     }
   }
-  return { restored, failed };
+  const done = new Set([...restored, ...gone]);
+  return { restored, failed, gone, stays: changes.filter((c) => !done.has(c)) };
 }
 
 /** "1 earlier variable mode change", "2 earlier created trees and 1 earlier variable mode change": `changes` counted

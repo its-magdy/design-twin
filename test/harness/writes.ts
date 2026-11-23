@@ -425,6 +425,10 @@ const KIT_STYLES: FakeNode[] = [
 /** The kit: a "Components" page with a Button set (variants by Size; Label text, Icon boolean, Glyph swap), a Badge
  *  without auto-layout, two components both named Card; and a library with a colour and a number variable (listed by
  *  name), an Avatar component and a Caption text style (by key only). */
+/** A set's default variant read as Figma reads it: its first variant now (one deleted or moved out is not it). */
+function liveDefault(set: FakeNode): void {
+  Object.defineProperty(set, "defaultVariant", { enumerable: false, configurable: true, get: () => kids(set).find((k) => k.type === "COMPONENT") ?? null });
+}
 function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const comp = (id: string, name: string, extra: FakeNode): FakeNode => {
     const c: FakeNode = { id, type: "COMPONENT", name, key: "local-" + id, layoutMode: "HORIZONTAL", parent: null, getPluginData: () => "", ...extra };
@@ -440,8 +444,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const medium = comp("5:2", "Size=Medium", { parent: set, variantProperties: { Size: "Medium" } });
   Object.defineProperty(medium, "componentPropertyDefinitions", { get() { throw new Error("in Figma: componentPropertyDefinitions can only be read on a component set or a non-variant component"); } });
   const large = comp("5:6", "Size=Large", { parent: set, variantProperties: { Size: "Large" } });
-  set.defaultVariant = medium;
   set.children = [medium, large];
+  liveDefault(set);
   const badge = comp("5:3", "Badge", { layoutMode: "NONE", componentPropertyDefinitions: {} });
   const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
   // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
@@ -452,8 +456,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   } };
   const chipSmall = comp("6:2", "Size=Small, Tone=Off", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small", Tone: "Off" } });
   const chipLarge = comp("6:3", "Size=Large, Tone=On", { parent: chip, variantProperties: { Size: "Large", Tone: "On" } });
-  chip.defaultVariant = chipSmall;
   chip.children = [chipSmall, chipLarge];
+  liveDefault(chip);
   const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
   // A variant property whose name is "__proto__" (any string is a valid property name in Figma; a variant's key is its name).
   const odd = comp("6:5", "Odd", { componentPropertyDefinitions: JSON.parse('{"__proto__": {"type": "VARIANT", "defaultValue": "Off", "variantOptions": ["On", "Off"]}}') as Record<string, unknown> });
@@ -463,8 +467,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   } };
   const twinFlat = comp("7:2", "Kind=A", { parent: twin, layoutMode: "NONE", variantProperties: { Kind: "A" } });
   const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
-  twin.defaultVariant = twinFlat;
   twin.children = [twinFlat, twinFlex];
+  liveDefault(twin);
   const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, odd, twin, twinFlat, twinFlex];
   const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, odd, twin], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };

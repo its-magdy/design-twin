@@ -119,11 +119,12 @@ async function scopeLayers(rule: CheckedRule, bad: (m: string) => void, selected
   return { hits: out };
 }
 
-/** The components an instance is of, as a rule may name them: its main component, and the set it is a variant of. */
+/** The components an instance is of, as a rule may name them: its main component, and the set it is a variant of. None
+ *  when its main component is not in the document (deleted: an instance keeps one, node-lookup.ts). */
 async function ownersOf(n: InstanceNode): Promise<Array<ComponentNode | ComponentSetNode>> {
   let main: ComponentNode | null = null;
   try { main = await n.getMainComponentAsync(); } catch { main = null; }
-  if (!main) return [];
+  if (!main || !inDocument(main)) return [];
   return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
 }
 
@@ -156,14 +157,21 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
   const owners = new Map<string, Array<ComponentNode | ComponentSetNode>>();
   let ownerId: string | null = null;
   if (w.instanceOf !== undefined) {
-    const pool = new Map<string, ComponentNode | ComponentSetNode>();
     for (const h of layers) {
       if (h.node.type !== "INSTANCE") continue;
-      const os = await ownersOf(h.node);
-      owners.set(h.node.id, os);
-      for (const o of os) pool.set(o.id, o);
+      owners.set(h.node.id, await ownersOf(h.node));
     }
     if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
+    // Each instance's component was found at an await and held across the later ones': one deleted or detached by now
+    // (or before: a soft-deleted main component, which an instance keeps) is no component of the file (node-lookup.ts),
+    // so no instance is of it, and nothing of it is read. A variant in the document has its set in it too.
+    const pool = new Map<string, ComponentNode | ComponentSetNode>();
+    for (const [id, os] of owners) {
+      const main = os[0];
+      const live = main && inDocument(main) ? os : [];
+      owners.set(id, live);
+      for (const o of live) pool.set(o.id, o);
+    }
     const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
     if (m.kind === "one") ownerId = m.item.id;
     else if (m.kind === "many") { bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of — pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", ")); return []; }

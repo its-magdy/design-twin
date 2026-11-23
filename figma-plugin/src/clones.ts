@@ -185,6 +185,16 @@ export function restamp(n: SceneNode, key: string | null, self: boolean): void {
   for (const c of n.children) restamp(c, key, false);
 }
 
+/** Every layer below `n` (a copy), outer ones first, onto `out`: not an instance's own layers, which follow its main
+ *  component and cannot be moved out of it. The copy made them all, so a cleanup takes back one moved out of it. */
+export function copiedLayers(n: SceneNode, out: SceneNode[]): void {
+  if (n.type === "INSTANCE" || !("children" in n)) return;
+  for (const c of n.children) {
+    out.push(c);
+    copiedLayers(c, out);
+  }
+}
+
 /**
  * Make the copy a resolved spec node names: its source cloned, its keyed stamps cleared, and its patches (its own, then
  * each edit's, mapped onto the copy's layer by place) queued on `patches` for once the tree is made. The copy is on

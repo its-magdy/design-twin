@@ -32,7 +32,7 @@ import { matchByName, nearestNames, quoteList } from "../../bridge/src/name-matc
 import { imagePaint } from "./images";
 import { fontOf, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
 import { checkTree } from "../../bridge/src/tree-check.ts";
-import { cloneUses, copiesOf, makeCopy, resolveClones, restamp, type CloneTarget, type CopyPatch } from "./clones";
+import { cloneUses, copiedLayers, copiesOf, makeCopy, resolveClones, restamp, type CloneTarget, type CopyPatch } from "./clones";
 import { patchCopy } from "./patch";
 import { noRefs, resolveRefs, treeUses, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { componentKey, componentRootOf, type ComponentRootType } from "../../bridge/src/component-spec.ts";
@@ -325,9 +325,11 @@ function discard(nodes: ReadonlyArray<[SceneNode, string]>, made: Made, from: Ma
     changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { takeBack([n]); } });
   }
 }
-/** The nodes a build made, from `from` on (a copy's layers go with the copy). */
+/** The nodes a build made, from `from` on: each node it made, then every layer of each copy it made (a layer the
+ *  designer moved out of a copy is the build's too: removing the copy leaves it on the page). In order, outer ones first:
+ *  takeBack skips a node already gone with one before it. */
 export function madeNodes(made: Made, from: MadeFrom = START): SceneNode[] {
-  return made.pairs.slice(from.pairs).map(([n]) => n);
+  return made.pairs.slice(from.pairs).map(([n]) => n).concat(made.layers.slice(from.layers));
 }
 /** `n` is `of` or below it. */
 function below(n: BaseNode, of: BaseNode): boolean {
@@ -345,20 +347,21 @@ export function createdCount(made: Made): { frames: number; texts: number; insta
 
 /** An empty build record over the resolved names `refs` and copies `clones`. */
 export function newMade(refs: ResolvedRefs, clones: ReadonlyMap<TreeNodeSpec, CloneTarget>): Made {
-  return { frames: 0, texts: 0, instances: 0, clones: 0, handles: new Map<string, string>(), refs, copies: clones, styled: [], patches: [], pairs: [], strays: [] };
+  return { frames: 0, texts: 0, instances: 0, clones: 0, handles: new Map<string, string>(), refs, copies: clones, styled: [], patches: [], pairs: [], layers: [], strays: [] };
 }
 
 /** Where a build's own entries start in `made` (a keyed re-send builds several subtrees into one record). */
-export interface MadeFrom { styled: number; patches: number; pairs: number; strays: number }
-const START: MadeFrom = { styled: 0, patches: 0, pairs: 0, strays: 0 };
-export const madeFrom = (made: Made): MadeFrom => ({ styled: made.styled.length, patches: made.patches.length, pairs: made.pairs.length, strays: made.strays.length });
+export interface MadeFrom { styled: number; patches: number; pairs: number; layers: number; strays: number }
+const START: MadeFrom = { styled: 0, patches: 0, pairs: 0, layers: 0, strays: 0 };
+export const madeFrom = (made: Made): MadeFrom => ({ styled: made.styled.length, patches: made.patches.length, pairs: made.pairs.length, layers: made.layers.length, strays: made.strays.length });
 
 /** Every node `made` holds from `from` on is still in the document (stillInDocument throws as missing): each node it
  *  made, and each layer of a copy it patched. Run once a build's last await is done (finish), and once a keyed re-send's
  *  last subtree is built (keyed.ts applyUpdate): a node of an earlier subtree, or a layer an earlier patch changed,
- *  deleted or detached at a later await is not counted, nor its handle returned. */
+ *  deleted or detached at a later await is not counted, nor its handle returned. (A copy's other layers are the copy's
+ *  own, not held: one the designer deletes from it is their edit of the result.) */
 export function checkMade(made: Made, from: MadeFrom = START): void {
-  for (const n of madeNodes(made, from)) stillInDocument(n);
+  for (const [n] of made.pairs.slice(from.pairs)) stillInDocument(n);
   for (const p of made.patches.slice(from.patches)) stillInDocument(p.node);
 }
 
@@ -394,6 +397,7 @@ function copyOf(r: CloneTarget, s: TreeNodeSpec, made: Made): SceneNode {
   const copy = makeCopy(r, made.patches, made.strays);
   made.clones++;
   made.pairs.push([copy, s]);
+  copiedLayers(copy, made.layers);
   if (s.handle) made.handles.set(s.handle, copy.id);
   return copy;
 }
@@ -514,6 +518,9 @@ export interface Made {
   patches: CopyPatch[];
   /** every node made, with the spec it was made from (a keyed spec stamps each with its own fields) */
   pairs: Array<[SceneNode, TreeNodeSpec]>;
+  /** every layer below each copy made (clones.ts copiedLayers), outer ones first: made with it, so a build's cleanup and
+   *  a put-back take back one the designer moved out of the copy */
+  layers: SceneNode[];
   /** a copy that failed before it was put in its parent and that Figma would not remove: taken back (discard) with the
    *  build it was for */
   strays: SceneNode[];

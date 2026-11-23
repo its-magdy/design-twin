@@ -1114,17 +1114,17 @@ cases.push({
       const want = "no node with id '" + id + "' (invalid or removed)";
       ok(`[ANNOUNCE] a patch, its node ${how} during its style await: fails as missing, its text unchanged (got ${JSON.stringify(r)}, text ${JSON.stringify(node ? peekRemoved(node, "characters") : null)})`,
         styled === 1 && r.ok === false && r.failedAt === 0 && typeof r.error === "string" && r.error.startsWith(want) && node !== undefined && peekRemoved(node, "characters") === "original");
-      // Detached, the patch's style is put back and nothing stays; removed, a node Figma reads nothing of cannot be put
-      // back, and the reply says so rather than "nothing changed".
+      // Detached, the patch's style is put back and nothing stays; removed, what it set went with the node (Figma reads
+      // nothing of it): nothing of the batch stays either, and the reply says where it went (#206 review 10).
       if (how === "detached") {
         ok(`[ANNOUNCE] …detached: put back, nothing applied, and the designer is told nothing changed (got ${JSON.stringify(text)})`,
           Array.isArray(r.applied) && r.applied.length === 0 && r.error === want && saidOnce(w, t, p, text) && text === HEAD + want);
       } else {
-        const lost = want + "; could not undo the changes to 'Text' (" + id + ") (it was deleted from the file after the patch changed it)";
-        ok(`[ANNOUNCE] …removed: the patch stays listed, the reply says it went with the node, never "nothing changed" (got ${JSON.stringify(r)})`,
-          Array.isArray(r.applied) && r.applied.length === 1 && r.error === lost);
-        ok(`[ANNOUNCE] …removed: and the designer the same (got ${JSON.stringify(text)})`,
-          w.notified.slice(t).length === 1 && w.notified[t] === text && text === "Design Twin applied 1 edit that could not be put back after one failed: " + lost);
+        const lost = want + "; " + wentWith("the changes to 'Text' (" + id + ")");
+        ok(`[ANNOUNCE] …removed: nothing listed as applied, the reply says the patch went with the node (got ${JSON.stringify(r)})`,
+          Array.isArray(r.applied) && r.applied.length === 0 && r.error === lost);
+        ok(`[ANNOUNCE] …removed: and the designer the same, never that an edit stays (got ${JSON.stringify(text)})`,
+          saidOnce(w, t, p, text) && text === HEAD + lost);
       }
     }
   },
@@ -1569,13 +1569,12 @@ cases.push({
         const r = await w.api.applyWrites([{ op: "createTree", tree: tree("A2", [{ name: "X", text: "X", styles: { text: "Body" } }, { name: "Y", text: "Y", styles: { text: "Body" } }]) }]);
         w.hooks.onStyle = undefined;
         const missing = "no node with id '" + String(gone?.id) + "' (invalid or removed)";
-        // A patched node removed takes its change with it: that cannot be put back, and the reply says so (a detached one
-        // is put back).
-        const kept = which === "patched" && how === "removed";
+        // A patched node removed takes its change with it: nothing of it stays, and the reply says where it went (a
+        // detached one is put back).
+        const went = which === "patched" && how === "removed";
         ok(`[ANNOUNCE] a keyed re-send, its ${which} node ${how} during a later build: fails as missing, nothing else stays (got ${JSON.stringify(r)})`,
-          gone !== undefined && r.ok === false && !w.alive().some((n) => n.name === "X" || n.name === "Y") && (kept
-            ? r.applied.length === 1 && r.applied[0]?.id === gone.id && r.error === missing + "; could not undo the changes to 'A' (" + String(gone.id) + ") (it was deleted from the file after the patch changed it)"
-            : r.applied.length === 0 && r.error === missing));
+          gone !== undefined && r.ok === false && !w.alive().some((n) => n.name === "X" || n.name === "Y") && r.applied.length === 0
+          && r.error === (went ? missing + "; " + wentWith("the changes to 'A' (" + String(gone.id) + ")") : missing));
       }
     }
   },
@@ -2140,6 +2139,179 @@ cases.push({
       w2.figma.getNodeByIdAsync = lookup;
       ok(`[ANNOUNCE] an instance's component set ${how} while its swap value is looked up: refused as missing (got ${JSON.stringify(r2)})`,
         r2.ok === false && r2.applied.length === 0 && r2.error === "ops[0] (createTree): tree.children[0].component: no component with id '5:1' (invalid or removed). Nothing was changed.");
+    }
+  },
+});
+
+// ---- #206 review 10: a change whose layer the designer deleted while the batch ran went with it (never "applied",
+// never "could not be put back"); a build's cleanup takes back every layer of a copy it made; a component a resolve
+// held across a later await is checked before it is read again.
+
+/** What a reply says of a change that went with its layer (write-batch.ts goneSentence). */
+const wentWith = (what: string): string => what + " went with that layer: it was deleted from the file while the batch ran, so none of it stays";
+
+cases.push({
+  name: "A rule's match deleted during a later match's await went with its changes: not applied, not \"could not be put back\" (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Host", children: [{ name: "First", text: "Change", handle: "first" }, { name: "Second", text: "Change", handle: "second" }] } }]);
+      const first = w.scene.nodes[String(made.applied[0]?.handles?.first)];
+      const second = w.scene.nodes[String(made.applied[0]?.handles?.second)];
+      if (!first || !second) throw new Error("no matches");
+      let calls = 0;
+      w.hooks.onStyle = async () => { if (++calls === 2) out(first); };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r10-rule-" + how, [{ op: "patchWhere", where: { text: "Change" }, set: { styles: { text: "Body" }, text: "Changed" } }])) as { ok?: unknown; error?: unknown; applied?: unknown; restored?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const missing = "'First' (" + String(first.id) + "), one of the 2 layers its rule matches: no node with id '" + String(first.id) + "' (invalid or removed)";
+      // Removed: its changes went with it. Detached (still readable): put back with the rest.
+      const want = how === "removed" ? missing + "; " + wentWith("the changes to 'First' (" + String(first.id) + ")") : missing;
+      const restored = how === "removed" ? [{ matched: 1 }] : [{ matched: 2 }];
+      ok(`[ANNOUNCE] patchWhere, its first match ${how} during the second's style await: nothing listed as applied, the reply says what stays (got ${JSON.stringify(r)})`,
+        calls === 2 && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && JSON.stringify(r.restored) === JSON.stringify(restored) && r.error === want);
+      // (A rule waits for the designer: the card's toast comes first, then the batch's.)
+      ok(`[ANNOUNCE] …${how}: the designer is told the other was undone, never that an edit stays (got ${JSON.stringify(text)})`,
+        w.notified.slice(t).length === 2 && w.notified.at(-1) === text && writesOf(w.posted.slice(p)).length === 1
+        && text === "Design Twin undid 1 earlier change after an edit failed: " + want && second.characters === "Change");
+    }
+  },
+}, {
+  name: "An earlier op's patched or filled layer deleted before a later op fails went with its changes, edits on or off (#206)",
+  async run() {
+    for (const [first, off] of [["patch", false], ["patch", true], ["setFill", false]] as const) {
+      const w = await treeWorld({ kit: true });
+      const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Host", children: [{ name: "Target", handle: "t" }] } }]);
+      const target = w.scene.nodes[String(made.applied[0]?.handles?.t)];
+      if (!target) throw new Error("no target");
+      // The later op's style await: the designer deletes the changed layer (and unticks "Allow edits").
+      w.hooks.onStyle = async () => { markRemoved(target); if (off) await w.allowEdits(false); else throw new Error("style refused"); };
+      const r = await w.api.applyWrites([
+        first === "patch" ? { op: "patch", nodeId: String(target.id), set: { opacity: 0.5 } } : { op: "setFill", nodeId: String(target.id), color: "#ff0000" },
+        { op: "createTree", tree: { name: "Later", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] } },
+      ]);
+      w.hooks.onStyle = undefined;
+      const gone = wentWith((first === "patch" ? "the changes to" : "the fill of") + " 'Target' (" + String(target.id) + ")");
+      ok(`[ANNOUNCE] a layer changed by ${first} and deleted before a later op failed${off ? " (edits then off)" : ""}: not applied, the reply says it went with the layer (got ${JSON.stringify(r)})`,
+        r.ok === false && r.failedAt === 1 && !r.applied.some((a) => a.id === target.id) && typeof r.error === "string" && r.error.includes("; " + gone) && !r.error.includes("could not undo")
+        && !r.error.includes("put back its"));
+    }
+  },
+}, {
+  name: "A kept node deleted while a keyed re-send's size limits are put back went with them, never Figma's read error (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const tree = (extra: Record<string, unknown>): Record<string, unknown> =>
+      ({ key: "lim", name: "Lim", box: { w: 400, h: 100 }, layout: { display: "flex" }, children: [{ name: "C", handle: "c", box: { w: 50, h: 50 }, ...extra }] });
+    const first = await w.api.applyWrites([{ op: "createTree", tree: tree({ sizeLimits: { minWidth: 10, maxWidth: 900 }, tokens: { minWidth: "size/min" } }) }]);
+    const c = w.scene.nodes[String(first.applied[0]?.handles?.c)];
+    if (!c) throw new Error("no kept node");
+    const lookup = w.figma.variables.getVariableByIdAsync;
+    let hits = 0;
+    // The put-back binds the old limit's variable again: the designer deletes the node while it is looked up.
+    w.figma.variables.getVariableByIdAsync = async (id: string) => { if (new Error().stack?.includes("restoreChanges") === true && !hits++) markRemoved(c); return lookup(id); };
+    // The limit changes, its variable stays: the put-back sets the old limit raw (unbinding it), then binds it again.
+    const r = await w.api.applyWrites([{ op: "createTree", tree: tree({ sizeLimits: { minWidth: 20, maxWidth: 900 }, tokens: { minWidth: "size/min" } }) }, { op: "createFrame", parentId: "missing:1" }]);
+    w.figma.variables.getVariableByIdAsync = lookup;
+    const gone = wentWith("the place, clipping or size limits of 'C' (" + String(c.id) + ")");
+    ok(`[ANNOUNCE] a kept node deleted during its size limits' put-back: not applied, the reply says they went with it (got ${JSON.stringify(r)})`,
+      first.ok === true && hits === 1 && r.ok === false && r.failedAt === 1 && !r.applied.some((a) => a.id === c.id) && typeof r.error === "string" && r.error.includes("; " + gone) && !r.error.includes("could not undo"));
+  },
+}, {
+  name: "A copy's layer the designer moves out during the build is taken back when it fails, or when a later op does (#206)",
+  async run() {
+    for (const kind of ["patched layer", "other layer", "nested layer", "other layer, then a later op", "keyed subtree's layer"] as const) {
+      const w = await treeWorld({ kit: true });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original", handle: "title" }, { name: "Icon", handle: "icon" },
+        { name: "Group", children: [{ name: "Deep", handle: "deep" }] }] } }]);
+      const source = first.applied[0];
+      if (!source?.id) throw new Error("no source");
+      const keyed = kind.startsWith("keyed");
+      if (keyed) await w.api.applyWrites([{ op: "createTree", tree: { key: "k", name: "Root" } }]);
+      const later = kind.endsWith("later op");
+      const name = kind.startsWith("patched") || keyed ? "Title" : kind.startsWith("nested") ? "Deep" : "Icon";
+      const own = name === "Title" ? source.handles?.title : name === "Deep" ? source.handles?.deep : source.handles?.icon;
+      let moved: FakeNode | undefined;
+      w.hooks.onStyle = async () => {
+        moved = w.made.find((n) => peekRemoved(n, "name") === name && n.id !== own && n.removed !== true);
+        if (moved) (w.pages.current.appendChild as (n: FakeNode) => void)(moved);
+        if (!later) throw new Error("style refused");
+      };
+      const copy = { clone: String(source.id), name: "Copy", edits: { Title: { text: "updated", styles: { text: "Body" } } } };
+      const op: WriteOp = keyed ? { op: "createTree", tree: { key: "k", name: "Root", children: [copy] } } : { op: "createTree", tree: copy };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r10-copy-" + kind, later ? [op, { op: "setFill", nodeId: "gone:1", color: "#fff" }] : [op])) as { ok?: unknown; error?: unknown; applied?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      ok(`[ANNOUNCE] a copy's ${kind} moved out during the build: nothing applied, no layer of the copy stays (alive ${JSON.stringify(w.alive().map((n) => [n.id, n.name]))}, got ${JSON.stringify(r)})`,
+        moved !== undefined && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && !w.alive().some((n) => n === moved || n.name === "Copy"));
+      if (!later && !keyed) ok(`[ANNOUNCE] …${kind}: the designer is told nothing changed, and it is true (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text === HEAD + "style refused");
+    }
+  },
+}, {
+  name: "A rule by instanceOf whose instance's component goes while another's resolves: no instance is of it, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const badge = w.scene.nodes["5:3"];
+      const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Mixed", children: [{ component: "Badge", handle: "a" }, { component: "Button", handle: "b" }] } }]);
+      const b = w.scene.nodes[String(made.applied[0]?.handles?.b)];
+      if (!badge || !b) throw new Error("no instances: " + JSON.stringify(made));
+      const main = b.getMainComponentAsync as () => Promise<unknown>;
+      let hits = 0;
+      b.getMainComponentAsync = async () => { if (!hits++) out(badge); return main(); };
+      const r = await w.api.applyWrites([{ op: "patchWhere", where: { instanceOf: "Badge" }, set: { hidden: true } }]);
+      b.getMainComponentAsync = main;
+      const refused = "ops[0] (patchWhere): where.instanceOf: no instance in the current page is of a component named 'Badge'";
+      ok(`[ANNOUNCE] patchWhere by instanceOf, its component ${how} while another instance's resolves: refused, the name matches nothing (got ${JSON.stringify(r)})`,
+        made.ok === true && hits === 1 && r.ok === false && r.applied.length === 0 && typeof r.error === "string" && r.error.startsWith(refused));
+      // Sent again: the same answer (the file has no such component now).
+      const again = await w.api.applyWrites([{ op: "patchWhere", where: { instanceOf: "Badge" }, set: { hidden: true } }]);
+      ok(`[ANNOUNCE] …${how}: sent again, the same refusal (got ${JSON.stringify(again)})`, again.ok === false && typeof again.error === "string" && again.error.startsWith(refused));
+    }
+  },
+}, {
+  name: "An instance of a set whose default variant goes while a swap value resolves takes the set's default as it is then (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const button = w.scene.nodes["5:1"];
+      const [medium, large] = button?.children ?? [];
+      const lookup = w.figma.getNodeByIdAsync;
+      if (!medium || !large) throw new Error("no kit");
+      let hits = 0;
+      w.figma.getNodeByIdAsync = async (id: string) => { if (id === "5:3" && !hits++) out(medium); return lookup(id); };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Buttons", children: [{ component: "Button", handle: "b", props: { Glyph: "5:3" } }] } }]);
+      w.figma.getNodeByIdAsync = lookup;
+      const inst = w.scene.nodes[String(r.applied[0]?.handles?.b)];
+      ok(`[ANNOUNCE] a set's default variant ${how} while an instance's swap value resolves: the instance is of the default now (got ${JSON.stringify(r)}, main ${JSON.stringify(inst ? (inst.mainComponent as FakeNode | undefined)?.id : null)})`,
+        hits === 1 && r.ok === true && inst !== undefined && inst.mainComponent === large);
+    }
+  },
+});
+
+cases.push({
+  name: "A component re-send's dry run whose component goes while its instances are counted says it is missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const spec = (names: string[]) => ({ type: "COMPONENT_SET", name: "Button", children: names.map((name) => ({ type: "COMPONENT", name: "Size=" + name })) });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M"]) }]);
+      const root = w.scene.nodes[String(first.applied[0]?.id)];
+      const variant = (root?.children ?? [])[0];
+      if (!root || !variant) throw new Error("no set");
+      const real = variant.getInstancesAsync as () => Promise<unknown[]>;
+      let hits = 0;
+      variant.getInstancesAsync = async () => { const found = await real(); if (!hits++) out(root); return found; };
+      const posted = await w.send({ type: "bridge", id: "r10-imp-" + how, cmd: "writeImpact", args: { ops: [{ op: "createTree", tree: spec(["S", "M", "L"]) }] } });
+      const reply = posted.find((m) => m.type === "bridge-result" && m.id === "r10-imp-" + how);
+      const result = reply && reply.ok && typeof reply.result === "object" && reply.result !== null ? reply.result as { steps?: Array<{ problem?: string }> } : null;
+      const want = "no component with id '" + String(root.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a component re-send's dry run, the set ${how} while its instances are counted: it says the component is missing (got ${JSON.stringify(reply)})`,
+        hits === 1 && result !== null && (result.steps ?? []).some((s) => s.problem === want));
     }
   },
 });

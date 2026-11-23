@@ -285,7 +285,6 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   // A swap property's default or suggestion: the component itself (a set shows its default variant).
   if (!node) { refs.components.set(u.ref, c); return null; }
   const set = c.type === "COMPONENT_SET" ? c : c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
-  const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
   let defs: ComponentPropertyDefinitions;
   try { defs = (set || c).componentPropertyDefinitions; } catch { defs = {}; }
   const mapped = mapProps(valueProps(node.props || {}), defs, (set || c).name, true);
@@ -293,6 +292,9 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
   const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
   if (swapErr) return swapErr;
   if (!inDocument(c)) return noNode(c.id, "component"); // gone during the swaps' lookups
+  // A set's default variant, read only now: the one it had before the swaps' lookups may be deleted or moved out by now
+  // (node-lookup.ts), and the instance is of the set's default as it is when it is placed.
+  const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
   // An instance hugs only when the variant it ends up as has auto-layout (checkTree cannot know; Figma would refuse
   // mid-build): the variant the given variant values pick, the default's values for the rest.
   const shown = set ? variantFor(set, main, mapped.ok, defs) : main;

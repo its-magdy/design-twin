@@ -39,7 +39,7 @@ import { buildSubtree, checkMade, createdCount, madeFrom, madeNodes, newMade, st
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
-import { goneFrom, inDocument, nodeById, stillInDocument, takeBack } from "./node-lookup";
+import { goneFrom, inDocument, nodeById, stillInDocument, stillToRestore, takeBack } from "./node-lookup";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -345,9 +345,12 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
         if ((n.width !== size.w || n.height !== size.h) && "resize" in n) n.resize(size.w, size.h);
         for (const [k, v] of size.sizing) if (v !== undefined && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
       }
+      // Each variable looked up is an await: the node removed meanwhile has nothing left to bind back, and its fields
+      // throw (node-lookup.ts stillToRestore: the batch's put-back says the change went with it).
       for (const [k, id] of bound) {
         if (boundTo(n, k) === id) continue;
         const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+        stillToRestore(n);
         n.setBoundVariable(k, v);
       }
     },
@@ -396,8 +399,9 @@ function arrange(parent: FrameNode, want: readonly SceneNode[]): void {
 
 /** Put a frame's spec children in the new order; the designer's own layers keep their places. Its Change is on `changes`
  *  before the first move: a move Figma refuses partway puts back the ones before it here, so the op leaves nothing (as a
- *  patch does); one that cannot be put back stays on the list, and the batch reports it. */
-async function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>, allowed: () => boolean, changes: Change[]): Promise<void> {
+ *  patch does); one that cannot be put back stays on the list, and the batch reports it. Synchronous, its put-back too:
+ *  it never awaits, so nothing the update holds can change between one order and the next (node-lookup.ts). */
+function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>, allowed: () => boolean, changes: Change[]): void {
   const parent = o.parent as FrameNode;
   const was = parent.children.slice(); // a copy: Figma's array is frozen, and live
   const nodes: SceneNode[] = [];
@@ -415,19 +419,20 @@ async function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[],
   const slots = was.map((c, i) => (seq.indexOf(c) >= 0 ? i : -1)).filter((i) => i >= 0);
   const want = was.slice();
   slots.forEach((slot, k) => { const n = seq[k]; if (n) want[slot] = n; });
+  const putBack = (): void => { arrange(parent, was.filter((c) => childOf(c, parent))); };
   const change: Change = {
     applied: { id: parent.id },
     kind: "reordered frame",
     what: "the order of the layers in " + label(parent),
     on: parent,
-    restore() { arrange(parent, was.filter((c) => childOf(c, parent))); },
+    restore: putBack,
   };
   changes.push(change);
   try {
     arrange(parent, want);
   } catch (e) {
     if (allowed()) {
-      try { await change.restore(allowed); changes.splice(changes.indexOf(change), 1); } catch { /* the batch's restore tries again and reports it */ }
+      try { putBack(); changes.splice(changes.indexOf(change), 1); } catch { /* the batch's restore tries again and reports it */ }
     }
     throw e;
   }
@@ -479,7 +484,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     stampAll(made, key, from.pairs);
     built.push(n);
   }
-  // The builds were the op's last awaits (a reorder awaits only to put itself back): every node it holds is checked once
+  // The builds were the op's last awaits (a reorder never awaits, nor does its put-back): every node it holds is checked once
   // here, before the reorders, the stamps, the component's wiring and the reply: each node of the result it keeps (the
   // result itself, the nodes it changed, reorders or restamps among them) and every node it just built, each subtree's
   // layers included (a later subtree's style await comes after an earlier one's). One deleted or
@@ -488,7 +493,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   for (const k of plan.kept) stillInDocument(k.ref);
   checkMade(made);
   const replaced = plan.builds.map((b) => b.replaces);
-  for (const o of plan.orders) { consent(); await applyOrder(o, built, replaced, allowed, changes); }
+  for (const o of plan.orders) { consent(); applyOrder(o, built, replaced, allowed, changes); }
   if (plan.stamps.length) {
     consent();
     restamp(plan.stamps, key, changes);

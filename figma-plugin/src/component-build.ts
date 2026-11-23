@@ -30,7 +30,7 @@ import { planUpdate } from "../../bridge/src/tree-diff.ts";
 import { resolveRefs, treeUses, type ResolvedRefs } from "./tree-refs";
 import { setPlannedComponents } from "./batch-plan";
 import type { Change } from "./write-batch";
-import { inDocument, noNode } from "./node-lookup";
+import { goneFrom, inDocument, noNode } from "./node-lookup";
 
 export type Owner = ComponentNode | ComponentSetNode;
 const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
@@ -434,6 +434,8 @@ export async function componentImpact(ops: readonly WriteOp[]): Promise<WriteImp
     let instances = 0;
     const mains = found.ours.type === "COMPONENT_SET" ? found.ours.children.filter((k): k is ComponentNode => k.type === "COMPONENT") : [found.ours];
     for (const m of mains) { try { instances += (await m.getInstancesAsync()).length; } catch { /* not counted */ } }
+    // Found before those awaits: deleted or detached at one of them (node-lookup.ts), it is missing, and never read.
+    if (goneFrom(found.ours, (m) => { steps.push({ index, op: op.op, problem: m }); }, "component")) continue;
     // The variants the new table no longer has (its rows dropped), and the instances each leaves without a main.
     const old = readOld(found.ours, componentKey(c.name));
     const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];

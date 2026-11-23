@@ -30,7 +30,7 @@ import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
-import { goneFrom, holding, nodeById, stillInDocument } from "./node-lookup";
+import { goneFrom, holding, nodeById, stillInDocument, stillToRestore } from "./node-lookup";
 
 /** A patch op whose node, fonts and names all resolved. */
 export interface PatchTarget {
@@ -400,7 +400,10 @@ export async function keepText(t: TextNode, still: () => void = () => {}): Promi
   if (whole) for (const [, id] of whole.bound) if (id) ids.push(id);
   const vars = await variablesById(ids);
   return async (allowed) => {
-    const check = checker(allowed);
+    // After each await: "Allow edits" still on, and the text not removed meanwhile (its fields would throw; what was
+    // set on it went with it, which the batch's put-back says: node-lookup.ts stillToRestore).
+    const stop = checker(allowed);
+    const check = (): void => { stop(); stillToRestore(t); };
     if (t.characters !== chars) t.characters = chars;
     if (whole) {
       // Its style (kept when it already matches), then the properties on top, then the bindings.
@@ -584,7 +587,11 @@ async function snapshot(t: PatchTarget, still: () => void): Promise<Restore> {
     }
   });
   return async (allowed) => {
-    const check = checker(allowed);
+    // After each await (a paint style, a text style set back): "Allow edits" still on, and the node not removed meanwhile.
+    // Removed, nothing is left to put back on it (its fields throw): the rest of the steps are not run, and the batch's
+    // put-back says the change went with the node (node-lookup.ts stillToRestore).
+    const stop = checker(allowed);
+    const check = (): void => { stop(); stillToRestore(n); };
     const failed: string[] = [];
     for (const step of steps) {
       check();
@@ -768,12 +775,12 @@ export async function applyPatch(t: PatchTarget, consent: () => void, allowed: (
   // A node removed since its fields were set reads nothing back (Figma throws on every field of it but `id`): what it
   // was set to went with it, and that is what the reply says, not Figma's read errors.
   const restore: Restore = async (ok) => {
-    if (t.node.removed) throw new Error("it was deleted from the file after the patch changed it");
+    stillToRestore(t.node);
     await kept(ok);
   };
   const applied: AppliedWrite = { id: t.node.id };
   if (t.unbound) applied.unbound = t.unbound;
-  const change: Change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+  const change: Change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", on: t.node, restore };
   changes.push(change);
   try {
     // The node checked again after the text-style await, before the fields after it are set.
