@@ -39,7 +39,7 @@ import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
-import { nodeById, stillInDocument } from "./node-lookup";
+import { goneFrom, inDocument, nodeById, stillInDocument } from "./node-lookup";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -61,7 +61,8 @@ async function findResult(key: string): Promise<FrameNode | null> {
   if (!id) return null;
   const n = await nodeById(id);
   if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
-  return (await loadPageOf(n)) ? n : null;
+  // Deleted while its page loaded (node-lookup.ts): there is no result, as if it had gone before the batch.
+  return (await loadPageOf(n)) && inDocument(n) ? n : null;
 }
 /** Load the page `n` is on (dynamic-page: before its children are read); false when it is on none. */
 async function loadPageOf(n: BaseNode): Promise<boolean> {
@@ -142,7 +143,7 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     if (comp) {
       const found = await existingComponent(comp.type, comp.name);
       if ("problem" in found) { bad(found.problem); continue; }
-      if ("ours" in found && (await loadPageOf(found.ours))) root = found.ours;
+      if ("ours" in found && (await loadPageOf(found.ours)) && inDocument(found.ours)) root = found.ours;
     } else root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
     if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
@@ -184,6 +185,8 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     const patches = new Map<number, PatchTarget>();
     for (const [i, u] of plan.updates.entries()) {
       if (!u.set) continue;
+      // Held across the earlier patches' awaits (their fonts): gone by now, it is missing, and its name is never read.
+      if (goneFrom(u.ref, bad, "node", u.path + ": ")) continue;
       const say = (m: string): void => bad(u.path + " (" + label(u.ref) + "): " + m);
       const checked = checkPatch(u.set);
       if (checked.problems.length) { for (const m of checked.problems) say(m); continue; }

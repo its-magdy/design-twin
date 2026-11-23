@@ -1619,3 +1619,109 @@ cases.push({
       placed.ok === true && counted === 1 && r.ok === true && !(r.warnings ?? []).some((m) => m.includes("Size=L")));
   },
 });
+
+// ---- #206 review 8, before the batch runs: a node a resolve holds across an await (a page load, a font load) is checked
+// after it; gone, it is reported missing with the rest of the refusal, never read (a removed node's fields throw).
+
+cases.push({
+  name: "A copy whose source goes while its page loads (or while an edit resolves) is refused as missing, never read (#206)",
+  async run() {
+    for (const when of ["page load", "page load (no edits)", "edit's font load"] as const) {
+      const w = await treeWorld();
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original" }, { name: "Sub", text: "sub" }] } }]);
+      const source = w.scene.nodes[String(first.applied[0]?.id)];
+      if (!source) throw new Error("no source");
+      let hits = 0;
+      if (when !== "edit's font load") {
+        const original = w.pages.current.loadAsync as () => Promise<void>;
+        w.pages.current.loadAsync = async () => { await original(); if (!hits++) markRemoved(source); };
+      } else {
+        const realLoad = w.figma.loadFontAsync;
+        if (!realLoad) throw new Error("the world loads no fonts");
+        w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+          const inPatch = new Error().stack?.includes("resolvePatchNode") === true;
+          await realLoad(f);
+          if (inPatch && !hits++) markRemoved(source);
+        };
+      }
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const edits = when === "page load (no edits)" ? {} : { edits: { Title: { text: "updated" }, Sub: { text: "new sub" } } };
+      const r = replyOf(await bridgeWrite(w, "r8-preflight-" + when, [{ op: "createTree", tree: { clone: String(source.id), name: "Copy", ...edits } }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+      const text = String(lastWrites(w)?.text);
+      const missing = "tree.clone: no node with id '" + String(source.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a copy's source removed during its ${when}: refused, the source named missing, no read error (got ${JSON.stringify(r)})`,
+        hits > 0 && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && String(r.error).includes(missing) && !String(r.error).includes("in get_"));
+      ok(`[ANNOUNCE] …${when}: the designer is told nothing changed (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text.startsWith(HEAD) && text.includes(missing) && !w.alive().some((n) => n.name === "Copy"));
+    }
+  },
+}, {
+  name: "A tree whose page goes while its fonts load is refused as missing, never loaded (#206)",
+  async run() {
+    const w = await treeWorld();
+    const dest = w.pages.screens;
+    const realLoad = w.figma.loadFontAsync;
+    if (!realLoad) throw new Error("the world loads no fonts");
+    let hits = 0;
+    w.figma.loadFontAsync = async (f: { family: string; style: string }) => { await realLoad(f); if (!hits++) markRemoved(dest); };
+    const r = await w.api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "New", children: [{ name: "T", text: "T", font: { family: "Inter", weight: "Bold" } }] } }]);
+    w.figma.loadFontAsync = realLoad;
+    ok(`[ANNOUNCE] a tree's page removed while its fonts load: refused, the page named missing (got ${JSON.stringify(r)})`,
+      hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (createTree): no page with id '" + String(dest.id) + "' (invalid or removed). Nothing was changed.");
+  },
+}, {
+  name: "A keyed re-send whose result goes while its page loads builds afresh; one whose kept node goes while another resolves is refused (#206)",
+  async run() {
+    {
+      const w = await treeWorld();
+      const tree = (t: string) => ({ key: "fresh", name: "Fresh", children: [{ name: "Box", handle: "box", opacity: t === "a" ? 1 : 0.5 }] });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: tree("a") }]);
+      const root = w.scene.nodes[String(first.applied[0]?.id)];
+      if (!root) throw new Error("no keyed result");
+      const original = w.pages.current.loadAsync as () => Promise<void>;
+      let hits = 0;
+      w.pages.current.loadAsync = async () => { const mine = new Error().stack?.includes("loadPageOf") === true; await original(); if (mine && !hits++) markRemoved(root); };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: tree("b") }]);
+      ok(`[ANNOUNCE] a keyed result removed while its page loads: no result, so the re-send builds a new one, never reading the old (got ${JSON.stringify(r)})`,
+        hits === 1 && r.ok === true && r.applied[0]?.id !== root.id && r.applied[0]?.created?.frames === 2);
+    }
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const tree = (a: string, b: string) => ({ key: "two", name: "Two", children: [{ name: "T1", text: a, handle: "t1" }, { name: "T2", text: b, handle: "t2" }] });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: tree("a", "b") }]);
+      const t2 = w.scene.nodes[String(first.applied[0]?.handles?.t2)];
+      if (!t2) throw new Error("no keyed result");
+      const realLoad = w.figma.loadFontAsync;
+      if (!realLoad) throw new Error("the world loads no fonts");
+      let hits = 0;
+      // T1's patch resolves first (its fonts load): the designer deletes T2 then.
+      w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        const inPatch = new Error().stack?.includes("resolvePatchNode") === true;
+        await realLoad(f);
+        if (inPatch && !hits++) out(t2);
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: tree("a2", "b2") }]);
+      w.figma.loadFontAsync = realLoad;
+      ok(`[ANNOUNCE] a keyed re-send, a kept node ${how} while another's patch resolves: refused, named missing, never read (got ${JSON.stringify(r)})`,
+        hits === 1 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (createTree): tree.children[1]: no node with id '" + String(t2.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+}, {
+  name: "A move whose node or new parent goes while the parent's page loads is refused as missing, never read (#206)",
+  async run() {
+    for (const which of ["node", "parent"] as const) {
+      const w = await treeWorld();
+      const made = await w.api.applyWrites([{ op: "createFrame", name: "Mover", width: 10, height: 10 }]);
+      const mover = w.scene.nodes[String(made.applied[0]?.id)];
+      const dest = w.pages.screens;
+      if (!mover) throw new Error("no frame to move");
+      const original = dest.loadAsync as () => Promise<void>;
+      let hits = 0;
+      dest.loadAsync = async () => { await original(); if (!hits++) markRemoved(which === "node" ? mover : dest); };
+      const r = await w.api.applyWrites([{ op: "move", nodeId: String(mover.id), parentId: String(dest.id) }]);
+      const want = which === "node" ? "no node with id '" + String(mover.id) + "' (invalid or removed)" : "no parent with id '" + String(dest.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a move, its ${which} removed while the parent page loads: refused as missing (got ${JSON.stringify(r)})`,
+        hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (move): " + want + ". Nothing was changed.");
+    }
+  },
+});

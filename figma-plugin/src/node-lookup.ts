@@ -50,6 +50,15 @@ export function stillInDocument(n: BaseNode, what = "node", prefix = ""): void {
   if (!inDocument(n)) throw new Error(prefix + noNode(n.id, what));
 }
 
+/** A node a batch's resolve (before any op runs) held across an await: when it is no longer in the document, `bad` gets
+ *  the error its lookup would have given (after `prefix`) and true comes back, so the caller drops it without reading
+ *  anything else of it. */
+export function goneFrom(n: BaseNode, bad: (message: string) => void, what = "node", prefix = ""): boolean {
+  if (inDocument(n)) return false;
+  bad(prefix + noNode(n.id, what));
+  return true;
+}
+
 /** `consent` for a change that holds `n` across its awaits (a text style set, a patch's fonts): each call checks `n` is
  *  still in the document (stillInDocument), then consent. Every such change calls its consent after each await and
  *  before it reads or changes anything again, so a node deleted or detached during one is never read (a removed node's

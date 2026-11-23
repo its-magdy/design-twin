@@ -26,7 +26,7 @@ import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { KEY_DATA, SPEC_DATA } from "./keyed-store";
 import { resolvePatchNode, type PatchTarget } from "./patch";
 import { patchUses, type Use } from "./tree-refs";
-import { nodeById } from "./node-lookup";
+import { goneFrom, nodeById } from "./node-lookup";
 
 /** A copy whose source and edits resolved. */
 export interface CloneTarget {
@@ -116,6 +116,10 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
     if (page) await page.loadAsync(); // dynamic-page: before the source's layers are read
     const before = { n: 0 };
     const say = (m: string): void => { before.n++; bad(m); };
+    // Held across the page load and each patch's own awaits (node-lookup.ts): gone at one, the source is missing, as its
+    // lookup would have said, and none of its layers is read.
+    const gone = (): boolean => goneFrom(nd, say, "node", at + ": ");
+    if (gone()) continue;
     // `later`: the checks that read the file as it is now (auto-layout, the parent's) are run against the copy, in its
     // place, right before its patch is set (patchCopy): the copy's parent is not the source's.
     const self = clonePatch(s);
@@ -123,6 +127,7 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
     const edits: PatchTarget[] = [];
     const named = new Map<string, string>();
     for (const [ref, set] of cloneEdits(s)) {
+      if (gone()) break;
       const where = path + ".edits[" + JSON.stringify(ref) + "]";
       const layer = findLayer(nd, ref);
       if ("error" in layer) { say(where + ": " + layer.error); continue; }

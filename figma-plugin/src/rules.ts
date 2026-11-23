@@ -21,7 +21,7 @@ import { patchUses, resolveRefs, type RefResolution, type Use } from "./tree-ref
 import { boundVariableIds } from "./sources";
 import { errMsg } from "./util";
 import type { OpProblem } from "./write-batch";
-import { nodeById } from "./node-lookup";
+import { inDocument, nodeById } from "./node-lookup";
 
 /** A patchWhere op whose rule matched and whose every match resolved as a patch. */
 export interface RuleTarget {
@@ -250,7 +250,8 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
       const t = await resolvePatchNode(h.node, set, later, loadFont, (m) => { said.push(m); }, fontsLater);
       if (t && !said.length) { resolved.push(t); continue; }
       misfits++;
-      if (named.length < RULE_SAMPLES) named.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+      // A match deleted since it was found (at an earlier match's awaits) is named by its id alone: its name throws.
+      if (named.length < RULE_SAMPLES) named.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
     }
     if (misfits) { bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch — narrow the rule (another kind, a name) or the scope: " + named.join(" | ") + (misfits > named.length ? " | …" : "")); continue; }
     // The names its `set` uses resolve in the dry run too (nothing is imported until a real run applies).

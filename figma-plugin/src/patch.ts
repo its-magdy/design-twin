@@ -30,7 +30,7 @@ import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
-import { holding, inDocument, nodeById, noNode, stillInDocument } from "./node-lookup";
+import { goneFrom, holding, nodeById, stillInDocument } from "./node-lookup";
 
 /** A patch op whose node, fonts and names all resolved. */
 export interface PatchTarget {
@@ -229,16 +229,13 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
  * resolution of the patch's names (patchUses → resolveRefs).
  */
 export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void, fontsLater = false): Promise<PatchTarget | null> {
+  // Deleted or detached since its caller found it, or at one of the awaits below (node-lookup.ts): missing, as its lookup
+  // would have said, and nothing more of it is read (a removed node's fields throw).
+  const gone = (): boolean => goneFrom(nd, bad);
+  if (gone()) return null;
   if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); return null; }
   const node = nd;
   const name = node.name;
-  // Deleted or detached at one of the awaits below (node-lookup.ts): missing, as its lookup would have said, and nothing
-  // more of it is read (a removed node's fields throw).
-  const gone = (): boolean => {
-    if (inDocument(node)) return false;
-    bad(noNode(node.id));
-    return true;
-  };
   const fit = unfit(node, set);
   const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
   for (const m of misfits) bad(m);

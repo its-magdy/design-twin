@@ -15,7 +15,7 @@
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { createdThisSession, foreignBelow } from "./session";
 import type { Change, OpProblem } from "./write-batch";
-import { nodeById, stillInDocument } from "./node-lookup";
+import { goneFrom, nodeById, stillInDocument } from "./node-lookup";
 
 type Parent = PageNode | (SceneNode & ChildrenMixin);
 export interface MoveTarget { node: SceneNode; parent: Parent; index: number | undefined }
@@ -77,6 +77,8 @@ export async function resolveStructureOps(ops: readonly WriteOp[], changesBefore
     if (!pd) { bad("no parent with id '" + String(op.parentId) + "' (invalid or removed)"); continue; }
     if (pd.type === "DOCUMENT" || !("insertChild" in pd)) { bad("parent " + label(pd) + " is a " + pd.type + ", which cannot have children"); continue; }
     if (pd.type === "PAGE") await pd.loadAsync(); // dynamic-page: before its children are read or it is appended to
+    // Both held across the lookup and the page load (node-lookup.ts): gone by then, missing, as their lookups would say.
+    if (goneFrom(node, bad) || goneFrom(pd, bad, "parent")) continue;
     if (!changesBefore(index)) {
       const wrong = placeProblem(node, pd, op.index);
       if (wrong) { bad(wrong); continue; }

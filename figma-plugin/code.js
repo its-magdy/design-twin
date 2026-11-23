@@ -7070,6 +7070,11 @@
   function stillInDocument(n, what = "node", prefix = "") {
     if (!inDocument(n)) throw new Error(prefix + noNode(n.id, what));
   }
+  function goneFrom(n, bad, what = "node", prefix = "") {
+    if (inDocument(n)) return false;
+    bad(prefix + noNode(n.id, what));
+    return true;
+  }
   function holding(n, consent2, what = "node", prefix = "") {
     return () => {
       stillInDocument(n, what, prefix);
@@ -7870,17 +7875,14 @@
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
   async function resolvePatchNode(nd, set, later2, loadFont, bad, fontsLater = false) {
+    const gone = () => goneFrom(nd, bad);
+    if (gone()) return null;
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
       bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page");
       return null;
     }
     const node = nd;
     const name = node.name;
-    const gone = () => {
-      if (inDocument(node)) return false;
-      bad(noNode(node.id));
-      return true;
-    };
     const fit = unfit(node, set);
     const misfits = later2 ? fit.kind : [...fit.kind, ...fit.state];
     for (const m of misfits) bad(m);
@@ -8522,11 +8524,14 @@
         before.n++;
         bad(m);
       };
+      const gone = () => goneFrom(nd, say2, "node", at3 + ": ");
+      if (gone()) continue;
       const self = clonePatch(s);
       const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say2(under(path, m)), fontsLater) : null;
       const edits = [];
       const named2 = /* @__PURE__ */ new Map();
       for (const [ref2, set] of cloneEdits(s)) {
+        if (gone()) break;
         const where = path + ".edits[" + JSON.stringify(ref2) + "]";
         const layer = findLayer(nd, ref2);
         if ("error" in layer) {
@@ -9333,6 +9338,7 @@
       for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
       for (const c of clones.values()) cloneTargets.push(c);
       if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
+      if (goneFrom(page.ok, bad, "page")) continue;
       await page.ok.loadAsync();
       targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {} });
     }
@@ -10616,7 +10622,7 @@
     if (!id) return null;
     const n = await nodeById(id);
     if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
-    return await loadPageOf(n) ? n : null;
+    return await loadPageOf(n) && inDocument(n) ? n : null;
   }
   async function loadPageOf(n) {
     let p = n.parent;
@@ -10695,7 +10701,7 @@
           bad(found.problem);
           continue;
         }
-        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+        if ("ours" in found && await loadPageOf(found.ours) && inDocument(found.ours)) root = found.ours;
       } else root = await findResult(key);
       if (!root) continue;
       if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
@@ -10741,6 +10747,7 @@
       const patches = /* @__PURE__ */ new Map();
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
+        if (goneFrom(u.ref, bad, "node", u.path + ": ")) continue;
         const say2 = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
         const checked = checkPatch(u.set);
         if (checked.problems.length) {
@@ -12020,7 +12027,7 @@
           continue;
         }
         misfits++;
-        if (named2.length < RULE_SAMPLES) named2.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+        if (named2.length < RULE_SAMPLES) named2.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
       }
       if (misfits) {
         bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch \u2014 narrow the rule (another kind, a name) or the scope: " + named2.join(" | ") + (misfits > named2.length ? " | \u2026" : ""));
@@ -12992,6 +12999,7 @@
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
+      if (goneFrom(node, bad) || goneFrom(pd, bad, "parent")) continue;
       if (!changesBefore2(index)) {
         const wrong = placeProblem(node, pd, op.index);
         if (wrong) {

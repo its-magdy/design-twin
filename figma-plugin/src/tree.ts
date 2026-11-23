@@ -44,7 +44,7 @@ import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
 import type { BoundSpec } from "./bind";
 import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
-import { holding, inDocument, noNode, stillInDocument } from "./node-lookup";
+import { goneFrom, holding, inDocument, noNode, stillInDocument } from "./node-lookup";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
@@ -130,6 +130,8 @@ export async function resolveTreeOps(ops: readonly WriteOp[], bound: ReadonlyMap
     for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
     for (const c of clones.values()) cloneTargets.push(c);
     if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
+    // Held across the font loads and the copies' lookups (node-lookup.ts): deleted by then, the page is missing, never loaded.
+    if (goneFrom(page.ok, bad, "page")) continue;
     await page.ok.loadAsync(); // dynamic-page: before its children are read or it is appended to
     targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...(b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {}) });
   }
