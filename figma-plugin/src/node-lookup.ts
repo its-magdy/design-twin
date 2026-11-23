@@ -59,6 +59,25 @@ export function goneFrom(n: BaseNode, bad: (message: string) => void, what = "no
   return true;
 }
 
+/** goneFrom over every node of `nodes` a resolve holds (the layers a rule walked, the pages it loaded): the first one no
+ *  longer in the document goes to `bad`, only it (one problem however many went with it), and true comes back. */
+export function goneAmong(nodes: readonly BaseNode[], bad: (message: string) => void, what = "node", prefix = ""): boolean {
+  for (const n of nodes) if (goneFrom(n, bad, what, prefix)) return true;
+  return false;
+}
+
+/** Take back nodes a write made (a build's, a createText's): each one is removed, unless it or a node it is under is
+ *  removed already (gone with it: there is nothing to take back, and its fields throw when read). One only detached (out
+ *  of the document, not removed) is removed: it is the write's own. A remove() Figma refuses throws, for the caller. */
+export function takeBack(nodes: readonly SceneNode[]): void {
+  for (const n of nodes) if (!goneWithRemoved(n)) n.remove();
+}
+/** `n` or a node it is under is removed (`removed` read first at each step: a removed node's parent throws). */
+function goneWithRemoved(n: BaseNode): boolean {
+  for (let a: BaseNode | null = n; a; a = a.parent) if (a.removed) return true;
+  return false;
+}
+
 /** `consent` for a change that holds `n` across its awaits (a text style set, a patch's fonts): each call checks `n` is
  *  still in the document (stillInDocument), then consent. Every such change calls its consent after each await and
  *  before it reads or changes anything again, so a node deleted or detached during one is never read (a removed node's

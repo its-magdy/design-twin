@@ -1725,3 +1725,296 @@ cases.push({
     }
   },
 });
+
+// ---- #206 review 9: the loops inside one op (a rule's matches, a keyed re-send's subtrees), every cleanup path, and the
+// rollback of a node the batch made: what an op holds across an await is checked after it (node-lookup.ts).
+
+cases.push({
+  name: "A createText whose own text goes while its font loads fails as missing: it is not written, put back or left anywhere (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const realLoad = w.figma.loadFontAsync;
+      if (!realLoad) throw new Error("the world loads no fonts");
+      let gone: FakeNode | undefined;
+      w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+        await realLoad(f);
+        if (gone) return;
+        gone = w.made.find((n) => n.type === "TEXT");
+        if (gone) out(gone);
+      };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r9-text-" + how, [{ op: "createText", text: "Written after" }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+      w.figma.loadFontAsync = realLoad;
+      const text = String(lastWrites(w)?.text);
+      const want = "no node with id '" + String(gone?.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] createText, its text ${how} during its font load: fails as missing, nothing applied (got ${JSON.stringify(r)})`,
+        gone !== undefined && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && r.error === want);
+      ok(`[ANNOUNCE] …${how}: the text is never written nor put back on a page (alive ${JSON.stringify(w.alive().map((n) => n.id))}), and the designer is told nothing changed (got ${JSON.stringify(text)})`,
+        gone !== undefined && peekRemoved(gone, "characters") !== "Written after" && !w.alive().some((n) => n.type === "TEXT") && saidOnce(w, t, p, text) && text === HEAD + want);
+    }
+  },
+}, {
+  name: "A keyed re-send's earlier new subtree whose layer goes during a later subtree's style await fails as missing (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const base = { key: "multi", name: "Root" };
+      const first = await w.api.applyWrites([{ op: "createTree", tree: base }]);
+      let gone: FakeNode | undefined;
+      w.hooks.onStyle = async () => { if (gone) return; gone = madeNamed(w, "Early text"); if (gone) out(gone); };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { ...base, children: [
+        { name: "Early group", handle: "early", children: [{ name: "Early text", handle: "earlyText", text: "Early" }] },
+        { name: "Late group", handle: "late", children: [{ name: "Late text", text: "Late", styles: { text: "Body" } }] },
+      ] } }]);
+      w.hooks.onStyle = undefined;
+      ok(`[ANNOUNCE] a keyed re-send, an earlier subtree's layer ${how} during a later one's style await: fails as missing, no handle for it (got ${JSON.stringify(r)})`,
+        first.ok === true && gone !== undefined && r.ok === false && r.applied.length === 0 && r.error === "no node with id '" + String(gone.id) + "' (invalid or removed)");
+      ok(`[ANNOUNCE] …${how}: neither new group stays, the result does (alive ${JSON.stringify(w.alive().map((n) => n.name))})`,
+        !w.alive().some((n) => n.name === "Early group" || n.name === "Late group" || n.name === "Late text") && w.alive().some((n) => n.name === "Root"));
+    }
+  },
+}, {
+  name: "A rule whose page goes while it loads is refused as missing, never walked (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const page = w.pages.screens;
+      const original = page.loadAsync as () => Promise<void>;
+      let hits = 0;
+      page.loadAsync = async () => { await original(); if (!hits++) out(page); };
+      const r = await w.api.applyWrites([{ op: "patchWhere", scope: [String(page.name)], where: { name: "*" }, set: { hidden: true } }]);
+      ok(`[ANNOUNCE] patchWhere, its page ${how} while it loads: refused as missing (got ${JSON.stringify(r)})`,
+        hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): no page with id '" + String(page.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+}, {
+  name: "A rule whose layer on one page goes while a later page loads is refused as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const made = await w.api.applyWrites([{ op: "createFrame", name: "On page one", width: 10, height: 10 }]);
+      const layer = w.scene.nodes[String(made.applied[0]?.id)];
+      if (!layer) throw new Error("no layer");
+      const later = w.pages.screens;
+      const original = later.loadAsync as () => Promise<void>;
+      let hits = 0;
+      later.loadAsync = async () => { await original(); if (!hits++) out(layer); };
+      const r = await w.api.applyWrites([{ op: "patchWhere", scope: "file", where: { name: "On page one" }, set: { hidden: true } }]);
+      ok(`[ANNOUNCE] patchWhere over the file, a layer ${how} while a later page loads: refused as missing (got ${JSON.stringify(r)})`,
+        hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): no layer with id '" + String(layer.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+}, {
+  name: "A rule's variable or component match whose layer goes while the names resolve is refused as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      for (const where of [{ variable: "color/brand" }, { variable: "color/brand", name: "Target" }] as const) {
+        const w = await treeWorld({ kit: true });
+        const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Target", tokens: { fills: "color/brand" } } }]);
+        const target = w.scene.nodes[String(made.applied[0]?.id)];
+        if (!target) throw new Error("no target");
+        const original = w.figma.variables.getLocalVariablesAsync;
+        let hit = false;
+        w.figma.variables.getLocalVariablesAsync = async () => { if (!hit) { hit = true; out(target); } return original(); };
+        const r = await w.api.applyWrites([{ op: "patchWhere", where, set: { hidden: true } }]);
+        w.figma.variables.getLocalVariablesAsync = original;
+        ok(`[ANNOUNCE] patchWhere by ${JSON.stringify(where)}, its match ${how} while the variable resolves: refused as missing (got ${JSON.stringify(r)})`,
+          hit && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): no layer with id '" + String(target.id) + "' (invalid or removed). Nothing was changed.");
+      }
+      const w = await treeWorld({ kit: true });
+      const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Badges", children: [{ component: "Badge", handle: "a" }, { component: "Badge", name: "Second", handle: "b" }] } }]);
+      const a = w.scene.nodes[String(made.applied[0]?.handles?.a)];
+      const b = w.scene.nodes[String(made.applied[0]?.handles?.b)];
+      if (!a || !b) throw new Error("no instances");
+      const main = a.getMainComponentAsync as () => Promise<unknown>;
+      a.getMainComponentAsync = async () => { out(b); return main(); };
+      const r = await w.api.applyWrites([{ op: "patchWhere", where: { instanceOf: "Badge", name: "Second" }, set: { hidden: true } }]);
+      ok(`[ANNOUNCE] patchWhere by instanceOf, an instance ${how} while another's component resolves: refused as missing (got ${JSON.stringify(r)})`,
+        made.ok === true && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): no layer with id '" + String(b.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+}, {
+  name: "A rule's match whose page goes while a match's font loads names it by id, never reading the page (#206)",
+  async run() {
+    const w = await treeWorld();
+    const made = await w.api.applyWrites([{ op: "createText", text: "Match", parentId: String(w.pages.screens.id) }]);
+    const match = w.scene.nodes[String(made.applied[0]?.id)];
+    if (!match) throw new Error("no match");
+    const page = w.pages.screens;
+    const realLoad = w.figma.loadFontAsync;
+    if (!realLoad) throw new Error("the world loads no fonts");
+    let hit = false;
+    w.figma.loadFontAsync = async (f: { family: string; style: string }) => { await realLoad(f); if (!hit) { hit = true; markRemoved(page); } };
+    const r = await w.api.applyWrites([{ op: "patchWhere", scope: [String(page.name)], where: { text: "Match" }, set: { text: "Changed" } }]);
+    w.figma.loadFontAsync = realLoad;
+    ok(`[ANNOUNCE] patchWhere, its match's page removed while the match's font loads: refused, the match named by id (got ${JSON.stringify(r)})`,
+      hit && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): 1 of the 1 layers its rule matches cannot take this patch — narrow the rule (another kind, a name) or the scope: (" + String(match.id) + "): no node with id '" + String(match.id) + "' (invalid or removed). Nothing was changed.");
+  },
+}, {
+  name: "A rule's earlier match that goes during a later match's style await fails as missing, never reported applied (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Host", children: [{ name: "First", text: "Change", handle: "first" }, { name: "Second", text: "Change", handle: "second" }] } }]);
+      const first = w.scene.nodes[String(made.applied[0]?.handles?.first)];
+      const second = w.scene.nodes[String(made.applied[0]?.handles?.second)];
+      if (!first || !second) throw new Error("no matches");
+      let calls = 0;
+      w.hooks.onStyle = async () => { if (++calls === 2) out(first); };
+      const r = await w.api.applyWrites([{ op: "patchWhere", where: { text: "Change" }, set: { styles: { text: "Body" }, text: "Changed" } }]);
+      w.hooks.onStyle = undefined;
+      const want = "'First' (" + String(first.id) + "), one of the 2 layers its rule matches: no node with id '" + String(first.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] patchWhere, its first match ${how} during the second's style await: fails as missing (got ${JSON.stringify(r)})`,
+        calls === 2 && r.ok === false && typeof r.error === "string" && r.error.startsWith(want) && !r.applied.some((a) => a.matched !== undefined));
+      ok(`[ANNOUNCE] …${how}: the second match is put back (text ${JSON.stringify(second.characters)})`, second.characters === "Change");
+    }
+  },
+}, {
+  name: "A tree whose child cannot be put in its frame leaves no new node anywhere (#206)",
+  async run() {
+    const w = await treeWorld();
+    const createFrame = w.figma.createFrame;
+    if (!createFrame) throw new Error("no createFrame");
+    w.figma.createFrame = () => {
+      const n = createFrame();
+      n.appendChild = () => { throw new Error("append refused"); };
+      return n;
+    };
+    const t = w.notified.length;
+    const p = w.posted.length;
+    const r = replyOf(await bridgeWrite(w, "r9-append", [{ op: "createTree", tree: { name: "Tree", children: [{ name: "Child", text: "Child" }] } }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+    w.figma.createFrame = createFrame;
+    const text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] a tree whose first append throws: refused, no node left on the page (alive ${JSON.stringify(w.alive().map((n) => [n.id, n.type]))}, got ${JSON.stringify(r)})`,
+      r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && r.error === "append refused" && w.alive().length === 0);
+    ok(`[ANNOUNCE] …and the designer is told nothing changed (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text === HEAD + "append refused");
+  },
+}, {
+  name: "A build that fails takes back a layer it made that the designer moved out meanwhile; so does a later op's failure (#206)",
+  async run() {
+    for (const kind of ["tree", "component", "subtree", "tree, then a later op", "component, then a later op", "subtree, then a later op"] as const) {
+      const w = await treeWorld({ kit: true });
+      const later = kind.endsWith("later op");
+      let first: { ok: boolean; applied: Array<{ id?: string }> } | null = null;
+      if (kind.startsWith("subtree")) first = await w.api.applyWrites([{ op: "createTree", tree: { key: "k", name: "Root" } }]);
+      let moved: FakeNode | undefined;
+      w.hooks.onStyle = async () => {
+        moved = madeNamed(w, "Styled");
+        if (moved) (w.figma.currentPage.appendChild as (n: FakeNode) => void)(moved);
+        if (!later) throw new Error("style refused");
+      };
+      const child = { name: "Styled", text: "Hello", styles: { text: "Body" } };
+      const op: WriteOp = kind.startsWith("tree") ? { op: "createTree", tree: { name: "Tree", children: [child] } }
+        : kind.startsWith("component") ? { op: "createTree", tree: { type: "COMPONENT", name: "Comp", children: [child] } }
+        : { op: "createTree", tree: { key: "k", name: "Root", children: [{ name: "Group", children: [child] }] } };
+      const ops: WriteOp[] = later ? [op, { op: "setFill", nodeId: "gone:1", color: "#fff" }] : [op];
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r9-moved-" + kind, ops)) as { ok?: unknown; error?: unknown; applied?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      ok(`[ANNOUNCE] a ${kind} failing after its styled text was moved out of it: nothing applied, the text is not left on the page (alive ${JSON.stringify(w.alive().map((n) => n.name))}, got ${JSON.stringify(r)})`,
+        (!kind.startsWith("subtree") || first?.ok === true) && moved !== undefined && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && !w.alive().some((n) => n.name === "Styled"));
+      if (kind === "tree") ok(`[ANNOUNCE] …the designer is told nothing changed (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text === HEAD + "style refused");
+    }
+  },
+}, {
+  name: "A keyed tree the batch made and the designer deleted before a later op failed puts the key's earlier result back in the index (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const indexKey = "dtwin.key:index";
+    const root = w.figma.root as FakeNode & { setPluginData(k: string, v: string): void; getPluginData(k: string): string };
+    root.setPluginData(indexKey, "prior-id");
+    let deleted: FakeNode | undefined;
+    w.hooks.onStyle = async () => { deleted = madeNamed(w, "Earlier"); if (deleted) markRemoved(deleted); throw new Error("style rejected"); };
+    const r = await w.api.applyWrites([
+      { op: "createTree", tree: { key: "index", name: "Earlier" } },
+      { op: "createTree", tree: { name: "Later", children: [{ text: "Later", styles: { text: "Body" } }] } },
+    ]);
+    w.hooks.onStyle = undefined;
+    ok(`[ANNOUNCE] a keyed tree deleted by the designer before a later op failed: put back, the index names the earlier result again (got ${JSON.stringify(r)}, index ${JSON.stringify(root.getPluginData(indexKey))})`,
+      deleted !== undefined && r.ok === false && r.failedAt === 1 && r.applied.length === 0 && (r.restored || []).length === 1 && root.getPluginData(indexKey) === "prior-id");
+  },
+}, {
+  name: "A keyed re-send whose named page goes while its result's page loads is refused as missing, never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const tree = { key: "same", name: "Root" };
+      const first = await w.api.applyWrites([{ op: "createTree", tree }]);
+      const page = w.pages.screens;
+      const current = w.pages.current;
+      const original = current.loadAsync as () => Promise<void>;
+      let hits = 0;
+      current.loadAsync = async () => { await original(); if (!hits++) out(page); };
+      const r = await w.api.applyWrites([{ op: "createTree", page: String(page.id), tree: { ...tree, name: "Changed" } }]);
+      current.loadAsync = original;
+      ok(`[ANNOUNCE] a keyed re-send, its named page ${how} while the result's page loads: refused as missing (got ${JSON.stringify(r)})`,
+        first.ok === true && hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (createTree): no page with id '" + String(page.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+}, {
+  name: "A component found on one page and gone while a later page loads is no component: never read (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      // Placed by name: the name then matches nothing.
+      const w = await treeWorld();
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { type: "COMPONENT", name: "Local source" } }]);
+      const source = w.scene.nodes[String(first.applied[0]?.id)];
+      if (!source) throw new Error("no component");
+      const later = w.pages.screens;
+      const original = later.loadAsync as () => Promise<void>;
+      let hits = 0;
+      later.loadAsync = async () => { await original(); if (!hits++) out(source); };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: { name: "Use source", children: [{ component: "Local source" }] } }]);
+      later.loadAsync = original;
+      ok(`[ANNOUNCE] an instance of a component ${how} while a later page loads: refused, the name matches nothing (got ${JSON.stringify(r)})`,
+        hits > 0 && r.ok === false && r.applied.length === 0 && typeof r.error === "string" && r.error.startsWith("ops[0] (createTree): tree.children[0].component: component 'Local source' matches no component in this file"));
+      // Re-sent by its name: there is no earlier result, so it builds afresh.
+      const w2 = await treeWorld();
+      const made = await w2.api.applyWrites([{ op: "createTree", tree: { type: "COMPONENT", name: "Card" } }]);
+      const card = w2.scene.nodes[String(made.applied[0]?.id)];
+      if (!card) throw new Error("no component");
+      const later2 = w2.pages.screens;
+      const original2 = later2.loadAsync as () => Promise<void>;
+      let hits2 = 0;
+      later2.loadAsync = async () => { await original2(); if (!hits2++) out(card); };
+      const r2 = await w2.api.applyWrites([{ op: "createTree", tree: { type: "COMPONENT", name: "Card", children: [{ name: "Inside" }] } }]);
+      later2.loadAsync = original2;
+      ok(`[ANNOUNCE] a component re-sent by name, the earlier one ${how} while a later page loads: built afresh, never read (got ${JSON.stringify(r2)})`,
+        hits2 > 0 && r2.ok === true && r2.applied[0]?.id !== card.id && r2.applied[0]?.created !== undefined);
+    }
+  },
+}, {
+  name: "A keyed variant removal whose variant is detached during the orphan count is not removed by the re-send, nor counted (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const spec = (names: string[]) => ({ type: "COMPONENT_SET", name: "Button", children: names.map((name) => ({ type: "COMPONENT", name: "Size=" + name })) });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M", "L"]) }]);
+      const root = w.scene.nodes[String(first.applied[0]?.id)];
+      const doomed = (root?.children ?? []).find((n) => n.name === "Size=L");
+      if (!root || !doomed) throw new Error("no set to re-send");
+      let removedByPlugin = false;
+      const remove = doomed.remove as () => void;
+      doomed.remove = () => { removedByPlugin = true; remove(); };
+      // A layer of the designer's own, dropped into the variant as it goes: it goes with it, and refuses nothing.
+      const own = await w.api.applyWrites([{ op: "createFrame", name: "Own", width: 10, height: 10 }]);
+      const foreign = w.scene.nodes[String(own.applied[0]?.id)];
+      if (!foreign) throw new Error("no layer of the designer's");
+      const realInstances = doomed.getInstancesAsync as () => Promise<unknown[]>;
+      let hits = 0;
+      doomed.getInstancesAsync = async () => {
+        const counting = new Error().stack?.includes("orphanWarnings") === true;
+        const found = await realInstances();
+        if (counting && !hits++) { if (how === "detached") (doomed.appendChild as (n: FakeNode) => void)(foreign); out(doomed); }
+        return found;
+      };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M"]) }]);
+      ok(`[ANNOUNCE] a keyed variant removal, the variant ${how} during its orphan count: the re-send lands, removes and counts nothing (got ${JSON.stringify(r)})`,
+        hits === 1 && r.ok === true && !removedByPlugin && r.applied[0]?.removed === undefined && !r.applied.some((a) => a.deleted === true));
+    }
+  },
+});

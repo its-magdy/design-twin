@@ -21,7 +21,7 @@ import { patchUses, resolveRefs, type RefResolution, type Use } from "./tree-ref
 import { boundVariableIds } from "./sources";
 import { errMsg } from "./util";
 import type { OpProblem } from "./write-batch";
-import { inDocument, nodeById } from "./node-lookup";
+import { goneAmong, goneFrom, inDocument, nodeById } from "./node-lookup";
 
 /** A patchWhere op whose rule matched and whose every match resolved as a patch. */
 export interface RuleTarget {
@@ -62,8 +62,15 @@ async function loadPage(p: PageNode): Promise<void> {
   if (typeof p.loadAsync === "function") await p.loadAsync(); // dynamic-page: before its layers are walked
 }
 
-/** The layers the scope holds, in document order, each once: what a rule is tested against. Problems go to `bad`. */
+/** The layers the scope holds, in document order, each once: what a rule is tested against. Problems go to `bad`. Each
+ *  page load (and each selected layer's lookup) is an await the designer can delete a page or a layer at (node-lookup.ts):
+ *  a page is checked once it loads, before its layers are read, and every layer once the last await is done. Gone, it
+ *  is missing: no layers come back. */
 async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: readonly string[]): Promise<{ hits: Hit[]; selection?: string[] }> {
+  const scoped = await scopeLayers(rule, bad, selected);
+  return goneAmong(scoped.hits.map((h) => h.node), bad, "layer") ? { hits: [] } : scoped;
+}
+async function scopeLayers(rule: CheckedRule, bad: (m: string) => void, selected?: readonly string[]): Promise<{ hits: Hit[]; selection?: string[] }> {
   const out: Hit[] = [];
   const seen = new Set<string>();
   const walk = (n: SceneNode, page: PageNode): void => {
@@ -86,6 +93,8 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: 
       }
     }
     if (!sel.length) { bad("scope \"selection\": " + (selected ? "the selected layers it looked in are gone" : "nothing is selected in Figma — select the layers to look in, or use \"page\" or \"file\"")); return { hits: out }; }
+    // Each looked up at an await: one found, then deleted at a later one's lookup, is missing, never read.
+    if (goneAmong(sel, bad, "layer")) return { hits: out };
     for (const n of sel) if (!inSource(n)) walk(n, pageOf(n) || figma.currentPage);
     return { hits: out, selection: sel.map((n) => n.id) };
   }
@@ -104,6 +113,7 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: 
   }
   for (const p of pages) {
     try { await loadPage(p); } catch (e) { bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")"); continue; }
+    if (goneFrom(p, bad, "page")) continue;
     for (const k of p.children) walk(k, p);
   }
   return { hits: out };
@@ -118,7 +128,8 @@ async function ownersOf(n: InstanceNode): Promise<Array<ComponentNode | Componen
 }
 
 /** The layers of `layers` op `rule` matches, in document order. A `variable` or `instanceOf` name that matches nothing
- *  or several things goes to `bad` (and nothing matches). */
+ *  or several things goes to `bad` (and nothing matches). Resolving either name awaits: every layer is checked after
+ *  those awaits, before the name is matched and any layer read again (node-lookup.ts); one gone is missing. */
 async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: string) => void): Promise<Hit[]> {
   const w = rule.where;
   let variableId: string | null = null;
@@ -134,6 +145,7 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
       try { v = await figma.variables.getVariableByIdAsync(id); } catch { v = null; }
       if (v) pool.set(id, v);
     }
+    if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
     const m = matchByName(w.variable, [...pool.values()], (v) => v.name, (v) => [v.id, v.key]);
     if (m.kind === "one") variableId = m.item.id;
     else if (m.kind === "many") { bad("where.variable: '" + w.variable + "' matches " + m.matches.length + " variables — pass one's id or key: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", ")); return []; }
@@ -151,6 +163,7 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
       owners.set(h.node.id, os);
       for (const o of os) pool.set(o.id, o);
     }
+    if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
     const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
     if (m.kind === "one") ownerId = m.item.id;
     else if (m.kind === "many") { bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of — pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", ")); return []; }
@@ -250,8 +263,9 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
       const t = await resolvePatchNode(h.node, set, later, loadFont, (m) => { said.push(m); }, fontsLater);
       if (t && !said.length) { resolved.push(t); continue; }
       misfits++;
-      // A match deleted since it was found (at an earlier match's awaits) is named by its id alone: its name throws.
-      if (named.length < RULE_SAMPLES) named.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+      // A match deleted since it was found (at an earlier match's awaits) is named by its id alone: its name throws; so
+      // does its page's, when that went.
+      if (named.length < RULE_SAMPLES) named.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage && inDocument(h.page) ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
     }
     if (misfits) { bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch — narrow the rule (another kind, a name) or the scope: " + named.join(" | ") + (misfits > named.length ? " | …" : "")); continue; }
     // The names its `set` uses resolve in the dry run too (nothing is imported until a real run applies).

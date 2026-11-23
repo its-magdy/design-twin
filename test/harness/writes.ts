@@ -64,6 +64,7 @@ function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, cli
   const created: FakeNode[] = [];
   const made = (n: FakeNode): FakeNode => {
     n.remove = () => { const i = created.indexOf(n); if (i >= 0) created.splice(i, 1); markRemoved(n); };
+    n.parent = w.figma.currentPage; // Figma makes a new node on the current page
     created.push(n);
     return n;
   };
@@ -162,6 +163,9 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
     for (const k of existing) appendTo(pg)(k);
     return pg;
   };
+  // The page Figma creates nodes on: figma.currentPage once the world exists (a test may switch it), "Page 1" before.
+  let live: { figma: { currentPage: FakeNode } } | null = null;
+  const currentPage = (): FakeNode => (live ? live.figma.currentPage : current);
   const current = page("0:1", "Page 1", [
     { id: "1:1", type: "FRAME", name: "Existing A", x: 0, y: 40, width: 390, height: 844 },
     { id: "1:2", type: "FRAME", name: "Existing B", x: 500, y: -20, width: 390, height: 844 },
@@ -348,7 +352,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
     raw.set(n, fields);
     made.push(n);
     register(n);
-    appendTo(current)(n); // Figma puts a new node on the current page
+    appendTo(currentPage())(n); // Figma puts a new node on the current page (figma.currentPage, wherever it is now)
     return n;
   };
   // ---- the design system (opts.kit)
@@ -365,7 +369,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       if (!list.length) throw new Error("in Figma: combineAsVariants needs at least one component");
       for (const c of list) if (c.type !== "COMPONENT" || parentOf(c)?.type === "COMPONENT_SET") throw new Error("in Figma: only components outside a set can be combined");
       const set = node("COMPONENT_SET");
-      if (parent !== current && typeof parent.appendChild === "function") (parent.appendChild as (c: FakeNode) => void)(set);
+      if (parent !== currentPage() && typeof parent.appendChild === "function") (parent.appendChild as (c: FakeNode) => void)(set);
       for (const c of list) appendTo(set)(c);
       return set;
     },
@@ -385,6 +389,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       },
     } : {}),
   });
+  live = w;
   reg.nodes = w.scene.nodes;
   reg.styles = w.scene.styles;
   for (const pg of pages) { register(pg); for (const k of kids(pg)) register(k); }

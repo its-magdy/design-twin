@@ -59,7 +59,9 @@ export interface Change {
   group?: object;
   /** The node the change is on. Removed from the file since (the designer deleted it at one of the batch's awaits), the
    *  change went with it: restoreChanges does not run the restore (a removed node's fields throw when read) and says
-   *  so, or, for a node the batch made (`made`), counts it as put back: it is gone, as it was before the batch. */
+   *  so. A node the batch made (`made`) is gone as it was before the batch, but its restore still runs: it takes back
+   *  what else the build made (a layer moved out of it) and what it set outside its nodes (a key's index entry), and
+   *  never reads a node already gone (node-lookup.ts takeBack). */
   on?: BaseNode;
   made?: true;
 }
@@ -94,9 +96,8 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
       failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
       break;
     }
-    if (c.on && c.on.removed) {
-      if (c.made) restored.push(c);
-      else failed.push("could not undo " + c.what + " (it was deleted from the file after the batch changed it)");
+    if (c.on && c.on.removed && !c.made) {
+      failed.push("could not undo " + c.what + " (it was deleted from the file after the batch changed it)");
       continue;
     }
     try { await c.restore(allowed); restored.push(c); } catch (e) {

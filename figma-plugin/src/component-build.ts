@@ -50,7 +50,8 @@ export async function localComponentsNamed(name: string): Promise<Owner[]> {
       }
     } catch { /* a page that will not load holds no component a name could match */ }
   }
-  return out;
+  // One found on a page and deleted at a later page's load is no component of the file (node-lookup.ts): never read.
+  return out.filter(inDocument);
 }
 
 /** What the file has under a component spec's name: nothing (build it), the one a write made (update it), or why the

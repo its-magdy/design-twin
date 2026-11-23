@@ -7075,6 +7075,17 @@
     bad(prefix + noNode(n.id, what));
     return true;
   }
+  function goneAmong(nodes, bad, what = "node", prefix = "") {
+    for (const n of nodes) if (goneFrom(n, bad, what, prefix)) return true;
+    return false;
+  }
+  function takeBack(nodes) {
+    for (const n of nodes) if (!goneWithRemoved(n)) n.remove();
+  }
+  function goneWithRemoved(n) {
+    for (let a = n; a; a = a.parent) if (a.removed) return true;
+    return false;
+  }
   function holding(n, consent2, what = "node", prefix = "") {
     return () => {
       stillInDocument(n, what, prefix);
@@ -7459,7 +7470,7 @@
           byId = null;
         }
         if (byId && (byId.type === "COMPONENT" || byId.type === "COMPONENT_SET")) return { ok: byId };
-        const all = await allComponents();
+        const all = (await allComponents()).filter(inDocument);
         const exact = all.filter((c) => c.key === ref2 || c.id === ref2);
         const first2 = exact[0];
         if (first2 && exact.length === 1) return { ok: first2 };
@@ -7665,9 +7676,8 @@
         failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
         break;
       }
-      if (c.on && c.on.removed) {
-        if (c.made) restored.push(c);
-        else failed.push("could not undo " + c.what + " (it was deleted from the file after the batch changed it)");
+      if (c.on && c.on.removed && !c.made) {
+        failed.push("could not undo " + c.what + " (it was deleted from the file after the batch changed it)");
         continue;
       }
       try {
@@ -8635,7 +8645,7 @@
       } catch {
       }
     }
-    return out;
+    return out.filter(inDocument);
   }
   async function existingComponent(type, name) {
     const found = await localComponentsNamed(name);
@@ -9392,7 +9402,7 @@
     try {
       root = rootCopy ? copyOf(rootCopy, t.spec, made2) : figma.createFrame();
     } catch (e) {
-      discard([], made2.strays, "created tree", changes);
+      discard([], made2, START, "created tree", changes);
       throw e;
     }
     const key = t.spec.key;
@@ -9414,7 +9424,7 @@
       }
       markCreated(root);
     } catch (e) {
-      discard([[root, "the unfinished tree"]], made2.strays, "created tree", changes);
+      discard([[root, "the unfinished tree"]], made2, START, "created tree", changes);
       throw e;
     }
     const applied = { id: root.id, created: createdCount(made2) };
@@ -9427,8 +9437,10 @@
       what: "the tree '" + root.name + "' (" + root.id + ")",
       on: root,
       made: true,
+      // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
+      // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
       restore() {
-        root.remove();
+        takeBack([root, ...madeNodes(made2)]);
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
       }
     };
@@ -9483,26 +9495,31 @@
       if (t.summary.unbound) applied.unbound = t.summary.unbound;
       const built = root;
       return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", on: built, made: true, restore() {
-        built.remove();
+        takeBack([built, ...madeNodes(made2)]);
       } };
     } catch (e) {
-      discard(parts.slice().reverse().map((p) => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made2.strays, "created component", changes);
+      discard(parts.slice().reverse().map((p) => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made2, START, "created component", changes);
       throw e;
     }
   }
-  function discard(nodes, strays, kind, changes) {
+  function discard(nodes, made2, from, kind, changes) {
     const stayed = [];
-    for (const [n, what] of nodes.concat(strays.map((c) => [c, "the unfinished copy"]))) {
+    const rest = made2.strays.slice(from.strays).map((c) => [c, "the unfinished copy"]).concat(madeNodes(made2, from).map((c) => [c, "the unfinished layer"]));
+    for (const [n, what] of nodes.concat(rest)) {
+      if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
       try {
-        if (!n.removed) n.remove();
+        takeBack([n]);
       } catch {
       }
-      if (!inDocument(n) || stayed.some((s) => below(n, s))) continue;
+      if (!inDocument(n)) continue;
       stayed.push(n);
       changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
-        n.remove();
+        takeBack([n]);
       } });
     }
+  }
+  function madeNodes(made2, from = START) {
+    return made2.pairs.slice(from.pairs).map(([n]) => n);
   }
   function below(n, of) {
     for (let p = n; p; p = p.parent) if (p === of) return true;
@@ -9517,8 +9534,11 @@
   function newMade(refs2, clones) {
     return { frames: 0, texts: 0, instances: 0, clones: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, copies: clones, styled: [], patches: [], pairs: [], strays: [] };
   }
-  var START = { styled: 0, patches: 0, pairs: 0 };
-  var madeFrom = (made2) => ({ styled: made2.styled.length, patches: made2.patches.length, pairs: made2.pairs.length });
+  var START = { styled: 0, patches: 0, pairs: 0, strays: 0 };
+  var madeFrom = (made2) => ({ styled: made2.styled.length, patches: made2.patches.length, pairs: made2.pairs.length, strays: made2.strays.length });
+  function checkMade(made2, from = START) {
+    for (const n of madeNodes(made2, from)) stillInDocument(n);
+  }
   async function finish(made2, from, consent2) {
     for (const [text, style] of made2.styled.slice(from.styled)) {
       stillInDocument(text);
@@ -9529,7 +9549,7 @@
       await patchCopy(p.target, p.node, consent2);
       consent2();
     }
-    for (const [n] of made2.pairs.slice(from.pairs)) stillInDocument(n);
+    checkMade(made2, from);
   }
   function stampAll(made2, key, from = 0) {
     for (const [n, s] of made2.pairs.slice(from)) {
@@ -9565,8 +9585,6 @@
     stillInDocument(parent);
     const kind = nodeKind(spec);
     const from = madeFrom(made2);
-    const first2 = from.pairs;
-    const strays = made2.strays.length;
     let node = null;
     try {
       if (kind === "TEXT") {
@@ -9586,9 +9604,9 @@
       }
       await finish(made2, from, holding(parent, consent2));
     } catch (e) {
-      const made0 = made2.pairs[first2];
+      const made0 = made2.pairs[from.pairs];
       const n = node || (made0 ? made0[0] : null);
-      discard(n ? [[n, "the unfinished node"]] : [], made2.strays.slice(strays), "created node", changes);
+      discard(n ? [[n, "the unfinished node"]] : [], made2, from, "created node", changes);
       throw e;
     }
     if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
@@ -10704,6 +10722,7 @@
         if ("ours" in found && await loadPageOf(found.ours) && inDocument(found.ours)) root = found.ours;
       } else root = await findResult(key);
       if (!root) continue;
+      if (op.page !== void 0 && goneFrom(t.page, bad, "page")) continue;
       if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
         bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
         continue;
@@ -10764,7 +10783,7 @@
     return { problems };
   }
   function checkRemoval(u, n) {
-    if (n.removed) return;
+    if (!inDocument(n)) return;
     const f = foreignIn(n, u.key);
     if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
   }
@@ -10830,7 +10849,7 @@
       if (x.getPluginData(KEY_DATA) === u.key) n++;
       if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
     };
-    for (const x of removalsOf(u)) count2(x);
+    for (const x of removalsOf(u)) if (inDocument(x)) count2(x);
     return n;
   }
   function removalsOf(u) {
@@ -10985,16 +11004,17 @@
     const built = [];
     for (const b of plan.builds) {
       consent2();
-      const from = made2.pairs.length;
+      const from = madeFrom(made2);
       const n = await buildSubtree(b.spec, b.parent, made2, consent2, changes);
+      const mine = madeNodes(made2, from);
       changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), on: n, made: true, restore() {
-        n.remove();
+        takeBack([n, ...mine]);
       } });
-      stampAll(made2, key, from);
+      stampAll(made2, key, from.pairs);
       built.push(n);
     }
     for (const k of plan.kept) stillInDocument(k.ref);
-    for (const n of built) stillInDocument(n);
+    checkMade(made2);
     const replaced = plan.builds.map((b) => b.replaces);
     for (const o of plan.orders) {
       consent2();
@@ -11800,6 +11820,10 @@
     if (typeof p.loadAsync === "function") await p.loadAsync();
   }
   async function layersIn(rule, bad, selected) {
+    const scoped = await scopeLayers(rule, bad, selected);
+    return goneAmong(scoped.hits.map((h) => h.node), bad, "layer") ? { hits: [] } : scoped;
+  }
+  async function scopeLayers(rule, bad, selected) {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     const walk = (n, page) => {
@@ -11828,6 +11852,7 @@
         bad('scope "selection": ' + (selected ? "the selected layers it looked in are gone" : 'nothing is selected in Figma \u2014 select the layers to look in, or use "page" or "file"'));
         return { hits: out };
       }
+      if (goneAmong(sel, bad, "layer")) return { hits: out };
       for (const n of sel) if (!inSource(n)) walk(n, pageOf3(n) || figma.currentPage);
       return { hits: out, selection: sel.map((n) => n.id) };
     }
@@ -11852,6 +11877,7 @@
         bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
         continue;
       }
+      if (goneFrom(p, bad, "page")) continue;
       for (const k of p.children) walk(k, p);
     }
     return { hits: out };
@@ -11884,6 +11910,7 @@
         }
         if (v) pool.set(id, v);
       }
+      if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
       const m = matchByName(w.variable, [...pool.values()], (v) => v.name, (v) => [v.id, v.key]);
       if (m.kind === "one") variableId = m.item.id;
       else if (m.kind === "many") {
@@ -11904,6 +11931,7 @@
         owners.set(h.node.id, os);
         for (const o of os) pool.set(o.id, o);
       }
+      if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
       const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
       if (m.kind === "one") ownerId = m.item.id;
       else if (m.kind === "many") {
@@ -12027,7 +12055,7 @@
           continue;
         }
         misfits++;
-        if (named2.length < RULE_SAMPLES) named2.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+        if (named2.length < RULE_SAMPLES) named2.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage && inDocument(h.page) ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
       }
       if (misfits) {
         bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch \u2014 narrow the rule (another kind, a name) or the scope: " + named2.join(" | ") + (misfits > named2.length ? " | \u2026" : ""));
@@ -13118,7 +13146,7 @@
   function createdNode(n) {
     markCreated(n);
     return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
-      n.remove();
+      takeBack([n]);
     } };
   }
   async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style, rule }, changes) {
@@ -13155,20 +13183,24 @@
           await figma.loadFontAsync(t.fontName);
         } catch (e) {
           if (editsAllowedNow()) {
-            t.remove();
+            takeBack([t]);
             changes.pop();
           }
           throw e;
         }
         if (!editsAllowedNow()) {
-          t.remove();
+          takeBack([t]);
           changes.pop();
           consent();
         }
         if (!inDocument(parent)) {
-          t.remove();
+          takeBack([t]);
           changes.pop();
           throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page"));
+        }
+        if (!inDocument(t)) {
+          changes.pop();
+          throw new Error(noNode(t.id));
         }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
@@ -13266,13 +13298,21 @@
       case "patchWhere": {
         if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
         const group = {};
+        const named2 = (t, e) => new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
         for (const t of rule.matches) {
           consent();
           try {
             (await applyPatch(t, consent, editsAllowedNow, changes)).group = group;
           } catch (e) {
             if (e instanceof EditsRevoked) throw e;
-            throw new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+            throw named2(t, e);
+          }
+        }
+        for (const t of rule.matches) {
+          try {
+            stillInDocument(t.node);
+          } catch (e) {
+            throw named2(t, e);
           }
         }
         const first2 = rule.matches[0];
@@ -13668,7 +13708,7 @@
       for (const m of orphans.get(i) || []) warnings.push("ops[" + i + "]: " + m);
       try {
         for (const n of removalsOf(t.update)) {
-          if (n.removed) continue;
+          if (!inDocument(n)) continue;
           consent();
           const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
           const id = n.id;

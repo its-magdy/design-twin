@@ -26,7 +26,7 @@ import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeL
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
-import { inDocument, nodeById, noNode, stillInDocument } from "./node-lookup";
+import { inDocument, nodeById, noNode, stillInDocument, takeBack } from "./node-lookup";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -99,7 +99,7 @@ interface Resolved {
 /** A node an op just created, as a Change whose undo removes it. */
 function createdNode(n: SceneNode): Change {
   markCreated(n);
-  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { n.remove(); } };
+  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { takeBack([n]); } };
 }
 
 // Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
@@ -137,14 +137,17 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       changes.push(change);
       try { await figma.loadFontAsync(t.fontName as FontName); } catch (e) {
         // The font did not load: take back the empty node (unless edits are off by now: then it stays, and is reported).
-        if (editsAllowedNow()) { t.remove(); changes.pop(); }
+        if (editsAllowedNow()) { takeBack([t]); changes.pop(); }
         throw e;
       }
       // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
-      if (!editsAllowedNow()) { t.remove(); changes.pop(); consent(); }
+      if (!editsAllowedNow()) { takeBack([t]); changes.pop(); consent(); }
       // The parent deleted during it (node-lookup.ts): likewise, and the op fails as its lookup would have. The current
       // page too, when no parent was named: the text was made on it, and it is not one the designer can see any more.
-      if (!inDocument(parent)) { t.remove(); changes.pop(); throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page")); }
+      if (!inDocument(parent)) { takeBack([t]); changes.pop(); throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page")); }
+      // The text itself deleted or detached during it: it is in no page, so nothing of the op is in the file; it fails as
+      // missing, and is never written to nor put back on a page.
+      if (!inDocument(t)) { changes.pop(); throw new Error(noNode(t.id)); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
@@ -246,14 +249,18 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     case "patchWhere": {
       if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
       const group = {};
+      // Named as the batch resolved it: a node removed since has no name Figma will read.
+      const named = (t: PatchTarget, e: unknown): Error => new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
       for (const t of rule.matches) {
         consent();
         try { (await applyPatch(t, consent, editsAllowedNow, changes)).group = group; } catch (e) {
           if (e instanceof EditsRevoked) throw e;
-          // Named as the batch resolved it: a node removed since has no name Figma will read.
-          throw new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+          throw named(t, e);
         }
       }
+      // Each match's patch awaits (its fonts, a text style): one deleted or detached at a later match's awaits fails the op
+      // as missing (node-lookup.ts), never counted as applied.
+      for (const t of rule.matches) { try { stillInDocument(t.node); } catch (e) { throw named(t, e); } }
       const first = rule.matches[0];
       return { matched: rule.matches.length, pages: rule.match.pages.length, ...(first && first.unbound ? { unbound: first.unbound } : {}) };
     }
@@ -734,7 +741,9 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     for (const m of orphans.get(i) || []) warnings.push("ops[" + i + "]: " + m);
     try {
       for (const n of removalsOf(t.update)) {
-        if (n.removed) continue;
+        // Out of the document already (the designer deleted or detached it, at the orphan count's awaits or before): it is
+        // not this re-send's to remove, nor to claim (node-lookup.ts); never read.
+        if (!inDocument(n)) continue;
         consent();
         const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
         const id = n.id;

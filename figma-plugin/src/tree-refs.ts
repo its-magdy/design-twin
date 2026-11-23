@@ -33,7 +33,7 @@ import type { OpProblem } from "./write-batch";
 import { plannedComponent, plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
 import { componentRootOf, propDefComponents, propDefsOf } from "../../bridge/src/component-spec.ts";
 import { valueProps } from "../../bridge/src/tree-diff.ts";
-import { nodeById } from "./node-lookup";
+import { inDocument, nodeById } from "./node-lookup";
 
 /** What a node of a spec resolved to, for the build. */
 export interface ResolvedRefs {
@@ -461,7 +461,9 @@ function fileLookups() {
       let byId: BaseNode | null = null;
       try { byId = /^[I\d][\d:;I-]*$/.test(ref) ? await nodeById(ref) : null; } catch { byId = null; }
       if (byId && (byId.type === "COMPONENT" || byId.type === "COMPONENT_SET")) return { ok: byId };
-      const all = await allComponents();
+      // Walked page by page, each page load an await (and kept for the batch's later lookups): a component found on one
+      // page and deleted since is no component of the file (node-lookup.ts), and never read.
+      const all = (await allComponents()).filter(inDocument);
       const exact = all.filter((c) => c.key === ref || c.id === ref);
       const first = exact[0];
       if (first && exact.length === 1) return { ok: first };

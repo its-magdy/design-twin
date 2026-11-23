@@ -35,11 +35,11 @@ import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type Plan } from
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { KEY_DATA, readIndex, readOld, SPEC_DATA, stampNode } from "./keyed-store";
 import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
-import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "./tree";
+import { buildSubtree, checkMade, createdCount, madeFrom, madeNodes, newMade, stampAll, type TreeTarget } from "./tree";
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
-import { goneFrom, inDocument, nodeById, stillInDocument } from "./node-lookup";
+import { goneFrom, inDocument, nodeById, stillInDocument, takeBack } from "./node-lookup";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -146,6 +146,8 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       if ("ours" in found && (await loadPageOf(found.ours)) && inDocument(found.ours)) root = found.ours;
     } else root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
+    // The page the op names, held across the result's page load (node-lookup.ts): gone, it is missing, never read.
+    if (op.page !== undefined && goneFrom(t.page, bad, "page")) continue;
     if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
       bad(what + ": its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is — leave `page` out");
       continue;
@@ -205,7 +207,7 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
 /** Throws when a node an update is about to remove now holds a layer its key did not build (one an op of the same batch,
  *  or the designer, put there since the batch was checked): it is run on every removal before the first one. */
 export function checkRemoval(u: KeyedUpdate, n: SceneNode): void {
-  if (n.removed) return;
+  if (!inDocument(n)) return; // gone already: nothing of it is removed (writes.ts), and it is never read
   const f = foreignIn(n, u.key);
   if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
 }
@@ -286,7 +288,8 @@ export function removalCount(u: KeyedUpdate): number {
     if (x.getPluginData(KEY_DATA) === u.key) n++;
     if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count(c);
   };
-  for (const x of removalsOf(u)) count(x);
+  // One out of the document already is not removed by the update (writes.ts), so it is not counted.
+  for (const x of removalsOf(u)) if (inDocument(x)) count(x);
   return n;
 }
 
@@ -461,20 +464,23 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const built: SceneNode[] = [];
   for (const b of plan.builds) {
     consent();
-    const from = made.pairs.length;
+    const from = madeFrom(made);
     const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent, changes);
-    // On the list before it is stamped: a stamp that throws removes it with the batch.
-    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), on: n, made: true, restore() { n.remove(); } });
-    stampAll(made, key, from);
+    // On the list before it is stamped: a stamp that throws removes it with the batch. Every node it made goes back, not
+    // only its top one: a layer the designer moved out of it since is the batch's too (tree.ts discard).
+    const mine = madeNodes(made, from);
+    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), on: n, made: true, restore() { takeBack([n, ...mine]); } });
+    stampAll(made, key, from.pairs);
     built.push(n);
   }
   // The builds were the op's last awaits (a reorder awaits only to put itself back): every node it holds is checked once
   // here, before the reorders, the stamps, the component's wiring and the reply: each node of the result it keeps (the
-  // result itself, the nodes it changed, reorders or restamps among them) and each node it just built. One deleted or
+  // result itself, the nodes it changed, reorders or restamps among them) and every node it just built, each subtree's
+  // layers included (a later subtree's style await comes after an earlier one's). One deleted or
   // detached at an earlier op's await or at one of its own fails the op as missing: never silently left out of a
   // reorder, nor reported as changed or built.
   for (const k of plan.kept) stillInDocument(k.ref);
-  for (const n of built) stillInDocument(n);
+  checkMade(made);
   const replaced = plan.builds.map((b) => b.replaces);
   for (const o of plan.orders) { consent(); await applyOrder(o, built, replaced, allowed, changes); }
   if (plan.stamps.length) {
