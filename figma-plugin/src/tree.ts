@@ -44,7 +44,7 @@ import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
 import type { BoundSpec } from "./bind";
 import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
-import { inDocument, noNode } from "./node-lookup";
+import { holding, inDocument, noNode, stillInDocument } from "./node-lookup";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
@@ -196,7 +196,8 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     shown = rootCopy ? root.visible : t.spec.hidden !== true;
     root.visible = false; // built to the side: nothing shows until the whole tree is in place
     if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made);
-    await finish(made, 0, 0, consent);
+    // Its page checked after each await (node-lookup.ts holding): deleted meanwhile, the tree lands nowhere.
+    await finish(made, 0, 0, holding(t.page, consent, "page"));
     const { x, y } = placement(t.page, root.id, t.spec);
     t.page.appendChild(root);
     root.x = x;
@@ -268,7 +269,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
       }
       arrangeVariants(set, t.spec, null);
     }
-    await finish(made, 0, 0, consent);
+    await finish(made, 0, 0, holding(t.page, consent, "page"));
     const keys = addDefs(root, fileDefs(t.spec, t.refs));
     wireAll(made.pairs, keys);
     const { x, y } = placement(t.page, root.id, t.spec);
@@ -356,6 +357,9 @@ function applyClone(s: TreeNodeSpec, parent: Parent, made: Made): SceneNode {
  * is checked after each). Throws, leaving nothing behind, when Figma refuses a value.
  */
 export async function buildSubtree(spec: TreeNodeSpec, parent: Parent, made: Made, consent: () => void): Promise<SceneNode> {
+  // The frame it goes into was resolved before the batch ran: deleted or detached since (at an earlier op's await, or an
+  // earlier subtree's), nothing is built into it; deleted during this one's own awaits, what was built is removed.
+  stillInDocument(parent);
   const kind = nodeKind(spec);
   const first = made.pairs.length;
   const styledFrom = made.styled.length;
@@ -368,7 +372,7 @@ export async function buildSubtree(spec: TreeNodeSpec, parent: Parent, made: Mad
     // A new variant of a set a re-send updates: a component, appended to the set.
     else if (spec.type === "COMPONENT") { const c = figma.createComponent(); node = c; applyFrame(c, spec, parent, made); }
     else { const f = figma.createFrame(); node = f; applyFrame(f, spec, parent, made); }
-    await finish(made, styledFrom, patchesFrom, consent);
+    await finish(made, styledFrom, patchesFrom, holding(parent, consent));
   } catch (e) {
     // An instance is made only once its component resolved: before that there is nothing to remove.
     const made0 = made.pairs[first];

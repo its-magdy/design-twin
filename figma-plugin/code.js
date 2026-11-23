@@ -9380,7 +9380,7 @@
       shown4 = rootCopy ? root.visible : t.spec.hidden !== true;
       root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made2);
-      await finish(made2, 0, 0, consent2);
+      await finish(made2, 0, 0, holding(t.page, consent2, "page"));
       const { x, y } = placement(t.page, root.id, t.spec);
       t.page.appendChild(root);
       root.x = x;
@@ -9445,7 +9445,7 @@
         }
         arrangeVariants(set, t.spec, null);
       }
-      await finish(made2, 0, 0, consent2);
+      await finish(made2, 0, 0, holding(t.page, consent2, "page"));
       const keys = addDefs(root, fileDefs(t.spec, t.refs));
       wireAll(made2.pairs, keys);
       const { x, y } = placement(t.page, root.id, t.spec);
@@ -9523,6 +9523,7 @@
     return copy2;
   }
   async function buildSubtree(spec, parent, made2, consent2) {
+    stillInDocument(parent);
     const kind = nodeKind(spec);
     const first2 = made2.pairs.length;
     const styledFrom = made2.styled.length;
@@ -9544,7 +9545,7 @@
         node = f;
         applyFrame(f, spec, parent, made2);
       }
-      await finish(made2, styledFrom, patchesFrom, consent2);
+      await finish(made2, styledFrom, patchesFrom, holding(parent, consent2));
     } catch (e) {
       const made0 = made2.pairs[first2];
       const n = node || (made0 ? made0[0] : null);
@@ -10914,6 +10915,7 @@
     const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
     for (const [i, up] of plan.updates.entries()) {
       const p = u.patches.get(i);
+      stillInDocument(up.ref);
       if (up.extras.length) {
         consent2();
         applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
@@ -10923,6 +10925,7 @@
         await applyPatch(p, consent2, allowed2, changes);
       }
       if (up.extras.length) {
+        stillInDocument(up.ref);
         consent2();
         applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
       }
@@ -10942,10 +10945,12 @@
     }
     const replaced = plan.builds.map((b) => b.replaces);
     for (const o of plan.orders) {
+      stillInDocument(o.parent);
       consent2();
       changes.push(applyOrder(o, built, replaced));
     }
     if (plan.stamps.length) {
+      for (const st of plan.stamps) stillInDocument(st.ref);
       consent2();
       restamp2(plan.stamps, key, changes);
     }
@@ -10953,6 +10958,7 @@
     let rewired = 0;
     if (u.component) {
       const root = u.root;
+      stillInDocument(root);
       if (root.type === "COMPONENT_SET" && built.length) {
         consent2();
         const size2 = { w: root.width, h: root.height };

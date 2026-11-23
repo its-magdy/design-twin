@@ -1018,6 +1018,84 @@ const OUT: Array<[string, (n: FakeNode) => void]> = [
   ["removed", (n) => { markRemoved(n); }],
 ];
 
+/** A node's children, read past a removal (markRemoved). */
+const kidsOf = (n: FakeNode | undefined): FakeNode[] => (n ? (peekRemoved(n, "children") as FakeNode[] | undefined) ?? [] : []);
+const namesOf = (list: readonly FakeNode[]): unknown[] => list.map((c) => peekRemoved(c, "name"));
+
+cases.push({
+  name: "A keyed re-send whose build parent goes while a new child's text style is set fails as missing: nothing added to it, put back (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const tree = (rest: Array<Record<string, unknown>> = []) => ({ key: "race", name: "Race", children: [{ name: "Parent", handle: "parent", children: rest }] });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: tree() }]);
+      const root = w.scene.nodes[String(first.applied[0]?.id)];
+      const parentId = String(first.applied[0]?.handles?.parent);
+      const parent = w.scene.nodes[parentId];
+      let styled = 0;
+      // The first new child's style await: the designer deletes the frame both new children go into.
+      w.hooks.onStyle = async () => { if (!styled++ && parent) out(parent); };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r7-keyed-" + how, [{ op: "createTree", tree: tree([{ name: "Wait", text: "Wait", styles: { text: "Body" } }, { name: "Later" }]) }])) as { ok?: unknown; error?: unknown; applied?: unknown; failedAt?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      ok(`[ANNOUNCE] keyed, its build parent ${how} during a child's style await: fails as missing, nothing applied (got ${JSON.stringify(r)})`,
+        styled === 1 && r.ok === false && r.failedAt === 0 && Array.isArray(r.applied) && r.applied.length === 0 && r.error === "no node with id '" + parentId + "' (invalid or removed)");
+      // Detached, the frame keeps nothing of the batch; removed, "Wait" was in it when it went (and went with it): never
+      // "Later", built after it went.
+      const left = namesOf(kidsOf(parent));
+      ok(`[ANNOUNCE] …${how}: no new child is left anywhere, none added once the frame was gone (children ${JSON.stringify(left)})`,
+        (how === "detached" ? left.length === 0 : !left.includes("Later")) && !w.alive().some((n) => n.name === "Wait" || n.name === "Later") && kidsOf(root).length === 0);
+      ok(`[ANNOUNCE] …${how}: the designer is told nothing changed, and why (got ${JSON.stringify(text)})`,
+        saidOnce(w, t, p, text) && text === HEAD + "no node with id '" + parentId + "' (invalid or removed)");
+    }
+  },
+}, {
+  name: "A tree whose page goes while one of its texts' style is set fails as missing: nothing lands on the page, nothing stays (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const dest = w.pages.screens;
+      let styled = 0;
+      w.hooks.onStyle = async () => { if (!styled++) out(dest); };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r7-page-" + how, [{ op: "createTree", page: "Screens", tree: { name: "New tree", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] } }])) as { ok?: unknown; error?: unknown; applied?: unknown; failedAt?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const want = "no page with id '" + String(dest.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a tree, its page ${how} during a style await: fails as missing, nothing applied (got ${JSON.stringify(r)})`,
+        styled === 1 && r.ok === false && r.failedAt === 0 && Array.isArray(r.applied) && r.applied.length === 0 && r.error === want);
+      ok(`[ANNOUNCE] …${how}: the tree is on no page, the gone one included (its layers ${JSON.stringify(namesOf(kidsOf(dest)))})`,
+        kidsOf(dest).length === 0 && !w.alive().some((n) => n.name === "New tree" || n.name === "Wait"));
+      ok(`[ANNOUNCE] …${how}: the designer is told nothing changed, and why (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && text === HEAD + want);
+    }
+  },
+});
+
+cases.push({
+  name: "A keyed re-send whose next build's frame goes during an earlier build's await builds nothing into it (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const tree = (a: Array<Record<string, unknown>> = [], b: Array<Record<string, unknown>> = []) =>
+        ({ key: "two", name: "Two", children: [{ name: "First", handle: "first", children: a }, { name: "Second", handle: "second", children: b }] });
+      const made = await w.api.applyWrites([{ op: "createTree", tree: tree() }]);
+      const secondId = String(made.applied[0]?.handles?.second);
+      const second = w.scene.nodes[secondId];
+      let styled = 0;
+      // First's new child awaits its style: the designer deletes Second, which the next new child goes into.
+      w.hooks.onStyle = async () => { if (!styled++ && second) out(second); };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: tree([{ name: "Wait", text: "Wait", styles: { text: "Body" } }], [{ name: "Later" }]) }]);
+      w.hooks.onStyle = undefined;
+      ok(`[ANNOUNCE] keyed, the next build's frame ${how} during an earlier build: fails as missing, put back, nothing built into it (got ${JSON.stringify(r)}, ${JSON.stringify(namesOf(kidsOf(second)))})`,
+        styled === 1 && r.ok === false && r.applied.length === 0 && r.error === "no node with id '" + secondId + "' (invalid or removed)" && (r.restored || []).length === 1
+        && kidsOf(second).length === 0 && !w.alive().some((n) => n.name === "Wait" || n.name === "Later"));
+    }
+  },
+});
+
 cases.push({
   name: "A patch whose node goes while its text style is set fails as missing, its text never written (#206)",
   async run() {

@@ -39,7 +39,7 @@ import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
-import { nodeById } from "./node-lookup";
+import { nodeById, stillInDocument } from "./node-lookup";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -424,6 +424,9 @@ function restamp(stamps: Plan<SceneNode>["stamps"], key: string, changes: Change
 /**
  * Apply a planned update: every change it makes goes onto `changes` as it lands, so the batch can put all of it back.
  * `consent` is checked before each step and after each await. The nodes to remove are left to the batch (removalsOf).
+ * Every node the plan holds was resolved before the batch ran, and each step can await (a patch's fonts, a text style
+ * set): so each step checks the node it uses is still in the document before it reads it (node-lookup.ts), and one
+ * deleted or detached by then fails the op as missing, and the batch is put back.
  */
 export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<AppliedWrite> {
   const { plan, key } = u;
@@ -432,9 +435,10 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const unwired = u.component ? unwireGoing(u.component.defs, consent, changes) : [];
   for (const [i, up] of plan.updates.entries()) {
     const p = u.patches.get(i);
+    stillInDocument(up.ref);
     if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes); }
     if (p) { consent(); await applyPatch(p, consent, allowed, changes); }
-    if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
+    if (up.extras.length) { stillInDocument(up.ref); consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
     changed.push({ id: up.ref.id, ...(up.spec.handle !== undefined ? { handle: up.spec.handle } : {}), fields: up.fields });
   }
   const made = newMade(t.refs, t.clones);
@@ -449,13 +453,18 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     built.push(n);
   }
   const replaced = plan.builds.map((b) => b.replaces);
-  for (const o of plan.orders) { consent(); changes.push(applyOrder(o, built, replaced)); }
-  if (plan.stamps.length) { consent(); restamp(plan.stamps, key, changes); }
+  for (const o of plan.orders) { stillInDocument(o.parent); consent(); changes.push(applyOrder(o, built, replaced)); }
+  if (plan.stamps.length) {
+    for (const st of plan.stamps) stillInDocument(st.ref);
+    consent();
+    restamp(plan.stamps, key, changes);
+  }
   // A component: its new variants laid out in the set, its definitions and its layers' wiring brought to the spec.
   let props = new Map<string, string>();
   let rewired = 0;
   if (u.component) {
     const root = u.root;
+    stillInDocument(root);
     if (root.type === "COMPONENT_SET" && built.length) {
       consent();
       const size = { w: root.width, h: root.height };
