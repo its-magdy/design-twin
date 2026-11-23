@@ -302,7 +302,12 @@ list of merged PRs.
   went with that layer. A failed tree also takes back a layer of a copy that the designer moved out of the copy. A rule
   by `instanceOf` counts an instance only while its main component is in the file, an instance of a set whose default
   variant goes while its swap values resolve takes the set's default as it is then, and a component re-send's dry run
-  says its component is missing when it goes while its instances are counted.
+  says its component is missing when it goes while its instances are counted (or a dropped variant's are). A failed
+  tree, or one put back, never deletes a layer of the designer's that they moved into one of its layers: that layer
+  stays, theirs in it, and the reply says why. A rule by `instanceOf` matches a deleted main component that an instance
+  still has by its exact id or key again (not by its name), and a variant moved out of its set while the rule resolves
+  is no longer counted as the set's. A layer deleted during a put-back, its own or a later one, takes its change with
+  it (never "put back" nor "could not undo"), and rejecting a preview after one of its layers was deleted says so.
 
 ## [0.1.6] - 2026-11-02
 
