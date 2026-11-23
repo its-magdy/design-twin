@@ -12,8 +12,11 @@
 //
 // A batch resolves every op before the first one runs, and holds the nodes it found; the file can change at any await
 // after that (an image being made, a library import, a font load, an earlier op's own awaits). So a node held from
-// before is checked again (stillInDocument) right before the change that uses it, after the op's last await: gone by
-// then, the op fails with the error its lookup would have given, and the batch is put back as for any failed op.
+// before is checked again (stillInDocument) before the op reads it at all, and after each of its own awaits (holding):
+// gone by then, the op fails with the error its lookup would have given, and the batch is put back as for any failed
+// op. Before, not only right before the change: a removed node's handle reads only `id`, `removed` and `type` (seen
+// live: `name` threw "in get_name: The node with id … does not exist"), so a read of anything else would fail the op
+// with that instead of saying the node is missing.
 
 /** The node with `id`, or null when the file has none: an invalid id, a node that is removed, or one that is detached
  *  from the document (no parent chain up to it), short of a library component. */
@@ -45,4 +48,15 @@ export function noNode(id: string, what = "node"): string {
  *  document. Called right before the change that uses it. */
 export function stillInDocument(n: BaseNode, what = "node", prefix = ""): void {
   if (!inDocument(n)) throw new Error(prefix + noNode(n.id, what));
+}
+
+/** `consent` for a change that holds `n` across its awaits (a text style set, a patch's fonts): each call checks `n` is
+ *  still in the document (stillInDocument), then consent. Every such change calls its consent after each await and
+ *  before it reads or changes anything again, so a node deleted or detached during one is never read (a removed node's
+ *  fields throw) nor changed: the op fails as its lookup would have, and the batch is put back. */
+export function holding(n: BaseNode, consent: () => void, what = "node", prefix = ""): () => void {
+  return () => {
+    stillInDocument(n, what, prefix);
+    consent();
+  };
 }

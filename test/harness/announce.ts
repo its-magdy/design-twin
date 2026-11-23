@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
-import type { FakeCollection, FakeNode, PostedMessage } from "../fake-figma.ts";
+import { markRemoved, peekRemoved, type FakeCollection, type FakeNode, type PostedMessage } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { modeNode, modeScene, treeWorld } from "./writes.ts";
 
@@ -555,10 +555,10 @@ async function previewedAndPutBack(id: string, opts: { drop?: readonly string[];
       const n = w.scene.nodes[x];
       if (how === "gone") delete w.scene.nodes[x];
       else if (!n) continue;
-      else if (how === "removed") { n.removed = true; n.parent = null; }
+      else if (how === "removed") markRemoved(n);
       else if (how === "soft") n.parent = null;
     }
-    if (how === "under") { holder.removed = true; holder.parent = null; }
+    if (how === "under") markRemoved(holder);
   };
   // Late: while the next run makes its image (an await, after the batch resolved and before its first op runs).
   if (opts.late) w.figma.createImage = (data: Uint8Array) => { w.figma.createImage = real; drop(); return real(data); };
@@ -597,9 +597,14 @@ function snapshotOf(w: World, h: LateIds): string {
   const ids: string[] = [h.mine, h.box, h.label, h.chip, h.keyed, "40:1"];
   return JSON.stringify(ids.map((id) => {
     const n = w.scene.nodes[id];
-    return n ? [n.name, n.characters, n.fills, n.explicitVariableModes, (n.children || []).map((c) => c.id)] : null;
+    // A removed node's fields throw when read (markRemoved): what it held, read past that.
+    const f = (k: string): unknown => (n ? peekRemoved(n, k) : undefined);
+    return n ? [f("name"), f("characters"), f("fills"), f("explicitVariableModes"), ((f("children") || []) as FakeNode[]).map((c) => c.id)] : null;
   }));
 }
+
+/** A node's name, read past a removal (markRemoved). */
+const nameOf = (w: World, id: string): unknown => { const n = w.scene.nodes[id]; return n ? peekRemoved(n, "name") : undefined; };
 
 const LOADED_NOTE = "No layer was changed, but the batch had already loaded 1 image file into Figma.";
 const CHANGED = "the file changed while the write waited for review: ops[1] (patch): no node with id 'x:1' (invalid or removed)";
@@ -729,7 +734,7 @@ cases.push({
       const h = hash();
       ok(`[ANNOUNCE] ${what} is missing: the approved write is refused, nothing of it lands (got ${JSON.stringify(r)})`,
         card?.previewable === true && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && !w.alive().some((n) => n.name === "Pic")
-        && w.scene.nodes["x:1"]?.name === "Old 1" && w.scene.nodes["x:2"]?.name === "Old 2");
+        && nameOf(w, "x:1") === "Old 1" && nameOf(w, "x:2") === "Old 2");
       ok(`[ANNOUNCE] …${what}: the agent is told the file changed, and that the preview's image stays (got ${JSON.stringify(r.error)})`,
         r.error === CHANGED + ". " + LOADED_NOTE && h !== undefined && w.figma.getImageByHash(h) !== null);
       ok(`[ANNOUNCE] …${what}: and the designer the same, never "applied" (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
@@ -741,13 +746,14 @@ cases.push({
   async run() {
     // The same three layers, deleted three ways Figma can hand them back: removed; not removed but detached from the
     // document (its parent null, as a soft-deleted main component is); not removed but under a removed frame.
-    const holder = { id: "h:9", type: "FRAME", name: "Holder", removed: true, parent: null, visible: true };
-    const ways: Array<[string, Record<string, unknown>]> = [
-      ["a removed node", { removed: true, parent: null }],
-      ["a detached node (not removed, no parent)", { removed: false, parent: null }],
-      ["a node under a removed frame (not removed itself)", { removed: false, parent: holder }],
+    // Removed: every field but id, removed and type throws when read, as Figma's does (markRemoved).
+    const holder = markRemoved({ id: "h:9", type: "FRAME", name: "Holder", visible: true });
+    const ways: Array<[string, Record<string, unknown>, boolean]> = [
+      ["a removed node", { removed: false, parent: null }, true],
+      ["a detached node (not removed, no parent)", { removed: false, parent: null }, false],
+      ["a node under a removed frame (not removed itself)", { removed: false, parent: holder }, false],
     ];
-    for (const [how, gone] of ways) {
+    for (const [how, gone, remove] of ways) {
       const w = await treeWorld({ extra: { nodes: {
         "r:1": { id: "r:1", type: "FRAME", name: "Gone frame", fills: [], visible: true, ...gone },
         "r:2": { id: "r:2", type: "TEXT", name: "Gone text", characters: "a", fontName: { family: "Inter", style: "Regular" }, fills: [], visible: true, ...gone },
@@ -758,6 +764,7 @@ cases.push({
       let instanced = 0;
       const comp = w.scene.nodes[GONE_COMPONENT];
       if (comp) comp.createInstance = () => { instanced++; return { id: "I40:3", type: "INSTANCE", name: "Gone component", visible: true }; };
+      if (remove) for (const id of ["r:1", "r:2", GONE_COMPONENT]) { const n = w.scene.nodes[id]; if (n) markRemoved(n); }
       const looked: string[] = [];
       const lookup = w.figma.getNodeByIdAsync;
       w.figma.getNodeByIdAsync = (id: string) => { looked.push(id); return lookup(id); };
@@ -783,7 +790,7 @@ cases.push({
         const r = await w.api.applyWrites(ops);
         ok(`[ANNOUNCE] ${what}, ${how}: refused as missing, nothing changed (got ${JSON.stringify(r)})`,
           r.ok === false && r.applied.length === 0 && want.test(String(r.error)) && w.alive().length === before && instanced === 0
-          && w.scene.nodes["r:1"]?.name === "Gone frame" && w.scene.nodes["r:2"]?.characters === "a" && w.scene.nodes[GONE_COMPONENT]?.name === "Gone component");
+          && nameOf(w, "r:1") === "Gone frame" && peekRemoved(w.scene.nodes["r:2"] ?? {}, "characters") === "a" && nameOf(w, GONE_COMPONENT) === "Gone component");
         // Refused by the lookup itself: the id was looked up (a ref that does not read as an id never is, tree-refs.ts).
         ok(`[ANNOUNCE] …${what}, ${how}: the write looked '${id}' up by id (looked up: ${JSON.stringify(looked.slice(asked))})`, looked.slice(asked).includes(id));
       }
@@ -905,10 +912,9 @@ cases.push({
       const r = replyOf(await reply) as { ok?: unknown; error?: unknown; applied?: unknown; restored?: unknown; failedAt?: unknown };
       const text = String(lastWrites(w)?.text);
       const h = hash();
-      const x1 = w.scene.nodes["x:1"];
       ok(`[ANNOUNCE] ${what} after the run resolved: the approved write fails at it and is put back whole (got ${JSON.stringify(r)})`,
         r.ok === false && r.failedAt === 1 && Array.isArray(r.applied) && r.applied.length === 0 && Array.isArray(r.restored) && r.restored.length === 1
-        && !w.alive().some((n) => n.name === "Pic") && x1?.name === "Old 1" && w.scene.nodes["x:2"]?.name === "Old 2");
+        && !w.alive().some((n) => n.name === "Pic") && nameOf(w, "x:1") === "Old 1" && nameOf(w, "x:2") === "Old 2");
       ok(`[ANNOUNCE] …${what}: the agent is told it is missing, and that the image stays (got ${JSON.stringify(r.error)})`,
         r.error === "no node with id 'x:1' (invalid or removed)." + LOADED_STAYS && h !== undefined && w.figma.getImageByHash(h) !== null);
       ok(`[ANNOUNCE] …${what}: and the designer the same, never "applied" (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
@@ -940,7 +946,7 @@ cases.push({
     ];
     const ways: Array<[string, ((n: FakeNode) => void) | null]> = [
       ["as is", null],
-      ["removed", (n) => { n.removed = true; n.parent = null; }],
+      ["removed", (n) => { markRemoved(n); }],
       ["detached (not removed, no parent)", (n) => { n.parent = null; }],
     ];
     for (const t of tries) {
@@ -977,13 +983,16 @@ cases.push({
       { what: "createText into a frame", op: (h) => ({ op: "createText", text: "Child", parentId: h.box }), gone: (h) => h.box, want: (h) => "parent '" + h.box + "' not found (invalid or removed id)" },
     ];
     for (const t of tries) {
-      for (const detach of [null, (n: FakeNode) => { n.parent = null; }]) {
+      // As is; detached (no parent); removed (its fields then throw when read: markRemoved).
+      const ways: Array<[string, ((n: FakeNode) => void) | null]> = [["as is", null], ["detached", (n) => { n.parent = null; }], ["removed", (n) => { markRemoved(n); }]];
+      for (const [how, detach] of ways) {
         const { w, h } = await lateWorld();
         const id = t.gone(h);
         const load = w.figma.loadFontAsync;
         if (!load) throw new Error("the fake has no loadFontAsync");
-        // Every font load of the batch detaches it: the last one before the op's change is what counts.
-        w.figma.loadFontAsync = async (f) => { const n = w.scene.nodes[id]; if (detach && n) detach(n); return load(f); };
+        // Every font load once the batch runs (its first op has made "First") detaches it: the last one before the op's
+        // change is what counts. (One while the batch resolves: the next case.)
+        w.figma.loadFontAsync = async (f) => { const n = w.scene.nodes[id]; if (detach && n && w.alive().some((x) => x.name === "First")) detach(n); return load(f); };
         const before = snapshotOf(w, h);
         const r = await w.api.applyWrites([{ op: "createFrame", name: "First" }, t.op(h)]);
         w.figma.loadFontAsync = load;
@@ -991,10 +1000,72 @@ cases.push({
           ok(`[ANNOUNCE] ${t.what}, as is: it lands (got ${JSON.stringify(r)})`, r.ok === true && r.applied.length === 2);
           continue;
         }
-        ok(`[ANNOUNCE] ${t.what}, its node detached during a font load: missing, put back whole, its node untouched (got ${JSON.stringify(r)})`,
+        ok(`[ANNOUNCE] ${t.what}, its node ${how} during a font load: missing, put back whole, its node untouched (got ${JSON.stringify(r)})`,
           r.ok === false && r.failedAt === 1 && r.applied.length === 0 && (r.restored || []).length === 1 && r.error === t.want(h)
           && !w.alive().some((n) => n.name === "First") && snapshotOf(w, h) === before);
       }
+    }
+  },
+});
+
+// ---- #206 review 7: a node deleted during an op's own await (a text style being set), after the op checked it; and a
+// keyed reorder that fails partway.
+
+/** Two ways the designer can take a held node out of the document during an await: detached (no parent, out of its
+ *  parent's layers: as a soft-deleted main component is), or removed (markRemoved: its fields then throw when read). */
+const OUT: Array<[string, (n: FakeNode) => void]> = [
+  ["detached", (n) => { const p = n.parent; if (p && typeof p === "object") { const q = p as FakeNode; q.children = (q.children ?? []).filter((c) => c !== n); } n.parent = null; }],
+  ["removed", (n) => { markRemoved(n); }],
+];
+
+cases.push({
+  name: "A patch whose node goes while its text style is set fails as missing, its text never written (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const made = await w.api.applyWrites([{ op: "createTree", tree: { name: "Target", children: [{ name: "Text", text: "original", handle: "text" }] } }]);
+      const id = String(made.applied[0]?.handles?.text);
+      const node = w.scene.nodes[id];
+      let styled = 0;
+      w.hooks.onStyle = async () => { if (!styled++ && node) out(node); };
+      const t = w.notified.length;
+      const p = w.posted.length;
+      const r = replyOf(await bridgeWrite(w, "r7-patch-" + how, [{ op: "patch", nodeId: id, set: { text: "updated", styles: { text: "Body" } } }])) as { ok?: unknown; error?: unknown; applied?: unknown; failedAt?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const want = "no node with id '" + id + "' (invalid or removed)";
+      ok(`[ANNOUNCE] a patch, its node ${how} during its style await: fails as missing, its text unchanged (got ${JSON.stringify(r)}, text ${JSON.stringify(node ? peekRemoved(node, "characters") : null)})`,
+        styled === 1 && r.ok === false && r.failedAt === 0 && typeof r.error === "string" && r.error.startsWith(want) && node !== undefined && peekRemoved(node, "characters") === "original");
+      // Detached, the patch's style is put back and nothing stays; removed, a node Figma reads nothing of cannot be put
+      // back, and the reply says so rather than "nothing changed".
+      if (how === "detached") {
+        ok(`[ANNOUNCE] …detached: put back, nothing applied, and the designer is told nothing changed (got ${JSON.stringify(text)})`,
+          Array.isArray(r.applied) && r.applied.length === 0 && r.error === want && saidOnce(w, t, p, text) && text === HEAD + want);
+      } else {
+        const lost = want + "; could not undo the changes to 'Text' (" + id + ") (it was deleted from the file after the patch changed it)";
+        ok(`[ANNOUNCE] …removed: the patch stays listed, the reply says it went with the node, never "nothing changed" (got ${JSON.stringify(r)})`,
+          Array.isArray(r.applied) && r.applied.length === 1 && r.error === lost);
+        ok(`[ANNOUNCE] …removed: and the designer the same (got ${JSON.stringify(text)})`,
+          w.notified.slice(t).length === 1 && w.notified[t] === text && text === "Design Twin applied 1 edit that could not be put back after one failed: " + lost);
+      }
+    }
+  },
+});
+
+cases.push({
+  name: "A patch whose text goes while the batch resolves (a font it keeps loading) is refused whole as missing, never with Figma's read error (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const { w, h } = await lateWorld();
+      const load = w.figma.loadFontAsync;
+      if (!load) throw new Error("the fake has no loadFontAsync");
+      let loads = 0;
+      w.figma.loadFontAsync = async (f) => { loads++; const n = w.scene.nodes[h.label]; if (n && n.removed !== true && n.parent !== null) out(n); return load(f); };
+      const before = snapshotOf(w, h);
+      const r = await w.api.applyWrites([{ op: "patch", nodeId: h.label, set: { text: "b" } }]);
+      w.figma.loadFontAsync = load;
+      ok(`[ANNOUNCE] a patch, its text ${how} while the batch resolves: refused whole as missing (got ${JSON.stringify(r)})`,
+        loads > 0 && r.ok === false && r.failedAt === 0 && r.applied.length === 0 && r.error === "ops[0] (patch): no node with id '" + h.label + "' (invalid or removed). Nothing was changed." && snapshotOf(w, h) === before);
     }
   },
 });

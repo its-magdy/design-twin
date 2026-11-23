@@ -163,8 +163,9 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // A text's paints and paint-style links can differ from run to run even when the paints look the same: kept run by
       // run (keepText loads the fonts that needs).
       if (nd.type === "TEXT") {
-        const restore = await keepText(nd);
-        stillInDocument(nd, "node", "setFill: "); // deleted while its fonts loaded (node-lookup.ts)
+        // Deleted while its fonts loaded (node-lookup.ts): checked after each load, before the text is read again.
+        const restore = await keepText(nd, () => stillInDocument(nd, "node", "setFill: "));
+        stillInDocument(nd, "node", "setFill: ");
         consent();
         nd.fills = [paint];
         const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -194,9 +195,12 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
+      // Deleted while its fonts loaded (node-lookup.ts): checked after each load, before the text is read again.
+      const still = (): void => stillInDocument(nd, "node", "setText: ");
+      still();
       consent();
-      const restore = await keepText(nd);
-      stillInDocument(nd, "node", "setText: "); // deleted while its fonts loaded (node-lookup.ts)
+      const restore = await keepText(nd, still);
+      still();
       consent();
       nd.characters = op.text || "";
       const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -245,7 +249,8 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
         consent();
         try { (await applyPatch(t, consent, editsAllowedNow, changes)).group = group; } catch (e) {
           if (e instanceof EditsRevoked) throw e;
-          throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+          // Named as the batch resolved it: a node removed since has no name Figma will read.
+          throw new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
         }
       }
       const first = rule.matches[0];

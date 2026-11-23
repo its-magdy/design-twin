@@ -321,6 +321,57 @@ export function skipAwareInstance(instance: FakeNode, skipping: () => boolean): 
   return instance;
 }
 
+/** The fields a held handle on a removed node still reads (seen live, #206): the rest throw. */
+const REMOVED_READABLE = new Set(["id", "removed", "type"]);
+/** What a removed node held, behind the getters that now throw (peekRemoved reads it). */
+const removedFields = new WeakMap<object, Map<string, unknown>>();
+/**
+ * Figma's node.remove() as a plugin holding the node sees it: `removed` true, no parent, and every field but `id`,
+ * `removed` and `type` throws when read, as Figma's does (seen live: `name` threw "in get_name: The node with id "1:8" does
+ * not exist"; `id` and `removed` read). Its methods are fields too, so calling one throws the same way. Setting a field
+ * still stores it (not modelled: whether Figma's setters throw). In place, so every reference to the node sees it: a
+ * fixture node and a world's proxied one alike. A field defined non-configurable is left readable. Returns `n`.
+ */
+export function markRemoved(n: FakeNode): FakeNode {
+  if (removedFields.has(n)) return n;
+  const id = String(n.id);
+  const kept = new Map<string, unknown>();
+  removedFields.set(n, kept);
+  // Out of its parent's layers, as in Figma.
+  const p = n.parent;
+  if (typeof p === "object" && p !== null && "children" in p) {
+    const list = (p as FakeNode).children;
+    if (Array.isArray(list) && list.includes(n)) (p as FakeNode).children = list.filter((k: FakeNode) => k !== n);
+  }
+  n.parent = null;
+  n.removed = true;
+  // Every value read first (a computed field can read another), then every field replaced.
+  const fields: Array<[string, boolean]> = [];
+  for (const key of Object.getOwnPropertyNames(n)) {
+    if (REMOVED_READABLE.has(key)) continue;
+    const d = Object.getOwnPropertyDescriptor(n, key);
+    if (!d || !d.configurable) continue;
+    let v: unknown;
+    try { v = d.get ? d.get.call(n) : d.value; } catch { v = undefined; }
+    kept.set(key, v);
+    fields.push([key, d.enumerable === true]);
+  }
+  for (const [key, enumerable] of fields) {
+    Object.defineProperty(n, key, {
+      configurable: true, enumerable,
+      get: () => { throw new Error("in get_" + key + ': The node with id "' + id + '" does not exist'); },
+      set: (v: unknown) => { kept.set(key, v); },
+    });
+  }
+  return n;
+}
+/** A field of a node as it was when markRemoved removed it (a test checking what stayed); the field itself when it was
+ *  not removed. */
+export function peekRemoved(n: FakeNode, key: string): unknown {
+  const kept = removedFields.get(n);
+  return kept ? kept.get(key) : n[key];
+}
+
 // ---- the plugin bundle: built once per process from the current sources
 const built = await esbuild.build({ ...pluginBuildOptions(), write: false, logLevel: "silent" });
 const bundleText = built.outputFiles?.[0]?.text;
@@ -736,6 +787,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     const field = d.type === "TEXT" ? "characters" : d.type === "BOOLEAN" ? "visible" : null;
     if (field && value.defaultValue !== undefined && value.defaultValue !== d.defaultValue) {
       for (const l of layers()) {
+        if (l.removed === true) continue; // gone with remove(): Figma walks the layers it has
         const r = l.componentPropertyReferences;
         if (typeof r !== "object" || r === null || !Object.prototype.hasOwnProperty.call(r, field) || (r as Record<string, unknown>)[field] !== key) continue;
         followingDefault = true;
@@ -749,6 +801,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     guard("deleteComponentProperty");
     if (!defs.delete(key)) throw new Error("in Figma: no property " + key);
     for (const l of layers()) {
+      if (l.removed === true) continue;
       const r = l.componentPropertyReferences;
       if (typeof r !== "object" || r === null) continue;
       const left: Record<string, unknown> = {};

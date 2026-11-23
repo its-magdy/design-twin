@@ -7070,6 +7070,12 @@
   function stillInDocument(n, what = "node", prefix = "") {
     if (!inDocument(n)) throw new Error(prefix + noNode(n.id, what));
   }
+  function holding(n, consent2, what = "node", prefix = "") {
+    return () => {
+      stillInDocument(n, what, prefix);
+      consent2();
+    };
+  }
 
   // src/tree-refs.ts
   var noRefs = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() });
@@ -7864,20 +7870,30 @@
       return null;
     }
     const node = nd;
+    const name = node.name;
+    const gone = () => {
+      if (inDocument(node)) return false;
+      bad(noNode(node.id));
+      return true;
+    };
     const fit = unfit(node, set);
     const misfits = later2 ? fit.kind : [...fit.kind, ...fit.state];
     for (const m of misfits) bad(m);
     if (node.type === "TEXT" && !fontsLater) {
-      for (const f of await fontsToKeep(node)) {
+      const fonts = await fontsToKeep(node);
+      if (gone()) return null;
+      for (const f of fonts) {
         const err = await loadFont(f);
-        if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
+        if (err) bad("'" + name + "' uses the " + err + ", so it cannot be changed");
       }
+      if (gone()) return null;
     }
     let props = null;
     if (set.props && node.type === "INSTANCE") {
       const main = await node.getMainComponentAsync();
+      if (gone()) return null;
       if (!main) {
-        bad("set.props: the instance '" + node.name + "' has no main component to read its properties from");
+        bad("set.props: the instance '" + name + "' has no main component to read its properties from");
         return null;
       }
       const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
@@ -7897,6 +7913,7 @@
         bad("set.props: " + swapErr);
         return null;
       }
+      if (gone()) return null;
       if (!later2) {
         const v = await variantProblem(node, mapped.ok);
         if (v) {
@@ -7904,11 +7921,12 @@
           return null;
         }
       }
+      if (gone()) return null;
       props = mapped.ok;
     }
     const bound = /* @__PURE__ */ new Map();
-    for (const k of NUMBER_TOKEN_FIELDS) {
-      const id = boundId(node, k);
+    const boundIds2 = NUMBER_TOKEN_FIELDS.map((k) => boundId(node, k));
+    for (const id of boundIds2) {
       if (!id || bound.has(id)) continue;
       let v = null;
       try {
@@ -7918,8 +7936,9 @@
       }
       if (v) bound.set(id, v);
     }
+    if (gone()) return null;
     if (misfits.length) return null;
-    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
+    return { node, name, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
   }
   function canonical3(v) {
     if (v === void 0) return "undefined";
@@ -8032,13 +8051,14 @@
     }
     return out;
   }
-  async function keepText(t) {
-    for (const f of await fontsToKeep(t)) {
-      try {
-        await figma.loadFontAsync(f);
-      } catch {
-        throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
-      }
+  async function keepText(t, still = () => {
+  }) {
+    const fonts = await fontsToKeep(t);
+    still();
+    for (const f of fonts) {
+      const failed = await figma.loadFontAsync(f).then(() => false, () => true);
+      still();
+      if (failed) throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
     }
     const chars = t.characters;
     const runs = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
@@ -8132,7 +8152,7 @@
       check();
     };
   }
-  async function snapshot(t) {
+  async function snapshot(t, still) {
     const n = t.node;
     const set = t.set;
     const tok = set.tokens || {};
@@ -8223,7 +8243,7 @@
     });
     for (const link of links) steps2.push(link);
     if (textRuns && n.type === "TEXT") {
-      const text = await keepText(n);
+      const text = await keepText(n, still);
       steps2.push((check) => text(() => {
         check();
         return true;
@@ -8379,25 +8399,32 @@
     await setFields(on, consent2);
   }
   async function applyPatch(t, consent2, allowed2, changes) {
+    const still = () => stillInDocument(t.node);
+    still();
     await checkBeforeApply(t);
+    still();
     if (t.fontsLater && t.node.type === "TEXT") {
-      for (const f of await fontsToKeep(t.node)) {
-        try {
-          await figma.loadFontAsync(f);
-        } catch {
-          throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
-        }
+      const fonts = await fontsToKeep(t.node);
+      still();
+      for (const f of fonts) {
+        const failed = await figma.loadFontAsync(f).then(() => false, () => true);
+        still();
+        if (failed) throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
       }
     }
-    const restore = await snapshot(t);
-    stillInDocument(t.node);
+    const kept = await snapshot(t, still);
+    still();
     consent2();
+    const restore = async (ok) => {
+      if (t.node.removed) throw new Error("it was deleted from the file after the patch changed it");
+      await kept(ok);
+    };
     const applied = { id: t.node.id };
     if (t.unbound) applied.unbound = t.unbound;
     const change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
     changes.push(change);
     try {
-      await setFields(t, consent2);
+      await setFields(t, holding(t.node, consent2));
     } catch (e) {
       if (allowed2()) {
         try {
@@ -10834,9 +10861,10 @@
       else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
     }
   }
+  var childOf = (n, parent) => !n.removed && n.parent === parent;
   function arrange(parent, want) {
     for (const [i, n] of want.entries()) {
-      if (n.parent !== parent) continue;
+      if (!childOf(n, parent)) continue;
       if (parent.children[i] !== n) parent.insertChild(i, n);
     }
   }
@@ -10847,9 +10875,9 @@
     const olds = [];
     for (const e of o.order) {
       const n = "ref" in e ? e.ref : built[e.build];
-      if (n && n.parent === parent) nodes.push(n);
+      if (n && childOf(n, parent)) nodes.push(n);
       const r = "build" in e ? replaced[e.build] : null;
-      if (r && r.parent === parent) olds.push(r);
+      if (r && childOf(r, parent)) olds.push(r);
     }
     const seq2 = nodes.concat(olds);
     const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
@@ -10864,7 +10892,7 @@
       kind: "reordered frame",
       what: "the order of the layers in " + label3(parent),
       restore() {
-        arrange(parent, was.filter((c) => c.parent === parent));
+        arrange(parent, was.filter((c) => childOf(c, parent)));
       }
     };
   }
@@ -13101,7 +13129,7 @@
         const paint = solidPaint(op.color, "setFill color");
         consent();
         if (nd.type === "TEXT") {
-          const restore = await keepText(nd);
+          const restore = await keepText(nd, () => stillInDocument(nd, "node", "setFill: "));
           stillInDocument(nd, "node", "setFill: ");
           consent();
           nd.fills = [paint];
@@ -13134,9 +13162,11 @@
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
+        const still = () => stillInDocument(nd, "node", "setText: ");
+        still();
         consent();
-        const restore = await keepText(nd);
-        stillInDocument(nd, "node", "setText: ");
+        const restore = await keepText(nd, still);
+        still();
         consent();
         nd.characters = op.text || "";
         const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -13183,7 +13213,7 @@
             (await applyPatch(t, consent, editsAllowedNow, changes)).group = group;
           } catch (e) {
             if (e instanceof EditsRevoked) throw e;
-            throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+            throw new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
           }
         }
         const first2 = rule.matches[0];

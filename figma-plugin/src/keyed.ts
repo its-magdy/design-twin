@@ -369,10 +369,14 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
   }
 }
 
+/** Whether `n` is one of `parent`'s children now. A removed node is no one's (and Figma throws on reading any field of
+ *  it but `id`, `removed` and `type`, its `parent` included: so `removed` is read first). */
+const childOf = (n: SceneNode, parent: BaseNode): boolean => !n.removed && n.parent === parent;
+
 /** Put `parent`'s children in `want` order (each a child of it), node by node from the first place. */
 function arrange(parent: FrameNode, want: readonly SceneNode[]): void {
   for (const [i, n] of want.entries()) {
-    if (n.parent !== parent) continue;
+    if (!childOf(n, parent)) continue;
     if (parent.children[i] !== n) parent.insertChild(i, n);
   }
 }
@@ -385,9 +389,9 @@ function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], repla
   const olds: SceneNode[] = [];
   for (const e of o.order) {
     const n = "ref" in e ? e.ref : built[e.build];
-    if (n && n.parent === parent) nodes.push(n);
+    if (n && childOf(n, parent)) nodes.push(n);
     const r = "build" in e ? replaced[e.build] : null;
-    if (r && r.parent === parent) olds.push(r);
+    if (r && childOf(r, parent)) olds.push(r);
   }
   // The slots the spec's children hold now (built ones were appended last; a node built anew still has its old one
   // beside it) take them in spec order, then the old ones about to be removed: so a node built anew takes the place
@@ -401,7 +405,7 @@ function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], repla
     applied: { id: parent.id },
     kind: "reordered frame",
     what: "the order of the layers in " + label(parent),
-    restore() { arrange(parent, was.filter((c) => c.parent === parent)); },
+    restore() { arrange(parent, was.filter((c) => childOf(c, parent))); },
   };
 }
 
