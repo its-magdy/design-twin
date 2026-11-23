@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
-import type { FakeCollection, PostedMessage } from "../fake-figma.ts";
+import type { FakeCollection, FakeNode, PostedMessage } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { treeWorld } from "./writes.ts";
 
@@ -517,12 +517,21 @@ cases.push({
 
 /** A card with an image that offers a preview (26 existing layers renamed: over the review limit), previewed and put
  *  back: the image its preview loaded is in the file, no layer of the batch is. Then the designer deletes the layers of
- *  `drop` (x:1 by default): gone from the lookup, or with `removed`, still handed back by it but `removed` and on no
- *  page (as Figma hands back a deleted main component: it keeps one, soft-deleted, for its instances and an undo). */
-async function previewedAndPutBack(id: string, opts: { drop?: readonly string[]; removed?: boolean } = {}): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
-  const nodes: Record<string, { id: string; type: string; name: string; visible: boolean }> = {};
+ *  `drop` (x:1 by default), the way `how` says: "gone" (the default) from the lookup; "removed", still handed back by it
+ *  but `removed` and on no page; "soft", still handed back NOT `removed` but on no page, its parent null (as Figma
+ *  hands back a deleted main component: it keeps one, soft-deleted, for its instances and an undo); "under", the frame
+ *  it sits in removed, it left NOT `removed` with that frame as its parent. `component` makes x:1 a local main
+ *  component; the layers sit on the current page, x:1 in a frame there with "under". */
+type Deleted = "gone" | "removed" | "soft" | "under";
+async function previewedAndPutBack(id: string, opts: { drop?: readonly string[]; how?: Deleted; component?: boolean } = {}): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
+  const nodes: Record<string, FakeNode> = {};
   for (let i = 1; i <= 26; i++) nodes["x:" + i] = { id: "x:" + i, type: "FRAME", name: "Old " + i, visible: true };
+  if (opts.component) Object.assign(nodes["x:1"] ?? {}, { type: "COMPONENT", key: "local-x:1", remote: false, description: "", getInstancesAsync: async () => [] });
   const w = await treeWorld({ extra: { reviewer: "real", nodes } });
+  const how = opts.how ?? "gone";
+  for (const n of Object.values(nodes)) n.parent = w.pages.current;
+  const holder: FakeNode = { id: "h:1", type: "FRAME", name: "Holder", visible: true, parent: w.pages.current, removed: false };
+  if (how === "under") for (const x of opts.drop || ["x:1"]) { const n = nodes[x]; if (n) n.parent = holder; }
   let hash: string | undefined;
   const real = w.figma.createImage;
   w.figma.createImage = (data: Uint8Array) => { const img = real(data); hash = img.hash; return img; };
@@ -542,9 +551,12 @@ async function previewedAndPutBack(id: string, opts: { drop?: readonly string[];
   // The designer removes a layer the batch renames: the batch no longer resolves.
   for (const x of opts.drop || ["x:1"]) {
     const n = w.scene.nodes[x];
-    if (!opts.removed) delete w.scene.nodes[x];
-    else if (n) { n.removed = true; n.parent = null; }
+    if (how === "gone") delete w.scene.nodes[x];
+    else if (!n) continue;
+    else if (how === "removed") { n.removed = true; n.parent = null; }
+    else if (how === "soft") n.parent = null;
   }
+  if (how === "under") { holder.removed = true; holder.parent = null; }
   return { w, card, reply, hash: () => hash, from };
 }
 
@@ -653,52 +665,83 @@ function rawLookups(): string[] {
 }
 
 cases.push({
-  name: "A layer deleted after a preview, whose id still resolves to a removed node, refuses the approved write (#206)",
+  name: "A layer deleted after a preview, whose id still resolves (removed, or soft-deleted: not removed but on no page), refuses the approved write (#206)",
   async run() {
-    const { w, card, reply, hash } = await previewedAndPutBack("rm1", { removed: true });
-    const t = w.notified.length;
-    const p = w.posted.length;
-    await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
-    const r = replyOf(await reply);
-    const text = String(lastWrites(w)?.text);
-    const h = hash();
-    ok(`[ANNOUNCE] a removed node is missing: the approved write is refused, nothing of it lands (got ${JSON.stringify(r)})`,
-      r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && !w.alive().some((n) => n.name === "Pic") && w.scene.nodes["x:1"]?.name === "Old 1" && w.scene.nodes["x:2"]?.name === "Old 2");
-    ok(`[ANNOUNCE] …the agent is told the file changed, and that the preview's image stays (got ${JSON.stringify(r.error)})`,
-      r.error === CHANGED + ". " + LOADED_NOTE && h !== undefined && w.figma.getImageByHash(h) !== null);
-    ok(`[ANNOUNCE] …and the designer the same, never "applied" (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
-      saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: " + CHANGED);
+    // As Figma hands them back after the delete: a removed frame; a main component kept soft-deleted for its instances
+    // and an undo (not `removed`, its parent null); a plain frame left the same way; a frame whose holder was removed.
+    const runs: Array<[string, { how: Deleted; component?: boolean }]> = [
+      ["a removed frame", { how: "removed" }],
+      ["a soft-deleted main component (not removed, no parent)", { how: "soft", component: true }],
+      ["a frame not removed but with no parent", { how: "soft" }],
+      ["a frame whose holder was removed (it is not)", { how: "under" }],
+    ];
+    for (const [what, opts] of runs) {
+      const { w, card, reply, hash } = await previewedAndPutBack("rm-" + opts.how + String(!!opts.component), opts);
+      const t = w.notified.length;
+      const p = w.posted.length;
+      await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
+      const r = replyOf(await reply);
+      const text = String(lastWrites(w)?.text);
+      const h = hash();
+      ok(`[ANNOUNCE] ${what} is missing: the approved write is refused, nothing of it lands (got ${JSON.stringify(r)})`,
+        card?.previewable === true && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && !w.alive().some((n) => n.name === "Pic")
+        && w.scene.nodes["x:1"]?.name === "Old 1" && w.scene.nodes["x:2"]?.name === "Old 2");
+      ok(`[ANNOUNCE] …${what}: the agent is told the file changed, and that the preview's image stays (got ${JSON.stringify(r.error)})`,
+        r.error === CHANGED + ". " + LOADED_NOTE && h !== undefined && w.figma.getImageByHash(h) !== null);
+      ok(`[ANNOUNCE] …${what}: and the designer the same, never "applied" (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+        saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: " + CHANGED);
+    }
   },
 }, {
-  name: "Every op that names a node by id treats a removed node as missing (#206)",
+  name: "Every op that names a node by id treats a removed or detached node as missing (#206)",
   async run() {
-    const gone = { removed: true, parent: null, visible: true };
-    const w = await treeWorld({ extra: { nodes: {
-      "r:1": { id: "r:1", type: "FRAME", name: "Gone frame", fills: [], ...gone },
-      "r:2": { id: "r:2", type: "TEXT", name: "Gone text", characters: "a", fontName: { family: "Inter", style: "Regular" }, fills: [], ...gone },
-      "r:3": { id: "r:3", type: "COMPONENT", name: "Gone component", key: "local-r:3", remote: false, ...gone },
-    } } });
-    const made = await w.api.applyWrites([{ op: "createFrame", name: "Mine" }]);
-    const mine = String(made.applied[0]?.id);
-    const tries: Array<[string, WriteOp[], RegExp]> = [
-      ["setFill", [{ op: "setFill", nodeId: "r:1", color: "#ff0000" }], /no node with id 'r:1' \(invalid or removed\)/],
-      ["setText", [{ op: "setText", nodeId: "r:2", text: "b" }], /no node with id 'r:2' \(invalid or removed\)/],
-      ["patch", [{ op: "patch", nodeId: "r:1", set: { name: "x" } }], /no node with id 'r:1' \(invalid or removed\)/],
-      ["patch of a removed main component", [{ op: "patch", nodeId: "r:3", set: { name: "x" } }], /no node with id 'r:3' \(invalid or removed\)/],
-      ["setVariableMode", [{ op: "setVariableMode", nodeId: "r:1", collection: "Theme", mode: "Dark" }], /no node with id 'r:1' \(invalid or removed\)/],
-      ["delete", [{ op: "delete", nodeId: "r:1" }], /no node with id 'r:1' \(invalid or removed\)/],
-      ["move of it", [{ op: "move", nodeId: "r:1", parentId: "1:1" }], /no node with id 'r:1' \(invalid or removed\)/],
-      ["move into it", [{ op: "move", nodeId: mine, parentId: "r:1" }], /no parent with id 'r:1' \(invalid or removed\)/],
-      ["createFrame into it", [{ op: "createFrame", name: "Child", parentId: "r:1" }], /parent 'r:1' not found \(invalid or removed id\)/],
-      ["a copy of it", [{ op: "createTree", tree: { clone: "r:1" } }], /no node with id 'r:1' \(invalid or removed\)/],
-      ["an instance of it", [{ op: "createTree", tree: { children: [{ component: "r:3" }] } }], /r:3/],
+    // The same three layers, deleted three ways Figma can hand them back: removed; not removed but detached from the
+    // document (its parent null, as a soft-deleted main component is); not removed but under a removed frame.
+    const holder = { id: "h:9", type: "FRAME", name: "Holder", removed: true, parent: null, visible: true };
+    const ways: Array<[string, Record<string, unknown>]> = [
+      ["a removed node", { removed: true, parent: null }],
+      ["a detached node (not removed, no parent)", { removed: false, parent: null }],
+      ["a node under a removed frame (not removed itself)", { removed: false, parent: holder }],
     ];
-    for (const [what, ops, want] of tries) {
-      const before = w.alive().length;
-      const r = await w.api.applyWrites(ops);
-      ok(`[ANNOUNCE] ${what}: a removed node is refused as missing, nothing changed (got ${JSON.stringify(r)})`,
-        r.ok === false && r.applied.length === 0 && want.test(String(r.error)) && w.alive().length === before
-        && w.scene.nodes["r:1"]?.name === "Gone frame" && w.scene.nodes["r:2"]?.characters === "a" && w.scene.nodes["r:3"]?.name === "Gone component");
+    for (const [how, gone] of ways) {
+      const w = await treeWorld({ extra: { nodes: {
+        "r:1": { id: "r:1", type: "FRAME", name: "Gone frame", fills: [], visible: true, ...gone },
+        "r:2": { id: "r:2", type: "TEXT", name: "Gone text", characters: "a", fontName: { family: "Inter", style: "Regular" }, fills: [], visible: true, ...gone },
+        "r:3": { id: "r:3", type: "COMPONENT", name: "Gone component", key: "local-r:3", remote: false, visible: true, ...gone },
+      } } });
+      const made = await w.api.applyWrites([{ op: "createFrame", name: "Mine" }]);
+      const mine = String(made.applied[0]?.id);
+      const tries: Array<[string, WriteOp[], RegExp]> = [
+        ["setFill", [{ op: "setFill", nodeId: "r:1", color: "#ff0000" }], /no node with id 'r:1' \(invalid or removed\)/],
+        ["setText", [{ op: "setText", nodeId: "r:2", text: "b" }], /no node with id 'r:2' \(invalid or removed\)/],
+        ["patch", [{ op: "patch", nodeId: "r:1", set: { name: "x" } }], /no node with id 'r:1' \(invalid or removed\)/],
+        ["patch of a deleted main component", [{ op: "patch", nodeId: "r:3", set: { name: "x" } }], /no node with id 'r:3' \(invalid or removed\)/],
+        ["setVariableMode", [{ op: "setVariableMode", nodeId: "r:1", collection: "Theme", mode: "Dark" }], /no node with id 'r:1' \(invalid or removed\)/],
+        ["delete", [{ op: "delete", nodeId: "r:1" }], /no node with id 'r:1' \(invalid or removed\)/],
+        ["move of it", [{ op: "move", nodeId: "r:1", parentId: "1:1" }], /no node with id 'r:1' \(invalid or removed\)/],
+        ["move into it", [{ op: "move", nodeId: mine, parentId: "r:1" }], /no parent with id 'r:1' \(invalid or removed\)/],
+        ["createFrame into it", [{ op: "createFrame", name: "Child", parentId: "r:1" }], /parent 'r:1' not found \(invalid or removed id\)/],
+        ["a copy of it", [{ op: "createTree", tree: { clone: "r:1" } }], /no node with id 'r:1' \(invalid or removed\)/],
+        ["an instance of it", [{ op: "createTree", tree: { children: [{ component: "r:3" }] } }], /r:3/],
+      ];
+      for (const [what, ops, want] of tries) {
+        const before = w.alive().length;
+        const r = await w.api.applyWrites(ops);
+        ok(`[ANNOUNCE] ${what}, ${how}: refused as missing, nothing changed (got ${JSON.stringify(r)})`,
+          r.ok === false && r.applied.length === 0 && want.test(String(r.error)) && w.alive().length === before
+          && w.scene.nodes["r:1"]?.name === "Gone frame" && w.scene.nodes["r:2"]?.characters === "a" && w.scene.nodes["r:3"]?.name === "Gone component");
+      }
+    }
+    // A library component has no parent by design (and neither has its own layer's chain a page): it is still found,
+    // and a patch of it or inside it is refused as the library's, not as missing.
+    const lib: FakeNode = { id: "lib:1", type: "COMPONENT", name: "Avatar", key: "e".repeat(40), remote: true, parent: null, removed: false, visible: true, getInstancesAsync: async () => [] };
+    const dot: FakeNode = { id: "lib:2", type: "FRAME", name: "Dot", parent: lib, removed: false, visible: true, fills: [] };
+    lib.children = [dot];
+    const w = await treeWorld({ extra: { nodes: { "lib:1": lib, "lib:2": dot } } });
+    for (const [what, nodeId] of [["a library component", "lib:1"], ["a layer inside one", "lib:2"]] as const) {
+      const r = await w.api.applyWrites([{ op: "patch", nodeId, set: { name: "x" } }]);
+      ok(`[ANNOUNCE] ${what} is found by id, never missing: refused as the library's (got ${JSON.stringify(r.error)})`,
+        r.ok === false && /lives in another library file/.test(String(r.error)) && !/no node with id/.test(String(r.error)) && lib.name === "Avatar" && dot.name === "Dot");
     }
     const raw = rawLookups();
     ok(`[ANNOUNCE] …every write-path lookup by id goes through node-lookup.ts nodeById (raw lookups: ${JSON.stringify(raw)})`, raw.length === 0);
@@ -706,15 +749,15 @@ cases.push({
 }, {
   name: "Two layers deleted after a preview: the refusal lists both and says the preview's image stays, never \"nothing was changed\" (#206)",
   async run() {
-    for (const removed of [false, true]) {
-      const { w, card, reply } = await previewedAndPutBack("two" + String(removed), { drop: ["x:1", "x:2"], removed });
+    for (const how of ["gone", "removed", "soft"] as const) {
+      const { w, card, reply } = await previewedAndPutBack("two-" + how, { drop: ["x:1", "x:2"], how });
       const t = w.notified.length;
       const p = w.posted.length;
       await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
       const r = replyOf(await reply);
       const text = String(lastWrites(w)?.text);
       const lines = "ops[1] (patch): no node with id 'x:1' (invalid or removed)\nops[2] (patch): no node with id 'x:2' (invalid or removed)";
-      ok(`[ANNOUNCE] two problems after a preview (${removed ? "removed" : "gone"}): the agent gets both, and what landed, once (got ${JSON.stringify(r.error)})`,
+      ok(`[ANNOUNCE] two problems after a preview (${how}): the agent gets both, and what landed, once (got ${JSON.stringify(r.error)})`,
         r.ok === false && r.error === "the file changed while the write waited for review: 2 problems — no layer was changed, but the batch had already loaded 1 image file into Figma:\n" + lines);
       ok(`[ANNOUNCE] …and the designer the same, both on one line (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
         saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: the file changed while the write waited for review: 2 problems: " + lines.replace("\n", "; "));

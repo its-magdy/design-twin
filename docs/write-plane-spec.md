@@ -213,8 +213,13 @@ screens.
     stay. `applied` lists the changes not put back and the deletes already run, not the imported items (a batch
     that fails while importing has an empty `applied`). A refusal whose put-back failed for one change says what
     stays, never that nothing was changed. A node the designer deleted counts as missing even when Figma still hands
-    it back by id (a deleted main component is kept, soft-deleted, and is `removed`): every lookup a write makes
-    treats a removed node as no node, so a write approved after its target was deleted is refused, not applied to it.
+    it back by id. A deleted main component is kept, soft-deleted, for its instances and an undo, and is not always
+    `removed` (seen live: one deleted after a preview still resolved and passed a `removed` check, though no page
+    showed it). So every lookup a write makes counts a node only when it
+    is in the document: not `removed`, and its parent chain climbs to the document node. A node with no parent, or
+    under a removed one, is no node, so a write approved after its target was deleted is refused, not applied to it.
+    A library component is the one exception: it has no parent by design, and is found (to make an instance of it;
+    changing it is refused as the library's).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
 16. **One undo per batch.** Figma ends an undo step at each addComponentProperty, editComponentProperty and

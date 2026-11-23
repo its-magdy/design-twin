@@ -91,7 +91,7 @@ export interface FakeFigma {
   commitUndo(): void;
   currentPage: FakePage;
   fileKey: string;
-  root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData: (key: string) => string; setPluginData: (key: string, value: string) => void };
+  root: FakeNode & { type: "DOCUMENT"; id: string; parent: null; removed: false; name: string; documentColorProfile: string; children: FakeNode[]; getPluginData: (key: string) => string; setPluginData: (key: string, value: string) => void };
   loadAllPagesAsync(): Promise<void>;
   /** Absent unless a case passes one: the plugin's reads must not need them (a read leaves the view alone). */
   setCurrentPageAsync?(page: FakePage): Promise<void>;
@@ -376,6 +376,26 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const currentPage = delta.currentPage ?? base.currentPage ?? { name: "Page 1", selection: [], children: [] };
   const selection = delta.selection ?? base.selection;
   if (selection) currentPage.selection = selection;
+  // Figma's document node (figma.root): every page's parent, so the top of every attached node's parent chain (the
+  // write path counts a node only when its chain climbs to it: node-lookup.ts). A page the scene gives with no parent
+  // is the root's: the current page, the scene's pages, any a case puts in `root.children` later, and one a lookup by id
+  // finds. A node the scene gives with no `parent` field at all is on the current page once a lookup by id finds it; a
+  // case that means one detached from the document (a soft-deleted main component, a library one) says `parent: null`.
+  let pageList: FakeNode[] = [];
+  const adopt = (p: FakeNode): void => { if (p.parent === undefined) p.parent = root; };
+  const root: FakeFigma["root"] = {
+    type: "DOCUMENT", id: "0:0", parent: null, removed: false,
+    name: file.name ?? "", documentColorProfile: file.colorProfile ?? "",
+    get children() { return pageList; },
+    set children(list: FakeNode[]) { pageList = list; for (const p of list) adopt(p); },
+    getPluginData: (k) => rootData.get(k) ?? (rootPluginData ? rootPluginData(k) : ""),
+    setPluginData: (k, v) => { if (v === "") rootData.delete(k); else rootData.set(k, v); },
+  };
+  const onCurrentPage = (n: FakeNode): FakeNode => {
+    if (n.type === "PAGE") adopt(n);
+    else if (n.type !== "DOCUMENT" && !("parent" in n)) n.parent = currentPage;
+    return n;
+  };
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
   const undo: World["undo"] = { commits: 0, implicit: 0, onImplicit: null };
@@ -386,6 +406,8 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   // The document's own plugin data: what the plugin sets reads back; anything else is what the scene says (or "").
   const rootData = new Map<string, string>();
   const teamLibrary = delta.teamLibrary ?? base.teamLibrary;
+  root.children = delta.pages ?? base.pages ?? [];
+  adopt(currentPage);
 
   const figma: FakeFigma = {
     mixed: MIXED,
@@ -406,12 +428,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     commitUndo: () => { undo.commits++; },
     currentPage,
     fileKey: file.fileKey ?? "",
-    root: {
-      name: file.name ?? "", documentColorProfile: file.colorProfile ?? "",
-      children: delta.pages ?? base.pages ?? [],
-      getPluginData: (k) => rootData.get(k) ?? (rootPluginData ? rootPluginData(k) : ""),
-      setPluginData: (k, v) => { if (v === "") rootData.delete(k); else rootData.set(k, v); },
-    },
+    root,
     loadAllPagesAsync: async () => {},
     getImageByHash: (hash) => scene.images[hash] ?? null,
     createImage: (data) => {
@@ -424,7 +441,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
       return img;
     },
     base64Decode: (data) => new Uint8Array(Buffer.from(data, "base64")),
-    getNodeByIdAsync: async (id) => scene.nodes[id] ?? null,
+    getNodeByIdAsync: async (id) => { const n = scene.nodes[id]; return n ? onCurrentPage(n) : null; },
     getStyleByIdAsync: async (id) => {
       const s = scene.styles[id];
       return typeof s === "function" ? s() : s ?? null;

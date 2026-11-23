@@ -7051,7 +7051,18 @@
   // src/node-lookup.ts
   async function nodeById(id) {
     const n = await figma.getNodeByIdAsync(id);
-    return n && !n.removed ? n : null;
+    return n && inDocument(n) ? n : null;
+  }
+  function inDocument(n) {
+    let top = n;
+    for (; ; ) {
+      if (top.removed) return false;
+      const p = top.parent;
+      if (!p) break;
+      top = p;
+    }
+    if (top.type === "DOCUMENT") return true;
+    return (top.type === "COMPONENT" || top.type === "COMPONENT_SET") && top.remote === true;
   }
 
   // src/tree-refs.ts
