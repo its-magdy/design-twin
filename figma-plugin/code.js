@@ -7660,6 +7660,11 @@
         failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
         break;
       }
+      if (c.on && c.on.removed) {
+        if (c.made) restored.push(c);
+        else failed.push("could not undo " + c.what + " (it was deleted from the file after the batch changed it)");
+        continue;
+      }
       try {
         await c.restore(allowed2);
         restored.push(c);
@@ -8827,7 +8832,7 @@
       }
       if (sameRefs(was, next)) continue;
       consent2();
-      changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label2(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label2(n), on: n, restore() {
         if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was);
       } });
       if ("componentPropertyReferences" in n) n.componentPropertyReferences = next;
@@ -8842,7 +8847,7 @@
     for (const d of p.add) {
       consent2();
       const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0);
-      changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label2(owner), restore() {
+      changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label2(owner), on: owner, restore() {
         owner.deleteComponentProperty(key);
       } });
       propertyCalled();
@@ -8856,7 +8861,7 @@
       const key = owner.editComponentProperty(e.key, next);
       const back = { defaultValue: e.was.defaultValue };
       if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
-      changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), restore() {
+      changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), on: owner, restore() {
         owner.editComponentProperty(key, back);
       } });
       propertyCalled();
@@ -8869,7 +8874,7 @@
       const was = refsNow(n);
       if (sameRefs(was, r)) return;
       consent2();
-      changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label2(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label2(n), on: n, restore() {
         n.componentPropertyReferences = liveRefs(owner, was);
       } });
       n.componentPropertyReferences = r;
@@ -8916,6 +8921,7 @@
       } catch {
         continue;
       }
+      if (!inDocument(n)) continue;
       if (count2) out.push("removing variant '" + n.name + "' of '" + n.parent.name + "' leaves " + count2 + " instance" + (count2 === 1 ? "" : "s") + " without a main component");
     }
     return out;
@@ -9413,6 +9419,8 @@
       applied,
       kind: "created tree",
       what: "the tree '" + root.name + "' (" + root.id + ")",
+      on: root,
+      made: true,
       restore() {
         root.remove();
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
@@ -9468,7 +9476,7 @@
       if (made2.handles.size) applied.handles = handleRecord(made2.handles);
       if (t.summary.unbound) applied.unbound = t.summary.unbound;
       const built = root;
-      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
+      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", on: built, made: true, restore() {
         built.remove();
       } };
     } catch (e) {
@@ -9485,8 +9493,8 @@
       }
       if (!inDocument(n) || stayed.some((s) => below(n, s))) continue;
       stayed.push(n);
-      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", restore() {
-        if (!n.removed) n.remove();
+      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
+        n.remove();
       } });
     }
   }
@@ -10843,6 +10851,7 @@
       applied: { id: n.id },
       kind: "updated node",
       what: "the place, clipping or size limits of " + label3(n),
+      on: n,
       async restore() {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
         if (size2) {
@@ -10911,6 +10920,7 @@
       applied: { id: parent.id },
       kind: "reordered frame",
       what: "the order of the layers in " + label3(parent),
+      on: parent,
       restore() {
         arrange(parent, was.filter((c) => childOf(c, parent)));
       }
@@ -10935,8 +10945,9 @@
       applied: {},
       kind: "stored spec",
       what: "the spec stored on " + stamps.length + " node(s)",
+      // A node deleted since took its stored spec with it: nothing to put back on it (its fields throw when read).
       restore() {
-        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
+        for (const [n, v] of was) if (!n.removed) n.setPluginData(SPEC_DATA, v);
       }
     });
     for (const s of stamps) stampNode(s.ref, key, s.spec);
@@ -10969,20 +10980,20 @@
       consent2();
       const from = made2.pairs.length;
       const n = await buildSubtree(b.spec, b.parent, made2, consent2, changes);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), on: n, made: true, restore() {
         n.remove();
       } });
       stampAll(made2, key, from);
       built.push(n);
     }
+    for (const k of plan.kept) stillInDocument(k.ref);
+    for (const n of built) stillInDocument(n);
     const replaced = plan.builds.map((b) => b.replaces);
     for (const o of plan.orders) {
-      stillInDocument(o.parent);
       consent2();
       await applyOrder(o, built, replaced, allowed2, changes);
     }
     if (plan.stamps.length) {
-      for (const st of plan.stamps) stillInDocument(st.ref);
       consent2();
       restamp2(plan.stamps, key, changes);
     }
@@ -10990,13 +11001,12 @@
     let rewired = 0;
     if (u.component) {
       const root = u.root;
-      stillInDocument(root);
       if (root.type === "COMPONENT_SET" && built.length) {
         consent2();
         const size2 = { w: root.width, h: root.height };
         const at3 = root.children.map((c) => [c, c.x, c.y]);
         const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
+        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), on: root, restore() {
           for (const [c, x, y] of at3) if (!c.removed) {
             c.x = x;
             c.y = y;
@@ -11757,6 +11767,7 @@
       applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
       kind: "variable mode change",
       what: "the '" + collection.name + "' mode on node " + node.id,
+      on: node,
       restore() {
         if (prev === void 0) node.clearExplicitVariableModeForCollection(collection);
         else node.setExplicitVariableModeForCollection(collection, prev);
@@ -13015,6 +13026,7 @@
       applied,
       kind: "moved node",
       what: "the move of " + label4(node),
+      on: node,
       restore() {
         from.insertChild(Math.min(at3, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
         if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
@@ -13097,7 +13109,7 @@
   }
   function createdNode(n) {
     markCreated(n);
-    return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", restore() {
+    return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
       n.remove();
     } };
   }
@@ -13171,7 +13183,7 @@
           stillInDocument(nd, "node", "setFill: ");
           consent();
           nd.fills = [paint];
-          const change2 = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+          const change2 = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
           changes.push(change2);
           return change2.applied;
         }
@@ -13183,6 +13195,7 @@
           applied: ifDefined("id", op.nodeId),
           kind: "fill change",
           what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+          on: nd,
           // The paints, then the paint style they came from (setting paints detaches it).
           async restore(allowed2) {
             target.fills = old;
@@ -13207,7 +13220,7 @@
         still();
         consent();
         nd.characters = op.text || "";
-        const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
+        const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
         changes.push(change);
         return change.applied;
       }
@@ -13615,6 +13628,26 @@
       const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
       return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
     };
+    const orphans = /* @__PURE__ */ new Map();
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
+        orphans.set(i, await orphanWarnings(removalsOf(t.update)));
+      } catch (e) {
+        return lostWith(i, op, e);
+      }
+    }
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
+        stillInDocument(t.update.root);
+        for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
+      } catch (e) {
+        return lostWith(i, op, e);
+      }
+    }
     for (const [i, t] of trees.targets) {
       const op = list[i];
       if (!op || !t.update) continue;
@@ -13624,8 +13657,8 @@
         if (n) row.removed = n;
         else delete row.removed;
       }
+      for (const m of orphans.get(i) || []) warnings.push("ops[" + i + "]: " + m);
       try {
-        for (const m of await orphanWarnings(removalsOf(t.update))) warnings.push("ops[" + i + "]: " + m);
         for (const n of removalsOf(t.update)) {
           if (n.removed) continue;
           consent();

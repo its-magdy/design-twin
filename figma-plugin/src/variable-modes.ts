@@ -130,6 +130,7 @@ export function applyMode(t: ModeTarget): Change {
     applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
     kind: "variable mode change",
     what: "the '" + collection.name + "' mode on node " + node.id,
+    on: node,
     restore() {
       if (prev === undefined) node.clearExplicitVariableModeForCollection(collection);
       else node.setExplicitVariableModeForCollection(collection, prev);

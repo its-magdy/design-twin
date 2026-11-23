@@ -99,7 +99,7 @@ interface Resolved {
 /** A node an op just created, as a Change whose undo removes it. */
 function createdNode(n: SceneNode): Change {
   markCreated(n);
-  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", restore() { n.remove(); } };
+  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { n.remove(); } };
 }
 
 // Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
@@ -169,7 +169,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
         stillInDocument(nd, "node", "setFill: ");
         consent();
         nd.fills = [paint];
-        const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+        const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
         changes.push(change);
         return change.applied;
       }
@@ -178,7 +178,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       const oldStyle = target.fillStyleId;
       target.fills = [paint];
       const change: Change = {
-        applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+        applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", on: nd,
         // The paints, then the paint style they came from (setting paints detaches it).
         async restore(allowed) {
           target.fills = old;
@@ -204,7 +204,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       still();
       consent();
       nd.characters = op.text || "";
-      const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
+      const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
       changes.push(change);
       return change.applied;
     }
@@ -707,15 +707,32 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
     return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
   };
+  // A variant dropped from a set's table: its instances lose their main component (said, not refused). Counted for every
+  // re-send first: those are the batch's last awaits, and the designer can change the file at any of them (node-lookup.ts),
+  // so what the removals hold is checked again after them, right before the first removal: the result each re-send
+  // updates is still in the document, and each node it removes still holds only what its key built.
+  const orphans = new Map<number, string[]>();
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try { orphans.set(i, await orphanWarnings(removalsOf(t.update))); } catch (e) { return lostWith(i, op, e); }
+  }
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try {
+      stillInDocument(t.update.root);
+      for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
+    } catch (e) { return lostWith(i, op, e); }
+  }
   for (const [i, t] of trees.targets) {
     const op = list[i];
     if (!op || !t.update) continue;
     // The reply counts what is removed now, after every other op (a later op may have moved a node out).
     const row = rows[i];
     if (row) { const n = removalCount(t.update); if (n) row.removed = n; else delete row.removed; }
+    for (const m of orphans.get(i) || []) warnings.push("ops[" + i + "]: " + m);
     try {
-      // A variant dropped from a set's table: its instances lose their main component (said, not refused).
-      for (const m of await orphanWarnings(removalsOf(t.update))) warnings.push("ops[" + i + "]: " + m);
       for (const n of removalsOf(t.update)) {
         if (n.removed) continue;
         consent();

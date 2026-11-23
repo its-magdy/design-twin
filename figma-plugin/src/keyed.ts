@@ -326,6 +326,7 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
     applied: { id: n.id },
     kind: "updated node",
     what: "the place, clipping or size limits of " + label(n),
+    on: n,
     async restore() {
       for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
       if (size) {
@@ -406,6 +407,7 @@ async function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[],
     applied: { id: parent.id },
     kind: "reordered frame",
     what: "the order of the layers in " + label(parent),
+    on: parent,
     restore() { arrange(parent, was.filter((c) => childOf(c, parent))); },
   };
   changes.push(change);
@@ -426,7 +428,8 @@ function restamp(stamps: Plan<SceneNode>["stamps"], key: string, changes: Change
     applied: {},
     kind: "stored spec",
     what: "the spec stored on " + stamps.length + " node(s)",
-    restore() { for (const [n, v] of was) n.setPluginData(SPEC_DATA, v); },
+    // A node deleted since took its stored spec with it: nothing to put back on it (its fields throw when read).
+    restore() { for (const [n, v] of was) if (!n.removed) n.setPluginData(SPEC_DATA, v); },
   });
   for (const s of stamps) stampNode(s.ref, key, s.spec);
 }
@@ -458,14 +461,20 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     const from = made.pairs.length;
     const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent, changes);
     // On the list before it is stamped: a stamp that throws removes it with the batch.
-    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
+    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), on: n, made: true, restore() { n.remove(); } });
     stampAll(made, key, from);
     built.push(n);
   }
+  // The builds were the op's last awaits (a reorder awaits only to put itself back): every node it holds is checked once
+  // here, before the reorders, the stamps, the component's wiring and the reply: each node of the result it keeps (the
+  // result itself, the nodes it changed, reorders or restamps among them) and each node it just built. One deleted or
+  // detached at an earlier op's await or at one of its own fails the op as missing: never silently left out of a
+  // reorder, nor reported as changed or built.
+  for (const k of plan.kept) stillInDocument(k.ref);
+  for (const n of built) stillInDocument(n);
   const replaced = plan.builds.map((b) => b.replaces);
-  for (const o of plan.orders) { stillInDocument(o.parent); consent(); await applyOrder(o, built, replaced, allowed, changes); }
+  for (const o of plan.orders) { consent(); await applyOrder(o, built, replaced, allowed, changes); }
   if (plan.stamps.length) {
-    for (const st of plan.stamps) stillInDocument(st.ref);
     consent();
     restamp(plan.stamps, key, changes);
   }
@@ -474,13 +483,12 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   let rewired = 0;
   if (u.component) {
     const root = u.root;
-    stillInDocument(root);
     if (root.type === "COMPONENT_SET" && built.length) {
       consent();
       const size = { w: root.width, h: root.height };
       const at = root.children.map((c) => [c, c.x, c.y] as const);
       const sizing = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), restore() {
+      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), on: root, restore() {
         for (const [c, x, y] of at) if (!c.removed) { c.x = x; c.y = y; }
         // resize first: it makes both axes fixed, so the sizing modes are put back after it
         if (root.width !== size.w || root.height !== size.h) root.resize(size.w, size.h);

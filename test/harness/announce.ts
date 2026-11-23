@@ -1471,3 +1471,151 @@ cases.push({
       copy !== undefined && r.ok === false && r.applied.length === 1 && r.applied[0]?.id === copy.id && r.error === want && !w.alive().some((n) => n.name === "Group"));
   },
 });
+
+cases.push({
+  name: "A keyed variant removal re-checks the variant after the orphan count: a layer the designer put in it meanwhile refuses it (#206)",
+  async run() {
+    const w = await treeWorld();
+    const spec = (names: string[]) => ({ type: "COMPONENT_SET", name: "Button", children: names.map((name) => ({ type: "COMPONENT", name: "Size=" + name })) });
+    const first = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M", "L"]) }]);
+    const root = w.scene.nodes[String(first.applied[0]?.id)];
+    const doomed = (root?.children ?? []).find((n) => n.name === "Size=L");
+    if (!root || !doomed) throw new Error("no set to re-send");
+    const makeFrame = w.figma.createFrame;
+    if (!makeFrame) throw new Error("the world makes no frames");
+    const foreign = makeFrame();
+    foreign.name = "Designer's layer";
+    const realInstances = doomed.getInstancesAsync as () => Promise<unknown[]>;
+    let calls = 0;
+    // The orphan count's await as the removals run (the review's own count reads it first): the designer drops a layer
+    // of their own into the variant.
+    doomed.getInstancesAsync = async () => { if (new Error().stack?.includes("orphanWarnings") && calls++ === 0) (doomed.appendChild as (n: unknown) => void)(foreign); return realInstances(); };
+    const t = w.notified.length;
+    const p = w.posted.length;
+    const r = replyOf(await bridgeWrite(w, "r8-foreign", [{ op: "createTree", tree: spec(["S", "M"]) }])) as { ok?: unknown; error?: unknown; applied?: unknown };
+    const text = String(lastWrites(w)?.text);
+    const want = "'Size=L' (" + String(doomed.id) + ") is to be removed (the spec with key 'dtwin/component:Button' no longer has it), but it now holds 'Designer's layer' (" + String(foreign.id) + "), which that key did not build; nothing was removed";
+    ok(`[ANNOUNCE] a variant that gained a designer's layer during the orphan count: refused, nothing removed (got ${JSON.stringify(r)})`,
+      calls >= 1 && r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && r.error === want);
+    ok(`[ANNOUNCE] …the variant and the designer's layer are both still in the file (alive ${JSON.stringify(w.alive().map((n) => n.name))})`,
+      w.alive().includes(foreign) && w.alive().includes(doomed) && foreign.parent === doomed);
+    // (The batch waited for review first, so the card's own toast came before this one.)
+    ok(`[ANNOUNCE] …the designer is told nothing changed, and why (got ${JSON.stringify(text)})`, w.notified.slice(t).at(-1) === text && writesOf(w.posted.slice(p)).length === 1 && text === HEAD + want);
+  },
+}, {
+  name: "A keyed re-send whose result goes during the orphan count removes nothing from it and fails as missing (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const spec = (names: string[]) => ({ type: "COMPONENT_SET", name: "Button", props: names.length > 2 ? { Label: { type: "TEXT", default: "Go" } } : undefined, children: names.map((name) => ({ type: "COMPONENT", name: "Size=" + name })) });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M", "L"]) }]);
+      const root = w.scene.nodes[String(first.applied[0]?.id)];
+      const doomed = (root?.children ?? []).find((n) => n.name === "Size=L");
+      if (!root || !doomed) throw new Error("no set to re-send");
+      const realInstances = doomed.getInstancesAsync as () => Promise<unknown[]>;
+      let calls = 0;
+      // The designer deletes the whole set while the variant's instances are counted as the removals run.
+      doomed.getInstancesAsync = async () => { if (new Error().stack?.includes("orphanWarnings") && calls++ === 0) out(root); return realInstances(); };
+      const r = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M"]) }]);
+      ok(`[ANNOUNCE] a set ${how} during the orphan count: fails as missing, no variant removed from it, no property deleted (got ${JSON.stringify(r)})`,
+        calls >= 1 && r.ok === false && r.applied.length === 0 && r.error === "no node with id '" + String(root.id) + "' (invalid or removed)"
+        && doomed.removed !== true && Object.keys(peekRemoved(root, "componentPropertyDefinitions") ?? {}).some((k) => k.startsWith("Label#")));
+    }
+  },
+}, {
+  name: "A keyed order-only re-send whose kept child goes during an earlier op's await fails as missing: no reorder is reported (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld({ kit: true });
+      const tree = (names: string[]) => ({ key: "order", name: "Order", children: names.map((name) => ({ name, handle: name })) });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: tree(["A", "B", "C"]) }]);
+      const root = w.scene.nodes[String(first.applied[0]?.id)];
+      const missing = w.scene.nodes[String(first.applied[0]?.handles?.C)];
+      if (!root || !missing) throw new Error("no keyed result");
+      let hooks = 0;
+      w.hooks.onStyle = async () => { if (!hooks++) out(missing); };
+      const r = replyOf(await bridgeWrite(w, "r8-order-" + how, [
+        { op: "createTree", tree: { name: "Earlier", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] } },
+        { op: "createTree", tree: tree(["C", "B", "A"]) },
+      ])) as { ok?: unknown; error?: unknown; applied?: unknown; failedAt?: unknown; restored?: unknown };
+      w.hooks.onStyle = undefined;
+      const text = String(lastWrites(w)?.text);
+      const want = "no node with id '" + String(missing.id) + "' (invalid or removed)";
+      ok(`[ANNOUNCE] an order-only re-send, a kept child ${how} during an earlier op: fails as missing, the earlier op put back (got ${JSON.stringify(r)})`,
+        hooks === 1 && r.ok === false && r.failedAt === 1 && Array.isArray(r.applied) && r.applied.length === 0 && Array.isArray(r.restored) && r.restored.length === 1 && r.error === want);
+      ok(`[ANNOUNCE] …${how}: the rest keep their order (got ${JSON.stringify(namesOf(kidsOf(root)))}), the earlier tree is gone, and the designer is told (got ${JSON.stringify(text)})`,
+        JSON.stringify(namesOf(kidsOf(root))) === JSON.stringify(how === "detached" ? ["A", "B"] : ["A", "B"]) && !w.alive().some((n) => n.name === "Earlier")
+        && text === "Design Twin undid 1 earlier change after an edit failed: " + want);
+    }
+  },
+}, {
+  name: "A keyed re-send whose patched node or new child goes during a later build's await fails as missing (#206)",
+  async run() {
+    for (const [how, out] of OUT) {
+      for (const which of ["patched", "built"] as const) {
+        const w = await treeWorld({ kit: true });
+        const tree = (a: string, extra: Array<Record<string, unknown>>) => ({ key: "k", name: "K", children: [{ name: a, handle: "a" }, ...extra] });
+        const first = await w.api.applyWrites([{ op: "createTree", tree: tree("A", []) }]);
+        const aNode = w.scene.nodes[String(first.applied[0]?.handles?.a)];
+        if (!aNode) throw new Error("no keyed result");
+        let calls = 0;
+        let gone: FakeNode | undefined;
+        // The second new child's style await: the designer deletes the renamed child, or the first new child.
+        w.hooks.onStyle = async () => {
+          if (++calls !== 2) return;
+          gone = which === "patched" ? aNode : madeNamed(w, "X");
+          if (gone) out(gone);
+        };
+        const r = await w.api.applyWrites([{ op: "createTree", tree: tree("A2", [{ name: "X", text: "X", styles: { text: "Body" } }, { name: "Y", text: "Y", styles: { text: "Body" } }]) }]);
+        w.hooks.onStyle = undefined;
+        const missing = "no node with id '" + String(gone?.id) + "' (invalid or removed)";
+        // A patched node removed takes its change with it: that cannot be put back, and the reply says so (a detached one
+        // is put back).
+        const kept = which === "patched" && how === "removed";
+        ok(`[ANNOUNCE] a keyed re-send, its ${which} node ${how} during a later build: fails as missing, nothing else stays (got ${JSON.stringify(r)})`,
+          gone !== undefined && r.ok === false && !w.alive().some((n) => n.name === "X" || n.name === "Y") && (kept
+            ? r.applied.length === 1 && r.applied[0]?.id === gone.id && r.error === missing + "; could not undo the changes to 'A' (" + String(gone.id) + ") (it was deleted from the file after the patch changed it)"
+            : r.applied.length === 0 && r.error === missing));
+      }
+    }
+  },
+}, {
+  name: "A node the batch made and the designer deleted before a later op failed counts as put back, not \"could not undo\" (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    let made: FakeNode | undefined;
+    w.hooks.onStyle = async () => { made = madeNamed(w, "Made first"); if (made) markRemoved(made); throw new Error("style refused"); };
+    const r = await w.api.applyWrites([
+      { op: "createFrame", name: "Made first", width: 10, height: 10 },
+      { op: "createTree", tree: { name: "Later", children: [{ name: "Wait", text: "Wait", styles: { text: "Body" } }] } },
+    ]);
+    w.hooks.onStyle = undefined;
+    ok(`[ANNOUNCE] a frame the batch made, deleted by the designer before a later op failed: put back, nothing left listed (got ${JSON.stringify(r)})`,
+      made !== undefined && r.ok === false && r.failedAt === 1 && r.applied.length === 0 && (r.restored || []).length === 1 && r.error === "style refused");
+  },
+});
+
+cases.push({
+  name: "A variant to be removed that the designer deletes during its own orphan count is not read: the re-send lands (#206)",
+  async run() {
+    const w = await treeWorld();
+    const spec = (names: string[]) => ({ type: "COMPONENT_SET", name: "Button", children: names.map((name) => ({ type: "COMPONENT", name: "Size=" + name })) });
+    const first = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M", "L"]) }]);
+    const root = w.scene.nodes[String(first.applied[0]?.id)];
+    const doomed = (root?.children ?? []).find((n) => n.name === "Size=L");
+    if (!root || !doomed) throw new Error("no set to re-send");
+    const placed = await w.api.applyWrites([{ op: "createTree", tree: { name: "Uses it", children: [{ component: "Button", props: { Size: "L" } }] } }]);
+    const realInstances = doomed.getInstancesAsync as () => Promise<unknown[]>;
+    let counted = -1;
+    // The designer deletes the variant itself while its instances are counted (the count still comes back).
+    doomed.getInstancesAsync = async () => {
+      const asRemoved = new Error().stack?.includes("orphanWarnings") === true; // read before the await (it loses the caller)
+      const found = await realInstances();
+      if (asRemoved && counted < 0) { counted = found.length; markRemoved(doomed); }
+      return found;
+    };
+    const r = await w.api.applyWrites([{ op: "createTree", tree: spec(["S", "M"]) }]);
+    ok(`[ANNOUNCE] a variant deleted during its own orphan count: the re-send lands, no warning names it, no read error (got ${JSON.stringify(r)})`,
+      placed.ok === true && counted === 1 && r.ok === true && !(r.warnings ?? []).some((m) => m.includes("Size=L")));
+  },
+});

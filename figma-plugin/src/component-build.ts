@@ -269,7 +269,7 @@ export function unwireGoing(p: DefsPlan, consent: () => void, changes: Change[])
     for (const f of PROP_REF_FIELDS) { const v = was[f]; if (v !== undefined && w.unwire.indexOf(f) < 0) next[f] = v; }
     if (sameRefs(was, next)) continue;
     consent();
-    changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label(n), restore() { if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was); } });
+    changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label(n), on: n, restore() { if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was); } });
     if ("componentPropertyReferences" in n) n.componentPropertyReferences = next;
     out.push(n);
   }
@@ -288,7 +288,7 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
   for (const d of p.add) {
     consent();
     const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : undefined);
-    changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label(owner), restore() { owner.deleteComponentProperty(key); } });
+    changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label(owner), on: owner, restore() { owner.deleteComponentProperty(key); } });
     propertyCalled();
     keys.set(d.name, key);
     changed.set(d.name, key);
@@ -301,7 +301,7 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
     // A swap that had no suggestions gets none back (an empty list clears the ones this edit added).
     const back: { defaultValue: string | boolean; preferredValues?: InstanceSwapPreferredValue[] } = { defaultValue: e.was.defaultValue };
     if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
-    changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label(owner), restore() { owner.editComponentProperty(key, back); } });
+    changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label(owner), on: owner, restore() { owner.editComponentProperty(key, back); } });
     propertyCalled();
     keys.set(e.def.name, key);
     changed.set(e.def.name, key);
@@ -312,7 +312,7 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
     const was = refsNow(n);
     if (sameRefs(was, r)) return;
     consent();
-    changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label(n), restore() { n.componentPropertyReferences = liveRefs(owner, was); } });
+    changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label(n), on: n, restore() { n.componentPropertyReferences = liveRefs(owner, was); } });
     n.componentPropertyReferences = r;
     touched.add(n);
   };
@@ -352,6 +352,8 @@ export async function orphanWarnings(removed: readonly SceneNode[]): Promise<str
     if (n.removed || n.type !== "COMPONENT" || !n.parent || n.parent.type !== "COMPONENT_SET") continue;
     let count = 0;
     try { count = (await n.getInstancesAsync()).length; } catch { continue; }
+    // Deleted meanwhile (node-lookup.ts): it leaves no instances behind that this write removes, and its name throws.
+    if (!inDocument(n)) continue;
     if (count) out.push("removing variant '" + n.name + "' of '" + n.parent.name + "' leaves " + count + " instance" + (count === 1 ? "" : "s") + " without a main component");
   }
   return out;

@@ -115,6 +115,7 @@ export function applyMove(t: MoveTarget): Change {
     applied,
     kind: "moved node",
     what: "the move of " + label(node),
+    on: node,
     restore() {
       from.insertChild(Math.min(at, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
       if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);

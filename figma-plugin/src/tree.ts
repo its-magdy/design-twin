@@ -227,6 +227,7 @@ export async function buildTree(t: TreeTarget, consent: () => void, changes: Cha
     applied,
     kind: "created tree",
     what: "the tree '" + root.name + "' (" + root.id + ")",
+    on: root, made: true,
     restore() {
       root.remove();
       if (key !== undefined && readIndex(key) === root.id) writeIndex(key, indexWas);
@@ -290,7 +291,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     if (made.handles.size) applied.handles = handleRecord(made.handles);
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
     const built = root;
-    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); } };
+    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", on: built, made: true, restore() { built.remove(); } };
   } catch (e) {
     discard(parts.slice().reverse().map((p): [SceneNode, string] => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made.strays, "created component", changes);
     throw e;
@@ -310,7 +311,7 @@ function discard(nodes: ReadonlyArray<[SceneNode, string]>, strays: readonly Sce
     try { if (!n.removed) n.remove(); } catch { /* checked below */ }
     if (!inDocument(n) || stayed.some((s) => below(n, s))) continue;
     stayed.push(n);
-    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", restore() { if (!n.removed) n.remove(); } });
+    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { n.remove(); } });
   }
 }
 /** `n` is `of` or below it. */
