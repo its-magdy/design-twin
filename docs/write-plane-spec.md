@@ -231,12 +231,14 @@ screens.
     it already did, a keyed re-send's reorder included, so a refusal that says nothing changed is true. A failed
     build whose remove() Figma refuses leaves its layers in the file: those are listed in `applied` and said not to be
     put back, never "nothing changed". An op that holds several targets in turn (a rule's matches, a keyed re-send's
-    new subtrees, a copy's patched layers, a component two instances name) checks each again once the last target's
-    awaits are done, so target N never goes unnoticed at target N+1's await. A failed build takes back every layer it
-    made, not only its root: a child Figma would not append, or one the designer moved out meanwhile, is not below the
-    root. A put-back skips a layer the designer deleted meanwhile, said not to be put back; one the batch made is gone
-    as it was before the batch, and what else its build made or set (a layer moved out of it, a key's index entry) is
-    still put back. A node a keyed re-send removes that has left the document by then is neither removed nor counted.
+    new subtrees, a copy's patched layers, a component two instances name, the components a rule's instances are of)
+    checks each again once the last target's awaits are done, so target N never goes unnoticed at target N+1's await. A failed build takes back every layer it
+    made, not only its root: a child Figma would not append, or one the designer moved out meanwhile (a layer of a copy
+    included), is not below the root. A change to a layer the designer deleted while the batch ran, before its
+    put-back or during the put-back's own awaits, went with that layer: nothing of it is in the file, so it is neither
+    listed in `applied` nor said not to be put back, and the reply says it went with the layer. A layer the batch made
+    is gone as it was before the batch, and what else its build made or set (a layer moved out of it, a key's index
+    entry) is still put back. A node a keyed re-send removes that has left the document by then is neither removed nor counted.
     A library component is the one exception: it has no parent by design, and is found (to make an instance of it;
     changing it is refused as the library's).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write

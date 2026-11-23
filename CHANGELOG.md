@@ -296,7 +296,13 @@ list of merged PRs.
   key's earlier result back in the file's index, and a keyed re-send no longer removes or counts a variant that left
   the document meanwhile. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
   Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
-  status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed".
+  status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed". A change to a
+  layer the designer deleted while the batch ran (before it was put back, or while it was being put back) is no longer
+  listed in `applied` nor called an edit that could not be put back: nothing of it is in the file, and the reply says it
+  went with that layer. A failed tree also takes back a layer of a copy that the designer moved out of the copy. A rule
+  by `instanceOf` counts an instance only while its main component is in the file, an instance of a set whose default
+  variant goes while its swap values resolve takes the set's default as it is then, and a component re-send's dry run
+  says its component is missing when it goes while its instances are counted.
 
 ## [0.1.6] - 2026-11-02
 
