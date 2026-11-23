@@ -30,6 +30,7 @@ import { planUpdate } from "../../bridge/src/tree-diff.ts";
 import { resolveRefs, treeUses, type ResolvedRefs } from "./tree-refs";
 import { setPlannedComponents } from "./batch-plan";
 import type { Change } from "./write-batch";
+import { inDocument, noNode } from "./node-lookup";
 
 export type Owner = ComponentNode | ComponentSetNode;
 const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
@@ -77,11 +78,13 @@ export function fileDefs(spec: TreeNodeSpec, refs: ResolvedRefs): FileDef[] {
     if (d.type !== "INSTANCE_SWAP") return { name, type: d.type, defaultValue: d.default };
     const main = refs.components.get(String(d.default));
     if (!main) throw new Error("component '" + String(d.default) + "' was not resolved before the batch ran");
+    if (!inDocument(main)) throw new Error(noNode(main.id, "component")); // deleted since the batch resolved
     const out: FileDef = { name, type: d.type, defaultValue: main.type === "COMPONENT_SET" ? main.defaultVariant.id : main.id };
     if (d.preferredValues) {
       out.preferredValues = d.preferredValues.map((ref) => {
         const c = refs.components.get(ref);
         if (!c) throw new Error("component '" + ref + "' was not resolved before the batch ran");
+        if (!inDocument(c)) throw new Error(noNode(c.id, "component"));
         return { type: c.type, key: c.key };
       });
     }

@@ -11,7 +11,7 @@ import { readBatch, SHOW_CAP } from "./review-reads";
 import { queueWork } from "./state";
 import { toast } from "./toast";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
-import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
+import { buildTree, resolveTreeOps, treeGone, type TreeTarget } from "./tree";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
@@ -26,7 +26,7 @@ import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeL
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
-import { nodeById } from "./node-lookup";
+import { inDocument, nodeById, stillInDocument } from "./node-lookup";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -57,17 +57,21 @@ async function loadNodeFonts(node: TextNode): Promise<void> {
 // silently fell back to currentPage: an agent composing a tree (createFrame root -> createFrame
 // parentId:root -> children) got ok:true and a flat pile of nodes on the canvas. Validating first
 // also means a bad parent fails WITHOUT leaving an orphan node the caller can't see in `applied`.
+const parentGone = (parentId: string): string => "parent '" + parentId + "' not found (invalid or removed id)";
 async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNode> {
   if (!parentId) return figma.currentPage;
   const p = await nodeById(parentId);
-  if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
+  if (!p) throw new Error(parentGone(parentId));
   if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
   for (let a: BaseNode | null = p; a; a = a.parent) {
     if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
   }
   // manifest documentAccess is "dynamic-page": appendChild on a PageNode requires the page to be
   // loaded first, or it throws. The read plane already does this (collect.ts / components.ts).
-  if (p.type === "PAGE") await p.loadAsync();
+  if (p.type === "PAGE") {
+    await p.loadAsync();
+    if (!inDocument(p)) throw new Error(parentGone(parentId)); // deleted while it loaded
+  }
   return p as ChildrenMixin & BaseNode;
 }
 
@@ -138,6 +142,8 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       }
       // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
       if (!editsAllowedNow()) { t.remove(); changes.pop(); consent(); }
+      // The parent deleted during it (node-lookup.ts): likewise, and the op fails as its lookup would have.
+      if (op.parentId && !inDocument(parent)) { t.remove(); changes.pop(); throw new Error(parentGone(op.parentId)); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
@@ -158,6 +164,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // run (keepText loads the fonts that needs).
       if (nd.type === "TEXT") {
         const restore = await keepText(nd);
+        stillInDocument(nd, "node", "setFill: "); // deleted while its fonts loaded (node-lookup.ts)
         consent();
         nd.fills = [paint];
         const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -189,6 +196,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       await loadNodeFonts(nd);
       consent();
       const restore = await keepText(nd);
+      stillInDocument(nd, "node", "setText: "); // deleted while its fonts loaded (node-lookup.ts)
       consent();
       nd.characters = op.text || "";
       const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -209,6 +217,10 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     // tree lands whole or not at all.
     case "createTree": {
       if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
+      // What it holds from before the batch ran (its page, a layer it copies, the result it updates) is still there; a
+      // component it places is checked as it is placed (tree.ts treeGone).
+      const gone = treeGone(tree);
+      if (gone !== null) throw new Error(gone);
       consent();
       // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
       // one by one, as they land.

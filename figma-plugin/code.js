@@ -7064,6 +7064,12 @@
     if (top.type === "DOCUMENT") return true;
     return (top.type === "COMPONENT" || top.type === "COMPONENT_SET") && top.remote === true;
   }
+  function noNode(id, what = "node") {
+    return "no " + what + " with id '" + id + "' (invalid or removed)";
+  }
+  function stillInDocument(n, what = "node", prefix = "") {
+    if (!inDocument(n)) throw new Error(prefix + noNode(n.id, what));
+  }
 
   // src/tree-refs.ts
   var noRefs = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() });
@@ -8384,6 +8390,7 @@
       }
     }
     const restore = await snapshot(t);
+    stillInDocument(t.node);
     consent2();
     const applied = { id: t.node.id };
     if (t.unbound) applied.unbound = t.unbound;
@@ -8603,11 +8610,13 @@
       if (d.type !== "INSTANCE_SWAP") return { name, type: d.type, defaultValue: d.default };
       const main = refs2.components.get(String(d.default));
       if (!main) throw new Error("component '" + String(d.default) + "' was not resolved before the batch ran");
+      if (!inDocument(main)) throw new Error(noNode(main.id, "component"));
       const out = { name, type: d.type, defaultValue: main.type === "COMPONENT_SET" ? main.defaultVariant.id : main.id };
       if (d.preferredValues) {
         out.preferredValues = d.preferredValues.map((ref2) => {
           const c = refs2.components.get(ref2);
           if (!c) throw new Error("component '" + ref2 + "' was not resolved before the batch ran");
+          if (!inDocument(c)) throw new Error(noNode(c.id, "component"));
           return { type: c.type, key: c.key };
         });
       }
@@ -9533,6 +9542,15 @@
     const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
     return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
   }
+  function treeGone(t) {
+    if (!inDocument(t.page)) return noNode(t.page.id, "page");
+    if (t.update && !inDocument(t.update.root)) return noNode(t.update.root.id);
+    for (const c of t.clones.values()) {
+      if (!inDocument(c.source)) return noNode(c.source.id);
+      for (const e of c.edits) if (!inDocument(e.node)) return noNode(e.node.id);
+    }
+    return null;
+  }
   function landingSpot(t) {
     const at3 = placement(t.page, "", t.spec);
     const beside = !(t.spec.x !== void 0 && t.spec.y !== void 0) && t.page.children.length > 0;
@@ -9688,6 +9706,7 @@
   function applyInstance(s, parent, made2) {
     const r = made2.refs.instances.get(s);
     if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
+    if (!inDocument(r.main)) throw new Error(noNode(r.main.id, "component"));
     made2.instances++;
     const inst = r.main.createInstance();
     made2.pairs.push([inst, s]);
@@ -11664,6 +11683,7 @@
   }
   function applyMode(t) {
     const { node, collection, modeId } = t;
+    stillInDocument(node);
     const prev = (node.explicitVariableModes || {})[collection.id];
     if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
     else node.setExplicitVariableModeForCollection(collection, modeId);
@@ -12907,11 +12927,14 @@
     return { moves, deletes, problems };
   }
   function checkDelete(t) {
+    stillInDocument(t.node);
     const foreign = foreignBelow(t.node);
     if (foreign) throw new Error(holds2(t.node, foreign));
   }
   function applyMove(t) {
     const { node, parent } = t;
+    stillInDocument(node);
+    stillInDocument(parent, "parent");
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
@@ -12986,15 +13009,19 @@
     const fonts = len > 0 ? node.getRangeAllFontNames(0, len) : node.fontName !== figma.mixed ? [node.fontName] : [];
     await Promise.all(fonts.map((f) => figma.loadFontAsync(f)));
   }
+  var parentGone = (parentId) => "parent '" + parentId + "' not found (invalid or removed id)";
   async function resolveParent(parentId) {
     if (!parentId) return figma.currentPage;
     const p = await nodeById(parentId);
-    if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
+    if (!p) throw new Error(parentGone(parentId));
     if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
     for (let a = p; a; a = a.parent) {
       if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
     }
-    if (p.type === "PAGE") await p.loadAsync();
+    if (p.type === "PAGE") {
+      await p.loadAsync();
+      if (!inDocument(p)) throw new Error(parentGone(parentId));
+    }
     return p;
   }
   var EditsRevoked = class extends Error {
@@ -13052,6 +13079,11 @@
           changes.pop();
           consent();
         }
+        if (op.parentId && !inDocument(parent)) {
+          t.remove();
+          changes.pop();
+          throw new Error(parentGone(op.parentId));
+        }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
         if (fill) t.fills = [fill];
@@ -13070,6 +13102,7 @@
         consent();
         if (nd.type === "TEXT") {
           const restore = await keepText(nd);
+          stillInDocument(nd, "node", "setFill: ");
           consent();
           nd.fills = [paint];
           const change2 = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -13103,6 +13136,7 @@
         await loadNodeFonts(nd);
         consent();
         const restore = await keepText(nd);
+        stillInDocument(nd, "node", "setText: ");
         consent();
         nd.characters = op.text || "";
         const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
@@ -13123,6 +13157,8 @@
       // tree lands whole or not at all.
       case "createTree": {
         if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
+        const gone = treeGone(tree);
+        if (gone !== null) throw new Error(gone);
         consent();
         if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
         const change = await buildTree(tree, consent);

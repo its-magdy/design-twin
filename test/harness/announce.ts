@@ -9,7 +9,7 @@ import type { WriteOp } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
 import type { FakeCollection, FakeNode, PostedMessage } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
-import { treeWorld } from "./writes.ts";
+import { modeNode, modeScene, treeWorld } from "./writes.ts";
 
 type World = Awaited<ReturnType<typeof treeWorld>>;
 
@@ -521,9 +521,10 @@ cases.push({
  *  but `removed` and on no page; "soft", still handed back NOT `removed` but on no page, its parent null (as Figma
  *  hands back a deleted main component: it keeps one, soft-deleted, for its instances and an undo); "under", the frame
  *  it sits in removed, it left NOT `removed` with that frame as its parent. `component` makes x:1 a local main
- *  component; the layers sit on the current page, x:1 in a frame there with "under". */
+ *  component; the layers sit on the current page, x:1 in a frame there with "under". `late`: deleted only once the
+ *  approved (or previewed) run has resolved the batch, as it makes the image (figma.createImage), not before. */
 type Deleted = "gone" | "removed" | "soft" | "under";
-async function previewedAndPutBack(id: string, opts: { drop?: readonly string[]; how?: Deleted; component?: boolean } = {}): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
+async function previewedAndPutBack(id: string, opts: { drop?: readonly string[]; how?: Deleted; component?: boolean; late?: boolean } = {}): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
   const nodes: Record<string, FakeNode> = {};
   for (let i = 1; i <= 26; i++) nodes["x:" + i] = { id: "x:" + i, type: "FRAME", name: "Old " + i, visible: true };
   if (opts.component) Object.assign(nodes["x:1"] ?? {}, { type: "COMPONENT", key: "local-x:1", remote: false, description: "", getInstancesAsync: async () => [] });
@@ -549,15 +550,55 @@ async function previewedAndPutBack(id: string, opts: { drop?: readonly string[];
   await tick(() => state("waiting"));
   w.figma.createImage = real;
   // The designer removes a layer the batch renames: the batch no longer resolves.
-  for (const x of opts.drop || ["x:1"]) {
-    const n = w.scene.nodes[x];
-    if (how === "gone") delete w.scene.nodes[x];
-    else if (!n) continue;
-    else if (how === "removed") { n.removed = true; n.parent = null; }
-    else if (how === "soft") n.parent = null;
-  }
-  if (how === "under") { holder.removed = true; holder.parent = null; }
+  const drop = (): void => {
+    for (const x of opts.drop || ["x:1"]) {
+      const n = w.scene.nodes[x];
+      if (how === "gone") delete w.scene.nodes[x];
+      else if (!n) continue;
+      else if (how === "removed") { n.removed = true; n.parent = null; }
+      else if (how === "soft") n.parent = null;
+    }
+    if (how === "under") { holder.removed = true; holder.parent = null; }
+  };
+  // Late: while the next run makes its image (an await, after the batch resolved and before its first op runs).
+  if (opts.late) w.figma.createImage = (data: Uint8Array) => { w.figma.createImage = real; drop(); return real(data); };
+  else drop();
   return { w, card, reply, hash: () => hash, from };
+}
+
+const PIC_HASH = "a".repeat(64);
+/** An op that loads an image from disk (`images` gives PIC_HASH its bytes). */
+const PIC: WriteOp = { op: "createTree", tree: { name: "Pic", fills: [{ type: "image", file: "one.gif", image: PIC_HASH }] } };
+const LOADED_STAYS = " The batch had already loaded 1 image file into Figma; that stays.";
+/** One op whose node goes partway through its batch: the op (by the ids of lateWorld's nodes), the id that goes, and
+ *  the error the op fails with then. */
+interface Late { what: string; op: (h: LateIds) => WriteOp; gone: (h: LateIds) => string; want: (h: LateIds) => string }
+interface LateIds { mine: string; box: string; label: string; chip: string; keyed: string }
+
+/** A world with a frame "40:1" that takes variable modes (a Theme collection: Light, Dark), and what this session made in
+ *  it: two frames (Mine, Box), a text (Label), a main component (Chip) and a keyed result ("late"). */
+async function lateWorld(): Promise<{ w: World; h: LateIds }> {
+  const w = await treeWorld({ extra: { ...modeScene(), nodes: { "40:1": modeNode("40:1", "Themed") } } });
+  const themed = w.scene.nodes["40:1"];
+  if (themed) themed.parent = w.pages.current;
+  const r = await w.api.applyWrites([
+    { op: "createFrame", name: "Mine" }, { op: "createFrame", name: "Box" }, { op: "createText", text: "a" },
+    { op: "createTree", tree: { type: "COMPONENT", name: "Chip" } }, { op: "createTree", tree: { key: "late", name: "Keyed" } },
+  ]);
+  const ids = r.applied.map((a) => String(a.id));
+  if (!r.ok || ids.length !== 5) throw new Error("lateWorld: the setup batch failed: " + JSON.stringify(r));
+  const [mine = "", box = "", label = "", chip = "", keyed = ""] = ids;
+  return { w, h: { mine, box, label, chip, keyed } };
+}
+
+/** What a failed batch must leave as it was: every node of lateWorld's, its name, text, fills, modes and children (its own
+ *  parent is left out: the case detaches it). */
+function snapshotOf(w: World, h: LateIds): string {
+  const ids: string[] = [h.mine, h.box, h.label, h.chip, h.keyed, "40:1"];
+  return JSON.stringify(ids.map((id) => {
+    const n = w.scene.nodes[id];
+    return n ? [n.name, n.characters, n.fills, n.explicitVariableModes, (n.children || []).map((c) => c.id)] : null;
+  }));
 }
 
 const LOADED_NOTE = "No layer was changed, but the batch had already loaded 1 image file into Figma.";
@@ -664,6 +705,9 @@ function rawLookups(): string[] {
   return out;
 }
 
+/** A local main component's id, in Figma's form (the resolver of a tree's `component` looks it up by id only then). */
+const GONE_COMPONENT = "40:3";
+
 cases.push({
   name: "A layer deleted after a preview, whose id still resolves (removed, or soft-deleted: not removed but on no page), refuses the approved write (#206)",
   async run() {
@@ -707,29 +751,41 @@ cases.push({
       const w = await treeWorld({ extra: { nodes: {
         "r:1": { id: "r:1", type: "FRAME", name: "Gone frame", fills: [], visible: true, ...gone },
         "r:2": { id: "r:2", type: "TEXT", name: "Gone text", characters: "a", fontName: { family: "Inter", style: "Regular" }, fills: [], visible: true, ...gone },
-        "r:3": { id: "r:3", type: "COMPONENT", name: "Gone component", key: "local-r:3", remote: false, visible: true, ...gone },
+        // An id as Figma gives one: the component resolver looks a ref up by id only when it reads as one (tree-refs.ts).
+        [GONE_COMPONENT]: { id: GONE_COMPONENT, type: "COMPONENT", name: "Gone component", key: "local-" + GONE_COMPONENT, remote: false, visible: true, componentPropertyDefinitions: {}, ...gone },
       } } });
+      // Instanceable, so a lookup that still found it would build the instance: the refusal can only come from the lookup.
+      let instanced = 0;
+      const comp = w.scene.nodes[GONE_COMPONENT];
+      if (comp) comp.createInstance = () => { instanced++; return { id: "I40:3", type: "INSTANCE", name: "Gone component", visible: true }; };
+      const looked: string[] = [];
+      const lookup = w.figma.getNodeByIdAsync;
+      w.figma.getNodeByIdAsync = (id: string) => { looked.push(id); return lookup(id); };
       const made = await w.api.applyWrites([{ op: "createFrame", name: "Mine" }]);
       const mine = String(made.applied[0]?.id);
-      const tries: Array<[string, WriteOp[], RegExp]> = [
-        ["setFill", [{ op: "setFill", nodeId: "r:1", color: "#ff0000" }], /no node with id 'r:1' \(invalid or removed\)/],
-        ["setText", [{ op: "setText", nodeId: "r:2", text: "b" }], /no node with id 'r:2' \(invalid or removed\)/],
-        ["patch", [{ op: "patch", nodeId: "r:1", set: { name: "x" } }], /no node with id 'r:1' \(invalid or removed\)/],
-        ["patch of a deleted main component", [{ op: "patch", nodeId: "r:3", set: { name: "x" } }], /no node with id 'r:3' \(invalid or removed\)/],
-        ["setVariableMode", [{ op: "setVariableMode", nodeId: "r:1", collection: "Theme", mode: "Dark" }], /no node with id 'r:1' \(invalid or removed\)/],
-        ["delete", [{ op: "delete", nodeId: "r:1" }], /no node with id 'r:1' \(invalid or removed\)/],
-        ["move of it", [{ op: "move", nodeId: "r:1", parentId: "1:1" }], /no node with id 'r:1' \(invalid or removed\)/],
-        ["move into it", [{ op: "move", nodeId: mine, parentId: "r:1" }], /no parent with id 'r:1' \(invalid or removed\)/],
-        ["createFrame into it", [{ op: "createFrame", name: "Child", parentId: "r:1" }], /parent 'r:1' not found \(invalid or removed id\)/],
-        ["a copy of it", [{ op: "createTree", tree: { clone: "r:1" } }], /no node with id 'r:1' \(invalid or removed\)/],
-        ["an instance of it", [{ op: "createTree", tree: { children: [{ component: "r:3" }] } }], /r:3/],
+      // Each: the op, the refusal it gets, and the id it must look up by id to get it.
+      const tries: Array<[string, WriteOp[], RegExp, string]> = [
+        ["setFill", [{ op: "setFill", nodeId: "r:1", color: "#ff0000" }], /no node with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["setText", [{ op: "setText", nodeId: "r:2", text: "b" }], /no node with id 'r:2' \(invalid or removed\)/, "r:2"],
+        ["patch", [{ op: "patch", nodeId: "r:1", set: { name: "x" } }], /no node with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["patch of a deleted main component", [{ op: "patch", nodeId: GONE_COMPONENT, set: { name: "x" } }], /no node with id '40:3' \(invalid or removed\)/, GONE_COMPONENT],
+        ["setVariableMode", [{ op: "setVariableMode", nodeId: "r:1", collection: "Theme", mode: "Dark" }], /no node with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["delete", [{ op: "delete", nodeId: "r:1" }], /no node with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["move of it", [{ op: "move", nodeId: "r:1", parentId: "1:1" }], /no node with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["move into it", [{ op: "move", nodeId: mine, parentId: "r:1" }], /no parent with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["createFrame into it", [{ op: "createFrame", name: "Child", parentId: "r:1" }], /parent 'r:1' not found \(invalid or removed id\)/, "r:1"],
+        ["a copy of it", [{ op: "createTree", tree: { clone: "r:1" } }], /no node with id 'r:1' \(invalid or removed\)/, "r:1"],
+        ["an instance of it", [{ op: "createTree", tree: { children: [{ component: GONE_COMPONENT }] } }], /component: component '40:3' matches no component in this file/, GONE_COMPONENT],
       ];
-      for (const [what, ops, want] of tries) {
+      for (const [what, ops, want, id] of tries) {
         const before = w.alive().length;
+        const asked = looked.length;
         const r = await w.api.applyWrites(ops);
         ok(`[ANNOUNCE] ${what}, ${how}: refused as missing, nothing changed (got ${JSON.stringify(r)})`,
-          r.ok === false && r.applied.length === 0 && want.test(String(r.error)) && w.alive().length === before
-          && w.scene.nodes["r:1"]?.name === "Gone frame" && w.scene.nodes["r:2"]?.characters === "a" && w.scene.nodes["r:3"]?.name === "Gone component");
+          r.ok === false && r.applied.length === 0 && want.test(String(r.error)) && w.alive().length === before && instanced === 0
+          && w.scene.nodes["r:1"]?.name === "Gone frame" && w.scene.nodes["r:2"]?.characters === "a" && w.scene.nodes[GONE_COMPONENT]?.name === "Gone component");
+        // Refused by the lookup itself: the id was looked up (a ref that does not read as an id never is, tree-refs.ts).
+        ok(`[ANNOUNCE] …${what}, ${how}: the write looked '${id}' up by id (looked up: ${JSON.stringify(looked.slice(asked))})`, looked.slice(asked).includes(id));
       }
     }
     // A library component has no parent by design (and neither has its own layer's chain a page): it is still found,
@@ -826,5 +882,119 @@ cases.push({
       !/nothing (in the file )?was changed/i.test(String(r.error)) && /^ops\[1\] \(createTree\): tree\.children\[0\]\.component: no component .*\. Not all of the batch could be put back: could not undo /.test(String(r.error)));
     ok(`[ANNOUNCE] …nor the designer (got ${JSON.stringify(text)})`, w.notified.slice(t).length === 1 && w.notified[t] === text && writesOf(w.posted.slice(p)).length === 1
       && !/nothing (was )?changed/i.test(text) && /could not undo/.test(text));
+  },
+});
+
+// ---- #206 review 6: a node detached after the batch resolved, before the op that holds it runs.
+
+cases.push({
+  name: "A layer deleted while an approved write makes its image (after it resolved) fails as missing: put back, never \"applied\" (#206)",
+  async run() {
+    // The race seen in review: Preview, Put back, Apply; the layer goes while the approved run makes its image, after the
+    // run resolved the batch against the file. A soft-deleted main component; a plain frame left the same way; a removed one.
+    const runs: Array<[string, { how: Deleted; component?: boolean }]> = [
+      ["a soft-deleted main component", { how: "soft", component: true }],
+      ["a frame detached (not removed, no parent)", { how: "soft" }],
+      ["a removed frame", { how: "removed" }],
+    ];
+    for (const [what, opts] of runs) {
+      const { w, card, reply, hash } = await previewedAndPutBack("late-" + opts.how + String(!!opts.component), { ...opts, late: true });
+      const t = w.notified.length;
+      const p = w.posted.length;
+      await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
+      const r = replyOf(await reply) as { ok?: unknown; error?: unknown; applied?: unknown; restored?: unknown; failedAt?: unknown };
+      const text = String(lastWrites(w)?.text);
+      const h = hash();
+      const x1 = w.scene.nodes["x:1"];
+      ok(`[ANNOUNCE] ${what} after the run resolved: the approved write fails at it and is put back whole (got ${JSON.stringify(r)})`,
+        r.ok === false && r.failedAt === 1 && Array.isArray(r.applied) && r.applied.length === 0 && Array.isArray(r.restored) && r.restored.length === 1
+        && !w.alive().some((n) => n.name === "Pic") && x1?.name === "Old 1" && w.scene.nodes["x:2"]?.name === "Old 2");
+      ok(`[ANNOUNCE] …${what}: the agent is told it is missing, and that the image stays (got ${JSON.stringify(r.error)})`,
+        r.error === "no node with id 'x:1' (invalid or removed)." + LOADED_STAYS && h !== undefined && w.figma.getImageByHash(h) !== null);
+      ok(`[ANNOUNCE] …${what}: and the designer the same, never "applied" (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+        saidOnce(w, t, p, text) && text === "Design Twin undid 1 earlier change after an edit failed, but it had already loaded 1 image file into Figma: no node with id 'x:1' (invalid or removed)");
+    }
+  },
+}, {
+  name: "Every op whose node is deleted after its batch resolved (while the batch makes its image) fails as missing, and the batch is put back (#206)",
+  async run() {
+    // Each op runs twice in a world of its own: as is (it lands: the case is a real one), and with its node removed or
+    // detached while the batch makes its image, after the batch resolved, before the op runs.
+    const tries: Late[] = [
+      { what: "setFill", op: (h) => ({ op: "setFill", nodeId: h.mine, color: "#ff0000" }), gone: (h) => h.mine, want: (h) => "setFill: no node with id '" + h.mine + "' (invalid or removed)" },
+      { what: "setText", op: (h) => ({ op: "setText", nodeId: h.label, text: "b" }), gone: (h) => h.label, want: (h) => "setText: no node with id '" + h.label + "' (invalid or removed)" },
+      { what: "patch", op: (h) => ({ op: "patch", nodeId: h.mine, set: { name: "Renamed" } }), gone: (h) => h.mine, want: (h) => "no node with id '" + h.mine + "' (invalid or removed)" },
+      { what: "patch of a main component", op: (h) => ({ op: "patch", nodeId: h.chip, set: { name: "Renamed" } }), gone: (h) => h.chip, want: (h) => "no node with id '" + h.chip + "' (invalid or removed)" },
+      { what: "patchWhere", op: () => ({ op: "patchWhere", where: { name: "Mine" }, set: { name: "Renamed" } }), gone: (h) => h.mine, want: (h) => "'Mine' (" + h.mine + "), one of the 1 layers its rule matches: no node with id '" + h.mine + "' (invalid or removed)" },
+      { what: "setVariableMode", op: () => ({ op: "setVariableMode", nodeId: "40:1", collection: "Theme", mode: "Dark" }), gone: () => "40:1", want: () => "no node with id '40:1' (invalid or removed)" },
+      { what: "clearVariableMode", op: () => ({ op: "clearVariableMode", nodeId: "40:1", collection: "Theme" }), gone: () => "40:1", want: () => "no node with id '40:1' (invalid or removed)" },
+      { what: "delete", op: (h) => ({ op: "delete", nodeId: h.mine }), gone: (h) => h.mine, want: (h) => "no node with id '" + h.mine + "' (invalid or removed)" },
+      { what: "move of it", op: (h) => ({ op: "move", nodeId: h.mine, parentId: h.box }), gone: (h) => h.mine, want: (h) => "no node with id '" + h.mine + "' (invalid or removed)" },
+      { what: "move into it", op: (h) => ({ op: "move", nodeId: h.mine, parentId: h.box }), gone: (h) => h.box, want: (h) => "no parent with id '" + h.box + "' (invalid or removed)" },
+      { what: "createFrame into it", op: (h) => ({ op: "createFrame", name: "Child", parentId: h.box }), gone: (h) => h.box, want: (h) => "parent '" + h.box + "' not found (invalid or removed id)" },
+      { what: "createText into it", op: (h) => ({ op: "createText", text: "Child", parentId: h.box }), gone: (h) => h.box, want: (h) => "parent '" + h.box + "' not found (invalid or removed id)" },
+      { what: "a copy of it", op: (h) => ({ op: "createTree", tree: { clone: h.mine } }), gone: (h) => h.mine, want: (h) => "no node with id '" + h.mine + "' (invalid or removed)" },
+      { what: "an instance of it", op: () => ({ op: "createTree", tree: { name: "Holder", children: [{ component: "Chip" }] } }), gone: (h) => h.chip, want: (h) => "no component with id '" + h.chip + "' (invalid or removed)" },
+      { what: "a swap property's default", op: () => ({ op: "createTree", tree: { type: "COMPONENT", name: "Card", props: { Glyph: { type: "INSTANCE_SWAP", default: "Chip" } } } }), gone: (h) => h.chip, want: (h) => "no component with id '" + h.chip + "' (invalid or removed)" },
+      { what: "a keyed re-send of it", op: () => ({ op: "createTree", tree: { key: "late", name: "Keyed again" } }), gone: (h) => h.keyed, want: (h) => "no node with id '" + h.keyed + "' (invalid or removed)" },
+    ];
+    const ways: Array<[string, ((n: FakeNode) => void) | null]> = [
+      ["as is", null],
+      ["removed", (n) => { n.removed = true; n.parent = null; }],
+      ["detached (not removed, no parent)", (n) => { n.parent = null; }],
+    ];
+    for (const t of tries) {
+      for (const [how, detach] of ways) {
+        const { w, h } = await lateWorld();
+        const op = t.op(h);
+        const id = t.gone(h);
+        let hash: string | undefined;
+        const real = w.figma.createImage;
+        w.figma.createImage = (data: Uint8Array) => { const n = w.scene.nodes[id]; if (detach && n) detach(n); const img = real(data); hash = img.hash; return img; };
+        const before = snapshotOf(w, h);
+        const r = await w.api.applyWrites([PIC, op], { [PIC_HASH]: gif(2, 2) });
+        w.figma.createImage = real;
+        if (!detach) {
+          ok(`[ANNOUNCE] ${t.what}, ${how}: it lands (got ${JSON.stringify(r)})`, r.ok === true && r.applied.length === 2);
+          continue;
+        }
+        ok(`[ANNOUNCE] ${t.what}, its node ${how} after the batch resolved: fails at it, put back whole, its node untouched (got ${JSON.stringify(r)})`,
+          r.ok === false && r.failedAt === 1 && r.applied.length === 0 && (r.restored || []).length === 1 && !w.alive().some((n) => n.name === "Pic")
+          && snapshotOf(w, h) === before && hash !== undefined && w.figma.getImageByHash(hash) !== null);
+        ok(`[ANNOUNCE] …${t.what}, ${how}: missing, as it would be before the batch ran, and the image stays (got ${JSON.stringify(r.error)})`,
+          r.error === t.want(h) + "." + LOADED_STAYS);
+      }
+    }
+  },
+}, {
+  name: "A node deleted while its own op waits for a font fails as missing (#206)",
+  async run() {
+    // The op's own await, between its lookup and its first change: a font load.
+    const tries: Late[] = [
+      { what: "setText", op: (h) => ({ op: "setText", nodeId: h.label, text: "b" }), gone: (h) => h.label, want: (h) => "setText: no node with id '" + h.label + "' (invalid or removed)" },
+      { what: "setFill of a text", op: (h) => ({ op: "setFill", nodeId: h.label, color: "#ff0000" }), gone: (h) => h.label, want: (h) => "setFill: no node with id '" + h.label + "' (invalid or removed)" },
+      { what: "patch of a text", op: (h) => ({ op: "patch", nodeId: h.label, set: { text: "b" } }), gone: (h) => h.label, want: (h) => "no node with id '" + h.label + "' (invalid or removed)" },
+      { what: "createText into a frame", op: (h) => ({ op: "createText", text: "Child", parentId: h.box }), gone: (h) => h.box, want: (h) => "parent '" + h.box + "' not found (invalid or removed id)" },
+    ];
+    for (const t of tries) {
+      for (const detach of [null, (n: FakeNode) => { n.parent = null; }]) {
+        const { w, h } = await lateWorld();
+        const id = t.gone(h);
+        const load = w.figma.loadFontAsync;
+        if (!load) throw new Error("the fake has no loadFontAsync");
+        // Every font load of the batch detaches it: the last one before the op's change is what counts.
+        w.figma.loadFontAsync = async (f) => { const n = w.scene.nodes[id]; if (detach && n) detach(n); return load(f); };
+        const before = snapshotOf(w, h);
+        const r = await w.api.applyWrites([{ op: "createFrame", name: "First" }, t.op(h)]);
+        w.figma.loadFontAsync = load;
+        if (!detach) {
+          ok(`[ANNOUNCE] ${t.what}, as is: it lands (got ${JSON.stringify(r)})`, r.ok === true && r.applied.length === 2);
+          continue;
+        }
+        ok(`[ANNOUNCE] ${t.what}, its node detached during a font load: missing, put back whole, its node untouched (got ${JSON.stringify(r)})`,
+          r.ok === false && r.failedAt === 1 && r.applied.length === 0 && (r.restored || []).length === 1 && r.error === t.want(h)
+          && !w.alive().some((n) => n.name === "First") && snapshotOf(w, h) === before);
+      }
+    }
   },
 });

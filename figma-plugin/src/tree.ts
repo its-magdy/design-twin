@@ -44,6 +44,7 @@ import type { KeyedUpdate } from "./keyed";
 import type { Change, OpProblem } from "./write-batch";
 import type { BoundSpec } from "./bind";
 import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
+import { inDocument, noNode } from "./node-lookup";
 
 /** A createTree op whose page resolved, whose fonts loaded and whose design-system names resolved. */
 export interface TreeTarget {
@@ -393,6 +394,20 @@ function occupied(c: SceneNode): { x: number; y: number; width: number; height: 
   return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
 }
 
+/** What a createTree holds from before its batch ran that is no longer in the document (node-lookup.ts): its page, the
+ *  result a keyed re-send updates, a layer it copies (or one of its layers a copy patches). The error its lookup would
+ *  have given, or null. A component it places or names is checked as the build uses it (applyInstance, fileDefs): the
+ *  batch's names resolve together, so `refs` holds every op's. */
+export function treeGone(t: TreeTarget): string | null {
+  if (!inDocument(t.page)) return noNode(t.page.id, "page");
+  if (t.update && !inDocument(t.update.root)) return noNode(t.update.root.id);
+  for (const c of t.clones.values()) {
+    if (!inDocument(c.source)) return noNode(c.source.id);
+    for (const e of c.edits) if (!inDocument(e.node)) return noNode(e.node.id);
+  }
+  return null;
+}
+
 /** Where a new tree's root will land, before it is built (the review card says it, and its Show me pans there):
  *  `beside` when it goes right of the frames already on the page, false when the spec placed it or the page is empty. */
 export function landingSpot(t: TreeTarget): { page: PageNode; x: number; y: number; beside: boolean } {
@@ -593,6 +608,8 @@ function applyFrame(f: FrameNode | ComponentNode | ComponentSetNode, s: TreeNode
 function applyInstance(s: TreeNodeSpec, parent: Parent, made: Made): InstanceNode {
   const r = made.refs.instances.get(s);
   if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
+  // Resolved before the batch ran: deleted since (soft-deleted, a main component stays for its instances), it is missing.
+  if (!inDocument(r.main)) throw new Error(noNode(r.main.id, "component"));
   made.instances++;
   const inst = r.main.createInstance();
   made.pairs.push([inst, s]);

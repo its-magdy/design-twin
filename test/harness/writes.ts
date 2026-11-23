@@ -20,7 +20,7 @@ const targetsOf = () => {
 /** A node with ExplicitVariableModesMixin: `explicitVariableModes` keyed by collection id, set and cleared with the
  *  collection OBJECT. The deprecated id-string form throws, as it does under the manifest's documentAccess
  *  "dynamic-page"; a modeId the collection does not have throws, as Figma's does. */
-function modeNode(id: string, name: string, start: Record<string, string> = {}): FakeNode & { explicitVariableModes: Record<string, string> } {
+export function modeNode(id: string, name: string, start: Record<string, string> = {}): FakeNode & { explicitVariableModes: Record<string, string> } {
   const n = {
     id, type: "FRAME", name, explicitVariableModes: { ...start },
     setExplicitVariableModeForCollection(c: unknown, modeId: string) {
@@ -42,7 +42,7 @@ function modeNode(id: string, name: string, start: Record<string, string> = {}):
  *  with Light/Dark, two collections both named "Spacing", one whose modes share a name, a library collection the
  *  file already uses (reachable by id only), and one the team library offers but the file does not use. */
 const THEME: FakeCollection = { id: "VariableCollectionId:7:1", key: "theme-key", name: "Theme", modes: [{ modeId: "7:0", name: "Light" }, { modeId: "7:1", name: "Dark" }], defaultModeId: "7:0" };
-const modeScene = (): Scene => ({
+export const modeScene = (): Scene => ({
   collections: {
     [THEME.id]: THEME,
     "VariableCollectionId:8:1": { id: "VariableCollectionId:8:1", name: "Spacing", modes: [{ modeId: "8:0", name: "Compact" }], defaultModeId: "8:0" },
@@ -463,6 +463,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, odd, twin, twinFlat, twinFlex];
   const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, odd, twin], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
+  // On the page, as Figma has them: a write checks a component is still in the document as it places it (node-lookup.ts).
+  for (const k of [set, badge, ...cards, chip, lookalike, odd, twin]) k.parent = page;
   const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
   const library = {
     components: { [KEY("e")]: avatar } as Record<string, FakeNode>,

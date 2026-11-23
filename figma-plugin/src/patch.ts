@@ -30,7 +30,7 @@ import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
-import { nodeById } from "./node-lookup";
+import { nodeById, stillInDocument } from "./node-lookup";
 
 /** A patch op whose node, fonts and names all resolved. */
 export interface PatchTarget {
@@ -729,6 +729,8 @@ export async function applyPatch(t: PatchTarget, consent: () => void, allowed: (
     }
   }
   const restore = await snapshot(t);
+  // Resolved before the batch ran: deleted since (at any await up to here), it fails as its lookup would have.
+  stillInDocument(t.node);
   consent();
   const applied: AppliedWrite = { id: t.node.id };
   if (t.unbound) applied.unbound = t.unbound;

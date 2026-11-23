@@ -15,7 +15,7 @@
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { createdThisSession, foreignBelow } from "./session";
 import type { Change, OpProblem } from "./write-batch";
-import { nodeById } from "./node-lookup";
+import { nodeById, stillInDocument } from "./node-lookup";
 
 type Parent = PageNode | (SceneNode & ChildrenMixin);
 export interface MoveTarget { node: SceneNode; parent: Parent; index: number | undefined }
@@ -89,6 +89,7 @@ export async function resolveStructureOps(ops: readonly WriteOp[], changesBefore
 /** A delete's own check, right before the deletes run: nothing below the node is another's (an earlier op of the
  *  batch may have changed what is below it). Throws. */
 export function checkDelete(t: DeleteTarget): void {
+  stillInDocument(t.node); // resolved before the batch ran: deleted since, it fails as its lookup would have
   const foreign = foreignBelow(t.node);
   if (foreign) throw new Error(holds(t.node, foreign));
 }
@@ -96,6 +97,9 @@ export function checkDelete(t: DeleteTarget): void {
 /** Move a resolved node, keeping where it was. */
 export function applyMove(t: MoveTarget): Change {
   const { node, parent } = t;
+  // Both resolved before the batch ran: deleted since, the move fails as their lookups would have.
+  stillInDocument(node);
+  stillInDocument(parent, "parent");
   const wrong = placeProblem(node, parent, t.index); // the file as the earlier ops of the batch left it
   if (wrong) throw new Error(wrong);
   const from = node.parent;

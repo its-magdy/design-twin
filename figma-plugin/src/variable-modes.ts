@@ -19,7 +19,7 @@
 import { INHERITED, type WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import type { Change, OpProblem } from "./write-batch";
-import { nodeById } from "./node-lookup";
+import { nodeById, stillInDocument } from "./node-lookup";
 
 type ModeNode = BaseNode & ExplicitVariableModesMixin;
 
@@ -122,6 +122,7 @@ function modeName(collection: VariableCollection, modeId: string | undefined | n
 /** Apply a resolved mode op, keeping the mode it replaces. */
 export function applyMode(t: ModeTarget): Change {
   const { node, collection, modeId } = t;
+  stillInDocument(node); // resolved before the batch ran: deleted since, it fails as its lookup would have
   const prev: string | undefined = (node.explicitVariableModes || {})[collection.id];
   if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
   else node.setExplicitVariableModeForCollection(collection, modeId);
