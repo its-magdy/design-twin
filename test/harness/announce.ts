@@ -4,9 +4,10 @@
 // replaces the plugin window's "Applying edits…" line (a `writes` message inside the write's run). An empty batch says
 // nothing; a batch refused in its run because another waits for review says so on the status line only (the card's
 // toast is up), and one refused before any run because a card is up says so in a toast only (the card stays).
+import { readdirSync, readFileSync } from "node:fs";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
-import type { PostedMessage } from "../fake-figma.ts";
+import type { FakeCollection, PostedMessage } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { treeWorld } from "./writes.ts";
 
@@ -515,8 +516,10 @@ cases.push({
 });
 
 /** A card with an image that offers a preview (26 existing layers renamed: over the review limit), previewed and put
- *  back: the image its preview loaded is in the file, no layer of the batch is. */
-async function previewedAndPutBack(id: string): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
+ *  back: the image its preview loaded is in the file, no layer of the batch is. Then the designer deletes the layers of
+ *  `drop` (x:1 by default): gone from the lookup, or with `removed`, still handed back by it but `removed` and on no
+ *  page (as Figma hands back a deleted main component: it keeps one, soft-deleted, for its instances and an undo). */
+async function previewedAndPutBack(id: string, opts: { drop?: readonly string[]; removed?: boolean } = {}): Promise<{ w: World; card: PostedMessage | undefined; reply: Promise<PostedMessage[]>; hash: () => string | undefined; from: number }> {
   const nodes: Record<string, { id: string; type: string; name: string; visible: boolean }> = {};
   for (let i = 1; i <= 26; i++) nodes["x:" + i] = { id: "x:" + i, type: "FRAME", name: "Old " + i, visible: true };
   const w = await treeWorld({ extra: { reviewer: "real", nodes } });
@@ -537,7 +540,11 @@ async function previewedAndPutBack(id: string): Promise<{ w: World; card: Posted
   await tick(() => state("waiting"));
   w.figma.createImage = real;
   // The designer removes a layer the batch renames: the batch no longer resolves.
-  delete w.scene.nodes["x:1"];
+  for (const x of opts.drop || ["x:1"]) {
+    const n = w.scene.nodes[x];
+    if (!opts.removed) delete w.scene.nodes[x];
+    else if (n) { n.removed = true; n.parent = null; }
+  }
   return { w, card, reply, hash: () => hash, from };
 }
 
@@ -627,5 +634,154 @@ cases.push({
       r.ok === false && r.applied.length === 0 && !w.alive().some((n) => n.name === "Card") && !Object.values(w.scene.variables).some((v) => v.name === "local/bg"));
     ok(`[ANNOUNCE] …the agent is not told a library item was imported (got ${JSON.stringify(r.error)})`, !/imported/.test(String(r.error)));
     ok(`[ANNOUNCE] …nor the designer (got ${JSON.stringify(text)})`, saidOnce(w, t, p, text) && !/imported/.test(text));
+  },
+});
+
+// ---- #206 review 4: a layer deleted after a preview whose id still resolves, several problems after a preview, a
+// preview stopped by "Allow edits", and a put-back that failed.
+
+/** Every write-path lookup by id that is not node-lookup.ts's: the plugin's sources, outside the read plane. */
+function rawLookups(): string[] {
+  const dir = new URL("../../figma-plugin/src/", import.meta.url);
+  const READ_PLANE = new Set(["collect.ts", "run.ts", "node-lookup.ts"]);
+  const out: string[] = [];
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".ts") || READ_PLANE.has(f)) continue;
+    readFileSync(new URL(f, dir), "utf8").split("\n").forEach((line, i) => { if (/getNodeByIdAsync\(/.test(line) && !/^\s*\/\//.test(line)) out.push(f + ":" + (i + 1)); });
+  }
+  return out;
+}
+
+cases.push({
+  name: "A layer deleted after a preview, whose id still resolves to a removed node, refuses the approved write (#206)",
+  async run() {
+    const { w, card, reply, hash } = await previewedAndPutBack("rm1", { removed: true });
+    const t = w.notified.length;
+    const p = w.posted.length;
+    await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
+    const r = replyOf(await reply);
+    const text = String(lastWrites(w)?.text);
+    const h = hash();
+    ok(`[ANNOUNCE] a removed node is missing: the approved write is refused, nothing of it lands (got ${JSON.stringify(r)})`,
+      r.ok === false && Array.isArray(r.applied) && r.applied.length === 0 && !w.alive().some((n) => n.name === "Pic") && w.scene.nodes["x:1"]?.name === "Old 1" && w.scene.nodes["x:2"]?.name === "Old 2");
+    ok(`[ANNOUNCE] …the agent is told the file changed, and that the preview's image stays (got ${JSON.stringify(r.error)})`,
+      r.error === CHANGED + ". " + LOADED_NOTE && h !== undefined && w.figma.getImageByHash(h) !== null);
+    ok(`[ANNOUNCE] …and the designer the same, never "applied" (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+      saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: " + CHANGED);
+  },
+}, {
+  name: "Every op that names a node by id treats a removed node as missing (#206)",
+  async run() {
+    const gone = { removed: true, parent: null, visible: true };
+    const w = await treeWorld({ extra: { nodes: {
+      "r:1": { id: "r:1", type: "FRAME", name: "Gone frame", fills: [], ...gone },
+      "r:2": { id: "r:2", type: "TEXT", name: "Gone text", characters: "a", fontName: { family: "Inter", style: "Regular" }, fills: [], ...gone },
+      "r:3": { id: "r:3", type: "COMPONENT", name: "Gone component", key: "local-r:3", remote: false, ...gone },
+    } } });
+    const made = await w.api.applyWrites([{ op: "createFrame", name: "Mine" }]);
+    const mine = String(made.applied[0]?.id);
+    const tries: Array<[string, WriteOp[], RegExp]> = [
+      ["setFill", [{ op: "setFill", nodeId: "r:1", color: "#ff0000" }], /no node with id 'r:1' \(invalid or removed\)/],
+      ["setText", [{ op: "setText", nodeId: "r:2", text: "b" }], /no node with id 'r:2' \(invalid or removed\)/],
+      ["patch", [{ op: "patch", nodeId: "r:1", set: { name: "x" } }], /no node with id 'r:1' \(invalid or removed\)/],
+      ["patch of a removed main component", [{ op: "patch", nodeId: "r:3", set: { name: "x" } }], /no node with id 'r:3' \(invalid or removed\)/],
+      ["setVariableMode", [{ op: "setVariableMode", nodeId: "r:1", collection: "Theme", mode: "Dark" }], /no node with id 'r:1' \(invalid or removed\)/],
+      ["delete", [{ op: "delete", nodeId: "r:1" }], /no node with id 'r:1' \(invalid or removed\)/],
+      ["move of it", [{ op: "move", nodeId: "r:1", parentId: "1:1" }], /no node with id 'r:1' \(invalid or removed\)/],
+      ["move into it", [{ op: "move", nodeId: mine, parentId: "r:1" }], /no parent with id 'r:1' \(invalid or removed\)/],
+      ["createFrame into it", [{ op: "createFrame", name: "Child", parentId: "r:1" }], /parent 'r:1' not found \(invalid or removed id\)/],
+      ["a copy of it", [{ op: "createTree", tree: { clone: "r:1" } }], /no node with id 'r:1' \(invalid or removed\)/],
+      ["an instance of it", [{ op: "createTree", tree: { children: [{ component: "r:3" }] } }], /r:3/],
+    ];
+    for (const [what, ops, want] of tries) {
+      const before = w.alive().length;
+      const r = await w.api.applyWrites(ops);
+      ok(`[ANNOUNCE] ${what}: a removed node is refused as missing, nothing changed (got ${JSON.stringify(r)})`,
+        r.ok === false && r.applied.length === 0 && want.test(String(r.error)) && w.alive().length === before
+        && w.scene.nodes["r:1"]?.name === "Gone frame" && w.scene.nodes["r:2"]?.characters === "a" && w.scene.nodes["r:3"]?.name === "Gone component");
+    }
+    const raw = rawLookups();
+    ok(`[ANNOUNCE] …every write-path lookup by id goes through node-lookup.ts nodeById (raw lookups: ${JSON.stringify(raw)})`, raw.length === 0);
+  },
+}, {
+  name: "Two layers deleted after a preview: the refusal lists both and says the preview's image stays, never \"nothing was changed\" (#206)",
+  async run() {
+    for (const removed of [false, true]) {
+      const { w, card, reply } = await previewedAndPutBack("two" + String(removed), { drop: ["x:1", "x:2"], removed });
+      const t = w.notified.length;
+      const p = w.posted.length;
+      await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
+      const r = replyOf(await reply);
+      const text = String(lastWrites(w)?.text);
+      const lines = "ops[1] (patch): no node with id 'x:1' (invalid or removed)\nops[2] (patch): no node with id 'x:2' (invalid or removed)";
+      ok(`[ANNOUNCE] two problems after a preview (${removed ? "removed" : "gone"}): the agent gets both, and what landed, once (got ${JSON.stringify(r.error)})`,
+        r.ok === false && r.error === "the file changed while the write waited for review: 2 problems — no layer was changed, but the batch had already loaded 1 image file into Figma:\n" + lines);
+      ok(`[ANNOUNCE] …and the designer the same, both on one line (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+        saidOnce(w, t, p, text) && text === "Design Twin refused an edit request — no layer changed, but it had already loaded 1 image file into Figma: the file changed while the write waited for review: 2 problems: " + lines.replace("\n", "; "));
+    }
+    // Previewed again instead: the same, after the preview's own head.
+    const { w, card, reply } = await previewedAndPutBack("two-again", { drop: ["x:1", "x:2"] });
+    const t = w.notified.length;
+    const p = w.posted.length;
+    await w.send({ type: "review-answer", id: String(card?.id), action: "preview" });
+    const r = replyOf(await reply);
+    const text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] …previewed again: no "nothing was changed" anywhere (got ${JSON.stringify(r.error)}, ${JSON.stringify(text)})`,
+      r.ok === false && !/nothing (in the file )?was changed/i.test(String(r.error)) && /2 problems — no layer was changed, but the batch had already loaded 1 image file into Figma:\n/.test(String(r.error))
+      && saidOnce(w, t, p, text) && !/nothing was changed/i.test(text) && /: 2 problems: ops\[1\]/.test(text));
+  },
+}, {
+  name: "\"Allow edits\" turned off while an image preview is on the canvas: the designer is told the image too (#206)",
+  async run() {
+    const nodes: Record<string, { id: string; type: string; name: string; visible: boolean }> = {};
+    for (let i = 1; i <= 26; i++) nodes["x:" + i] = { id: "x:" + i, type: "FRAME", name: "Old " + i, visible: true };
+    const w = await treeWorld({ extra: { reviewer: "real", nodes } });
+    const A = "a".repeat(64);
+    const ops: WriteOp[] = [{ op: "createTree", tree: { name: "Pic", fills: [{ type: "image", file: "one.gif", image: A }] } },
+      ...Object.keys(nodes).map((nodeId): WriteOp => ({ op: "patch", nodeId, set: { name: "New" } }))];
+    const from = w.posted.length;
+    const reply = bridgeWrite(w, "off1", ops, { [A]: gif(2, 2) });
+    await tick(() => w.posted.slice(from).some((m) => m.type === "review" || m.type === "bridge-result"));
+    const card = w.posted.slice(from).find((m) => m.type === "review");
+    await w.send({ type: "review-answer", id: String(card?.id), action: "preview" });
+    await tick(() => w.posted.slice(from).some((m) => m.type === "review-state" && m.state === "previewing"));
+    const t = w.notified.length;
+    const p = w.posted.length;
+    await w.allowEdits(false);
+    const r = replyOf(await reply);
+    const text = String(lastWrites(w)?.text);
+    ok(`[ANNOUNCE] unticked during an image preview: the preview stays, and the agent hears of the image (got ${JSON.stringify(r.error)})`,
+      r.refused === "edits-off" && w.alive().some((n) => n.name === "Pic") && /The batch had already loaded 1 image file into Figma; that stays\.$/.test(String(r.error)));
+    ok(`[ANNOUNCE] …and the designer too, in the toast and on the panel (got ${JSON.stringify(text)}, ${JSON.stringify(w.notified.slice(t))})`,
+      w.notified.slice(t).length === 1 && w.notified[t] === text && writesOf(w.posted.slice(p)).length === 1
+      && text === "Design Twin applied 27 edits, then stopped — 'Allow edits' was turned off. It had already loaded 1 image file into Figma.");
+  },
+}, {
+  name: "A refusal whose put-back failed never says \"Nothing was changed\" (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    // The batch's own collection cannot be removed again: its put-back fails, and the collection stays.
+    const realCreate = w.figma.variables.createVariableCollection;
+    if (!realCreate) throw new Error("the fake has no createVariableCollection");
+    w.figma.variables.createVariableCollection = (name: string) => {
+      const c: FakeCollection & { remove?: () => void } = realCreate(name);
+      c.remove = () => { throw new Error("in Figma: the collection is in use"); };
+      return c;
+    };
+    const t = w.notified.length;
+    const p = w.posted.length;
+    const r = await w.api.applyWrites([
+      { op: "createVariables", collection: "Local", variables: [["local/bg", "color", "#ffffff"]] },
+      { op: "createTree", tree: { name: "Card", fills: [{ type: "solid", tokens: { color: "local/bg" } }], children: [{ component: "a".repeat(40) }] } },
+    ]);
+    w.figma.variables.createVariableCollection = realCreate;
+    const text = String(lastWrites(w)?.text);
+    const kept = Object.values(w.scene.collections).some((c) => c.name === "Local");
+    ok(`[ANNOUNCE] a put-back that failed: the collection stays, listed as applied (got ${JSON.stringify(r)})`,
+      r.ok === false && kept && r.applied.length > 0 && /could not undo/.test(String(r.error)));
+    ok(`[ANNOUNCE] …the agent is never told nothing was changed (got ${JSON.stringify(r.error)})`,
+      !/nothing (in the file )?was changed/i.test(String(r.error)) && /^ops\[1\] \(createTree\): tree\.children\[0\]\.component: no component .*\. Not all of the batch could be put back: could not undo /.test(String(r.error)));
+    ok(`[ANNOUNCE] …nor the designer (got ${JSON.stringify(text)})`, w.notified.slice(t).length === 1 && w.notified[t] === text && writesOf(w.posted.slice(p)).length === 1
+      && !/nothing (was )?changed/i.test(text) && /could not undo/.test(text));
   },
 });

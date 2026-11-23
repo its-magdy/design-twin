@@ -11,12 +11,38 @@ export interface OpProblem {
   message: string;
 }
 
-/** The refusal for a batch whose ops did not all resolve: every problem, one per line. */
-export function batchRefusal(problems: readonly OpProblem[]): string {
+/** What a refusal came after (batchRefusal): what the batch had landed (an image, an import), and the sentences of the
+ *  changes it could not put back (restoreChanges `failed`). */
+export interface RefusalAfter { landed?: Landed; failed?: readonly string[] }
+
+/**
+ * The refusal for a batch whose ops did not all resolve: every problem, one per line, and what that left in the file,
+ * said once, where the refusal is made — so it is true however the error is prefixed afterwards (a review's "the file
+ * changed…", a preview's "…it failed: "). Nothing landed and nothing failed to go back: "Nothing was changed." (a list:
+ * "N problems — nothing was changed:"). Something landed: landedNote (a list: "N problems — no layer was changed, but
+ * the batch had already …:"). A change that could not be put back: never "nothing changed"; the sentence says what stays.
+ */
+export function batchRefusal(problems: readonly OpProblem[], after: RefusalAfter = {}): string {
   const line = (p: OpProblem): string => "ops[" + p.index + "] (" + p.op + "): " + p.message;
   const first = problems[0];
-  if (problems.length === 1 && first) return line(first) + ". Nothing was changed.";
-  return problems.length + " problems — nothing was changed:\n" + problems.map(line).join("\n");
+  const landed = after.landed && hasLanded(after.landed) ? after.landed : null;
+  const failed = after.failed && after.failed.length ? after.failed : null;
+  if (failed) {
+    const kept = " Not all of the batch could be put back: " + failed.join("; ") + "." + (landed ? " " + landedStays(landed) : "");
+    if (problems.length === 1 && first) return line(first) + "." + kept;
+    return problems.length + " problems:\n" + problems.map(line).join("\n") + "\n" + kept.slice(1);
+  }
+  if (problems.length === 1 && first) return line(first) + ". " + (landed ? landedNote(landed) : "Nothing was changed.");
+  return problems.length + " problems — " + (landed ? "no layer was changed, but the batch had already " + landedText(landed) : "nothing was changed") + ":\n" + problems.map(line).join("\n");
+}
+
+/** Why a batch was refused, as the designer's one line (writes.ts announce): its error without what the sentence
+ *  around it already says — batchRefusal's "Nothing was changed." or what landed (landedNote, landedStays), a list's
+ *  "— nothing was changed" head (or what landed) wherever the list starts, after a review's or a preview's words
+ *  included — its problems joined with "; ". */
+export function refusalReason(error: string | undefined): string {
+  return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "")
+    .replace(/(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
 }
 
 /** An applied change, and how to undo it. `kind` names it in a sentence ("variable mode change", "created tree"). A
@@ -113,15 +139,13 @@ export function mergeLanded(a: Landed, b: Landed): Landed {
 
 /**
  * A failure as the agent gets it, once something landed before it (an import, an image): its "Nothing was changed."
- * (or "Nothing in the file was changed.", or a list's "N problems — nothing was changed:") says what landed instead.
- * One with no such sentence (an op that failed as it ran) gets one: landedNote when no layer stays and none was put
- * back, else landedStays. Anything else — a success, an error that says it already, or nothing landed — is returned
- * as it is, word for word.
+ * (or "Nothing in the file was changed.") says what landed instead. One with no such sentence (an op that failed as it
+ * ran) gets one: landedNote when no layer stays and none was put back, else landedStays. Anything else — a success, an
+ * error that says it already (a batchRefusal given what landed), or nothing landed — is returned as it is, word for word.
  */
 export function landedResult(r: WriteResult, l: Landed): WriteResult {
   if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
   let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
-  if (error === r.error) error = r.error.replace(/^(\d+ problems) — nothing was changed:\n/, "$1 — no layer was changed, but the batch had already " + landedText(l) + ":\n");
   if (error === r.error && r.error.indexOf(landedText(l)) < 0) {
     const untouched = !r.applied.length && !(r.restored && r.restored.length);
     error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));

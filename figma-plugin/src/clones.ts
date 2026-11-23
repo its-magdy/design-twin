@@ -26,6 +26,7 @@ import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { KEY_DATA, SPEC_DATA } from "./keyed-store";
 import { resolvePatchNode, type PatchTarget } from "./patch";
 import { patchUses, type Use } from "./tree-refs";
+import { nodeById } from "./node-lookup";
 
 /** A copy whose source and edits resolved. */
 export interface CloneTarget {
@@ -106,7 +107,7 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
     const id = s.clone;
     if (id === undefined) continue;
     const at = path + ".clone";
-    const nd = await figma.getNodeByIdAsync(id);
+    const nd = await nodeById(id);
     if (!nd) { bad(at + ": no node with id '" + id + "' (invalid or removed)"); continue; }
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad(at + ": " + label(nd) + " is a " + nd.type + "; a copy is of a layer on a page"); continue; }
     if (nd.type === "COMPONENT" || nd.type === "COMPONENT_SET") { bad(at + ": " + label(nd) + " is a main component; place an instance of it (`component`) instead of a copy of it"); continue; }

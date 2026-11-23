@@ -39,6 +39,7 @@ import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
+import { nodeById } from "./node-lookup";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -58,7 +59,7 @@ const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
 async function findResult(key: string): Promise<FrameNode | null> {
   const id = readIndex(key);
   if (!id) return null;
-  const n = await figma.getNodeByIdAsync(id);
+  const n = await nodeById(id);
   if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
   return (await loadPageOf(n)) ? n : null;
 }

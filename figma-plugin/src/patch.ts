@@ -30,6 +30,7 @@ import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { nodeById } from "./node-lookup";
 
 /** A patch op whose node, fonts and names all resolved. */
 export interface PatchTarget {
@@ -204,7 +205,7 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     // Checked by writeOpError already; this is the narrowing, and a last line.
     if (!isPatchSet(set)) { bad("the patch did not pass its check"); continue; }
     uses.push(...patchUses(index, set));
-    const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+    const nd = op.nodeId ? await nodeById(op.nodeId) : null;
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
     // A text's fonts can be bound to variables, so after a variable edit of the batch (sources.ts) the fonts it has when
     // the patch runs are not known yet: keepText loads them then, and a missing one fails the op (the batch is put back).

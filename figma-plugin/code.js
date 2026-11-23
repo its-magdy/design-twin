@@ -7048,6 +7048,12 @@
     return { ref: n, spec, children };
   }
 
+  // src/node-lookup.ts
+  async function nodeById(id) {
+    const n = await figma.getNodeByIdAsync(id);
+    return n && !n.removed ? n : null;
+  }
+
   // src/tree-refs.ts
   var noRefs = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() });
   var isKey = (ref2) => /^[0-9a-f]{40}$/i.test(ref2);
@@ -7420,7 +7426,7 @@
       async findComponent(ref2) {
         let byId = null;
         try {
-          byId = /^[I\d][\d:;I-]*$/.test(ref2) ? await figma.getNodeByIdAsync(ref2) : null;
+          byId = /^[I\d][\d:;I-]*$/.test(ref2) ? await nodeById(ref2) : null;
         } catch {
           byId = null;
         }
@@ -7585,11 +7591,21 @@
   }
 
   // src/write-batch.ts
-  function batchRefusal(problems) {
+  function batchRefusal(problems, after = {}) {
     const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
     const first2 = problems[0];
-    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
-    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
+    const landed = after.landed && hasLanded(after.landed) ? after.landed : null;
+    const failed = after.failed && after.failed.length ? after.failed : null;
+    if (failed) {
+      const kept = " Not all of the batch could be put back: " + failed.join("; ") + "." + (landed ? " " + landedStays(landed) : "");
+      if (problems.length === 1 && first2) return line(first2) + "." + kept;
+      return problems.length + " problems:\n" + problems.map(line).join("\n") + "\n" + kept.slice(1);
+    }
+    if (problems.length === 1 && first2) return line(first2) + ". " + (landed ? landedNote(landed) : "Nothing was changed.");
+    return problems.length + " problems \u2014 " + (landed ? "no layer was changed, but the batch had already " + landedText(landed) : "nothing was changed") + ":\n" + problems.map(line).join("\n");
+  }
+  function refusalReason(error) {
+    return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "").replace(/(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
   }
   function restoredRows(changes) {
     const out = [];
@@ -7655,7 +7671,6 @@
   function landedResult(r, l) {
     if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
     let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
-    if (error === r.error) error = r.error.replace(/^(\d+ problems) — nothing was changed:\n/, "$1 \u2014 no layer was changed, but the batch had already " + landedText(l) + ":\n");
     if (error === r.error && r.error.indexOf(landedText(l)) < 0) {
       const untouched = !r.applied.length && !(r.restored && r.restored.length);
       error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
@@ -7812,7 +7827,7 @@
         continue;
       }
       uses.push(...patchUses(index, set));
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) {
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
@@ -8430,7 +8445,7 @@
       const id = s.clone;
       if (id === void 0) continue;
       const at3 = path + ".clone";
-      const nd = await figma.getNodeByIdAsync(id);
+      const nd = await nodeById(id);
       if (!nd) {
         bad(at3 + ": no node with id '" + id + "' (invalid or removed)");
         continue;
@@ -9985,7 +10000,7 @@
       if (op.op === "patch" && op.nodeId) {
         let nd = null;
         try {
-          nd = await figma.getNodeByIdAsync(op.nodeId);
+          nd = await nodeById(op.nodeId);
         } catch {
           nd = null;
         }
@@ -10469,7 +10484,7 @@
         if (op.op === "patch") {
           let nd = null;
           try {
-            nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+            nd = op.nodeId ? await nodeById(op.nodeId) : null;
           } catch {
             nd = null;
           }
@@ -10513,7 +10528,7 @@
   async function findResult(key) {
     const id = readIndex(key);
     if (!id) return null;
-    const n = await figma.getNodeByIdAsync(id);
+    const n = await nodeById(id);
     if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
     return await loadPageOf(n) ? n : null;
   }
@@ -11070,7 +11085,7 @@
           }
           case "setFill":
           case "setText": {
-            const n = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+            const n = op.nodeId ? await nodeById(op.nodeId) : null;
             if (!n || n.type === "PAGE" || n.type === "DOCUMENT") break;
             read.name = n.name;
             ids.push(n.id);
@@ -11138,7 +11153,7 @@
           }
           case "createFrame":
           case "createText": {
-            const p = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+            const p = op.parentId ? await nodeById(op.parentId) : null;
             if (p && p.type !== "PAGE" && p.type !== "DOCUMENT") {
               read.parent = p.name;
               ids.push(p.id);
@@ -11191,7 +11206,7 @@
     for (const id of ids.slice(0, SHOW_CAP)) {
       let n = null;
       try {
-        n = await figma.getNodeByIdAsync(id);
+        n = await nodeById(id);
       } catch {
         n = null;
       }
@@ -11213,7 +11228,7 @@
     return nodes.length;
   }
   async function panTo(spot) {
-    const page = await figma.getNodeByIdAsync(spot.pageId);
+    const page = await nodeById(spot.pageId);
     if (page && page.type === "PAGE" && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
     figma.viewport.center = { x: spot.x + 200, y: spot.y + 200 };
   }
@@ -11379,7 +11394,7 @@
       if (e.end === "edits-off" || !editsAllowedNow()) {
         post2(msg);
         const r3 = landedResult({ ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." }, card.landed);
-        card.input.announce(r3);
+        card.input.announce(r3, card.landed);
         finish2(card, r3);
         return;
       }
@@ -11578,7 +11593,7 @@
       };
       const nodeId = op.nodeId || "";
       const ref2 = op.collection || "";
-      const nd = await figma.getNodeByIdAsync(nodeId);
+      const nd = await nodeById(nodeId);
       let node = null;
       if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
       else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");
@@ -11687,7 +11702,7 @@
         for (const id of selected) {
           let n = null;
           try {
-            n = await figma.getNodeByIdAsync(id);
+            n = await nodeById(id);
           } catch {
             n = null;
           }
@@ -12836,7 +12851,7 @@
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
       };
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) {
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
@@ -12859,7 +12874,7 @@
         deletes.set(index, { node });
         continue;
       }
-      const pd = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+      const pd = op.parentId ? await nodeById(op.parentId) : null;
       if (!pd) {
         bad("no parent with id '" + String(op.parentId) + "' (invalid or removed)");
         continue;
@@ -12962,7 +12977,7 @@
   }
   async function resolveParent(parentId) {
     if (!parentId) return figma.currentPage;
-    const p = await figma.getNodeByIdAsync(parentId);
+    const p = await nodeById(parentId);
     if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
     if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
     for (let a = p; a; a = a.parent) {
@@ -13032,12 +13047,12 @@
         parent.appendChild(t);
         return change.applied;
       }
-      // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or
+      // setFill/setText THROW rather than no-op. nodeById resolves to null for an invalid or
       // removed id (and for invisible instance children when skipInvisibleInstanceChildren is on), and
       // not every node type carries fills/characters. Returning {id} in those cases reported a write
       // that never happened — over MCP the agent reads that as success and builds on a false premise.
       case "setFill": {
-        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+        const nd = op.nodeId ? await nodeById(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
         const paint = solidPaint(op.color, "setFill color");
@@ -13071,7 +13086,7 @@
         return change.applied;
       }
       case "setText": {
-        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+        const nd = op.nodeId ? await nodeById(op.nodeId) : null;
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
@@ -13170,10 +13185,11 @@
     const r = await runBatch(list, images, "submit", NO_EXPECT);
     return "card" in r ? r : { done: r.result };
   }
+  var landedOf = (out) => out.prior ? mergeLanded(out.prior, out.landed) : out.landed;
   var NO_EXPECT = /* @__PURE__ */ new Map();
   async function runBatch(list, images, mode, expect, prior) {
-    const out = { changes: [], layers: 0, landed: { imported: 0, images: 0 } };
-    const landed = () => prior ? mergeLanded(prior, out.landed) : out.landed;
+    const out = { changes: [], layers: 0, landed: { imported: 0, images: 0 }, prior };
+    const landed = () => landedOf(out);
     if (list.length) commitUndo();
     let r;
     try {
@@ -13209,7 +13225,7 @@
       say(WAITING, 0, false, false);
       return;
     }
-    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "") : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
     else if (r.refused === "rejected") text = some ? "Design Twin did not apply the edit request \u2014 it was rejected. No layer changed, but its preview had already " + landedText(some) + "." : "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
@@ -13234,9 +13250,6 @@
   }
   function announceThrown(e, landed) {
     say(landed ? "Design Twin could not finish an edit request: " + errMsg(e) + " \u2014 some of it may be in the file." : "Design Twin could not run an edit request \u2014 nothing changed: " + errMsg(e), 0, false);
-  }
-  function refusalReason(error) {
-    return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "").replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
   }
   async function gatedWrites(list, images, mode, out, expect) {
     try {
@@ -13302,7 +13315,7 @@
     const firstProblem = problems[0];
     if (firstProblem) {
       const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
-      return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
+      return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems, { landed: landedOf(out) }) };
     }
     if (mode === "submit" && list.length) {
       const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
@@ -13359,7 +13372,7 @@
       setBatchImages(m.made);
       madeImages = m.images;
       const firstBad = m.problems[0];
-      if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
+      if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems, { landed: landedOf(out) }) };
     }
     const changes = out.changes;
     countPropertySteps(changes);
@@ -13389,7 +13402,7 @@
         ok: false,
         applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
         ...firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {},
-        error: batchRefusal(late) + (failed.length ? "; " + failed.join("; ") : ""),
+        error: batchRefusal(late, { landed: landedOf(out), failed }),
         ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
       };
     };
@@ -13406,7 +13419,7 @@
         out.landed.imported += imported || 0;
         if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
         const firstLate = late[0];
-        if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+        if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late, { landed: landedOf(out) }) };
       }
       try {
         for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;

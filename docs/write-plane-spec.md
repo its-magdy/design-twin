@@ -211,7 +211,10 @@ screens.
     the old values and restores them when a later op fails — best effort: nothing is put back once the designer
     turns Allow edits off mid-batch, a restore can fail for one change, an imported library item and a deleted node
     stay. `applied` lists the changes not put back and the deletes already run, not the imported items (a batch
-    that fails while importing has an empty `applied`).
+    that fails while importing has an empty `applied`). A refusal whose put-back failed for one change says what
+    stays, never that nothing was changed. A node the designer deleted counts as missing even when Figma still hands
+    it back by id (a deleted main component is kept, soft-deleted, and is `removed`): every lookup a write makes
+    treats a removed node as no node, so a write approved after its target was deleted is refused, not applied to it.
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
 16. **One undo per batch.** Figma ends an undo step at each addComponentProperty, editComponentProperty and

@@ -268,7 +268,11 @@ list of merged PRs.
   Apply or on a second preview (the file changed meanwhile), and so is one loaded before an op that failed and put its
   layers back. A variable or style the batch made itself, and put back when it failed, is no longer counted as an
   imported library item. A write sent while another waits for review now gets a toast saying it was refused; the
-  waiting card stays as it is.
+  waiting card stays as it is. A layer deleted after a preview was put back is now refused on Apply, even when Figma
+  still finds it by id (a deleted main component is kept, marked removed): before, Apply changed it and said it was
+  applied. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
+  Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
+  status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed".
 
 ## [0.1.6] - 2026-11-02
 

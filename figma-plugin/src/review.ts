@@ -236,7 +236,8 @@ async function end(card: Card, e: Ending): Promise<void> {
     if (e.end === "edits-off" || !editsAllowedNow()) {
       post(msg);
       const r: WriteResult = landedResult({ ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." }, card.landed);
-      card.input.announce(r);
+      // What the preview loaded is said to the designer too, as it is to the agent.
+      card.input.announce(r, card.landed);
       finish(card, r);
       return;
     }

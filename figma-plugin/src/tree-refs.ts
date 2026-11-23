@@ -33,6 +33,7 @@ import type { OpProblem } from "./write-batch";
 import { plannedComponent, plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
 import { componentRootOf, propDefComponents, propDefsOf } from "../../bridge/src/component-spec.ts";
 import { valueProps } from "../../bridge/src/tree-diff.ts";
+import { nodeById } from "./node-lookup";
 
 /** What a node of a spec resolved to, for the build. */
 export interface ResolvedRefs {
@@ -458,7 +459,7 @@ function fileLookups() {
     },
     async findComponent(ref: string): Promise<Found<ComponentNode | ComponentSetNode>> {
       let byId: BaseNode | null = null;
-      try { byId = /^[I\d][\d:;I-]*$/.test(ref) ? await figma.getNodeByIdAsync(ref) : null; } catch { byId = null; }
+      try { byId = /^[I\d][\d:;I-]*$/.test(ref) ? await nodeById(ref) : null; } catch { byId = null; }
       if (byId && (byId.type === "COMPONENT" || byId.type === "COMPONENT_SET")) return { ok: byId };
       const all = await allComponents();
       const exact = all.filter((c) => c.key === ref || c.id === ref);

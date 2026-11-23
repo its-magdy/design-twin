@@ -19,6 +19,7 @@
 import { INHERITED, type WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import type { Change, OpProblem } from "./write-batch";
+import { nodeById } from "./node-lookup";
 
 type ModeNode = BaseNode & ExplicitVariableModesMixin;
 
@@ -59,7 +60,7 @@ export async function resolveModeOps(ops: readonly WriteOp[]): Promise<{ targets
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
     const nodeId = op.nodeId || "";
     const ref = op.collection || "";
-    const nd = await figma.getNodeByIdAsync(nodeId);
+    const nd = await nodeById(nodeId);
     let node: ModeNode | null = null;
     if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
     else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");

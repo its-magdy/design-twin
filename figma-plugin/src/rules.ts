@@ -21,6 +21,7 @@ import { patchUses, resolveRefs, type RefResolution, type Use } from "./tree-ref
 import { boundVariableIds } from "./sources";
 import { errMsg } from "./util";
 import type { OpProblem } from "./write-batch";
+import { nodeById } from "./node-lookup";
 
 /** A patchWhere op whose rule matched and whose every match resolved as a patch. */
 export interface RuleTarget {
@@ -80,7 +81,7 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: 
       sel = [];
       for (const id of selected) {
         let n: BaseNode | null = null;
-        try { n = await figma.getNodeByIdAsync(id); } catch { n = null; }
+        try { n = await nodeById(id); } catch { n = null; }
         if (n && n.type !== "PAGE" && n.type !== "DOCUMENT") sel.push(n);
       }
     }

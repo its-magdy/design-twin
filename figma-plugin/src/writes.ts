@@ -22,10 +22,11 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeLanded, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, hasLanded, landedResult, landedText, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
+import { nodeById } from "./node-lookup";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -50,7 +51,7 @@ async function loadNodeFonts(node: TextNode): Promise<void> {
 // Resolve an explicit parentId to a container, or throw. Same contract as setFill/setText below: a
 // write that didn't land where it was asked to must NOT report success.
 //
-// This is resolved BEFORE the node is created, deliberately. getNodeByIdAsync resolves to null for an
+// This is resolved BEFORE the node is created, deliberately. nodeById resolves to null for an
 // invalid or removed id — and for invisible instance children when skipInvisibleInstanceChildren is
 // on (which the design-system read toggles) — so a stale id is ordinary, not exotic. The old code
 // silently fell back to currentPage: an agent composing a tree (createFrame root -> createFrame
@@ -58,7 +59,7 @@ async function loadNodeFonts(node: TextNode): Promise<void> {
 // also means a bad parent fails WITHOUT leaving an orphan node the caller can't see in `applied`.
 async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNode> {
   if (!parentId) return figma.currentPage;
-  const p = await figma.getNodeByIdAsync(parentId);
+  const p = await nodeById(parentId);
   if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
   if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
   for (let a: BaseNode | null = p; a; a = a.parent) {
@@ -143,12 +144,12 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       parent.appendChild(t);
       return change.applied;
     }
-    // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or
+    // setFill/setText THROW rather than no-op. nodeById resolves to null for an invalid or
     // removed id (and for invisible instance children when skipInvisibleInstanceChildren is on), and
     // not every node type carries fills/characters. Returning {id} in those cases reported a write
     // that never happened — over MCP the agent reads that as success and builds on a false premise.
     case "setFill": {
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
       const paint = solidPaint(op.color, "setFill color");
@@ -182,7 +183,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       return change.applied;
     }
     case "setText": {
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
@@ -301,8 +302,10 @@ export async function submitWrites(ops: WriteOp[], images?: ImageTable): Promise
 /** How a batch runs: as first sent (it may wait for review), as the designer approved it, or as a preview of it. */
 type Mode = "submit" | "approved" | "preview";
 /** What a run leaves beside its result: the changes it made (a preview puts them back) and the existing layers it
- *  counted for the review (review-policy.ts). */
-interface RunOut { changes: Change[]; layers: number; landed: Landed }
+ *  counted for the review (review-policy.ts); what it landed, and what the card's earlier previews had (`prior`). */
+interface RunOut { changes: Change[]; layers: number; landed: Landed; prior?: Landed | undefined }
+/** What is in the file from this batch besides its changes: what its run landed, and what earlier previews of it had. */
+const landedOf = (out: RunOut): Landed => out.prior ? mergeLanded(out.prior, out.landed) : out.landed;
 /** What a card showed of each patchWhere op's matches (op index → its token and the selection it looked in, rules.ts): on
  *  approval they must still match. */
 type Expect = ReadonlyMap<number, ShownRule>;
@@ -315,8 +318,8 @@ async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: M
   // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
   // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
   // the next one never joins it. Committing with nothing pending is a no-op.
-  const out: RunOut = { changes: [], layers: 0, landed: { imported: 0, images: 0 } };
-  const landed = (): Landed => prior ? mergeLanded(prior, out.landed) : out.landed;
+  const out: RunOut = { changes: [], layers: 0, landed: { imported: 0, images: 0 }, prior };
+  const landed = (): Landed => landedOf(out);
   if (list.length) commitUndo();
   let r: WriteResult | { card: Card };
   try {
@@ -362,7 +365,7 @@ function announce(r: WriteResult, landed?: Landed): void {
     return;
   }
   if (r.refused === "edits-off") text = n
-    ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
+    ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "")
     : "Design Twin refused an edit request — 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
   // Rejected after a preview that loaded an image (or imported an item) and was put back: that stays, and is said.
   else if (r.refused === "rejected") text = some
@@ -413,12 +416,6 @@ function announceThrown(e: unknown, landed: boolean): void {
     : "Design Twin could not run an edit request — nothing changed: " + errMsg(e), 0, false);
 }
 
-/** Why a batch was refused, as one line: its error without the "nothing was changed" (or what landed, write-batch.ts
- *  landedResult) the sentence already says (write-batch.ts batchRefusal), its problems joined with "; ". */
-function refusalReason(error: string | undefined): string {
-  return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "")
-    .replace(/^(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
-}
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
 // So do the images it made (images.ts).
@@ -496,7 +493,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     // Approved (or previewed) after a wait: the designer may have changed the file while the card was up, so the batch
     // was resolved again just now, against the file as it is; one the file no longer accepts is refused whole.
     const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
-    return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
+    return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems, { landed: landedOf(out) }) };
   }
   // A bulk change by rule always waits for the designer (`bulkByRule`); on approval its matches were counted again just
   // now (resolveRuleOps with the card's tokens), and a batch whose matches drifted from the card's was refused above.
@@ -559,7 +556,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     setBatchImages(m.made);
     madeImages = m.images;
     const firstBad = m.problems[0];
-    if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems) };
+    if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems, { landed: landedOf(out) }) };
   }
   const changes: Change[] = out.changes;
   countPropertySteps(changes);
@@ -587,7 +584,8 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
   };
-  // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole.
+  // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole. One
+  // that could not be put back stays (listed in `applied`), and the refusal says so — never that nothing was changed.
   const refuseLate = async (late: OpProblem[]): Promise<WriteResult> => {
     const firstLate = late[0];
     const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
@@ -595,7 +593,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     return {
       ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
       ...(firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {}),
-      error: batchRefusal(late) + (failed.length ? "; " + failed.join("; ") : ""),
+      error: batchRefusal(late, { landed: landedOf(out), failed }),
       ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
     };
   };
@@ -613,7 +611,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       out.landed.imported += imported || 0;
       if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       const firstLate = late[0];
-      if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+      if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late, { landed: landedOf(out) }) };
     }
     try {
       for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;

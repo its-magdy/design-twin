@@ -15,6 +15,7 @@
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { createdThisSession, foreignBelow } from "./session";
 import type { Change, OpProblem } from "./write-batch";
+import { nodeById } from "./node-lookup";
 
 type Parent = PageNode | (SceneNode & ChildrenMixin);
 export interface MoveTarget { node: SceneNode; parent: Parent; index: number | undefined }
@@ -61,7 +62,7 @@ export async function resolveStructureOps(ops: readonly WriteOp[], changesBefore
   for (const [index, op] of ops.entries()) {
     if (op.op !== "move" && op.op !== "delete") continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
-    const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+    const nd = op.nodeId ? await nodeById(op.nodeId) : null;
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad(label(nd) + " is a " + nd.type + "; " + NOT_OURS); continue; }
     const node = nd;
@@ -72,7 +73,7 @@ export async function resolveStructureOps(ops: readonly WriteOp[], changesBefore
       deletes.set(index, { node });
       continue;
     }
-    const pd = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+    const pd = op.parentId ? await nodeById(op.parentId) : null;
     if (!pd) { bad("no parent with id '" + String(op.parentId) + "' (invalid or removed)"); continue; }
     if (pd.type === "DOCUMENT" || !("insertChild" in pd)) { bad("parent " + label(pd) + " is a " + pd.type + ", which cannot have children"); continue; }
     if (pd.type === "PAGE") await pd.loadAsync(); // dynamic-page: before its children are read or it is appended to

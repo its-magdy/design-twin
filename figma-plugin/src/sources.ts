@@ -31,6 +31,7 @@ import { imagePaint } from "./images";
 import { remoteVariableByKey, resolveRefs, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { nodeById } from "./node-lookup";
 
 /** A setVariable whose variable, modes and values resolved. */
 export interface VariableTarget {
@@ -320,7 +321,7 @@ export async function resolveSourceOps(ops: readonly WriteOp[], lookups: Lookups
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
     if (op.op === "patch" && op.nodeId) {
       let nd: BaseNode | null = null;
-      try { nd = await figma.getNodeByIdAsync(op.nodeId); } catch { nd = null; }
+      try { nd = await nodeById(op.nodeId); } catch { nd = null; }
       const lib = nd ? libraryComponentProblem(nd) : null;
       if (lib) bad(lib);
       continue;
@@ -748,7 +749,7 @@ export async function writeImpact(ops: readonly WriteOp[]): Promise<WriteImpactR
     try {
       if (op.op === "patch") {
         let nd: BaseNode | null = null;
-        try { nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null; } catch { nd = null; }
+        try { nd = op.nodeId ? await nodeById(op.nodeId) : null; } catch { nd = null; }
         const c = nd ? componentOf(nd) : null;
         if (!nd || !c) continue; // not a source: an ordinary layer (or no node, which the write itself reports)
         const lib = libraryComponentProblem(nd);
