@@ -249,6 +249,7 @@ export function canvas(): Canvas {
       const id = nextId();
       const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, insertChild(at: number, ch: CNode) { adopt(p, ch, at); }, loadAsync: async () => {},
         findAllWithCriteria: (c: { types: string[] }) => findAll(p, c.types) };
+      if (current) (p as FakeNode).parent = current.figma.root; // a page added once the world is up (see world())
       nodes[id] = p;
       pages.push(p);
       return p;
@@ -345,6 +346,8 @@ export function canvas(): Canvas {
         // the live table, not the copy fakeWorld made: a node a write creates is found by the next op that names it
         getNodeByIdAsync: async (id: string) => nodes[id] ?? null,
       });
+      // Every page's parent is the document, as in Figma: a write counts a node only when its chain climbs to it.
+      for (const p of pages) (p as FakeNode).parent = current.figma.root;
       return current;
     },
   };
