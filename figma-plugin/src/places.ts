@@ -245,6 +245,15 @@ function neighbourHit(section: SectionNode, box: Box, skip: string): SceneNode |
   return null;
 }
 
+/** The warning when what a node covers in a section starts at `start` (the section's coordinates) left of or above its
+ *  edge — only given coordinates put it there; they are kept, and a section grows only right and down — or null. */
+function stickingOut(name: string, section: string, start: { x: number; y: number }): string | null {
+  const left = start.x < 0, top = start.y < 0;
+  if (!left && !top) return null;
+  const edges = left && top ? "left and top edges" : left ? "left edge" : "top edge";
+  return "'" + name + "' sticks out past the " + edges + " of section '" + section + "': what it covers starts at " + start.x + ", " + start.y + " in it, and a section grows only right and down to hold its frames";
+}
+
 /** What landing a node did: how to take back the growth of the sections around it, and what it ran into. */
 export interface Landed { undo(): void; warnings: string[] }
 
@@ -275,6 +284,8 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
   // Each section around the node grows to hold what is in it, with its margin: the one it is in, then outwards.
   const grown: Array<{ s: SectionNode; w: number; h: number }> = [];
   const warnings: string[] = [];
+  const out = stickingOut(root.name, section.name, { x: x + fp.dx, y: y + fp.dy });
+  if (out) warnings.push(out);
   const undo = (): void => { for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h); };
   try {
     // The right and bottom edges of what the section must hold: the node's footprint, then each section in turn.

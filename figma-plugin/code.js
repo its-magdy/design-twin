@@ -9409,6 +9409,12 @@
     }
     return null;
   }
+  function stickingOut(name, section, start) {
+    const left = start.x < 0, top = start.y < 0;
+    if (!left && !top) return null;
+    const edges = left && top ? "left and top edges" : left ? "left edge" : "top edge";
+    return "'" + name + "' sticks out past the " + edges + " of section '" + section + "': what it covers starts at " + start.x + ", " + start.y + " in it, and a section grows only right and down to hold its frames";
+  }
   function land(root, dest, spec) {
     const page = dest.page.node;
     if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
@@ -9429,6 +9435,8 @@
     root.y = y;
     const grown = [];
     const warnings = [];
+    const out = stickingOut(root.name, section.name, { x: x + fp.dx, y: y + fp.dy });
+    if (out) warnings.push(out);
     const undo = () => {
       for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h);
     };

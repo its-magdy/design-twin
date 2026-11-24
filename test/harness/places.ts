@@ -234,6 +234,26 @@ export const cases: Case[] = [{
       next.r.ok === true && num(found(w4, next.r), "x") === 280 && num(found(w4, next.r), "y") === 80 && next.spot === "-20,80" && next.r.warnings === undefined);
   },
 }, {
+  name: "given coordinates left of or above a section's edge are kept, the section stays put, and what sticks out is said",
+  async run() {
+    const w = await treeWorld();
+    const r = await write(w, [{ op: "createTree", section: "Pinned", createSection: true, tree: { name: "Setback", x: -200.125, y: -50.375, box: { w: 150, h: 75 } } }]);
+    const n = found(w, r);
+    const sec = parentOf(n);
+    ok(`[PLACE-OUT] past the left and top edges: kept exactly, the section's top-left where it was made, and a warning (${JSON.stringify(r.warnings)})`,
+      r.ok === true && num(n, "x") === -200.125 && num(n, "y") === -50.375 && sec?.type === "SECTION" && box(sec) === "990,-20,160,160"
+      && JSON.stringify(r.warnings) === JSON.stringify(["ops[0]: 'Setback' sticks out past the left and top edges of section 'Pinned': what it covers starts at -200.125, -50.375 in it, and a section grows only right and down to hold its frames"]));
+    const w2 = await flowsWorld();
+    const top = await write(w2, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Raised", { x: 80, y: -10 }) }]);
+    ok(`[PLACE-OUT] only above: said as the top edge (${JSON.stringify(top.warnings)})`,
+      top.ok === true && JSON.stringify(top.warnings) === JSON.stringify(["ops[0]: 'Raised' sticks out past the top edge of section 'Payments': what it covers starts at 80, -10 in it, and a section grows only right and down to hold its frames"]));
+    // A copy turned 90° anticlockwise covers from 40 above its own y: at y 0 it sticks out though its y does not.
+    const w3 = await flowsWorld();
+    const turned = await write(w3, [{ op: "createTree", page: "Flows", section: "Payments", tree: { clone: await turnedSource(w3, 40, 400, 90), x: 80, y: 0 } }]);
+    ok(`[PLACE-OUT] what it covers counts, its turn included (${JSON.stringify(turned.warnings)})`,
+      turned.ok === true && /sticks out past the top edge of section 'Payments': what it covers starts at 80, -40 in it/.test((turned.warnings ?? []).join()));
+  },
+}, {
   name: "a placed frame's x/y are whole pixels, never rounded onto a layer the spot was chosen clear of",
   async run() {
     /** A world whose current page holds only `boxes` (fixtures, not made by a batch). */
