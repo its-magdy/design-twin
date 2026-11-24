@@ -131,31 +131,6 @@ Placement: the root lands on `page`, 100 px right of the rightmost frame there a
 has `x`/`y`. With only one, it is kept and the other avoids overlap: only `y` goes right of everything; only `x` stays
 level with the topmost unless that lands on a layer, else 100 px below what is in its column (in a section too). It is built hidden and shown only once every node is in place.
 
-### Pages and sections
-
-`section` puts the root inside a section on `page` (nested sections too): 100 px right of what the section holds and
-level with its top, or on a new row 100 px below it when growing right would run the section into a neighbour; at
-80 px from its edges when it is empty. In a section the root's `x`/`y` are the section's own. The section grows (never
-shrinks) to hold the root with that 80 px margin, and so does each section around it; one that then overlaps a
-neighbour is a warning, not a refusal.
-
-`createPage: true` makes `page` when the file has no page of that name, `createSection: true` makes `section` on the
-page when it has none (beside what the page holds). A name the file has once is used as it is, so the same batch sent
-again lands where the first send did. Making is never guessed: a page or section that matches nothing is refused with
-its closest names unless the op asks to make it, and one whose name matches several is refused with their ids (make or
-not). A page or section the batch makes is made once, at the first op landing there; every op of the batch naming it
-lands in that one. At most 10 new pages and 25 new sections a batch. `createPage` needs `page`, `createSection` needs
-`section`; a name to make is not blank, has no spaces at its ends and does not read as a node id. The reply names what
-was made on the op that made it (`pageCreated`, `sectionCreated`: ids). If a later op fails, the batch removes them again
-(after the frames in them) and shrinks any section it grew — but never a page or section holding a layer the batch did
-not make: that one stays, and the error says so. A file in a Starter-plan team holds at most 3 pages (drafts are not
-held to it): there Figma refuses a fourth, and the batch is put back.
-
-```json
-{"op": "createTree", "page": "Checkout", "createPage": true, "section": "Payment", "createSection": true,
- "tree": {"name": "Card entry", "box": {"w": 390, "h": 844}}}
-```
-
 ```json
 {"op": "createTree", "tree": {
   "name": "Settings", "key": "settings", "box": {"w": 390, "h": 844},
@@ -167,6 +142,32 @@ held to it): there Figma refuses a fourth, and the batch is put back.
      "rows": [["Account", true], ["Notifications", true], ["Sign out", false]]},
     {"component": "Button", "props": {"Variant": "Primary", "Label": "Save"}, "handle": "save", "widthMode": "fill"}
   ]}}
+```
+
+### Pages and sections
+
+`section` puts the root inside a section on `page` (nested sections too); a section given by id with no `page` is
+found on whichever page holds it (by name, it is looked for on `page`, the current page by default): 100 px right of what the section holds and
+level with its top, or on a new row 100 px below it when growing right would run the section into a neighbour; at
+80 px from its edges when it is empty. In a section the root's `x`/`y` are the section's own. The section grows (never
+shrinks) to hold the root with that 80 px margin, and so does each section around it; one that then overlaps a
+neighbour is a warning, not a refusal.
+
+`createPage: true` makes `page` when the file has no page of that name, `createSection: true` makes `section` on the
+page when it has none (beside what the page holds). A name the file has once is used as it is, so the same batch sent
+again lands where the first send did. Making is never guessed: a page or section that matches nothing is refused with
+its closest names unless the op asks to make it, and one whose name matches several is refused with their ids (make or
+not). A page or section the batch makes is made once, at the first op landing there; every op of the batch naming it
+lands in that one. At most 10 new pages and 25 new sections a batch. `createPage` needs `page`, `createSection` needs
+`section`; a name to make is not blank, has no spaces at its ends and does not look like a node id. The reply names what
+was made on the op that made it (`pageCreated`, `sectionCreated`: ids). If a later op fails, the batch removes them again
+(after the frames in them) and shrinks any section it grew — but never a page or section holding a layer the batch did
+not make: that one stays, and the error says so. A file in a Starter-plan team holds at most 3 pages (drafts are not
+held to it): there Figma refuses a fourth, and the batch is put back.
+
+```json
+{"op": "createTree", "page": "Checkout", "createPage": true, "section": "Payment", "createSection": true,
+ "tree": {"name": "Card entry", "box": {"w": 390, "h": 844}}}
 ```
 
 ## Design-system references

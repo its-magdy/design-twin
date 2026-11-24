@@ -956,7 +956,7 @@ the current page):
 | `setText` | `nodeId`, `text` | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
-| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `section` (a section's exact name or id on that page), `createPage` / `createSection` (`true`: make the page or section when the file has none of that name; below), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
+| `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `section` (a section's exact name on that page, or its id: with no `page`, on whichever page holds it), `createPage` / `createSection` (`true`: make the page or section when the file has none of that name; below), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
 | `patchWhere` | `where` (a rule: `text`, `fill`, `variable`, `instanceOf`, `name`; every one given must hold), `set` (as a patch's) | `scope` (`"selection"`, `"page"` — the current page, the default — `"file"`, or page names or ids), `token` (the dry run's, needed above 25 matches; below) |
 | `move` | `nodeId`, `parentId` (a node this plugin session created, and its new parent) | `index` (its place among the new parent's children, 0 first; last when absent) |
@@ -1063,8 +1063,9 @@ With only one of them, that one is kept and the other is chosen so the frame ove
 everything; only `x`, level with the topmost unless that lands on a layer, else 100 px below what is in its column.
 The same holds in a section.
 
-**Pages and sections.** With `section`, the root lands inside that section of the page (a nested one too), and its
-`x`/`y` are the section's own: 100 px right of what the section holds and level with its top — or on a new row 100 px
+**Pages and sections.** With `section`, the root lands inside that section of the page (a nested one too; a section
+given by id with no `page` is found on whichever page holds it, while one given by name is looked for on `page`, the
+current page by default), and its `x`/`y` are the section's own: 100 px right of what the section holds and level with its top — or on a new row 100 px
 below, when growing right would run the section into a neighbour — and at 80 px from its edges in an empty section. The
 section grows (it never shrinks) to hold the root with that 80 px margin, and so does every section around it; a section
 that then overlaps a neighbour is listed in `warnings`. `createPage: true` makes `page` when the file has no page of that
@@ -1073,11 +1074,12 @@ is used, so the same batch sent again lands where the first send did. Nothing is
 that matches nothing is refused with its closest names and how to make it, and a name that matches several is refused
 with their ids, asked to make it or not. A page or section the batch makes is made once, when the first op landing there
 runs, and every op of the batch naming it lands in that one; a batch makes at most 10 pages and 25 sections. `createPage`
-needs `page` and `createSection` needs `section`; a name to make is not blank, has no spaces at its ends and does not read
-as a node id; only a `createTree` takes them. The op that made a page or section names it in its reply (`pageCreated`,
+needs `page` and `createSection` needs `section`; a name to make is not blank, has no spaces at its ends and does not look
+like a node id; only a `createTree` takes them. The op that made a page or section names it in its reply (`pageCreated`,
 `sectionCreated`: the ids). If a later op fails, what the batch made goes back with the rest, newest first — the frames,
 the sections' growth, the section, the page (the designer is moved off it first when it is the current page) — except a
-page or section that holds a layer the batch did not make: it stays, with that layer, and the error says so. A file in a
+page or section that holds a layer the batch did not make: it stays, with that layer, and the error says so; and a
+section side the designer resized after the batch grew it keeps their size, said the same way. A file in a
 Starter-plan team holds at most 3 pages (drafts are not held to it); there Figma refuses a fourth, and the batch is put
 back.
 The reply is small: `{id, created: {frames, texts, instances, clones}, handles, unbound}` for the tree (`instances`,
