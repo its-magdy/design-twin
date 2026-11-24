@@ -103,6 +103,9 @@ export const goneSentence = (c: Change): string => {
 };
 /** What `c` left outside its nodes that is still in the file (Change.leaves), or null. */
 const leftBehind = (c: Change): string | null => (c.leaves ? c.leaves() : null);
+/** `c` went with its nodes but left something of it in the file (a section it grew, still that size): the put-back
+ *  that found it so did not leave the file as it was before the batch, and says so (writes.ts putBack). */
+export const leftSomething = (c: Change): boolean => c.made === true && leftBehind(c) !== null;
 
 /** `changes` that stay in the file when none is put back (the plugin changes nothing more once "Allow edits" is off):
  *  every one but those that went with their node, and the made ones deleted whole (asBefore). */

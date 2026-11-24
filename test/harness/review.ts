@@ -235,6 +235,60 @@ export const cases: Case[] = [{
     }
   },
 }, {
+  name: "Review: a preview whose frame the designer deleted, its section growth left once 'Allow edits' went off, is said put back in part everywhere",
+  async run() {
+    // The preview grows section 'Payments' (600×600) to 1060×1010 and restyles a text layer. Put back (or Reject) sets the
+    // text style back first; at that await the designer deletes the preview's frame and the text, then unticks "Allow
+    // edits": the plugin changes nothing more, so the growth stays. Nothing of the frame is in the file, but the section
+    // is not as it was: the review ends as a put-back that could not all go back, and the window, Figma's toast and the
+    // agent's reply all say the section keeps that size — none says nothing changed.
+    const previewed = async (finish: "put-back" | "reject") => {
+      const w = await treeWorld({ flows: true, kit: true, extra: { reviewer: "real", clientStorage: { reviewWrites: false } } });
+      w.figma.viewport = { scrollAndZoomIntoView: () => {} };
+      const seed = await w.api.applyWrites([{ op: "createTree", tree: { children: [{ name: "Styled text", handle: "text", text: "Hi", styles: { text: "Body" } }] } }]);
+      const text = w.scene.nodes[String(seed.applied[0]?.handles?.text)];
+      const s = w.flows?.payments;
+      const ops: WriteOp[] = [
+        { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Grower", x: 80, y: 80, box: { w: 900, h: 850 } } },
+        { op: "patchWhere", scope: "file", where: { name: "Styled text" }, set: { styles: { text: "Heading/H1" } } },
+      ];
+      const from = w.posted.length;
+      const reply = bridge(w, "pg", "write", { ops }).then((r) => r.result);
+      await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
+      const card = w.posted.slice(from).find((m) => m.type === "review");
+      await w.send({ type: "review-answer", id: String(card?.id), action: "preview" });
+      await tick(() => w.posted.some((m) => m.type === "review-state" && m.state === "previewing"));
+      const grown = s ? s.width + "×" + s.height : "none";
+      const grower = w.made.find((n) => n.name === "Grower" && !n.removed);
+      if (text && grower) {
+        const set = text.setTextStyleIdAsync as (id: string) => Promise<void>;
+        text.setTextStyleIdAsync = async (id: string) => {
+          (grower.remove as () => void)();
+          (text.remove as () => void)();
+          await w.allowEdits(false);
+          await set(id);
+        };
+      }
+      const at = w.posted.length, toasts = w.notified.length;
+      await w.send({ type: "review-answer", id: String(card?.id), action: finish });
+      const r = asResult(await reply);
+      return { r, s, grown, card, after: w.posted.slice(at), toasts: w.notified.slice(toasts) };
+    };
+    for (const finish of ["put-back", "reject"] as const) {
+      const p = await previewed(finish);
+      const said = /section 'Payments' \(6:2\) it grew to 1060×1010 keeps that size/;
+      const writes = p.after.find((m) => m.type === "writes");
+      ok(`[PREVIEW-GONE-GREW] ${finish}: the preview grew the section, and it stays that size (${p.grown} -> ${p.s ? p.s.width + "×" + p.s.height : "none"})`,
+        p.card?.previewable === true && p.grown === "1060×1010" && p.s?.width === 1060 && p.s.height === 1010);
+      ok(`[PREVIEW-GONE-GREW] ${finish}: the agent's reply says the preview could not all be put back and the growth stays, never that nothing changed (${p.r?.error})`,
+        p.r?.ok === false && /could not all be put back/.test(p.r.error ?? "") && said.test(p.r.error ?? "") && !/Nothing (in the file )?(was )?changed/i.test(p.r.error ?? ""));
+      ok(`[PREVIEW-GONE-GREW] ${finish}: the window's status line says the growth stays, never that nothing changed (${String(writes?.text)})`,
+        writes !== undefined && writes.ok === false && said.test(String(writes.text)) && !/nothing changed/i.test(String(writes.text)));
+      ok(`[PREVIEW-GONE-GREW] ${finish}: …and so does Figma's toast (${JSON.stringify(p.toasts)})`,
+        p.toasts.length === 1 && said.test(p.toasts[0] ?? "") && !/nothing changed/i.test(p.toasts[0] ?? ""));
+    }
+  },
+}, {
   name: "Review: the ticket — pending after the hold, asked again, a repeat answers at once, unknown is refused",
   async run() {
     const clock = fakeClock();

@@ -7768,6 +7768,7 @@
     return c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
   };
   var leftBehind = (c) => c.leaves ? c.leaves() : null;
+  var leftSomething = (c) => c.made === true && leftBehind(c) !== null;
   function staying(changes) {
     const gone = (c) => wentWithNode(c) || asBefore(c);
     return { stays: changes.filter((c) => !gone(c)), gone: changes.filter(gone) };
@@ -14350,7 +14351,7 @@
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed" + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
-    else if (!r.ok && keptOnPutBack.has(r)) text = "Design Twin put the preview back, but kept what you changed since: " + keptOnPutBack.get(r) + "." + (some ? " Its preview had already " + landedText(some) + "; that stays." : "");
+    else if (!r.ok && keptOnPutBack.has(r)) text = keptOnPutBack.get(r) + (some ? " Its preview had already " + landedText(some) + "; that stays." : "");
     else if (!r.ok) text = some ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
     if (text === null) return;
     say(text, n, r.ok);
@@ -14695,9 +14696,10 @@
     const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
     commitUndo();
     const went = gone.map(goneSentence);
-    if (!failed.length) return { failed: null, gone: went, restored: restored.length };
+    const left = gone.filter(leftSomething).map(goneSentence);
+    if (!failed.length && !left.length) return { failed: null, gone: went, restored: restored.length };
     const r = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " \u2014 what stays is listed in `applied`." : ".") };
-    if (!stays.length) keptOnPutBack.set(r, failed.join("; "));
+    if (!stays.length) keptOnPutBack.set(r, left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".");
     return { failed: r, gone: went, restored: restored.length };
   }
   function undoNote(steps2) {

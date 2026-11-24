@@ -23,7 +23,7 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, goneSentence, hasLanded, landedResult, landedText, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, goneSentence, hasLanded, landedResult, landedText, leftSomething, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -410,8 +410,9 @@ function announce(r: WriteResult, landed?: Landed): void {
   // Put back after an op failed: an image loaded (or an item imported) before it stays, and is said.
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed"
     + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
-  // A preview put back but for what the designer changed since (a section side they resized): said to them too.
-  else if (!r.ok && keptOnPutBack.has(r)) text = "Design Twin put the preview back, but kept what you changed since: " + keptOnPutBack.get(r) + "."
+  // A preview put back but for what the designer changed since (a section side they resized), or for what a layer they
+  // deleted left (a section its frame grew): said to them too (putBack).
+  else if (!r.ok && keptOnPutBack.has(r)) text = keptOnPutBack.get(r)
     + (some ? " Its preview had already " + landedText(some) + "; that stays." : "");
   // Refused before anything changed (#206): a check before the first op (an image hash the file does not have, a name
   // that resolves to nothing, a bad op, Dev Mode, a file that changed while the batch waited for review), or an op
@@ -801,11 +802,15 @@ async function putBack(changes: readonly Change[]): Promise<PutBack> {
   const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
   commitUndo();
   const went = gone.map(goneSentence);
-  if (!failed.length) return { failed: null, gone: went, restored: restored.length };
-  // Every change may have gone back but for what the designer has changed since (a section they resized): then
-  // nothing is listed, and that is said to them as well (announce), not only to the agent.
+  // A change that went with its layers but left something of it (a section its frame grew, still that size: "Allow
+  // edits" went off before its put-back ran) is not all put back either: the file is not as it was.
+  const left = gone.filter(leftSomething).map(goneSentence);
+  if (!failed.length && !left.length) return { failed: null, gone: went, restored: restored.length };
+  // Every change may have gone back, or with its layers, but for what the designer has changed since (a section they
+  // resized) or what a deleted layer left: then nothing is listed, and that is said to them as well (announce), not
+  // only to the agent — never "nothing changed".
   const r: WriteResult = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
-  if (!stays.length) keptOnPutBack.set(r, failed.join("; "));
+  if (!stays.length) keptOnPutBack.set(r, left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".");
   return { failed: r, gone: went, restored: restored.length };
 }
 

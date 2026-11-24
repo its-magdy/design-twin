@@ -120,8 +120,10 @@ function failedAfter(failed: WriteResult, earlier: PutBack | null): WriteResult 
   if (!earlier || !earlier.gone.length) return failed;
   return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
 }
-/** A put-back's result (writes.ts putBack `failed`) that left only what the designer changed since (a section side they
- *  resized), with what it kept: writes.ts announce says it in the window and Figma's toast. Not a field of the reply. */
+/** A put-back's result (writes.ts putBack `failed`) that left no change applied, but not all of the file as it was:
+ *  what the designer changed since (a section side they resized), or what a layer they deleted left (a section its
+ *  frame grew, still that size). The sentence writes.ts announce says in the window and Figma's toast for it, never
+ *  "nothing changed". Not a field of the reply. */
 export const keptOnPutBack = new WeakMap<WriteResult, string>();
 /** The result a card ends with when its preview could not all be put back (`back.failed`): with what an earlier Put back
  *  found deleted (failedAfter) and what its previews landed (landedResult), and still known as what the designer kept. */
