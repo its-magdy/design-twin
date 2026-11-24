@@ -205,7 +205,9 @@ screens.
     As built (#184): a `createTree` op's `page`, `section`, `createPage` and `createSection` (the pure check and the
     dry run's words in `bridge/src/place-spec.ts`; the file side in `figma-plugin/src/places.ts`).
     - **Names, never guesses (decision 15).** `page` and `section` are an exact name or id; a section is looked for on
-      the target page, nested ones included. A name that matches several is refused with their ids; one that matches
+      the target page, nested ones included. A section given by id with no `page` is the one of that id wherever it is
+      in the file, its page then the op's (as every other id a write takes names a node on any page); the dry run says
+      it lands "on the page that holds it". A name that matches several is refused with their ids; one that matches
       nothing is refused with its closest names and the field that would make it. Making is asked for, never inferred
       from a miss: `createPage: true` makes the page when the file has no page of that name, `createSection: true` the
       section when the page has none. A name the file has exactly once is used as it is — so the same batch sent again
@@ -226,6 +228,8 @@ screens.
       and so does each section around it. A section that still runs into a neighbour (explicit coordinates, or no row
       that avoids it) is a `warning`, never a refusal: no existing layer is moved to make room. A new section is placed
       on its page as a new frame is (right of everything, level with the topmost), then grows to hold its frames.
+      A computed `x` or `y` in a section is never less than the 80 px margin: a layer that covers past the section's
+      left or top edge (a turned one) does not pull the next frame, or the start of a new row, out with it.
       Coordinates given left of or above the section's edge are kept as given (and the section's top-left stays), so
       the frame sticks out; that is a `warning` too. The frame being built (hidden where Figma makes a new node until
       it lands) is no neighbour of its section.
@@ -258,9 +262,15 @@ screens.
       no file, so whether the page and section exist is answered when applied. The review card says "lands in section
       'Payment' on page 'Checkout'", "in a new section …", "on a new page …"; Show me pans to where it lands, except on a
       page still to make — worked out by the write's own placing code, over the whole batch in order: each op is placed
-      beside what the ops before it will land, in the sections they make (where the write will put them) or grow. It
-      uses the size the write will measure where that is known before the build: each side the spec gives (`box`, else
-      `layout.width` / `layout.height`), else a copy's source's size and turn, else a new frame's 100 (a hugging side's
+      beside what the ops before it will land, in the sections they make (where the write will put them) or grow, and
+      beside what they resize, move or make on a page or in a section: a keyed re-send's new `x`/`y` and sides, a
+      patch's `box`, a `move` (the node keeps its `x`/`y` in its new parent, as Figma keeps them), a legacy
+      `createFrame` (at 0,0, its size or Figma's 100). A legacy `createText` is not counted (its size is its font's,
+      known only once built), nor a `delete` (deletes run after every other op); a keyed re-send of a component set
+      without a size of its own is counted at its size now. It uses the size the write will measure where that is
+      known before the build: each side the spec gives (`box`, else `layout.width` / `layout.height`; a component set
+      with neither and no auto-layout, the one column its variants are laid out in, 20 px around and between), else a
+      copy's source's size and turn, else a new frame's 100 (a hugging side's
       size is known only once built, so a hugging frame's Show me can be off). A section's growth is said in the card only as "the section grows to fit" in Details; it is
       not counted toward the review's layer limit (a container growing to hold the new frame, not a change to a layer).
     - Not built: moving or resizing an existing section beyond growing it, a section's fills or other fields, page
