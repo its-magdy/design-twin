@@ -93,7 +93,7 @@ export interface FakeFigma {
   loadAllPagesAsync(): Promise<void>;
   /** Absent unless a case passes one: the plugin's reads must not need them (a read leaves the view alone). */
   setCurrentPageAsync?(page: FakePage): Promise<void>;
-  viewport?: { scrollAndZoomIntoView(nodes: FakeNode[]): void };
+  viewport?: { scrollAndZoomIntoView(nodes: FakeNode[]): void; center?: { x: number; y: number } };
   getImageByHash(hash: string): FakeImage | null;
   /** Figma's createImage: the image added to the file (the world's `images` table, by a hash of its bytes), or a throw
    *  for bytes that are not a PNG, JPEG or GIF (as Figma's "Image type is unsupported") */

@@ -9364,9 +9364,9 @@
   }
   function sectionPlacement(section, skip, spec, fp) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    const held = others(section, skip).map(occupied);
+    const held = section ? others(section, skip).map(occupied) : [];
     const w = fp.width, h = fp.height;
-    if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
+    if (!section || !held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
     const beside = besideHeld(held, {}, w, h, SECTION_PAD);
     if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp);
     const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
@@ -9440,6 +9440,10 @@
     }
     return { undo, warnings };
   }
+  function newSectionAt(page, skip) {
+    return pagePlacement(page, skip, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
+  }
+  var NEW_FRAME = 100;
   function leftIn(n) {
     for (const c of n.children) if (!c.removed) return c;
     return null;
@@ -9500,7 +9504,7 @@
       changes.push(made2);
       section.name = s.name;
       made2.what = "the new section " + label3(section);
-      const at3 = pagePlacement(page, section.id, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
+      const at3 = newSectionAt(page, section.id);
       page.appendChild(section);
       section.x = at3.x;
       section.y = at3.y;
@@ -9509,26 +9513,21 @@
     }
     return out;
   }
-  function landing(dest, spec) {
+  function landing(dest, spec, source) {
     const p = dest.page;
     const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
     const page = p.node;
     const s = dest.section;
     if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
-    const w = spec.box ? spec.box.w : 100;
-    const h = spec.box ? spec.box.h : 100;
+    const fp = footprint(spec.box ? spec.box.w : source ? source.width : NEW_FRAME, spec.box ? spec.box.h : source ? source.height : NEW_FRAME, source);
     if (!s) {
-      const at4 = pagePlacement(page, "", spec, footprint(w, h));
+      const at4 = pagePlacement(page, "", spec, fp);
       const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
       return { lands: (beside ? "right of the existing frames" : "at " + at4.x + ", " + at4.y) + pageText, spot: { pageId: page.id, x: at4.x, y: at4.y } };
     }
-    if (!s.node) {
-      const at4 = pagePlacement(page, "", {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
-      return { lands: "in a new section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: at4.x + SECTION_PAD, y: at4.y + SECTION_PAD } };
-    }
-    const at3 = sectionPlacement(s.node, "", spec, footprint(w, h));
-    const origin = s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y };
-    return { lands: "in section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at3.x, y: origin.y + at3.y } };
+    const origin = s.node ? s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y } : newSectionAt(page, "");
+    const at3 = sectionPlacement(s.node, "", spec, fp);
+    return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at3.x, y: origin.y + at3.y } };
   }
   function pageHolding(n) {
     let p = n.parent;
@@ -11450,7 +11449,8 @@
               if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
               break;
             }
-            const l = landing(tt.dest, tt.spec);
+            const copied = tt.clones.get(tt.spec);
+            const l = landing(tt.dest, tt.spec, copied ? copied.source : null);
             read.lands = l.lands;
             if (l.spot) spot = l.spot;
             break;

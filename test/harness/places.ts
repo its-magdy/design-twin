@@ -56,6 +56,20 @@ function covers(n: FakeNode | undefined): Box {
   return { x: num(n, "x") + Math.min(...xs), y: num(n, "y") + Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
 const plain = (n: FakeNode): Box => ({ x: num(n, "x"), y: num(n, "y"), width: num(n, "width"), height: num(n, "height") });
+/** One op sent with "Review each change first" on, and Show me pressed on its line while the card is up: where the view
+ *  was panned to (the spot: the view's centre less 200, 200), and the reply. */
+async function shownAt(w: World, op: WriteOp): Promise<{ r: WriteResult; spot: string }> {
+  await w.send({ type: "set-review-writes", on: true });
+  const view = { center: { x: NaN, y: NaN }, scrollAndZoomIntoView() {} };
+  w.figma.viewport = view;
+  const post = w.figma.ui.postMessage;
+  // Pressed as the card is drawn, before the approving designer's answer (the next turn).
+  w.figma.ui.postMessage = (m) => { post(m); if (m.type === "review") void w.figma.ui.onmessage?.({ type: "review-show", id: m.id, index: 0 }); };
+  try {
+    const r = await write(w, [op]);
+    return { r, spot: (view.center.x - 200) + "," + (view.center.y - 200) };
+  } finally { w.figma.ui.postMessage = post; }
+}
 
 export const cases: Case[] = [{
   name: "a section on a named page: inside it, beside what it holds without overlap, the section grown to fit",
@@ -176,6 +190,31 @@ export const cases: Case[] = [{
     const pinned = await inSection({ x: 80, y: 80 });
     ok(`[PLACE-TURNED] at x/y given in a section: kept, the section grown to the right edge of what it covers (80+400+80) (${num(pinned.n, "x")},${num(pinned.n, "y")}; ${box(pinned.sec)})`,
       pinned.r.ok === true && num(pinned.n, "x") === 80 && num(pinned.n, "y") === 80 && box(pinned.sec) === "3300,0,560,160");
+  },
+}, {
+  name: "the review card's Show me pans to where the write puts the frame: its real size, the section the batch makes",
+  async run() {
+    /** Where the landed node's x/y are on the canvas (a section on the page adds its own). */
+    const canvas = (n: FakeNode | undefined): string => {
+      const p = parentOf(n);
+      const o = p && p.type === "SECTION" ? { x: num(p, "x"), y: num(p, "y") } : { x: 0, y: 0 };
+      return (o.x + num(n, "x")) + "," + (o.y + num(n, "y"));
+    };
+    // A copy of a 400×300 frame, x only at -300: 400 wide, it reaches 'Onboarding' and lands below that column (4500+100).
+    const w = await flowsWorld();
+    const wide = await shownAt(w, { op: "createTree", page: "Flows", tree: { clone: await turnedSource(w, 400, 300, 0), x: -300 } });
+    ok(`[PLACE-SHOW] a copy, x only: Show me uses the source's size, as the write does (shown ${wide.spot}, landed ${canvas(found(w, wide.r))})`,
+      wide.r.ok === true && canvas(found(w, wide.r)) === "-300,4600" && wide.spot === "-300,4600");
+    // A section the batch makes (right of everything: 3300,0) and x/y given in it: they are the section's own.
+    const w2 = await flowsWorld();
+    const pin = await shownAt(w2, { op: "createTree", page: "Flows", section: "Pinned", createSection: true, tree: screen("Pinned", { x: 300, y: 200 }) });
+    ok(`[PLACE-SHOW] a new section, x/y given: Show me at the section's place plus them, no margin added (shown ${pin.spot}, landed ${canvas(found(w2, pin.r))})`,
+      pin.r.ok === true && canvas(found(w2, pin.r)) === "3600,200" && pin.spot === "3600,200");
+    // A turned copy in a new section: its x/y as the write sets them (the covered box at the margin).
+    const w3 = await flowsWorld();
+    const turned = await shownAt(w3, { op: "createTree", page: "Flows", section: "Turned", createSection: true, tree: { clone: await turnedSource(w3, 40, 400, 90) } });
+    ok(`[PLACE-SHOW] a turned copy in a new section: Show me where its x/y land (shown ${turned.spot}, landed ${canvas(found(w3, turned.r))})`,
+      turned.r.ok === true && canvas(found(w3, turned.r)) === "3380,120" && turned.spot === "3380,120");
   },
 }, {
   name: "the dry run and the write refuse the same placement fields (one table: test/place-refusals.ts)",

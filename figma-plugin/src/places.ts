@@ -191,12 +191,12 @@ export function pagePlacement(page: PageNode, skip: string, spec: At, fp: Footpr
 
 /** Where a node covering `fp` lands in `section` (its x/y, in the section's coordinates), by the spec's x/y and what
  *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into a
- *  neighbour; with one, as besideHeld says. */
-function sectionPlacement(section: SectionNode, skip: string, spec: At, fp: Footprint): { x: number; y: number } {
+ *  neighbour; with one, as besideHeld says. `section` null: one the batch is still to make (it holds nothing). */
+function sectionPlacement(section: SectionNode | null, skip: string, spec: At, fp: Footprint): { x: number; y: number } {
   if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
-  const held = others(section, skip).map(occupied);
+  const held = section ? others(section, skip).map(occupied) : [];
   const w = fp.width, h = fp.height;
-  if (!held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
+  if (!section || !held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
   const beside = besideHeld(held, {}, w, h, SECTION_PAD);
   if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp);
   const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
@@ -281,6 +281,14 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
   return { undo, warnings };
 }
 
+/** Where a section the batch makes goes on `page` (`skip`: itself, once made): beside what the page holds, as a new
+ *  frame does; it is made SECTION_PAD * 2 a side and grows to hold the frames placed in it (land). */
+function newSectionAt(page: PageNode, skip: string): { x: number; y: number } {
+  return pagePlacement(page, skip, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
+}
+/** The size Figma's createFrame makes a frame (a tree root without a box keeps it unless its layout hugs). */
+const NEW_FRAME = 100;
+
 /** The first layer in `n` (a page or section the batch made) that is not gone: one the batch did not make. */
 function leftIn(n: BaseNode & ChildrenMixin): SceneNode | null {
   for (const c of n.children) if (!c.removed) return c;
@@ -347,8 +355,7 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     changes.push(made);
     section.name = s.name;
     made.what = "the new section " + label(section);
-    // Beside what the page holds; it grows to hold the frames placed in it (land).
-    const at = pagePlacement(page, section.id, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
+    const at = newSectionAt(page, section.id);
     page.appendChild(section);
     section.x = at.x;
     section.y = at.y;
@@ -359,28 +366,26 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
 }
 
 /** Where a new tree will land, before it is built (the review card says it, and its Show me pans to `spot`): words, and
- *  a point on a page the file has (none when the page is still to make). In a section, the spec's own size is used
- *  where it gives one (the built size is known only once it is built). */
-export function landing(dest: Dest, spec: TreeNodeSpec): { lands: string; spot: { pageId: string; x: number; y: number } | null } {
+ *  the point its x/y will be at on a page the file has (none when the page is still to make), by the rules the write
+ *  places it by (pagePlacement, sectionPlacement, a new section where makeDest puts it). Measured as land measures the
+ *  built frame where that is known before it is built: the spec's box, else a copy's source's size, turned as the source
+ *  is; else a new frame's 100×100 (Figma's createFrame; a hugging auto-layout frame's size is known only once built). */
+export function landing(dest: Dest, spec: TreeNodeSpec, source?: SceneNode | null): { lands: string; spot: { pageId: string; x: number; y: number } | null } {
   const p = dest.page;
   const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
   const page = p.node;
   const s = dest.section;
   if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
-  const w = spec.box ? spec.box.w : 100;
-  const h = spec.box ? spec.box.h : 100;
+  const fp = footprint(spec.box ? spec.box.w : source ? source.width : NEW_FRAME, spec.box ? spec.box.h : source ? source.height : NEW_FRAME, source);
   if (!s) {
-    const at = pagePlacement(page, "", spec, footprint(w, h));
+    const at = pagePlacement(page, "", spec, fp);
     const beside = spec.x === undefined && spec.y === undefined && page.children.length > 0;
     return { lands: (beside ? "right of the existing frames" : "at " + at.x + ", " + at.y) + pageText, spot: { pageId: page.id, x: at.x, y: at.y } };
   }
-  if (!s.node) {
-    const at = pagePlacement(page, "", {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
-    return { lands: "in a new section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: at.x + SECTION_PAD, y: at.y + SECTION_PAD } };
-  }
-  const at = sectionPlacement(s.node, "", spec, footprint(w, h));
-  const origin = s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y };
-  return { lands: "in section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at.x, y: origin.y + at.y } };
+  // A section still to make holds nothing, and is put where makeDest will put it.
+  const origin = s.node ? s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y } : newSectionAt(page, "");
+  const at = sectionPlacement(s.node, "", spec, fp);
+  return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at.x, y: origin.y + at.y } };
 }
 
 /** The page `n` is on, or null. */

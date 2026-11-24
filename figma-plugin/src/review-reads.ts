@@ -232,7 +232,9 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
             break;
           }
           // Where it lands (places.ts): a page or section still to make is said as new, and has no spot to pan to.
-          const l = landing(tt.dest, tt.spec);
+          // A copy as the root is measured by its source (its size and turn), as the write measures the copy.
+          const copied = tt.clones.get(tt.spec);
+          const l = landing(tt.dest, tt.spec, copied ? copied.source : null);
           read.lands = l.lands;
           if (l.spot) spot = l.spot;
           break;

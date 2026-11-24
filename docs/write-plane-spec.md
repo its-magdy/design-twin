@@ -252,7 +252,10 @@ screens.
       when the page has none) on page 'Checkout' (made when the file has none)", "the section grows to fit"); it reads
       no file, so whether the page and section exist is answered when applied. The review card says "lands in section
       'Payment' on page 'Checkout'", "in a new section …", "on a new page …"; Show me pans to where it lands, except on a
-      page still to make. A section's growth is said in the card only as "the section grows to fit" in Details; it is
+      page still to make — worked out by the rules the write places it by (a section still to make where the write will
+      put it, holding nothing), with the size the write will measure where it is known before the build: the spec's
+      `box`, else a copy's source's size and turn, else a new frame's 100×100 (a hugging layout's size is known only once
+      built). A section's growth is said in the card only as "the section grows to fit" in Details; it is
       not counted toward the review's layer limit (a container growing to hold the new frame, not a change to a layer).
     - Not built: moving or resizing an existing section beyond growing it, a section's fills or other fields, page
       dividers, ordering the new page among the others (it is appended), and re-placing a keyed result when the spec
