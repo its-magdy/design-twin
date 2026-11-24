@@ -215,6 +215,12 @@ export const cases: Case[] = [{
     const turned = await shownAt(w3, { op: "createTree", page: "Flows", section: "Turned", createSection: true, tree: { clone: await turnedSource(w3, 40, 400, 90) } });
     ok(`[PLACE-SHOW] a turned copy in a new section: Show me where its x/y land (shown ${turned.spot}, landed ${canvas(found(w3, turned.r))})`,
       turned.r.ok === true && canvas(found(w3, turned.r)) === "3380,120" && turned.spot === "3380,120");
+    // A size given by `layout` (no box) is the frame's size too: 400 wide at x -300 it reaches 'Onboarding' and goes
+    // below that column (4500+100), not level with the top as a 100×100 frame would.
+    const w5 = await flowsWorld();
+    const fixed = await shownAt(w5, { op: "createTree", page: "Flows", tree: { name: "Fixed", x: -300, layout: { display: "flex", width: 400, height: 300 } } });
+    ok(`[PLACE-SHOW] a size given by layout: Show me measures it as the write builds it (shown ${fixed.spot}, landed ${canvas(found(w5, fixed.r))})`,
+      fixed.r.ok === true && canvas(found(w5, fixed.r)) === "-300,4600" && fixed.spot === "-300,4600");
     // The frame being built (hidden, on the current page at 0,0 until it lands) is no neighbour of the section: a
     // section at -300,0 holding one 100×100 frame grows right to 160 for the next, over where the build sits — and the
     // frame still goes beside the first (section 280,80), where Show me points.

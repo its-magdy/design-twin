@@ -31,7 +31,7 @@ import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { parseHexColor } from "../../bridge/src/hex-color.ts";
 import { nearestNames, quoteList } from "../../bridge/src/name-match.ts";
 import { imagePaint } from "./images";
-import { fontOf, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
+import { fontOf, givenSize, nodeKind, NUMBER_TOKEN_FIELDS, type TreeFill, type TreeNodeSpec, type TreeSummary } from "../../bridge/src/tree-spec.ts";
 import { checkTree } from "../../bridge/src/tree-check.ts";
 import { cloneUses, copiesOf, makeCopy, resolveClones, restamp, type CloneTarget, type CopyPatch } from "./clones";
 import { patchCopy } from "./patch";
@@ -528,8 +528,7 @@ function applyFrame(f: FrameNode | ComponentNode | ComponentSetNode, s: TreeNode
     if (l.reverseZ) f.itemReverseZIndex = true;
     if (s.strokesInLayout) f.strokesIncludedInLayout = true; // applicable only with auto-layout (checkTree warns otherwise)
   }
-  const w = s.box ? s.box.w : l && l.width;
-  const h = s.box ? s.box.h : l && l.height;
+  const { w, h } = givenSize(s);
   if (w !== undefined && h !== undefined) f.resize(w, h);
   else if (w !== undefined || h !== undefined) f.resize(w !== undefined ? w : f.width, h !== undefined ? h : f.height);
   // A frame's sizing is said explicitly: FIXED is the read's default, and a new auto-layout frame's own may differ.

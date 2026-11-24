@@ -2157,9 +2157,11 @@
     if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
     return problems.length + " problems in the tree spec \u2014 nothing was changed:\n" + problems.join("\n");
   }
+  function givenSize(spec) {
+    return { w: spec.box ? spec.box.w : spec.layout && spec.layout.width, h: spec.box ? spec.box.h : spec.layout && spec.layout.height };
+  }
   function sizePhrase(spec) {
-    const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
-    const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
+    const { w, h } = givenSize(spec);
     const other = (mode, side) => side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
     if (typeof w === "number" && typeof h === "number") return w + "\xD7" + h;
     if (typeof w === "number") return w + " wide, " + other(spec.heightMode, "height");
@@ -9534,7 +9536,8 @@
     const page = p.node;
     const s = dest.section;
     if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
-    const fp = footprint(spec.box ? spec.box.w : source ? source.width : NEW_FRAME, spec.box ? spec.box.h : source ? source.height : NEW_FRAME, source);
+    const size2 = givenSize(spec);
+    const fp = footprint(size2.w !== void 0 ? size2.w : source ? source.width : NEW_FRAME, size2.h !== void 0 ? size2.h : source ? source.height : NEW_FRAME, source);
     if (!s) {
       const at4 = pagePlacement(page, "", spec, fp);
       const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
@@ -9960,8 +9963,7 @@
       if (l.reverseZ) f.itemReverseZIndex = true;
       if (s.strokesInLayout) f.strokesIncludedInLayout = true;
     }
-    const w = s.box ? s.box.w : l && l.width;
-    const h = s.box ? s.box.h : l && l.height;
+    const { w, h } = givenSize(s);
     if (w !== void 0 && h !== void 0) f.resize(w, h);
     else if (w !== void 0 || h !== void 0) f.resize(w !== void 0 ? w : f.width, h !== void 0 ? h : f.height);
     if (l && l.display === "flex" || parent && parent.layoutMode !== "NONE") {

@@ -855,12 +855,17 @@ export function treeRefusal(problems: readonly string[]): string {
   return problems.length + " problems in the tree spec — nothing was changed:\n" + problems.join("\n");
 }
 
+/** The size a frame spec gives itself, each side or undefined: its `box`, else its `layout`'s width and height (the
+ *  build resizes a frame to these; a side not given keeps Figma's new-frame size or hugs, by its widthMode/heightMode). */
+export function givenSize(spec: Pick<TreeNodeSpec, "box" | "layout">): { w: number | undefined; h: number | undefined } {
+  return { w: spec.box ? spec.box.w : spec.layout && spec.layout.width, h: spec.box ? spec.box.h : spec.layout && spec.layout.height };
+}
+
 /** A spec root's size in words: "320×200", or "320 wide, height hugs content" when only one side is given (the other
  *  is said by its `heightMode` / `widthMode`; without one it keeps the size Figma gives a new frame); "" when neither is
  *  given. The dry run's sentence and the review card both say it this way. */
 export function sizePhrase(spec: TreeNodeSpec): string {
-  const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
-  const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
+  const { w, h } = givenSize(spec);
   const other = (mode: "fill" | "hug" | undefined, side: string): string =>
     side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
   if (typeof w === "number" && typeof h === "number") return w + "×" + h;
