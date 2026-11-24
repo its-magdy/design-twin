@@ -7677,9 +7677,11 @@
     return out;
   }
   var wentWithNode = (c) => !c.made && c.on !== void 0 && removedWith(c.on);
-  var goneSentence = (c) => c.what + " went with that layer: it was deleted from the file while the batch ran, so none of it stays";
+  var asBefore = (c) => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
+  var goneSentence = (c) => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
   function staying(changes) {
-    return { stays: changes.filter((c) => !wentWithNode(c)), gone: changes.filter(wentWithNode) };
+    const gone = (c) => wentWithNode(c) || asBefore(c);
+    return { stays: changes.filter((c) => !gone(c)), gone: changes.filter(gone) };
   }
   function restoredRows(changes) {
     const out = [];
@@ -7726,11 +7728,16 @@
         failures.push([c, undo(c, e)]);
       }
     }
-    for (let more = !stop; more && allowed2(); ) {
+    for (let more = !stop; more; ) {
       more = false;
+      const tried = /* @__PURE__ */ new Set();
       for (const f of failures) {
         const c = f[0];
-        if (!c.made || wentWithNode(c) || !allowed2()) continue;
+        if (!c.made || wentWithNode(c)) continue;
+        if (!allowed2()) {
+          stop = { rest: [], tail: "" };
+          break;
+        }
         try {
           await c.restore(allowed2, ours);
           restored.push(c);
@@ -7738,16 +7745,28 @@
           more = true;
           break;
         } catch (e) {
-          if (e instanceof RestoreStopped) break;
+          if (e instanceof RestoreStopped) {
+            stop = { rest: [], tail: "" };
+            break;
+          }
+          tried.add(c);
           f[1] = undo(c, e);
         }
       }
+      if (stop) {
+        const untried = failures.filter(([c]) => c.made && !wentWithNode(c) && !tried.has(c));
+        for (const u of untried) failures.splice(failures.indexOf(u), 1);
+        stop.rest = untried.map(([c]) => c);
+      }
     }
     const gone = left.filter(wentWithNode);
-    const isGone = new Set(gone);
-    const failed = failures.filter(([c]) => !isGone.has(c)).map(([, s]) => s);
-    const kept = stop ? stop.rest.filter((c) => !isGone.has(c)) : [];
+    const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+    restored.push(...back);
+    const settled = /* @__PURE__ */ new Set([...gone, ...back]);
+    const failed = failures.filter(([c]) => !settled.has(c)).map(([, s]) => s);
+    const kept = stop ? stop.rest.filter((c) => !settled.has(c)) : [];
     if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
+    const isGone = new Set(gone);
     const done = /* @__PURE__ */ new Set([...restored, ...gone]);
     return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
   }
@@ -9591,7 +9610,7 @@
     const all = nodes.concat(rest);
     const everyNode = all.map(([n]) => n);
     for (const c of made2.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
-    const own4 = batchMade(changes);
+    const own4 = editsAllowedNow() ? batchMade(changes) : /* @__PURE__ */ new Set();
     for (const n of everyNode) own4.add(n.id);
     for (const [n, what] of all) {
       if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
@@ -9601,7 +9620,8 @@
       }
       if (!inDocument(n)) continue;
       stayed.push(n);
-      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: everyNode, restore(_allowed, ours) {
+      const owns = everyNode.filter((m) => !removedWith(m) && below(m, n));
+      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns, restore(_allowed, ours) {
         takeBack([n], ours);
       } });
     }
@@ -11528,6 +11548,10 @@
     return "Put back, but " + n + (n === 1 ? " change went with a deleted layer." : " changes went with deleted layers.");
   }
   var bothBack = (a, b) => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
+  function failedAfter(failed, earlier) {
+    if (!earlier || !earlier.gone.length) return failed;
+    return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+  }
   var current3 = null;
   var seq = 0;
   var FINISHED_KEEP = 20;
@@ -11644,7 +11668,7 @@
       card.previewed = null;
       post2(msg);
       if (back.failed) {
-        const f = landedResult(back.failed, card.landed);
+        const f = landedResult(failedAfter(back.failed, card.back), card.landed);
         card.input.announce(f, card.landed);
         finish2(card, f);
         return;
@@ -11723,7 +11747,7 @@
       card.previewed = null;
       if (back.failed) {
         post2({ type: "review-end", id: card.ticket, end: "failed" });
-        const f = landedResult(back.failed, card.landed);
+        const f = landedResult(failedAfter(back.failed, card.back), card.landed);
         card.input.announce(f, card.landed);
         finish2(card, f);
         return;

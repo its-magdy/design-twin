@@ -83,13 +83,20 @@ export function batchMade(changes: readonly Change[]): Set<string> {
 /** `c` went with its node: one the batch did not make, removed from the file (node-lookup.ts removedWith). */
 const wentWithNode = (c: Change): boolean => !c.made && c.on !== undefined && removedWith(c.on);
 
-/** What a reply says of a change that went with its node: what it was, and that none of it stays. */
-export const goneSentence = (c: Change): string => c.what + " went with that layer: it was deleted from the file while the batch ran, so none of it stays";
+/** `c` made nodes and every one is removed (taken back with a layer of the batch that held it, or deleted by the
+ *  designer): nothing of it is in the file, as before the batch, and its put-back would take back nothing. It is never
+ *  said to stay. */
+const asBefore = (c: Change): boolean => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
+
+/** What a reply says of a change that went with its node (or of a made one deleted whole): what it was, and that none
+ *  of it stays. */
+export const goneSentence = (c: Change): string => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
 
 /** `changes` that stay in the file when none is put back (the plugin changes nothing more once "Allow edits" is off):
- *  every one but those that went with their node. */
+ *  every one but those that went with their node, and the made ones deleted whole (asBefore). */
 export function staying(changes: readonly Change[]): { stays: Change[]; gone: Change[] } {
-  return { stays: changes.filter((c) => !wentWithNode(c)), gone: changes.filter(wentWithNode) };
+  const gone = (c: Change): boolean => wentWithNode(c) || asBefore(c);
+  return { stays: changes.filter((c) => !gone(c)), gone: changes.filter(gone) };
 }
 
 /** The rows of `changes` as a reply lists what was put back: each change's own row, but the layers one patchWhere
@@ -134,26 +141,42 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
   // A made layer refused for what it held (node-lookup.ts takeBack) may hold nothing else once the older changes went
   // back (a layer the batch moved, put back where it was): each is tried again until none more goes, so what the reply
   // says stays, and why, is the file as the put-back left it. Only made ones: a take-back changes nothing when it throws.
-  for (let more = !stop; more && allowed();) {
+  // "Allow edits" turned off before one was tried again since the last that went: its reason may no longer be true, so
+  // it is not given; it stays because the put-back stopped, and is counted with what else stays for that.
+  for (let more = !stop; more;) {
     more = false;
+    const tried = new Set<Change>();
     for (const f of failures) {
       const c = f[0];
-      if (!c.made || wentWithNode(c) || !allowed()) continue;
+      if (!c.made || wentWithNode(c)) continue;
+      if (!allowed()) { stop = { rest: [], tail: "" }; break; }
       try { await c.restore(allowed, ours); restored.push(c); failures.splice(failures.indexOf(f), 1); more = true; break; } catch (e) {
-        if (e instanceof RestoreStopped) break;
+        if (e instanceof RestoreStopped) { stop = { rest: [], tail: "" }; break; }
+        tried.add(c);
         f[1] = undo(c, e);
       }
+    }
+    if (stop) {
+      const untried = failures.filter(([c]) => c.made && !wentWithNode(c) && !tried.has(c));
+      for (const u of untried) failures.splice(failures.indexOf(u), 1);
+      stop.rest = untried.map(([c]) => c);
     }
   }
   // Gone or not is decided once every put-back is done: a node can be deleted at any put-back's await, its own (after it
   // was put back, or one that threw) or a later one's. One removed by now took with it what was set on it, and what was
   // put back on it: it is gone, neither restored, nor "could not undo", nor applied.
   const gone = left.filter(wentWithNode);
-  const isGone = new Set(gone);
-  const failed = failures.filter(([c]) => !isGone.has(c)).map(([, s]) => s);
+  // A made one not put back (refused, or not reached once "Allow edits" was off) whose every node is removed by now
+  // (taken back with a layer of the batch that held it, or deleted) is as its put-back would have left it: put back,
+  // never "could not undo", never said to stay.
+  const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+  restored.push(...back);
+  const settled = new Set([...gone, ...back]);
+  const failed = failures.filter(([c]) => !settled.has(c)).map(([, s]) => s);
   // Not put back ("Allow edits" turned off): the ones that did not go with their node stay applied, and are counted.
-  const kept = stop ? stop.rest.filter((c) => !isGone.has(c)) : [];
+  const kept = stop ? stop.rest.filter((c) => !settled.has(c)) : [];
   if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
+  const isGone = new Set(gone);
   const done = new Set([...restored, ...gone]);
   return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
 }

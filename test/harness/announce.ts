@@ -2786,3 +2786,198 @@ cases.push({
       r.ok === false && r.refused === "rejected" && typeof r.error === "string" && r.error.endsWith(" (A preview of it was on the canvas; it was put back, but " + wentWith("the changes to 'Old 1' (x:1)") + ".)"));
   },
 });
+
+// ---- #206 review 13: a made change whose layers are all gone is never listed as applied, kept or staying (a cleanup
+// after "Allow edits" went off takes only its own build's layers; a put-back stopped once one tree went with another
+// counts it as put back); "Allow edits" off before the retry pass is said, never a stale reason; a put-back that fails
+// after an earlier Put back found a layer deleted says that too.
+
+/** A layer of the fake file by id: one the batch made, or one of the scene's. */
+const nodeOf = (w: World, id: unknown): FakeNode | undefined => w.made.find((m) => m.id === id) ?? w.scene.nodes[String(id)];
+/** Every row of `applied` names a layer that is in the file. */
+const allInFile = (w: World, r: { applied: ReadonlyArray<{ id?: string }> }): boolean => r.applied.every((a) => { const n = nodeOf(w, a.id); return !!n && onPage(w, n); });
+
+cases.push({
+  name: "\"Allow edits\" off during a build that holds the batch's earlier tree: the earlier tree is listed as applied only while it is in the file (#206)",
+  async run() {
+    for (const how of ["moved in", "deleted"] as const) {
+      const w = await treeWorld({ kit: true });
+      let earlier: FakeNode | undefined;
+      let done = false;
+      // While the second tree's text style is set: the designer moves the first tree into it (or deletes it), then
+      // unticks "Allow edits".
+      w.hooks.onStyle = async () => {
+        earlier = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Earlier");
+        const box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+        if (earlier && box && !done) { if (how === "moved in") (box.appendChild as (n: FakeNode) => void)(earlier); else markRemoved(earlier); done = true; }
+        await w.allowEdits(false);
+      };
+      const r = await w.api.applyWrites([
+        { op: "createTree", tree: { name: "Earlier", children: [{ name: "E", text: "e" }] } },
+        { op: "createTree", tree: { name: "Later", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+      ]);
+      w.hooks.onStyle = undefined;
+      if (!earlier) throw new Error("no earlier tree");
+      const listed = r.applied.some((a) => a.id === earlier?.id);
+      const err = String(r.error);
+      // Moved in: nothing more of the batch is taken back once edits are off, so the earlier tree stays, listed. Deleted:
+      // not listed, and the reply says it was deleted.
+      ok(`[ANNOUNCE] "Allow edits" off during a build, the batch's earlier tree ${how}: it is listed as applied exactly when it is in the file (got ${JSON.stringify(r)})`,
+        done && r.ok === false && r.refused === "edits-off" && listed === onPage(w, earlier) && allInFile(w, r)
+        && (how === "moved in" ? onPage(w, earlier) : err.includes("; the tree 'Earlier' (" + String(earlier.id) + ") was deleted from the file while the batch ran, so none of it stays")));
+    }
+  },
+}, {
+  name: "A put-back stopped by \"Allow edits\" after one tree went back with another never says that tree stays (#206)",
+  async run() {
+    let off: (() => Promise<void>) | null = null;
+    let paints: unknown = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+    // A designer's swatch whose paint-style put-back awaits: "Allow edits" goes off there.
+    const target: FakeNode = {
+      id: "sw:1", type: "RECTANGLE", name: "Swatch", fillStyleId: "S:paint", removed: false,
+      get fills() { return paints; },
+      set fills(value: unknown) { paints = value; target.fillStyleId = ""; },
+      async setFillStyleIdAsync(style: string) { await Promise.resolve(); if (off) await off(); target.fillStyleId = style; },
+    };
+    const w = await treeWorld({ kit: true });
+    w.scene.nodes["sw:1"] = target;
+    target.parent = w.pages.current;
+    off = async () => { await w.allowEdits(false); };
+    let earlier: FakeNode | undefined;
+    let moved = false;
+    w.hooks.onStyle = async () => {
+      earlier = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Earlier");
+      const box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+      if (earlier && box && !moved) { (box.appendChild as (n: FakeNode) => void)(earlier); moved = true; }
+    };
+    // The second tree's put-back (newest first) takes the first with it; the swatch's, next, is where edits go off.
+    const r = await w.api.applyWrites([
+      { op: "createTree", tree: { name: "Earlier", children: [{ name: "E", text: "e" }] } },
+      { op: "setFill", nodeId: "sw:1", color: "#aa0000" },
+      { op: "createTree", tree: { name: "Later", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+      { op: "setFill", nodeId: "gone:1", color: "#fff" },
+    ]);
+    w.hooks.onStyle = undefined;
+    if (!earlier) throw new Error("no earlier tree");
+    const err = String(r.error);
+    ok(`[ANNOUNCE] a put-back stopped by "Allow edits" after the first tree went back inside the second: only the fill is said to stay, the tree is put back (got ${JSON.stringify(r)})`,
+      moved && r.ok === false && !onPage(w, earlier) && allInFile(w, r) && JSON.stringify(r.applied) === JSON.stringify([{ id: "sw:1" }])
+      && err.includes("so 1 fill change stay applied") && !err.includes("created tree") && (r.restored ?? []).some((a) => a.id === earlier?.id));
+  },
+}, {
+  name: "\"Allow edits\" off before a refused put-back is tried again: the reply says so, never the stale reason (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const first = await w.api.applyWrites([{ op: "createFrame", name: "Mover" }, { op: "createFrame", name: "Dest" }]);
+    const mover = w.scene.nodes[String(first.applied[0]?.id)];
+    const dest = w.scene.nodes[String(first.applied[1]?.id)];
+    if (!mover || !dest) throw new Error("no frames");
+    const home = mover.parent;
+    let paints: unknown = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+    // The oldest put-back (the swatch's paint style) fails at its await, and "Allow edits" goes off there.
+    const target: FakeNode = {
+      id: "sw:1", type: "RECTANGLE", name: "Swatch", fillStyleId: "S:paint", removed: false,
+      get fills() { return paints; },
+      set fills(value: unknown) { paints = value; target.fillStyleId = ""; },
+      async setFillStyleIdAsync() { await Promise.resolve(); await w.allowEdits(false); throw new Error("style refused"); },
+    };
+    w.scene.nodes["sw:1"] = target;
+    target.parent = w.pages.current;
+    let box: FakeNode | undefined;
+    w.hooks.onStyle = async () => {
+      box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+      if (box) (box.appendChild as (n: FakeNode) => void)(mover);
+    };
+    const r = await w.api.applyWrites([
+      { op: "setFill", nodeId: "sw:1", color: "#aa0000" },
+      { op: "move", nodeId: String(mover.id), parentId: String(dest.id) },
+      { op: "createTree", tree: { name: "Later", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+      { op: "setFill", nodeId: "gone:1", color: "#fff" },
+    ]);
+    w.hooks.onStyle = undefined;
+    const later = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Later");
+    const err = String(r.error);
+    // The tree was refused (it held the moved layer); the move's put-back took that layer out; edits went off at the
+    // swatch's, before the tree could be tried again: it stays, for that, and never "it holds 'Mover'".
+    ok(`[ANNOUNCE] "Allow edits" off between the put-back and its retry: the tree stays, said to be for "Allow edits", never for the layer it no longer holds (got ${JSON.stringify(r)})`,
+      !!box && !!later && r.ok === false && mover.parent === home && onPage(w, later) && allInFile(w, r) && !err.includes("holds 'Mover'")
+      && err.includes("could not undo the fill of 'Swatch' (sw:1) (style refused)") && err.includes("'Allow edits' was turned off while the batch was being put back, so 1 created tree stay applied"));
+  },
+}, {
+  name: "A preview put back after an earlier Put back found a layer deleted: when this put-back fails, the reply still says that layer went (#206)",
+  async run() {
+    for (const how of ["reject", "put back"] as const) {
+      const scene = swatchScene(() => { /* nothing deleted during the put-back */ });
+      const x1 = scene.nodes["x:1"];
+      const x2 = scene.nodes["x:2"];
+      if (!x1 || !x2) throw new Error("no layers");
+      // x:2 refuses its old name back once armed (the second put-back).
+      let refuse = false;
+      let name2 = "Old 2";
+      Object.defineProperty(x2, "name", { get: () => name2, set: (v: string) => { if (refuse && v === "Old 2") throw new Error("rename refused"); name2 = v; }, enumerable: true, configurable: true });
+      const w = await treeWorld({ extra: { reviewer: "real", nodes: { ...scene.nodes, [String(scene.target.id)]: scene.target } } });
+      const { reply, card } = await swatchCard(w, "r13-back-" + how, scene.nodes, scene.target);
+      // The designer deletes x:1 while the preview is up, then presses Put back.
+      x1.removed = true;
+      let at = w.posted.length;
+      await w.send({ type: "review-answer", id: card, action: "put-back" });
+      await tick(() => w.posted.slice(at).some((m) => m.type === "review-state" && m.state === "waiting"));
+      // Their Cmd-Z brings x:1 back; Preview again; this put-back cannot all go back.
+      x1.removed = false;
+      refuse = true;
+      at = w.posted.length;
+      await w.send({ type: "review-answer", id: card, action: "preview" });
+      await tick(() => w.posted.slice(at).some((m) => m.type === "review-state" && m.state === "previewing"));
+      await w.send({ type: "review-answer", id: card, action: how === "reject" ? "reject" : "put-back" });
+      const r = replyOf(await reply);
+      const err = String(r.error);
+      ok(`[ANNOUNCE] ${how} on a second preview that cannot all go back, after a Put back found a layer deleted: the reply says that layer's change went too (got ${JSON.stringify(r)})`,
+        r.ok === false && err.startsWith("The preview of this write could not all be put back: could not undo the changes to 'Old 2' (x:2) (rename refused)")
+        && err.includes(wentWith("the changes to 'Old 1' (x:1)")));
+    }
+  },
+});
+
+cases.push({
+  name: "A failed build's leftover deleted at a later put-back's await, then \"Allow edits\" off: it is never said to stay, nor \"could not undo\" (#206)",
+  async run() {
+    for (const two of [false, true]) {
+      const w = await treeWorld({ kit: true });
+      const designer = w.scene.nodes["1:1"];
+      if (!designer) throw new Error("no designer layer");
+      let root: FakeNode | undefined;
+      let box: FakeNode | undefined;
+      let paints: unknown = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+      // The oldest put-back (the swatch's paint style) awaits: the designer deletes the build's leftover there, then
+      // unticks "Allow edits".
+      const target: FakeNode = {
+        id: "sw:1", type: "RECTANGLE", name: "Swatch", fillStyleId: "S:paint", removed: false,
+        get fills() { return paints; },
+        set fills(value: unknown) { paints = value; target.fillStyleId = ""; },
+        async setFillStyleIdAsync(style: string) { await Promise.resolve(); if (root) markRemoved(root); await w.allowEdits(false); target.fillStyleId = style; },
+      };
+      w.scene.nodes["sw:1"] = target;
+      target.parent = w.pages.current;
+      // During the build: the designer's layer into its root (so the root stays), and (two) its Box out onto the page,
+      // where Figma will not remove it (so it stays too).
+      w.hooks.onStyle = async () => {
+        root = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Fresh");
+        box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+        if (!root || !box) return;
+        (root.appendChild as (n: FakeNode) => void)(designer);
+        if (two) { (w.pages.current.appendChild as (n: FakeNode) => void)(box); box.remove = () => { throw new Error("locked"); }; }
+        throw new Error("style refused");
+      };
+      const r = await w.api.applyWrites([
+        { op: "setFill", nodeId: "sw:1", color: "#aa0000" },
+        { op: "createTree", tree: { name: "Fresh", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+      ]);
+      w.hooks.onStyle = undefined;
+      if (!root || !box) throw new Error("no build");
+      const err = String(r.error);
+      ok(`[ANNOUNCE] a failed build's leftover${two ? " (one of two)" : ""} deleted at a later put-back's await, then "Allow edits" off: never listed, never "could not undo" (got ${JSON.stringify(r)})`,
+        r.ok === false && !onPage(w, root) && allInFile(w, r) && !r.applied.some((a) => a.id === root?.id) && !err.includes("'Fresh'")
+        && err.includes("so 1 fill change stay applied") && (two ? onPage(w, box) && err.includes("could not undo the unfinished layer 'Box' (" + String(box.id) + ") (locked)") : true));
+    }
+  },
+});

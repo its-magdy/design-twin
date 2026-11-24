@@ -39,6 +39,7 @@ import { componentKey, componentRootOf, type ComponentRootType } from "../../bri
 import { addDefs, arrangeVariants, fileDefs, propRecord, wireAll } from "./component-build";
 import { setPlannedComponents } from "./batch-plan";
 import { markCreated } from "./session";
+import { editsAllowedNow } from "./edits";
 import { readIndex, stampNode, writeIndex } from "./keyed-store";
 import type { KeyedUpdate } from "./keyed";
 import { batchMade, type Change, type OpProblem } from "./write-batch";
@@ -328,8 +329,9 @@ function discard(nodes: ReadonlyArray<[SceneNode, string]>, made: Made, from: Ma
   const everyNode = all.map(([n]) => n);
   for (const c of made.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
   // What an earlier op of the batch made is the batch's too (write-batch.ts batchMade): moved into this build, it goes
-  // with it, as the batch's put-back would take it back anyway.
-  const own = batchMade(changes);
+  // with it, as the batch's put-back would take it back anyway. Not once "Allow edits" is off: the batch's put-back
+  // changes nothing then, so an earlier op's layer stays, and with it the layer of this build that holds it.
+  const own = editsAllowedNow() ? batchMade(changes) : new Set<string>();
   for (const n of everyNode) own.add(n.id);
   for (const [n, what] of all) {
     // Below one that stayed: it stays with it, as it is (inDocument first: a removed node's parent throws when read).
@@ -337,7 +339,9 @@ function discard(nodes: ReadonlyArray<[SceneNode, string]>, made: Made, from: Ma
     try { takeBack([n], own); } catch { /* checked below */ }
     if (!inDocument(n)) continue;
     stayed.push(n);
-    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: everyNode, restore(_allowed, ours) { takeBack([n], ours); } });
+    // What it owns: it and the build's layers below it (what stays with it); the build's others went, or stay as their own.
+    const owns = everyNode.filter((m) => !removedWith(m) && below(m, n));
+    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns, restore(_allowed, ours) { takeBack([n], ours); } });
   }
 }
 /** The nodes a build made, from `from` on: each node it made, then every layer of each copy it made (a layer the

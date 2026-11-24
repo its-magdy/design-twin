@@ -114,6 +114,12 @@ function backState(back: PutBack): string {
 /** An earlier put-back of a card's preview (`a`, its Put back button) and a later one (`b`) as one: what went with its
  *  layers in either; what the later one put back (what a refusal says was, or was not, put back is the later preview). */
 const bothBack = (a: PutBack, b: PutBack): PutBack => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
+/** A put-back that could not all go back (`failed`), after an earlier one of the card's preview (`earlier`, its Put back
+ *  button) found layers deleted: it says those went too. */
+function failedAfter(failed: WriteResult, earlier: PutBack | null): WriteResult {
+  if (!earlier || !earlier.gone.length) return failed;
+  return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+}
 
 /** What writes.ts hands a card: the batch, what it shows, and how to run it. */
 export interface CardInput {
@@ -272,7 +278,7 @@ async function end(card: Card, e: Ending): Promise<void> {
     const back = await p.putBack();
     card.previewed = null;
     post(msg);
-    if (back.failed) { const f = landedResult(back.failed, card.landed); card.input.announce(f, card.landed); finish(card, f); return; }
+    if (back.failed) { const f = landedResult(failedAfter(back.failed, card.back), card.landed); card.input.announce(f, card.landed); finish(card, f); return; }
     // A change whose layer the designer deleted meanwhile was not put back: it went with that layer, and is said so (an
     // earlier Put back's too); when every one did, nothing of it was put back, and it says that.
     const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back ? bothBack(card.back, back) : back) + ".)" }, card.landed);
@@ -350,7 +356,7 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
     card.previewed = null;
     if (back.failed) {
       post({ type: "review-end", id: card.ticket, end: "failed" });
-      const f = landedResult(back.failed, card.landed);
+      const f = landedResult(failedAfter(back.failed, card.back), card.landed);
       card.input.announce(f, card.landed);
       finish(card, f);
       return;
