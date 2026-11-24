@@ -249,7 +249,9 @@ screens.
       removes them, newest first, after the frames in them; a section's growth goes back with the frame that caused
       it — each side only while it is still the size the batch gave it: a side the designer resized meanwhile (while a
       preview was up, or while the batch awaited a font or an import) keeps their size, and the error says so (the
-      frame still counts as put back). A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)
+      frame still counts as put back). It keeps it through every growth of that side the put-back takes back after: two
+      ops that grew the same section are undone newest first, and once the newer finds a side resized, the older leaves
+      it too (even when the designer set it to the size the older gave it), the side said once. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)
       is not removed: it stays with that layer, listed in `applied`, and the error says why. A page that is the
       current one when it goes is left first (the current page is not undo history); after that wait, its layers and
       "Allow edits" are checked again before it is removed, and it stays (listed as kept) when either has changed. A file in a Starter-plan team

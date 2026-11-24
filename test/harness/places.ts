@@ -565,6 +565,33 @@ export const cases: Case[] = [{
       same.r.ok === false && box(same.s) === "1200,0,600,600" && !/was resized/.test(same.r.error ?? ""));
   },
 }, {
+  name: "put back: a section two ops grew keeps a side the designer resized, even to the size the first op gave it",
+  async run() {
+    // Two trees at 80,80 grow "Payments" (600×600) twice: to 660×860, then 760×910. While a later op awaits its text
+    // style the designer sets the width to 660 — the size the first op gave it. Put back, newest first: the second
+    // op's growth finds the width changed and keeps it; the first op's must then leave it too (one conflict a side).
+    const sent = async (resize: (s: FakeNode) => void) => {
+      const w = await flowsWorld({ kit: true });
+      w.hooks.onStyle = async () => { w.hooks.onStyle = undefined; resize(w.f.payments); };
+      const r = await write(w, [
+        { op: "createTree", page: "Flows", section: "Payments", tree: { name: "First", x: 80, y: 80, box: { w: 500, h: 700 } } },
+        { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Second", x: 80, y: 80, box: { w: 600, h: 750 } } },
+        { op: "createTree", page: "Flows", tree: { name: "B", children: [{ text: "Hi", styles: { text: "Body" } }] } },
+        { op: "setFill", nodeId: "gone:1", color: "#fff" },
+      ]);
+      return { r, s: w.f.payments, w };
+    };
+    const grew: string[] = [];
+    const wide = await sent((s) => { grew.push(box(s)); s.width = 660; });
+    const said = (wide.r.error ?? "").match(/was resized after this batch grew it/g) ?? [];
+    ok(`[PLACE-BACK-RESIZED] two growths: the width the designer set (660) stays, the height goes back to 600, said once (${grew[0]} -> ${box(wide.s)}; ${wide.r.error})`,
+      wide.r.ok === false && grew[0] === "1200,0,760,910" && box(wide.s) === "1200,0,660,600" && wide.w.alive().length === 0
+      && said.length === 1 && /grew it to 760×910, so it keeps its width, 660/.test(wide.r.error ?? ""));
+    const same = await sent(() => {});
+    ok(`[PLACE-BACK-RESIZED] two growths, control: left as the batch grew it, both go back, to 600×600, and nothing is said (${box(same.s)}; ${same.r.error})`,
+      same.r.ok === false && box(same.s) === "1200,0,600,600" && !/was resized/.test(same.r.error ?? ""));
+  },
+}, {
   name: "a keyed re-send stays where its result is: the page and the section it names must be the result's",
   async run() {
     const w = await flowsWorld();

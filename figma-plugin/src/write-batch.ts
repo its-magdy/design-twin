@@ -29,7 +29,7 @@ export interface Change {
   /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. A
    *  sentence back: the change went back but for a part the designer has changed since, which it left as they made it
    *  (a section they resized after the batch grew it); said with what could not be undone. */
-  restore(allowed: () => boolean): void | string | Promise<void | string>;
+  restore(allowed: () => boolean, pass?: RestorePass): void | string | Promise<void | string>;
   /** One of the layers a patchWhere changed (the same object for every one of them): a reply that lists what was put
    *  back counts them in one row instead of a row each. */
   group?: object;
@@ -50,6 +50,12 @@ export function restoredRows(changes: readonly Change[]): AppliedWrite[] {
   }
   return out;
 }
+/** One put-back of a batch, shared by the restores it runs (newest first): the parts of a layer a newer change found
+ *  the designer has changed since, by layer (a section's "width", "height"). An older change of the same part leaves
+ *  it as the designer made it too, and does not say it again — the one sentence is the newer change's. */
+export interface RestorePass { kept: Map<object, Set<string>> }
+export const newRestorePass = (): RestorePass => ({ kept: new Map() });
+
 /** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
 export class RestoreStopped extends Error {}
 
@@ -61,13 +67,14 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
   const restored: Change[] = [];
   const failed: string[] = [];
   const left = [...changes].reverse();
+  const pass = newRestorePass();
   for (const [i, c] of left.entries()) {
     if (!allowed()) {
       failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
       break;
     }
     try {
-      const kept = await c.restore(allowed);
+      const kept = await c.restore(allowed, pass);
       restored.push(c);
       if (kept) failed.push(kept);
     } catch (e) {

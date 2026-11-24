@@ -41,7 +41,7 @@ import { builtSize, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, nodeIdLike, SECTION_PAD } from "../../bridge/src/place-spec.ts";
-import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { newRestorePass, RestoreStopped, type Change, type OpProblem, type RestorePass } from "./write-batch";
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
 export const PLACE_GAP = 100;
@@ -473,8 +473,9 @@ export class Canvas {
 
 /** What landing a node did: how to take back the growth of the sections around it, and what it ran into. `undo` puts
  *  back each side a section grew that is still the size landing gave it; a side resized since (the designer's, while a
- *  preview was up or the batch awaited) is left as it is, and said: one sentence per section, for the batch's reply. */
-export interface Landed { undo(): string[]; warnings: string[] }
+ *  preview was up or the batch awaited) is left as it is, and said: one sentence per section, for the batch's reply.
+ *  It is recorded on `pass` (the batch's put-back), so an older growth of the same side leaves it too, unsaid. */
+export interface Landed { undo(pass?: RestorePass): string[]; warnings: string[] }
 
 /**
  * Attach `root` (built to the side, sized) where `dest` says, placed (Canvas.place, on the file as it is now): on its
@@ -496,14 +497,20 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
   root.y = placed.y;
   // Each section around the node grows to hold what is in it, with its margin: the one it is in, then outwards.
   const grown: Array<{ s: SectionNode; w: number; h: number; toW: number; toH: number }> = [];
-  const undo = (): string[] => {
+  const undo = (pass: RestorePass = newRestorePass()): string[] => {
     const kept: string[] = [];
     for (const g of grown.slice().reverse()) {
       if (g.s.removed) continue;
-      // A side it grew goes back only while it is still the size landing gave it.
-      const keepW = g.toW !== g.w && !near(g.s.width, g.toW), keepH = g.toH !== g.h && !near(g.s.height, g.toH);
-      const w = keepW || g.toW === g.w ? g.s.width : g.w, h = keepH || g.toH === g.h ? g.s.height : g.h;
+      // A side it grew goes back only while it is still the size landing gave it — and not at all once a newer growth
+      // of the same put-back found it resized (its size may then be this one's by chance: the designer's all the same).
+      const held = pass.kept.get(g.s) || new Set<string>();
+      const heldW = held.has("width"), heldH = held.has("height");
+      const keepW = g.toW !== g.w && !heldW && !near(g.s.width, g.toW), keepH = g.toH !== g.h && !heldH && !near(g.s.height, g.toH);
+      const w = keepW || heldW || g.toW === g.w ? g.s.width : g.w, h = keepH || heldH || g.toH === g.h ? g.s.height : g.h;
       if (!near(w, g.s.width) || !near(h, g.s.height)) g.s.resizeWithoutConstraints(w, h);
+      if (keepW) held.add("width");
+      if (keepH) held.add("height");
+      if (held.size) pass.kept.set(g.s, held);
       if (keepW || keepH) {
         kept.push("the section " + label(g.s) + " was resized after this batch grew it to " + g.toW + "×" + g.toH + ", so it keeps its " +
           (keepW && keepH ? "size, " + g.s.width + "×" + g.s.height : keepW ? "width, " + g.s.width : "height, " + g.s.height));

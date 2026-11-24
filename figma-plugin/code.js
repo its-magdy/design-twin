@@ -7668,19 +7668,21 @@
     }
     return out;
   }
+  var newRestorePass = () => ({ kept: /* @__PURE__ */ new Map() });
   var RestoreStopped = class extends Error {
   };
   async function restoreChanges(changes, allowed2) {
     const restored = [];
     const failed = [];
     const left = [...changes].reverse();
+    const pass = newRestorePass();
     for (const [i, c] of left.entries()) {
       if (!allowed2()) {
         failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
         break;
       }
       try {
-        const kept = await c.restore(allowed2);
+        const kept = await c.restore(allowed2, pass);
         restored.push(c);
         if (kept) failed.push(kept);
       } catch (e) {
@@ -9656,13 +9658,18 @@
     root.x = placed.x;
     root.y = placed.y;
     const grown = [];
-    const undo = () => {
+    const undo = (pass = newRestorePass()) => {
       const kept = [];
       for (const g of grown.slice().reverse()) {
         if (g.s.removed) continue;
-        const keepW = g.toW !== g.w && !near2(g.s.width, g.toW), keepH = g.toH !== g.h && !near2(g.s.height, g.toH);
-        const w = keepW || g.toW === g.w ? g.s.width : g.w, h = keepH || g.toH === g.h ? g.s.height : g.h;
+        const held = pass.kept.get(g.s) || /* @__PURE__ */ new Set();
+        const heldW = held.has("width"), heldH = held.has("height");
+        const keepW = g.toW !== g.w && !heldW && !near2(g.s.width, g.toW), keepH = g.toH !== g.h && !heldH && !near2(g.s.height, g.toH);
+        const w = keepW || heldW || g.toW === g.w ? g.s.width : g.w, h = keepH || heldH || g.toH === g.h ? g.s.height : g.h;
         if (!near2(w, g.s.width) || !near2(h, g.s.height)) g.s.resizeWithoutConstraints(w, h);
+        if (keepW) held.add("width");
+        if (keepH) held.add("height");
+        if (held.size) pass.kept.set(g.s, held);
         if (keepW || keepH) {
           kept.push("the section " + label3(g.s) + " was resized after this batch grew it to " + g.toW + "\xD7" + g.toH + ", so it keeps its " + (keepW && keepH ? "size, " + g.s.width + "\xD7" + g.s.height : keepW ? "width, " + g.s.width : "height, " + g.s.height));
         }
@@ -9916,9 +9923,9 @@
       applied,
       kind: "created tree",
       what: "the tree '" + root.name + "' (" + root.id + ")",
-      restore() {
+      restore(_allowed, pass) {
         root.remove();
-        const kept = grew ? grew.undo() : [];
+        const kept = grew ? grew.undo(pass) : [];
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
         return kept.length ? kept.join("; ") : void 0;
       }
@@ -9973,9 +9980,9 @@
       if (t.summary.unbound) applied.unbound = t.summary.unbound;
       const built = root;
       const grew = landed;
-      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
+      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore(_allowed, pass) {
         built.remove();
-        const kept = grew.undo();
+        const kept = grew.undo(pass);
         return kept.length ? kept.join("; ") : void 0;
       } };
     } catch (e) {
