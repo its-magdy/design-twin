@@ -230,6 +230,10 @@ screens.
       lands on no layer: only `y`, right of everything there; only `x`, level with the topmost when that overlaps
       nothing, else 100 px below what is in its column (the band from `x` to `x` + its width). Neither refused nor
       warned: the coordinate given is honoured and the promise of no overlap kept (both given: exactly there).
+    - **What the new frame covers counts too.** Placing it and growing its section measure the new frame as the layers
+      it goes beside are measured: what it will cover on the canvas, its turn included (a copy of a rotated layer keeps
+      the rotation). Its `x`/`y` are Figma's own (the turned corner), so a placed copy's box starts where the rules
+      above say, its `x`/`y` wherever that puts them; given coordinates are kept as given.
     - **All or nothing (decision 14).** A made page and section are Changes on the batch's list, so a later failure
       removes them, newest first, after the frames in them; a section's growth goes back with the frame that caused
       it. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)

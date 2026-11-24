@@ -28,6 +28,34 @@ async function flowsWorld(extra: Parameters<typeof treeWorld>[0] = {}) {
   if (!f) throw new Error("flowsWorld: no Flows page");
   return { ...w, f };
 }
+type Box = { x: number; y: number; width: number; height: number };
+const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+/** A frame on page 'Screens' to copy, `width`×`height`, turned by `deg` as Figma turns a layer (its relativeTransform;
+ *  a positive rotation is anticlockwise on the canvas). Its id. */
+async function turnedSource(w: World, width: number, height: number, deg: number): Promise<string> {
+  const r = await write(w, [{ op: "createTree", page: "Screens", tree: { name: "Source", box: { w: width, h: height } } }]);
+  const n = found(w, r);
+  if (!r.ok || !n) throw new Error("turnedSource: " + String(r.error));
+  const t = (deg * Math.PI) / 180;
+  n.relativeTransform = [[Math.cos(t), Math.sin(t), num(n, "x")], [-Math.sin(t), Math.cos(t), num(n, "y")]];
+  n.rotation = deg;
+  return String(n.id);
+}
+/** What a node covers in its parent's coordinates, its turn included (Figma's absoluteBoundingBox less its parent's
+ *  origin), worked out here from its x/y, size and relativeTransform. */
+function covers(n: FakeNode | undefined): Box {
+  const m = n?.relativeTransform;
+  const at = (i: number, j: number, none: number): number => {
+    const row: unknown = Array.isArray(m) ? m[i] : undefined;
+    const v: unknown = Array.isArray(row) ? row[j] : undefined;
+    return typeof v === "number" ? v : none;
+  };
+  const a = at(0, 0, 1), c = at(0, 1, 0), b = at(1, 0, 0), d = at(1, 1, 1);
+  const w = num(n, "width"), h = num(n, "height");
+  const xs = [0, a * w, c * h, a * w + c * h], ys = [0, b * w, d * h, b * w + d * h];
+  return { x: num(n, "x") + Math.min(...xs), y: num(n, "y") + Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+}
+const plain = (n: FakeNode): Box => ({ x: num(n, "x"), y: num(n, "y"), width: num(n, "width"), height: num(n, "height") });
 
 export const cases: Case[] = [{
   name: "a section on a named page: inside it, beside what it holds without overlap, the section grown to fit",
@@ -115,6 +143,39 @@ export const cases: Case[] = [{
     const r2 = await write(w2, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Wide", { box: { w: 700, h: 400 } }) }]);
     ok(`[PLACE-ROTATED] a section grown into a rotated neighbour's canvas box is a warning (${JSON.stringify(r2.warnings)})`,
       r2.ok === true && /now overlaps 'Tilted beside'/.test((r2.warnings ?? []).join()));
+  },
+}, {
+  name: "a turned copy as the root: placed, and its section grown, by what it will cover on the canvas, not its unturned size",
+  async run() {
+    // A 40×400 frame turned -60° (clockwise) covers 366.41×234.64 from 346.41 left of its own x (Figma's corner).
+    const onPage = async (at: Record<string, number>): Promise<{ r: WriteResult; n: FakeNode | undefined; hit: string }> => {
+      const w = await flowsWorld();
+      const r = await write(w, [{ op: "createTree", page: "Flows", tree: { clone: await turnedSource(w, 40, 400, -60), ...at } }]);
+      const n = found(w, r);
+      const c = covers(n);
+      return { r, n, hit: kids(w.f.page).filter((k) => k !== n && overlaps(c, plain(k))).map((k) => String(k.name)).join() };
+    };
+    // y only: right of everything on the page (Drafts end at 3200, so its covered box starts at 3300).
+    const row = await onPage({ y: 0 });
+    ok(`[PLACE-TURNED] y only on a page: what it covers starts right of everything (3300+346.41), on no layer (${num(row.n, "x")},${num(row.n, "y")}; on '${row.hit}')`,
+      row.r.ok === true && num(row.n, "x") === 3646 && num(row.n, "y") === 0 && row.hit === "");
+    // x only: what it covers (3053.59–3420) reaches the 'Drafts' column, so it goes below them (1200+100).
+    const col = await onPage({ x: 3400 });
+    ok(`[PLACE-TURNED] x only on a page: below what its covered box reaches, on no layer (${num(col.n, "x")},${num(col.n, "y")}; on '${col.hit}')`,
+      col.r.ok === true && num(col.n, "x") === 3400 && num(col.n, "y") === 1300 && col.hit === "");
+    // Turned 90° (anticlockwise), it covers 400×40 from 40 above its own y.
+    const inSection = async (at: Record<string, number>) => {
+      const w = await flowsWorld();
+      const r = await write(w, [{ op: "createTree", page: "Flows", section: "Turned", createSection: true, tree: { clone: await turnedSource(w, 40, 400, 90), ...at } }]);
+      const n = found(w, r);
+      return { r, n, sec: parentOf(n) ?? undefined };
+    };
+    const auto = await inSection({});
+    ok(`[PLACE-TURNED] in a new section: what it covers at the margin (its y 80+40), the section grown to 80+400+80 × 80+40+80 (${num(auto.n, "x")},${num(auto.n, "y")}; ${box(auto.sec)})`,
+      auto.r.ok === true && num(auto.n, "x") === 80 && num(auto.n, "y") === 120 && box(auto.sec) === "3300,0,560,200");
+    const pinned = await inSection({ x: 80, y: 80 });
+    ok(`[PLACE-TURNED] at x/y given in a section: kept, the section grown to the right edge of what it covers (80+400+80) (${num(pinned.n, "x")},${num(pinned.n, "y")}; ${box(pinned.sec)})`,
+      pinned.r.ok === true && num(pinned.n, "x") === 80 && num(pinned.n, "y") === 80 && box(pinned.sec) === "3300,0,560,160");
   },
 }, {
   name: "the dry run and the write refuse the same placement fields (one table: test/place-refusals.ts)",

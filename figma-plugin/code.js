@@ -5961,7 +5961,7 @@
     if (!node) throw new Error("Node " + nodeId + " is not in the open file \u2014 open the Figma file this link points to, then retry.");
     return node;
   }
-  function resolvePages(wanted, all) {
+  function resolvePages(wanted2, all) {
     const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
     const pick = (sel, matches, how) => {
       if (matches.length > 1) {
@@ -5982,7 +5982,7 @@
   ${avail()}`);
     };
     const picked = [];
-    for (const sel of wanted) {
+    for (const sel of wanted2) {
       const p = resolveOne(sel);
       if (!picked.some((x) => x.id === p.id)) picked.push(p);
     }
@@ -6261,15 +6261,15 @@
     if (rawWanted.length && rawWanted.every((s) => !s)) {
       r.warn("page selector was empty after trimming \u2014 ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
     }
-    const wanted = rawWanted.filter(Boolean);
-    if (allPages && wanted.length) {
+    const wanted2 = rawWanted.filter(Boolean);
+    if (allPages && wanted2.length) {
       throw new Error("allPages and page select different scopes \u2014 pass only one (page:[ids] for a bounded pull, allPages for the whole file).");
     }
     let pages;
     if (allPages) {
       pages = figma.root.children;
-    } else if (wanted.length) {
-      const picked = resolvePages(wanted, figma.root.children);
+    } else if (wanted2.length) {
+      const picked = resolvePages(wanted2, figma.root.children);
       await Promise.all(picked.map((p) => loadPageSafely(p, r.warn, "")));
       pages = picked;
     } else {
@@ -6324,7 +6324,7 @@
       // to tell whether it got the page it asked for, next to a `page` field naming a page that was
       // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
       // whatever the user happens to be looking at).
-      scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
+      scope: allPages ? "all-pages" : wanted2.length ? "page" : "current-page",
       // `pages.map(...)[0]` rather than `pages[0]?.name`: the plugin bundle is ES2019, which has no `?.`.
       ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : pages.map((p) => p.name)[0]),
       ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0),
@@ -8669,10 +8669,10 @@
       if (!have.has(name)) have.set(name, { key, type: d.type, defaultValue: d.defaultValue, ...d.preferredValues ? { preferredValues: d.preferredValues } : {} });
     }
     const plan = { owner, defs, keys: /* @__PURE__ */ new Map(), add: [], edit: [], remove: [], wiring: [] };
-    const wanted = /* @__PURE__ */ new Set();
+    const wanted2 = /* @__PURE__ */ new Set();
     let ok = true;
     for (const d of defs) {
-      wanted.add(d.name);
+      wanted2.add(d.name);
       const h = have.get(d.name);
       if (!h) {
         plan.add.push(d);
@@ -8688,7 +8688,7 @@
       const hadPrefs = d.type === "INSTANCE_SWAP" ? h.preferredValues || [] : void 0;
       if (h.defaultValue !== d.defaultValue || !sameJson(prefs, hadPrefs)) plan.edit.push({ key: h.key, def: d, was: { defaultValue: h.defaultValue, ...h.preferredValues ? { preferredValues: h.preferredValues } : {} } });
     }
-    for (const [name, h] of have) if (!wanted.has(name)) plan.remove.push({ key: h.key, name });
+    for (const [name, h] of have) if (!wanted2.has(name)) plan.remove.push({ key: h.key, name });
     return ok ? plan : null;
   }
   var own2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -9336,28 +9336,41 @@
     return b && origin ? { x: b.x - origin.x, y: b.y - origin.y, width: b.width, height: b.height } : { x: c.x, y: c.y, width: c.width, height: c.height };
   }
   var overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-  function besideHeld(held, spec, w, h, pad) {
-    if (!held.length) return { x: spec.x !== void 0 ? spec.x : pad, y: spec.y !== void 0 ? spec.y : pad };
-    const top = Math.round(Math.min(...held.map((b) => b.y)));
-    if (spec.x === void 0) return { x: Math.round(Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP), y: spec.y !== void 0 ? spec.y : top };
-    const x = spec.x;
-    if (spec.y !== void 0) return { x, y: spec.y };
+  function footprint(w, h, turned) {
+    const t = turned && "relativeTransform" in turned ? turned.relativeTransform : null;
+    if (!Array.isArray(t)) return { dx: 0, dy: 0, width: w, height: h };
+    const [[a, c], [b, d]] = t;
+    const xs = [0, a * w, c * h, a * w + c * h];
+    const ys = [0, b * w, d * h, b * w + d * h];
+    const hundredth = (v) => Math.round(v * 100) / 100;
+    const x0 = Math.min(...xs), y0 = Math.min(...ys);
+    return { dx: hundredth(x0), dy: hundredth(y0), width: hundredth(Math.max(...xs) - x0), height: hundredth(Math.max(...ys) - y0) };
+  }
+  var wanted = (spec, fp) => ({ x: spec.x !== void 0 ? spec.x + fp.dx : void 0, y: spec.y !== void 0 ? spec.y + fp.dy : void 0 });
+  var anchored = (spec, box, fp) => ({ x: spec.x !== void 0 ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== void 0 ? spec.y : Math.round(box.y - fp.dy) });
+  function besideHeld(held, at3, w, h, pad) {
+    if (!held.length) return { x: at3.x !== void 0 ? at3.x : pad, y: at3.y !== void 0 ? at3.y : pad };
+    const top = Math.min(...held.map((b) => b.y));
+    if (at3.x === void 0) return { x: Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP, y: at3.y !== void 0 ? at3.y : top };
+    const x = at3.x;
+    if (at3.y !== void 0) return { x, y: at3.y };
     if (!held.some((b) => overlaps({ x, y: top, width: w, height: h }, b))) return { x, y: top };
     const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
-    return { x, y: Math.round(Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP) };
+    return { x, y: Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP };
   }
-  function pagePlacement(page, skip, spec, w, h) {
+  function pagePlacement(page, skip, spec, fp) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    return besideHeld(others(page, skip).map(occupied), spec, w, h, 0);
+    return anchored(spec, besideHeld(others(page, skip).map(occupied), wanted(spec, fp), fp.width, fp.height, 0), fp);
   }
-  function sectionPlacement(section, skip, spec, w, h) {
+  function sectionPlacement(section, skip, spec, fp) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
     const held = others(section, skip).map(occupied);
-    if (!held.length || spec.x !== void 0 || spec.y !== void 0) return besideHeld(held, spec, w, h, SECTION_PAD);
+    const w = fp.width, h = fp.height;
+    if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
     const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-    if (!runsInto(section, beside, w, h)) return beside;
-    const below = { x: Math.round(Math.min(...held.map((b) => b.x))), y: Math.round(Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
-    return runsInto(section, below, w, h) ? beside : below;
+    if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp);
+    const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
+    return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp);
   }
   function runsInto(section, at3, w, h) {
     const grown = grownBox(section, at3.x + w + SECTION_PAD, at3.y + h + SECTION_PAD);
@@ -9382,8 +9395,9 @@
   function land(root, dest, spec) {
     const page = dest.page.node;
     if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+    const fp = footprint(root.width, root.height, root);
     if (!dest.section) {
-      const { x: x2, y: y2 } = pagePlacement(page, root.id, spec, root.width, root.height);
+      const { x: x2, y: y2 } = pagePlacement(page, root.id, spec, fp);
       page.appendChild(root);
       root.x = x2;
       root.y = y2;
@@ -9392,7 +9406,7 @@
     }
     const section = dest.section.node;
     if (!section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
-    const { x, y } = sectionPlacement(section, root.id, spec, root.width, root.height);
+    const { x, y } = sectionPlacement(section, root.id, spec, fp);
     section.appendChild(root);
     root.x = x;
     root.y = y;
@@ -9402,17 +9416,19 @@
       for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h);
     };
     try {
-      let child = root;
+      let right = root.x + fp.dx + fp.width;
+      let bottom = root.y + fp.dy + fp.height;
       let s = section;
       while (s && s.type === "SECTION") {
-        const box = grownBox(s, child.x + child.width + SECTION_PAD, child.y + child.height + SECTION_PAD);
+        const box = grownBox(s, right + SECTION_PAD, bottom + SECTION_PAD);
         if (box) {
           const hit = neighbourHit(s, box);
           grown.push({ s, w: s.width, h: s.height });
           s.resizeWithoutConstraints(box.width, box.height);
           if (hit) warnings.push("section '" + s.name + "' grew to " + box.width + "\xD7" + box.height + " to hold '" + root.name + "' and now overlaps '" + hit.name + "'");
         }
-        child = s;
+        right = s.x + s.width;
+        bottom = s.y + s.height;
         s = s.parent;
       }
     } catch (e) {
@@ -9484,7 +9500,7 @@
       changes.push(made2);
       section.name = s.name;
       made2.what = "the new section " + label3(section);
-      const at3 = pagePlacement(page, section.id, {}, SECTION_PAD * 2, SECTION_PAD * 2);
+      const at3 = pagePlacement(page, section.id, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
       page.appendChild(section);
       section.x = at3.x;
       section.y = at3.y;
@@ -9502,15 +9518,15 @@
     const w = spec.box ? spec.box.w : 100;
     const h = spec.box ? spec.box.h : 100;
     if (!s) {
-      const at4 = pagePlacement(page, "", spec, w, h);
+      const at4 = pagePlacement(page, "", spec, footprint(w, h));
       const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
       return { lands: (beside ? "right of the existing frames" : "at " + at4.x + ", " + at4.y) + pageText, spot: { pageId: page.id, x: at4.x, y: at4.y } };
     }
     if (!s.node) {
-      const at4 = pagePlacement(page, "", {}, SECTION_PAD * 2, SECTION_PAD * 2);
+      const at4 = pagePlacement(page, "", {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
       return { lands: "in a new section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: at4.x + SECTION_PAD, y: at4.y + SECTION_PAD } };
     }
-    const at3 = sectionPlacement(s.node, "", spec, w, h);
+    const at3 = sectionPlacement(s.node, "", spec, footprint(w, h));
     const origin = s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y };
     return { lands: "in section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at3.x, y: origin.y + at3.y } };
   }
