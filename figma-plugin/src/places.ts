@@ -16,9 +16,16 @@
 // x/y are the section's own (as Figma reads a section child's): beside what it holds — right of it, top-aligned, or on
 // a new row below when growing right would run the section into one of its neighbours — at SECTION_PAD from its edges
 // when it is empty. The section then grows (never shrinks) to hold the frame with that margin, and so does each section
-// around it; the growth is put back with the frame. A section that still runs into a neighbour is said in a warning.
-// Every box here is what a layer covers on the canvas, rotation included: the layers there by their absoluteBoundingBox
-// (occupied), the frame placed by its footprint (its size through its relativeTransform; a copy keeps its source's turn).
+// around it; the growth is put back with the frame. A section that still runs into a neighbour is said in a warning,
+// as is a frame whose given coordinates put it past its section's left or top edge (kept there; a section grows only
+// right and down). Every box here is what a layer covers on the canvas, rotation included: the layers there by their
+// absoluteBoundingBox (occupied), the frame placed by its footprint (its size through its relativeTransform; a copy
+// keeps its source's turn), its computed x/y a whole pixel that stays clear of what it was placed beside.
+//
+// Every rule runs on a Canvas (what each page and section holds, each section's box), so the review card's Show me
+// (landing) places by the write's own code: the write reads a fresh one for each node it lands, without the node itself
+// (built hidden where Figma made it); the review plans the whole batch on one, op by op, so a later op is shown where it
+// will land beside the earlier ones.
 //
 // Plugin API facts this leans on (@figma/plugin-typings):
 //   * figma.createPage appends a new page to the document; a file in a Starter-plan team stops at 3 pages (drafts
@@ -125,21 +132,17 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
   return { dests, problems };
 }
 
-/** A container's children, except `skip` (a node being placed among them). */
-function others(parent: BaseNode & ChildrenMixin, skip: string): SceneNode[] {
-  return parent.children.filter((c) => c.id !== skip);
-}
-
 /** What a node covers in its parent's coordinates, rotation included: its canvas box (absoluteBoundingBox, page
  *  coordinates) less its parent's origin — a page's is 0,0, a section's its own canvas box (a section does not
  *  rotate). Its x/y/size when Figma gives no canvas box. */
-function occupied(c: SceneNode): { x: number; y: number; width: number; height: number } {
+function occupied(c: SceneNode): Box {
   const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
   const p = c.parent;
   const origin = !p ? null : p.type === "PAGE" ? { x: 0, y: 0 } : "absoluteBoundingBox" in p ? p.absoluteBoundingBox : null;
   return b && origin ? { x: b.x - origin.x, y: b.y - origin.y, width: b.width, height: b.height } : { x: c.x, y: c.y, width: c.width, height: c.height };
 }
 interface Box { x: number; y: number; width: number; height: number }
+interface XY { x: number; y: number }
 const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 /** What a node will cover on the canvas, from its own x/y: the box `dx`, `dy` from it, `width`×`height` — its size
@@ -169,7 +172,7 @@ function wholePixels(v: number): number[] {
 /** The node's x/y for its footprint at `box` (a spot clear of every box in `held`): the spec's own where it gives them,
  *  as given; the rest a whole pixel — the nearer, unless that puts what it covers on one of `held` (rounding never
  *  moves it onto a layer the spot was chosen clear of), then the other, else unrounded. */
-function anchored(spec: At, box: { x: number; y: number }, fp: Footprint, held: readonly Box[]): { x: number; y: number } {
+function anchored(spec: At, box: XY, fp: Footprint, held: readonly Box[]): XY {
   const xs = spec.x !== undefined ? [spec.x] : wholePixels(box.x - fp.dx);
   const ys = spec.y !== undefined ? [spec.y] : wholePixels(box.y - fp.dy);
   for (const x of xs) {
@@ -187,7 +190,7 @@ function anchored(spec: At, box: { x: number; y: number }, fp: Footprint, held: 
  * at that `y`. Only `x`: at that `x`, level with the topmost when that overlaps nothing, else below everything held in
  * its column. Only the given coordinates are kept; the other never lands on a layer.
  */
-function besideHeld(held: readonly Box[], at: At, w: number, h: number, pad: number): { x: number; y: number } {
+function besideHeld(held: readonly Box[], at: At, w: number, h: number, pad: number): XY {
   if (!held.length) return { x: at.x !== undefined ? at.x : pad, y: at.y !== undefined ? at.y : pad };
   const top = Math.min(...held.map((b) => b.y));
   if (at.x === undefined) return { x: Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP, y: at.y !== undefined ? at.y : top };
@@ -198,124 +201,201 @@ function besideHeld(held: readonly Box[], at: At, w: number, h: number, pad: num
   return { x, y: Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP };
 }
 
-/** Where a top-level node covering `fp` lands on `page` (its x/y): the spec's own x/y, the rest so what it covers is
- *  beside what is on the page (besideHeld). */
-export function pagePlacement(page: PageNode, skip: string, spec: At, fp: Footprint): { x: number; y: number } {
-  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
-  const held = others(page, skip).map(occupied);
-  return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
-}
-
-/** Where a node covering `fp` lands in `section` (its x/y, in the section's coordinates), by the spec's x/y and what
- *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into a
- *  neighbour; with one, as besideHeld says. `section` null: one the batch is still to make (it holds nothing). */
-function sectionPlacement(section: SectionNode | null, skip: string, spec: At, fp: Footprint): { x: number; y: number } {
-  if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
-  const held = section ? others(section, skip).map(occupied) : [];
-  const w = fp.width, h = fp.height;
-  if (!section || !held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp, held);
-  const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-  if (!runsInto(section, skip, beside, w, h)) return anchored(spec, beside, fp, held);
-  const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
-  return anchored(spec, runsInto(section, skip, below, w, h) ? beside : below, fp, held);
-}
-/** Whether `section`, grown to hold a node of `w`×`h` at `at`, would run into one of its neighbours (`skip`, the node
- *  being placed — hidden where Figma made it until it lands — is none). */
-function runsInto(section: SectionNode, skip: string, at: { x: number; y: number }, w: number, h: number): boolean {
-  const grown = grownBox(section, at.x + w + SECTION_PAD, at.y + h + SECTION_PAD);
-  return !!grown && neighbourHit(section, grown, skip) !== null;
-}
-/** The section's box grown to `needW`×`needH` (never shrunk); null when it already holds that. */
-function grownBox(section: SectionNode, needW: number, needH: number): Box | null {
-  const w = Math.max(section.width, Math.ceil(needW));
-  const h = Math.max(section.height, Math.ceil(needH));
-  return w === section.width && h === section.height ? null : { x: section.x, y: section.y, width: w, height: h };
-}
-/** The first of `section`'s neighbours (its parent's other children but `skip`) that `box` runs into and its own box
- *  did not. */
-function neighbourHit(section: SectionNode, box: Box, skip: string): SceneNode | null {
-  const p = section.parent;
-  if (!p || !("children" in p)) return null;
-  const was: Box = { x: section.x, y: section.y, width: section.width, height: section.height };
-  for (const c of p.children) {
-    if (c.id === section.id || c.id === skip) continue;
-    const b = occupied(c);
-    if (overlaps(box, b) && !overlaps(was, b)) return c;
-  }
-  return null;
+/** A box grown to `needW`×`needH` from its top-left (never shrunk); null when it already holds that. */
+function grownBox(box: Box, needW: number, needH: number): Box | null {
+  const w = Math.max(box.width, Math.ceil(needW));
+  const h = Math.max(box.height, Math.ceil(needH));
+  return w === box.width && h === box.height ? null : { x: box.x, y: box.y, width: w, height: h };
 }
 
 /** The warning when what a node covers in a section starts at `start` (the section's coordinates) left of or above its
  *  edge — only given coordinates put it there; they are kept, and a section grows only right and down — or null. */
-function stickingOut(name: string, section: string, start: { x: number; y: number }): string | null {
+function stickingOut(name: string, section: string, start: XY): string | null {
   const left = start.x < 0, top = start.y < 0;
   if (!left && !top) return null;
   const edges = left && top ? "left and top edges" : left ? "left edge" : "top edge";
   return "'" + name + "' sticks out past the " + edges + " of section '" + section + "': what it covers starts at " + start.x + ", " + start.y + " in it, and a section grows only right and down to hold its frames";
 }
 
+/** A layer as placing sees it: what it covers in its holder's coordinates. A section's is its holder's own box. */
+interface Item { name: string; box: Box }
+/** A page or section as placing sees it: its box in its parent's coordinates (a page's is unused), the layers it holds
+ *  (read off the file when first needed, then what the plan put in it), and the holder it is in. `node` null: a section
+ *  the batch is still to make (only a plan has one: the write makes the section before it places in it). */
+interface Holder { node: PageNode | SectionNode | null; section: boolean; name: string; box: Box; parent: Holder | null; items: Item[] | null }
+/** Where a node is to land and what that does: its x/y in its holder, the sections it grows (innermost first, each to
+ *  `width`×`height`), and the warnings to give. */
+export interface Placed { holder: Holder; x: number; y: number; fp: Footprint; name: string; grows: Array<{ holder: Holder; width: number; height: number }>; warnings: string[] }
+
+/**
+ * The canvas as placing reads it: what each page and section holds, and each section's box. Every placing rule runs on
+ * it, so the write and the review card's Show me place by the same code. The write reads a fresh one off the file each
+ * time it lands a node (land) or makes a section (makeDest). The review card keeps one for the whole batch and plans each
+ * op on it in order (commit), so a later op is placed beside what the earlier ones will land and in the sections they
+ * make or grow, as the write will place it.
+ */
+export class Canvas {
+  private readonly holders = new Map<object, Holder>();
+  /** A node to leave out wherever it is (the node being placed: hidden where Figma made it until it lands). */
+  private readonly skip: string;
+  constructor(skip = "") { this.skip = skip; }
+
+  /** The holder of a page or section of the file. */
+  private of(n: PageNode | SectionNode): Holder {
+    let h = this.holders.get(n);
+    if (h) return h;
+    h = { node: n, section: n.type === "SECTION", name: n.name, box: n.type === "SECTION" ? occupied(n) : { x: 0, y: 0, width: 0, height: 0 }, parent: null, items: null };
+    this.holders.set(n, h);
+    const p = n.type === "SECTION" ? n.parent : null;
+    if (p && (p.type === "PAGE" || p.type === "SECTION")) h.parent = this.of(p);
+    return h;
+  }
+  /** What `h` holds: its node's children but `skip`, read once (a section by its holder's box, so its growth shows). */
+  private itemsOf(h: Holder): Item[] {
+    if (h.items) return h.items;
+    const items: Item[] = [];
+    if (h.node) for (const c of h.node.children) if (c.id !== this.skip) items.push({ name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
+    h.items = items;
+    return items;
+  }
+  /** Where `dest` lands: its section, else its page; a section still to make is put where makeDest will make it, and
+   *  holds nothing. Null on a page still to make. */
+  private holderFor(dest: Dest): Holder | null {
+    const page = dest.page.node;
+    if (!page) return null;
+    const s = dest.section;
+    if (!s) return this.of(page);
+    if (s.node) return this.of(s.node);
+    const planned = this.holders.get(s);
+    if (planned) return planned;
+    const on = this.of(page);
+    const at = this.sectionAt(page);
+    const h: Holder = { node: null, section: true, name: s.name, box: { x: at.x, y: at.y, width: NEW_SECTION, height: NEW_SECTION }, parent: on, items: [] };
+    this.holders.set(s, h);
+    this.itemsOf(on).push({ name: s.name, box: h.box });
+    return h;
+  }
+
+  /** Where a section the batch makes goes on `page`: beside what the page holds, as a new frame does (it is made
+   *  NEW_SECTION a side and grows to hold the frames placed in it). */
+  sectionAt(page: PageNode): XY {
+    return this.onPage(this.of(page), {}, footprint(NEW_SECTION, NEW_SECTION));
+  }
+
+  /** Where a top-level node covering `fp` lands on a page (its x/y): the spec's own x/y, the rest so what it covers is
+   *  beside what is on the page (besideHeld). */
+  private onPage(h: Holder, spec: At, fp: Footprint): XY {
+    if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
+    const held = this.itemsOf(h).map((i) => i.box);
+    return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
+  }
+  /** Where a node covering `fp` lands in a section (its x/y, in the section's coordinates), by the spec's x/y and what
+   *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into
+   *  a neighbour; with one, as besideHeld says. */
+  private inSection(h: Holder, spec: At, fp: Footprint): XY {
+    if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
+    const held = this.itemsOf(h).map((i) => i.box);
+    const w = fp.width, ht = fp.height;
+    if (!held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD), fp, held);
+    const beside = besideHeld(held, {}, w, ht, SECTION_PAD);
+    if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held);
+    const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
+    return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held);
+  }
+  /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */
+  private runsInto(h: Holder, at: XY, w: number, ht: number): boolean {
+    const grown = grownBox(h.box, at.x + w + SECTION_PAD, at.y + ht + SECTION_PAD);
+    return !!grown && this.neighbourHit(h, grown) !== null;
+  }
+  /** The first of section `h`'s neighbours (what its holder holds besides it) that `box` runs into and its own box did
+   *  not. */
+  private neighbourHit(h: Holder, box: Box): Item | null {
+    if (!h.parent) return null;
+    for (const c of this.itemsOf(h.parent)) if (c.box !== h.box && overlaps(box, c.box) && !overlaps(h.box, c.box)) return c;
+    return null;
+  }
+
+  /** Where a node named `name`, covering `fp`, lands by `spec`'s x/y in what `dest` names (null on a page still to
+   *  make), and what that does: in a section, the section and each one around it grow to hold it with their margin
+   *  (innermost first); one that then runs into a neighbour, and what it covers starting past the section's left or top
+   *  edge, are warnings. Nothing changes (but a section still to make, put on the canvas where makeDest will make it). */
+  place(dest: Dest, spec: At, fp: Footprint, name: string): Placed | null {
+    const h = this.holderFor(dest);
+    if (!h) return null;
+    const at = h.section ? this.inSection(h, spec, fp) : this.onPage(h, spec, fp);
+    const placed: Placed = { holder: h, x: at.x, y: at.y, fp, name, grows: [], warnings: [] };
+    if (!h.section) return placed;
+    const out = stickingOut(name, h.name, { x: at.x + fp.dx, y: at.y + fp.dy });
+    if (out) placed.warnings.push(out);
+    // The right and bottom edges of what each section must hold: the node's footprint, then each section in turn.
+    let right = at.x + fp.dx + fp.width;
+    let bottom = at.y + fp.dy + fp.height;
+    for (let s: Holder | null = h; s && s.section; s = s.parent) {
+      const box = grownBox(s.box, right + SECTION_PAD, bottom + SECTION_PAD);
+      if (box) {
+        const hit = this.neighbourHit(s, box);
+        placed.grows.push({ holder: s, width: box.width, height: box.height });
+        if (hit) placed.warnings.push("section '" + s.name + "' grew to " + box.width + "×" + box.height + " to hold '" + name + "' and now overlaps '" + hit.name + "'");
+      }
+      const b = box || s.box;
+      right = b.x + b.width;
+      bottom = b.y + b.height;
+    }
+    return placed;
+  }
+  /** Put a placed node on the canvas, and grow the sections it grows: what the next op is placed beside. */
+  commit(p: Placed): void {
+    this.itemsOf(p.holder).push({ name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
+    for (const g of p.grows) { g.holder.box.width = g.width; g.holder.box.height = g.height; }
+  }
+  /** Where the origin of `h` (a page or section) is on its page. */
+  originOf(h: Holder): XY {
+    let x = 0, y = 0;
+    for (let s: Holder | null = h; s && s.section; s = s.parent) { x += s.box.x; y += s.box.y; }
+    return { x, y };
+  }
+}
+
 /** What landing a node did: how to take back the growth of the sections around it, and what it ran into. */
 export interface Landed { undo(): void; warnings: string[] }
 
 /**
- * Attach `root` (built to the side, sized) where `dest` says, placed: on its page beside what is there, or in its section
- * beside what it holds, the section and those around it grown to hold it. The page and the section must have been made
- * (makeDest). Throws when Figma refuses; what it grew before that is put back.
+ * Attach `root` (built to the side, sized) where `dest` says, placed (Canvas.place, on the file as it is now): on its
+ * page beside what is there, or in its section beside what it holds, the section and those around it grown to hold it.
+ * The page and the section must have been made (makeDest). Throws when Figma refuses; what it grew before that is put
+ * back.
  */
 export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" | "y">): Landed {
   const page = dest.page.node;
   if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+  const section = dest.section ? dest.section.node : null;
+  if (dest.section && !section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
   // What it will cover: its size through its turn (a copy keeps its source's rotation), as the layers it goes beside
   // are measured (occupied).
-  const fp = footprint(root.width, root.height, root);
-  if (!dest.section) {
-    const { x, y } = pagePlacement(page, root.id, spec, fp);
-    page.appendChild(root);
-    root.x = x;
-    root.y = y;
-    return { undo() {}, warnings: [] };
-  }
-  const section = dest.section.node;
-  if (!section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
-  const { x, y } = sectionPlacement(section, root.id, spec, fp);
-  section.appendChild(root);
-  root.x = x;
-  root.y = y;
+  const placed = new Canvas(root.id).place(dest, spec, footprint(root.width, root.height, root), root.name);
+  if (!placed) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+  (section || page).appendChild(root);
+  root.x = placed.x;
+  root.y = placed.y;
   // Each section around the node grows to hold what is in it, with its margin: the one it is in, then outwards.
   const grown: Array<{ s: SectionNode; w: number; h: number }> = [];
-  const warnings: string[] = [];
-  const out = stickingOut(root.name, section.name, { x: x + fp.dx, y: y + fp.dy });
-  if (out) warnings.push(out);
   const undo = (): void => { for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h); };
   try {
-    // The right and bottom edges of what the section must hold: the node's footprint, then each section in turn.
-    let right = root.x + fp.dx + fp.width;
-    let bottom = root.y + fp.dy + fp.height;
-    let s: BaseNode | null = section;
-    while (s && s.type === "SECTION") {
-      const box = grownBox(s, right + SECTION_PAD, bottom + SECTION_PAD);
-      if (box) {
-        const hit = neighbourHit(s, box, root.id);
-        grown.push({ s, w: s.width, h: s.height });
-        s.resizeWithoutConstraints(box.width, box.height);
-        if (hit) warnings.push("section '" + s.name + "' grew to " + box.width + "×" + box.height + " to hold '" + root.name + "' and now overlaps '" + hit.name + "'");
-      }
-      right = s.x + s.width;
-      bottom = s.y + s.height;
-      s = s.parent;
+    for (const g of placed.grows) {
+      const s = g.holder.node;
+      if (!s || s.type !== "SECTION") continue;
+      grown.push({ s, w: s.width, h: s.height });
+      s.resizeWithoutConstraints(g.width, g.height);
     }
   } catch (e) {
     try { undo(); } catch { /* the growth that was made is what Figma refused */ }
     throw e;
   }
-  return { undo, warnings };
+  return { undo, warnings: placed.warnings };
 }
 
-/** Where a section the batch makes goes on `page` (`skip`: itself, once made): beside what the page holds, as a new
- *  frame does; it is made SECTION_PAD * 2 a side and grows to hold the frames placed in it (land). */
-function newSectionAt(page: PageNode, skip: string): { x: number; y: number } {
-  return pagePlacement(page, skip, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
-}
+/** A section the batch makes is made this size a side, then grows to hold the frames placed in it (land). */
+const NEW_SECTION = SECTION_PAD * 2;
 /** The size Figma's createFrame makes a frame (a tree root without a box keeps it unless its layout hugs). */
 const NEW_FRAME = 100;
 
@@ -385,40 +465,40 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     changes.push(made);
     section.name = s.name;
     made.what = "the new section " + label(section);
-    const at = newSectionAt(page, section.id);
+    const at = new Canvas(section.id).sectionAt(page);
     page.appendChild(section);
     section.x = at.x;
     section.y = at.y;
-    section.resizeWithoutConstraints(SECTION_PAD * 2, SECTION_PAD * 2);
+    section.resizeWithoutConstraints(NEW_SECTION, NEW_SECTION);
     out.section = section.id;
   }
   return out;
 }
 
 /** Where a new tree will land, before it is built (the review card says it, and its Show me pans to `spot`): words, and
- *  the point its x/y will be at on a page the file has (none when the page is still to make), by the rules the write
- *  places it by (pagePlacement, sectionPlacement, a new section where makeDest puts it). Measured as land measures the
+ *  the point its x/y will be at on a page the file has (none when the page is still to make), placed on `canvas` by the
+ *  write's own rules (Canvas.place; a section still to make where makeDest will make it) and then put on it, so the
+ *  batch's next op is placed beside it (the review plans the ops in order on one canvas). Measured as land measures the
  *  built frame where that is known before it is built: each side the spec gives (its box, else its layout's width and
  *  height: givenSize, as the build sizes it), else a copy's source's, turned as the source is; else a new frame's 100
  *  (Figma's createFrame; a hugging auto-layout side is known only once built). */
-export function landing(dest: Dest, spec: TreeNodeSpec, source?: SceneNode | null): { lands: string; spot: { pageId: string; x: number; y: number } | null } {
+export function landing(canvas: Canvas, dest: Dest, spec: TreeNodeSpec, source?: SceneNode | null): { lands: string; spot: { pageId: string; x: number; y: number } | null } {
   const p = dest.page;
   const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
   const page = p.node;
   const s = dest.section;
-  if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
   const size = givenSize(spec);
   const fp = footprint(size.w !== undefined ? size.w : source ? source.width : NEW_FRAME, size.h !== undefined ? size.h : source ? source.height : NEW_FRAME, source);
-  if (!s) {
-    const at = pagePlacement(page, "", spec, fp);
-    const beside = spec.x === undefined && spec.y === undefined && page.children.length > 0;
-    return { lands: (beside ? "right of the existing frames" : "at " + at.x + ", " + at.y) + pageText, spot: { pageId: page.id, x: at.x, y: at.y } };
-  }
-  // A section still to make holds nothing, and is put where makeDest will put it.
-  const origin = s.node ? s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y } : newSectionAt(page, "");
-  const at = sectionPlacement(s.node, "", spec, fp);
-  return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at.x, y: origin.y + at.y } };
+  const placed = canvas.place(dest, spec, fp, spec.name || "");
+  if (!page || !placed) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
+  canvas.commit(placed);
+  const origin = canvas.originOf(placed.holder);
+  const spot = { pageId: page.id, x: origin.x + placed.x, y: origin.y + placed.y };
+  if (s) return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot };
+  const beside = spec.x === undefined && spec.y === undefined && page.children.length > 0;
+  return { lands: (beside ? "right of the existing frames" : "at " + placed.x + ", " + placed.y) + pageText, spot };
 }
+
 
 /** The page `n` is on, or null. */
 export function pageHolding(n: BaseNode): PageNode | null {

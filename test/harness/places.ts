@@ -56,17 +56,17 @@ function covers(n: FakeNode | undefined): Box {
   return { x: num(n, "x") + Math.min(...xs), y: num(n, "y") + Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
 const plain = (n: FakeNode): Box => ({ x: num(n, "x"), y: num(n, "y"), width: num(n, "width"), height: num(n, "height") });
-/** One op sent with "Review each change first" on, and Show me pressed on its line while the card is up: where the view
- *  was panned to (the spot: the view's centre less 200, 200), and the reply. */
-async function shownAt(w: World, op: WriteOp): Promise<{ r: WriteResult; spot: string }> {
+/** A batch (or one op) sent with "Review each change first" on, and Show me pressed on line `index` while the card is
+ *  up: where the view was panned to (the spot: the view's centre less 200, 200), and the reply. */
+async function shownAt(w: World, ops: WriteOp | WriteOp[], index = 0): Promise<{ r: WriteResult; spot: string }> {
   await w.send({ type: "set-review-writes", on: true });
   const view = { center: { x: NaN, y: NaN }, scrollAndZoomIntoView() {} };
   w.figma.viewport = view;
   const post = w.figma.ui.postMessage;
   // Pressed as the card is drawn, before the approving designer's answer (the next turn).
-  w.figma.ui.postMessage = (m) => { post(m); if (m.type === "review") void w.figma.ui.onmessage?.({ type: "review-show", id: m.id, index: 0 }); };
+  w.figma.ui.postMessage = (m) => { post(m); if (m.type === "review") void w.figma.ui.onmessage?.({ type: "review-show", id: m.id, index }); };
   try {
-    const r = await write(w, [op]);
+    const r = await write(w, Array.isArray(ops) ? ops : [ops]);
     return { r, spot: (view.center.x - 200) + "," + (view.center.y - 200) };
   } finally { w.figma.ui.postMessage = post; }
 }
@@ -221,6 +221,38 @@ export const cases: Case[] = [{
     const fixed = await shownAt(w5, { op: "createTree", page: "Flows", tree: { name: "Fixed", x: -300, layout: { display: "flex", width: 400, height: 300 } } });
     ok(`[PLACE-SHOW] a size given by layout: Show me measures it as the write builds it (shown ${fixed.spot}, landed ${canvas(found(w5, fixed.r))})`,
       fixed.r.ok === true && canvas(found(w5, fixed.r)) === "-300,4600" && fixed.spot === "-300,4600");
+    // A later op of the batch: Show me counts what the ops before it will land (and the sections they make or grow).
+    const later = async (ops: WriteOp[], index: number): Promise<{ ok: boolean; spot: string; landed: string }> => {
+      const wl = await flowsWorld();
+      const s = await shownAt(wl, ops, index);
+      return { ok: s.r.ok === true, spot: s.spot, landed: canvas(found(wl, s.r, index)) };
+    };
+    // Two frames in a section the batch makes (3300,0): the second right of the first (80+900+100).
+    const two = await later([
+      { op: "createTree", page: "Flows", section: "Placement test", createSection: true, tree: { name: "First", box: { w: 900, h: 300 } } },
+      { op: "createTree", page: "Flows", section: "Placement test", tree: { name: "Second", box: { w: 200, h: 100 } } },
+    ], 1);
+    ok(`[PLACE-SHOW] the second frame in a new section: right of the first, where Show me points (shown ${two.spot}, landed ${two.landed})`,
+      two.ok && two.landed === "4380,80" && two.spot === "4380,80");
+    // Two frames on the page: the second right of the first (3300+390+100).
+    const row = await later([
+      { op: "createTree", page: "Flows", tree: screen("One") },
+      { op: "createTree", page: "Flows", tree: screen("Two") },
+    ], 1);
+    ok(`[PLACE-SHOW] the second frame on a page: right of the first (shown ${row.spot}, landed ${row.landed})`, row.ok && row.landed === "3790,0" && row.spot === "3790,0");
+    // A frame on the page, then a new section: the section goes right of that frame (3790), the frame at its margin.
+    const after = await later([
+      { op: "createTree", page: "Flows", tree: screen("One") },
+      { op: "createTree", page: "Flows", section: "After", createSection: true, tree: screen("Two") },
+    ], 1);
+    ok(`[PLACE-SHOW] a section made after a frame of the batch: beside that frame (shown ${after.spot}, landed ${after.landed})`,
+      after.ok && after.landed === "3870,80" && after.spot === "3870,80");
+    // Two frames into an existing section: the first grows it; the second goes beside it in the grown section.
+    const grown = await later([
+      { op: "createTree", page: "Flows", section: "Payments", tree: screen("A") },
+      { op: "createTree", page: "Flows", section: "Payments", tree: screen("B") },
+    ], 1);
+    ok(`[PLACE-SHOW] the second frame in a section the first grew (shown ${grown.spot}, landed ${grown.landed})`, grown.ok && grown.landed === "1770,80" && grown.spot === "1770,80");
     // The frame being built (hidden, on the current page at 0,0 until it lands) is no neighbour of the section: a
     // section at -300,0 holding one 100×100 frame grows right to 160 for the next, over where the build sits — and the
     // frame still goes beside the first (section 280,80), where Show me points.

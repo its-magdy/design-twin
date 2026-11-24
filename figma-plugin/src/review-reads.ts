@@ -10,7 +10,7 @@ import type { OpRead } from "../../bridge/src/review-card.ts";
 import { countLayers } from "../../bridge/src/review-policy.ts";
 import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } from "./sources";
 import type { TreeTarget } from "./tree";
-import { landing } from "./places";
+import { Canvas, landing } from "./places";
 import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { RuleTarget } from "./rules";
@@ -120,6 +120,8 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
   const warnings: string[] = [];
   const warn = (m: string): void => { if (warnings.indexOf(m) < 0) warnings.push(m); };
   const ops: OpLayers[] = [];
+  // Where each new tree lands is planned on one canvas, in batch order, so a later op lands beside the earlier ones (places.ts).
+  const canvas = new Canvas();
   for (const [i, op] of list.entries()) {
     const read: OpRead = {};
     const ids: string[] = [];
@@ -234,7 +236,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           // Where it lands (places.ts): a page or section still to make is said as new, and has no spot to pan to.
           // A copy as the root is measured by its source (its size and turn), as the write measures the copy.
           const copied = tt.clones.get(tt.spec);
-          const l = landing(tt.dest, tt.spec, copied ? copied.source : null);
+          const l = landing(canvas, tt.dest, tt.spec, copied ? copied.source : null);
           read.lands = l.lands;
           if (l.spot) spot = l.spot;
           break;

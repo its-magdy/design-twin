@@ -5921,12 +5921,12 @@
     g.forEach((row, i) => {
       const mine = textsOf2[i];
       if (!mine || mine.cut) return;
-      const others2 = textsOf2.filter((o, j) => j !== i && !!o).map((o) => o.texts);
+      const others = textsOf2.filter((o, j) => j !== i && !!o).map((o) => o.texts);
       const unique = [];
       const notCommon = [];
       for (const t of mine.texts) {
-        if (others2.every((o) => !o.has(t))) unique.push(t);
-        else if (others2.some((o) => !o.has(t))) notCommon.push(t);
+        if (others.every((o) => !o.has(t))) unique.push(t);
+        else if (others.some((o) => !o.has(t))) notCommon.push(t);
       }
       const picked = unique.concat(notCommon).slice(0, DISTINCT_TEXTS).map((t) => Array.from(t).slice(0, DISTINCT_TEXT_CHARS).join(""));
       if (picked.length) row.distinctTexts = picked;
@@ -9328,9 +9328,6 @@
     }
     return { dests, problems };
   }
-  function others(parent, skip) {
-    return parent.children.filter((c) => c.id !== skip);
-  }
   function occupied(c) {
     const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
     const p = c.parent;
@@ -9374,40 +9371,10 @@
     const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
     return { x, y: Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP };
   }
-  function pagePlacement(page, skip, spec, fp) {
-    if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    const held = others(page, skip).map(occupied);
-    return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
-  }
-  function sectionPlacement(section, skip, spec, fp) {
-    if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    const held = section ? others(section, skip).map(occupied) : [];
-    const w = fp.width, h = fp.height;
-    if (!section || !held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp, held);
-    const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-    if (!runsInto(section, skip, beside, w, h)) return anchored(spec, beside, fp, held);
-    const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
-    return anchored(spec, runsInto(section, skip, below, w, h) ? beside : below, fp, held);
-  }
-  function runsInto(section, skip, at3, w, h) {
-    const grown = grownBox(section, at3.x + w + SECTION_PAD, at3.y + h + SECTION_PAD);
-    return !!grown && neighbourHit(section, grown, skip) !== null;
-  }
-  function grownBox(section, needW, needH) {
-    const w = Math.max(section.width, Math.ceil(needW));
-    const h = Math.max(section.height, Math.ceil(needH));
-    return w === section.width && h === section.height ? null : { x: section.x, y: section.y, width: w, height: h };
-  }
-  function neighbourHit(section, box, skip) {
-    const p = section.parent;
-    if (!p || !("children" in p)) return null;
-    const was = { x: section.x, y: section.y, width: section.width, height: section.height };
-    for (const c of p.children) {
-      if (c.id === section.id || c.id === skip) continue;
-      const b = occupied(c);
-      if (overlaps(box, b) && !overlaps(was, b)) return c;
-    }
-    return null;
+  function grownBox(box, needW, needH) {
+    const w = Math.max(box.width, Math.ceil(needW));
+    const h = Math.max(box.height, Math.ceil(needH));
+    return w === box.width && h === box.height ? null : { x: box.x, y: box.y, width: w, height: h };
   }
   function stickingOut(name, section, start) {
     const left = start.x < 0, top = start.y < 0;
@@ -9415,46 +9382,150 @@
     const edges = left && top ? "left and top edges" : left ? "left edge" : "top edge";
     return "'" + name + "' sticks out past the " + edges + " of section '" + section + "': what it covers starts at " + start.x + ", " + start.y + " in it, and a section grows only right and down to hold its frames";
   }
+  var Canvas = class {
+    constructor(skip = "") {
+      this.holders = /* @__PURE__ */ new Map();
+      this.skip = skip;
+    }
+    /** The holder of a page or section of the file. */
+    of(n) {
+      let h = this.holders.get(n);
+      if (h) return h;
+      h = { node: n, section: n.type === "SECTION", name: n.name, box: n.type === "SECTION" ? occupied(n) : { x: 0, y: 0, width: 0, height: 0 }, parent: null, items: null };
+      this.holders.set(n, h);
+      const p = n.type === "SECTION" ? n.parent : null;
+      if (p && (p.type === "PAGE" || p.type === "SECTION")) h.parent = this.of(p);
+      return h;
+    }
+    /** What `h` holds: its node's children but `skip`, read once (a section by its holder's box, so its growth shows). */
+    itemsOf(h) {
+      if (h.items) return h.items;
+      const items = [];
+      if (h.node) {
+        for (const c of h.node.children) if (c.id !== this.skip) items.push({ name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
+      }
+      h.items = items;
+      return items;
+    }
+    /** Where `dest` lands: its section, else its page; a section still to make is put where makeDest will make it, and
+     *  holds nothing. Null on a page still to make. */
+    holderFor(dest) {
+      const page = dest.page.node;
+      if (!page) return null;
+      const s = dest.section;
+      if (!s) return this.of(page);
+      if (s.node) return this.of(s.node);
+      const planned = this.holders.get(s);
+      if (planned) return planned;
+      const on = this.of(page);
+      const at3 = this.sectionAt(page);
+      const h = { node: null, section: true, name: s.name, box: { x: at3.x, y: at3.y, width: NEW_SECTION, height: NEW_SECTION }, parent: on, items: [] };
+      this.holders.set(s, h);
+      this.itemsOf(on).push({ name: s.name, box: h.box });
+      return h;
+    }
+    /** Where a section the batch makes goes on `page`: beside what the page holds, as a new frame does (it is made
+     *  NEW_SECTION a side and grows to hold the frames placed in it). */
+    sectionAt(page) {
+      return this.onPage(this.of(page), {}, footprint(NEW_SECTION, NEW_SECTION));
+    }
+    /** Where a top-level node covering `fp` lands on a page (its x/y): the spec's own x/y, the rest so what it covers is
+     *  beside what is on the page (besideHeld). */
+    onPage(h, spec, fp) {
+      if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
+      const held = this.itemsOf(h).map((i) => i.box);
+      return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
+    }
+    /** Where a node covering `fp` lands in a section (its x/y, in the section's coordinates), by the spec's x/y and what
+     *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into
+     *  a neighbour; with one, as besideHeld says. */
+    inSection(h, spec, fp) {
+      if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
+      const held = this.itemsOf(h).map((i) => i.box);
+      const w = fp.width, ht = fp.height;
+      if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD), fp, held);
+      const beside = besideHeld(held, {}, w, ht, SECTION_PAD);
+      if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held);
+      const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
+      return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held);
+    }
+    /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */
+    runsInto(h, at3, w, ht) {
+      const grown = grownBox(h.box, at3.x + w + SECTION_PAD, at3.y + ht + SECTION_PAD);
+      return !!grown && this.neighbourHit(h, grown) !== null;
+    }
+    /** The first of section `h`'s neighbours (what its holder holds besides it) that `box` runs into and its own box did
+     *  not. */
+    neighbourHit(h, box) {
+      if (!h.parent) return null;
+      for (const c of this.itemsOf(h.parent)) if (c.box !== h.box && overlaps(box, c.box) && !overlaps(h.box, c.box)) return c;
+      return null;
+    }
+    /** Where a node named `name`, covering `fp`, lands by `spec`'s x/y in what `dest` names (null on a page still to
+     *  make), and what that does: in a section, the section and each one around it grow to hold it with their margin
+     *  (innermost first); one that then runs into a neighbour, and what it covers starting past the section's left or top
+     *  edge, are warnings. Nothing changes (but a section still to make, put on the canvas where makeDest will make it). */
+    place(dest, spec, fp, name) {
+      const h = this.holderFor(dest);
+      if (!h) return null;
+      const at3 = h.section ? this.inSection(h, spec, fp) : this.onPage(h, spec, fp);
+      const placed = { holder: h, x: at3.x, y: at3.y, fp, name, grows: [], warnings: [] };
+      if (!h.section) return placed;
+      const out = stickingOut(name, h.name, { x: at3.x + fp.dx, y: at3.y + fp.dy });
+      if (out) placed.warnings.push(out);
+      let right = at3.x + fp.dx + fp.width;
+      let bottom = at3.y + fp.dy + fp.height;
+      for (let s = h; s && s.section; s = s.parent) {
+        const box = grownBox(s.box, right + SECTION_PAD, bottom + SECTION_PAD);
+        if (box) {
+          const hit = this.neighbourHit(s, box);
+          placed.grows.push({ holder: s, width: box.width, height: box.height });
+          if (hit) placed.warnings.push("section '" + s.name + "' grew to " + box.width + "\xD7" + box.height + " to hold '" + name + "' and now overlaps '" + hit.name + "'");
+        }
+        const b = box || s.box;
+        right = b.x + b.width;
+        bottom = b.y + b.height;
+      }
+      return placed;
+    }
+    /** Put a placed node on the canvas, and grow the sections it grows: what the next op is placed beside. */
+    commit(p) {
+      this.itemsOf(p.holder).push({ name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
+      for (const g of p.grows) {
+        g.holder.box.width = g.width;
+        g.holder.box.height = g.height;
+      }
+    }
+    /** Where the origin of `h` (a page or section) is on its page. */
+    originOf(h) {
+      let x = 0, y = 0;
+      for (let s = h; s && s.section; s = s.parent) {
+        x += s.box.x;
+        y += s.box.y;
+      }
+      return { x, y };
+    }
+  };
   function land(root, dest, spec) {
     const page = dest.page.node;
     if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
-    const fp = footprint(root.width, root.height, root);
-    if (!dest.section) {
-      const { x: x2, y: y2 } = pagePlacement(page, root.id, spec, fp);
-      page.appendChild(root);
-      root.x = x2;
-      root.y = y2;
-      return { undo() {
-      }, warnings: [] };
-    }
-    const section = dest.section.node;
-    if (!section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
-    const { x, y } = sectionPlacement(section, root.id, spec, fp);
-    section.appendChild(root);
-    root.x = x;
-    root.y = y;
+    const section = dest.section ? dest.section.node : null;
+    if (dest.section && !section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
+    const placed = new Canvas(root.id).place(dest, spec, footprint(root.width, root.height, root), root.name);
+    if (!placed) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+    (section || page).appendChild(root);
+    root.x = placed.x;
+    root.y = placed.y;
     const grown = [];
-    const warnings = [];
-    const out = stickingOut(root.name, section.name, { x: x + fp.dx, y: y + fp.dy });
-    if (out) warnings.push(out);
     const undo = () => {
       for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h);
     };
     try {
-      let right = root.x + fp.dx + fp.width;
-      let bottom = root.y + fp.dy + fp.height;
-      let s = section;
-      while (s && s.type === "SECTION") {
-        const box = grownBox(s, right + SECTION_PAD, bottom + SECTION_PAD);
-        if (box) {
-          const hit = neighbourHit(s, box, root.id);
-          grown.push({ s, w: s.width, h: s.height });
-          s.resizeWithoutConstraints(box.width, box.height);
-          if (hit) warnings.push("section '" + s.name + "' grew to " + box.width + "\xD7" + box.height + " to hold '" + root.name + "' and now overlaps '" + hit.name + "'");
-        }
-        right = s.x + s.width;
-        bottom = s.y + s.height;
-        s = s.parent;
+      for (const g of placed.grows) {
+        const s = g.holder.node;
+        if (!s || s.type !== "SECTION") continue;
+        grown.push({ s, w: s.width, h: s.height });
+        s.resizeWithoutConstraints(g.width, g.height);
       }
     } catch (e) {
       try {
@@ -9463,11 +9534,9 @@
       }
       throw e;
     }
-    return { undo, warnings };
+    return { undo, warnings: placed.warnings };
   }
-  function newSectionAt(page, skip) {
-    return pagePlacement(page, skip, {}, footprint(SECTION_PAD * 2, SECTION_PAD * 2));
-  }
+  var NEW_SECTION = SECTION_PAD * 2;
   var NEW_FRAME = 100;
   function leftIn(n) {
     for (const c of n.children) if (!c.removed) return c;
@@ -9529,31 +9598,30 @@
       changes.push(made2);
       section.name = s.name;
       made2.what = "the new section " + label3(section);
-      const at3 = newSectionAt(page, section.id);
+      const at3 = new Canvas(section.id).sectionAt(page);
       page.appendChild(section);
       section.x = at3.x;
       section.y = at3.y;
-      section.resizeWithoutConstraints(SECTION_PAD * 2, SECTION_PAD * 2);
+      section.resizeWithoutConstraints(NEW_SECTION, NEW_SECTION);
       out.section = section.id;
     }
     return out;
   }
-  function landing(dest, spec, source) {
+  function landing(canvas, dest, spec, source) {
     const p = dest.page;
     const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
     const page = p.node;
     const s = dest.section;
-    if (!page) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
     const size2 = givenSize(spec);
     const fp = footprint(size2.w !== void 0 ? size2.w : source ? source.width : NEW_FRAME, size2.h !== void 0 ? size2.h : source ? source.height : NEW_FRAME, source);
-    if (!s) {
-      const at4 = pagePlacement(page, "", spec, fp);
-      const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
-      return { lands: (beside ? "right of the existing frames" : "at " + at4.x + ", " + at4.y) + pageText, spot: { pageId: page.id, x: at4.x, y: at4.y } };
-    }
-    const origin = s.node ? s.node.absoluteBoundingBox || { x: s.node.x, y: s.node.y } : newSectionAt(page, "");
-    const at3 = sectionPlacement(s.node, "", spec, fp);
-    return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot: { pageId: page.id, x: origin.x + at3.x, y: origin.y + at3.y } };
+    const placed = canvas.place(dest, spec, fp, spec.name || "");
+    if (!page || !placed) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
+    canvas.commit(placed);
+    const origin = canvas.originOf(placed.holder);
+    const spot = { pageId: page.id, x: origin.x + placed.x, y: origin.y + placed.y };
+    if (s) return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot };
+    const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
+    return { lands: (beside ? "right of the existing frames" : "at " + placed.x + ", " + placed.y) + pageText, spot };
   }
   function pageHolding(n) {
     let p = n.parent;
@@ -11339,6 +11407,7 @@
       if (warnings.indexOf(m) < 0) warnings.push(m);
     };
     const ops = [];
+    const canvas = new Canvas();
     for (const [i, op] of list.entries()) {
       const read = {};
       const ids = [];
@@ -11475,7 +11544,7 @@
               break;
             }
             const copied = tt.clones.get(tt.spec);
-            const l = landing(tt.dest, tt.spec, copied ? copied.source : null);
+            const l = landing(canvas, tt.dest, tt.spec, copied ? copied.source : null);
             read.lands = l.lands;
             if (l.spot) spot = l.spot;
             break;
@@ -13165,7 +13234,7 @@
     const moves = /* @__PURE__ */ new Map();
     const deletes = /* @__PURE__ */ new Map();
     const problems = [];
-    const others2 = ops.some((o) => o.op !== "delete" && o.op !== "setVariableMode" && o.op !== "clearVariableMode");
+    const others = ops.some((o) => o.op !== "delete" && o.op !== "setVariableMode" && o.op !== "clearVariableMode");
     for (const [index, op] of ops.entries()) {
       if (op.op !== "move" && op.op !== "delete") continue;
       const bad = (message) => {
@@ -13186,7 +13255,7 @@
         continue;
       }
       if (op.op === "delete") {
-        const foreign = others2 ? null : foreignBelow(node);
+        const foreign = others ? null : foreignBelow(node);
         if (foreign) {
           bad(holds2(node, foreign));
           continue;
