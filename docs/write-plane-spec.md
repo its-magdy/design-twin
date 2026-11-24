@@ -263,7 +263,10 @@ screens.
       is not removed: it stays with that layer, listed in `applied`, and the error says why (a layer the batch made,
       even by another of its ops, is its own: moved into it, it goes with it, unless it holds the designer's). A frame the
       designer deleted while the batch ran, with nothing put back after ("Allow edits" off), is said to have gone, but the
-      section it grew stays the size it gave it, and that is said too (never "none of it stays"). A page that is the
+      section it grew stays the size it gave it, and that is said too (never "none of it stays"), to the agent and, in
+      the window and Figma's toast, to the designer (never "nothing changed"); a preview put back so (Put back, or a
+      Reject) could not all go back, and ends its review as above. With "Allow edits" left on, the growth goes back
+      with the frame. A page that is the
       current one when it goes is left first (the current page is not undo history); after that wait, its layers and
       "Allow edits" are checked again before it is removed, and it stays (listed as kept) when either has changed. A file in a Starter-plan team
       holds at most 3 pages (Figma's limit for team files; drafts are not held to it): Figma refuses a fourth, which is
@@ -275,8 +278,8 @@ screens.
       neither moves its result nor makes a page or section for it (a re-send into a section its result is not in is
       refused, and nothing is made; the refusal says how to reach the result: leave `section` out (`createSection` with
       it), or name the result's section and, when it is on another page, that page — only the page when the op already
-      names its section; its section's id instead when either name would match more than one, sent with no
-      `createSection`. One naming another page is told to leave out `page` and every other placement field it has).
+      names its section; its section's id instead when either name would match more than one, or its section's name
+      looks like an id, sent with no `createSection`. One naming another page is told to leave out `page` and every other placement field it has).
     - **Reply, dry run, card.** The op that made a page or section names it (`pageCreated`, `sectionCreated`: ids);
       a page or section the file had is not named. The dry run says where the frame lands ("in section 'Payment' (made
       when the page has none) on page 'Checkout' (made when the file has none)", "the section grows if needed"); it reads

@@ -43,8 +43,9 @@ list of merged PRs.
   and what the batch made is put back if a later op fails (a section you resized after the batch grew it keeps your
   size, however many of its ops grew it, and the reply says so; after a preview, the plugin window and Figma's toast
   say it too; a page or section the batch made goes back even when you moved another of its frames into it; if you
-  delete one of its frames and then turn "Allow edits" off, the reply says the frame went and the section it grew keeps
-  its new size).
+  delete one of its frames and then turn "Allow edits" off, while it runs or while its preview is put back, the reply,
+  the plugin window and Figma's toast say the frame went and the section it grew keeps its new size, never that nothing
+  changed).
   `figma_write`'s definition grew from 1,400 to 1,449 estimated tokens.
 - One `figma_write` op changes every layer that matches a rule: `patchWhere {where, scope?, set, token?}`. The rule is
   any of text equals, fill equals, uses a variable, is an instance of a component, and name matches (`*` for any run),
