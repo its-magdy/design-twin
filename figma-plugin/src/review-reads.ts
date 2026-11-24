@@ -127,12 +127,13 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
   const treeAfter = (i: number): boolean => list.slice(i + 1).some((o) => o.op === "createTree");
   /** `n`'s page, loaded (dynamic-page: before the canvas reads what is on it). */
   const loaded = async (n: BaseNode): Promise<void> => { const pg = n.type === "PAGE" ? n : pageHolding(n); if (pg) await pg.loadAsync(); };
-  /** A layer a patch sets `box` on, at its size then (a side the box leaves out stays). */
+  /** A layer a patch sets `box` on, at its size then (a side the box leaves out stays as the ops before it left it). */
   const patched = async (i: number, n: SceneNode, set: Record<string, unknown>): Promise<void> => {
     const b = set.box as { w?: number; h?: number } | undefined;
     if (!b || typeof b !== "object" || !treeAfter(i)) return;
     await loaded(n);
-    canvas.reshape(n, n.x, n.y, typeof b.w === "number" ? b.w : n.width, typeof b.h === "number" ? b.h : n.height);
+    const g = canvas.geometry(n);
+    canvas.reshape(n, g.x, g.y, typeof b.w === "number" ? b.w : g.w, typeof b.h === "number" ? b.h : g.h);
   };
   for (const [i, op] of list.entries()) {
     const read: OpRead = {};
@@ -252,8 +253,9 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
               const box = u.set && u.set.box;
               const moved = (f: "x" | "y"): boolean => u.extras.indexOf(f) >= 0;
               const sx = tt.spec.x, sy = tt.spec.y;
-              canvas.reshape(root, moved("x") && sx !== undefined ? sx : root.x, moved("y") && sy !== undefined ? sy : root.y,
-                box && box.w !== undefined ? box.w : root.width, box && box.h !== undefined ? box.h : root.height);
+              const g = canvas.geometry(root);
+              canvas.reshape(root, moved("x") && sx !== undefined ? sx : g.x, moved("y") && sy !== undefined ? sy : g.y,
+                box && box.w !== undefined ? box.w : g.w, box && box.h !== undefined ? box.h : g.h);
             }
             break;
           }

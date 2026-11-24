@@ -9431,6 +9431,8 @@
       /** Where layer `n` is on this canvas: the holder a plan moved it to (null: into neither a page nor a section), else
        *  its parent's in the file (null when that is neither). */
       this.moved = /* @__PURE__ */ new Map();
+      /** Each layer's x/y and size as the plan last set them (reshape), by id. */
+      this.shaped = /* @__PURE__ */ new Map();
       this.skip = skip;
     }
     /** The holder of a page or section of the file. */
@@ -9561,9 +9563,15 @@
       const fp = footprint(w, h, n);
       return { id: n.id, name: n.name, box: { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height } };
     }
+    /** Layer `n`'s x/y and size on this canvas: as an earlier op of the plan set them (reshape), else the file's — so a
+     *  later op that sets only one side (a patch's `box: {h}`) keeps the other as the earlier op left it. */
+    geometry(n) {
+      return this.shaped.get(n.id) || { x: n.x, y: n.y, w: n.width, h: n.height };
+    }
     /** Layer `n` of the file (a keyed re-send's root, a patched layer) now at `x`, `y` in its holder and `w`×`h`; nothing
-     *  when it is in neither a page nor a section (what it is in keeps its box). */
+     *  more when it is in neither a page nor a section (what it is in keeps its box). */
     reshape(n, x, y, w, h) {
+      this.shaped.set(n.id, { x, y, w, h });
       const holder = this.holderOfNode(n);
       if (!holder) return;
       const items = this.itemsOf(holder);
@@ -9584,7 +9592,8 @@
       this.moved.set(n.id, into);
       if (n.type === "SECTION") this.of(n).parent = into;
       if (!into) return;
-      this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, n.x, n.y, n.width, n.height));
+      const g = this.geometry(n);
+      this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, g.x, g.y, g.w, g.h));
     }
     /** A layer the batch makes in `parent` (a legacy createFrame), covering `box` there; nothing unless `parent` is a page
      *  or a section. */
@@ -11525,7 +11534,8 @@
       const b = set.box;
       if (!b || typeof b !== "object" || !treeAfter(i)) return;
       await loaded3(n);
-      canvas.reshape(n, n.x, n.y, typeof b.w === "number" ? b.w : n.width, typeof b.h === "number" ? b.h : n.height);
+      const g = canvas.geometry(n);
+      canvas.reshape(n, g.x, g.y, typeof b.w === "number" ? b.w : g.w, typeof b.h === "number" ? b.h : g.h);
     };
     for (const [i, op] of list.entries()) {
       const read = {};
@@ -11667,12 +11677,13 @@
                 const box = u.set && u.set.box;
                 const moved = (f) => u.extras.indexOf(f) >= 0;
                 const sx = tt.spec.x, sy = tt.spec.y;
+                const g = canvas.geometry(root);
                 canvas.reshape(
                   root,
-                  moved("x") && sx !== void 0 ? sx : root.x,
-                  moved("y") && sy !== void 0 ? sy : root.y,
-                  box && box.w !== void 0 ? box.w : root.width,
-                  box && box.h !== void 0 ? box.h : root.height
+                  moved("x") && sx !== void 0 ? sx : g.x,
+                  moved("y") && sy !== void 0 ? sy : g.y,
+                  box && box.w !== void 0 ? box.w : g.w,
+                  box && box.h !== void 0 ? box.h : g.h
                 );
               }
               break;

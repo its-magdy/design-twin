@@ -386,9 +386,17 @@ export class Canvas {
     const fp = footprint(w, h, n);
     return { id: n.id, name: n.name, box: { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height } };
   }
+  /** Each layer's x/y and size as the plan last set them (reshape), by id. */
+  private readonly shaped = new Map<string, { x: number; y: number; w: number; h: number }>();
+  /** Layer `n`'s x/y and size on this canvas: as an earlier op of the plan set them (reshape), else the file's — so a
+   *  later op that sets only one side (a patch's `box: {h}`) keeps the other as the earlier op left it. */
+  geometry(n: SceneNode): { x: number; y: number; w: number; h: number } {
+    return this.shaped.get(n.id) || { x: n.x, y: n.y, w: n.width, h: n.height };
+  }
   /** Layer `n` of the file (a keyed re-send's root, a patched layer) now at `x`, `y` in its holder and `w`×`h`; nothing
-   *  when it is in neither a page nor a section (what it is in keeps its box). */
+   *  more when it is in neither a page nor a section (what it is in keeps its box). */
   reshape(n: SceneNode, x: number, y: number, w: number, h: number): void {
+    this.shaped.set(n.id, { x, y, w, h });
     const holder = this.holderOfNode(n);
     if (!holder) return;
     const items = this.itemsOf(holder);
@@ -410,7 +418,8 @@ export class Canvas {
     if (n.type === "SECTION") this.of(n).parent = into;
     if (!into) return;
     // What it covers keeps its place in its parent's coordinates (a section's box is its holder's).
-    this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, n.x, n.y, n.width, n.height));
+    const g = this.geometry(n);
+    this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, g.x, g.y, g.w, g.h));
   }
   /** A layer the batch makes in `parent` (a legacy createFrame), covering `box` there; nothing unless `parent` is a page
    *  or a section. */

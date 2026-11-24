@@ -682,6 +682,13 @@ export const cases: Case[] = [{
     const grown = await shownAt(w6, [{ op: "patch", nodeId: String(small.applied[0]?.id), set: { box: { w: 1100 } } }, next], 1);
     ok(`[PLACE-BATCH] after a patch that resizes a frame on the page (shown ${grown.spot}, landed ${canvasAt(found(w6, grown.r, 1))})`,
       grown.r.ok === true && canvasAt(found(w6, grown.r, 1)) === "1200,0" && grown.spot === "1200,0");
+    // Two patches each setting one side (w 1100, then only h 200): the second keeps the width the first set.
+    const w9 = await treeWorld();
+    const seed = await write(w9, [{ op: "createFrame", name: "Seed", width: 100, height: 100, parentId: "0:2" }]);
+    const seedId = String(seed.applied[0]?.id);
+    const sides = await shownAt(w9, [{ op: "patch", nodeId: seedId, set: { box: { w: 1100 } } }, { op: "patch", nodeId: seedId, set: { box: { h: 200 } } }, next], 2);
+    ok(`[PLACE-BATCH] after two patches setting one side each: the width the first set counts (shown ${sides.spot}, landed ${canvasAt(found(w9, sides.r, 2))})`,
+      sides.r.ok === true && canvasAt(found(w9, sides.r, 2)) === "1200,0" && sides.spot === "1200,0");
     // A delete runs after every other op: what it deletes is still there when the tree lands.
     const w5 = await treeWorld();
     const big5 = await write(w5, [{ op: "createFrame", name: "Big", width: 1100, height: 100, parentId: "0:2" }]);

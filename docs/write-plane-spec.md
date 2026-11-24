@@ -266,7 +266,7 @@ screens.
       page still to make — worked out by the write's own placing code, over the whole batch in order: each op is placed
       beside what the ops before it will land, in the sections they make (where the write will put them) or grow, and
       beside what they resize, move or make on a page or in a section: a keyed re-send's new `x`/`y` and sides, a
-      patch's `box`, a `move` (the node keeps its `x`/`y` in its new parent, as Figma keeps them), a legacy
+      patch's `box` (a side either leaves out stays as the ops before it left it), a `move` (the node keeps its `x`/`y` in its new parent, as Figma keeps them), a legacy
       `createFrame` (at 0,0, its size or Figma's 100). A legacy `createText` is not counted (its size is its font's,
       known only once built), nor a `delete` (deletes run after every other op); a keyed re-send of a component set
       without a size of its own is counted at its size now. It uses the size the write will measure where that is
