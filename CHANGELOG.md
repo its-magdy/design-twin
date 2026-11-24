@@ -36,8 +36,10 @@ list of merged PRs.
   of its page, and `createPage: true` / `createSection: true` make the page or section when the file has none of that
   name (one it has is used, so the same batch sent again lands in the same place). In a section the frame goes beside
   what it holds without overlap, or on a new row when the section would run into a neighbour, and the section grows to
-  fit. A name that matches nothing or several things is refused before anything runs, and what the batch made is put
-  back if a later op fails. `figma_write`'s definition grew from 1,400 to 1,449 estimated tokens.
+  fit. Coordinates you give are kept; when they put the frame past the section's left or top edge, the reply warns that
+  it sticks out (a section grows only right and down). In review, Show me pans to where each frame of the batch will
+  land, counting the frames before it. A name that matches nothing or several things is refused before anything runs,
+  and what the batch made is put back if a later op fails. `figma_write`'s definition grew from 1,400 to 1,449 estimated tokens.
 - One `figma_write` op changes every layer that matches a rule: `patchWhere {where, scope?, set, token?}`. The rule is
   any of text equals, fill equals, uses a variable, is an instance of a component, and name matches (`*` for any run),
   all of which must hold; the scope is the selection, the current page, listed pages or the whole file. Its dry run

@@ -226,6 +226,9 @@ screens.
       and so does each section around it. A section that still runs into a neighbour (explicit coordinates, or no row
       that avoids it) is a `warning`, never a refusal: no existing layer is moved to make room. A new section is placed
       on its page as a new frame is (right of everything, level with the topmost), then grows to hold its frames.
+      Coordinates given left of or above the section's edge are kept as given (and the section's top-left stays), so
+      the frame sticks out; that is a `warning` too. The frame being built (hidden where Figma makes a new node until
+      it lands) is no neighbour of its section.
     - **One coordinate given.** On a page or in a section, the one given is kept and the other is chosen so the frame
       lands on no layer: only `y`, right of everything there; only `x`, level with the topmost when that overlaps
       nothing, else 100 px below what is in its column (the band from `x` to `x` + its width). Neither refused nor
@@ -233,7 +236,9 @@ screens.
     - **What the new frame covers counts too.** Placing it and growing its section measure the new frame as the layers
       it goes beside are measured: what it will cover on the canvas, its turn included (a copy of a rotated layer keeps
       the rotation). Its `x`/`y` are Figma's own (the turned corner), so a placed copy's box starts where the rules
-      above say, its `x`/`y` wherever that puts them; given coordinates are kept as given.
+      above say, its `x`/`y` wherever that puts them; given coordinates are kept as given. A computed `x`/`y` is a
+      whole pixel: the nearer one, unless rounding would put the frame on a layer the spot was chosen clear of — then
+      the other, else left unrounded.
     - **All or nothing (decision 14).** A made page and section are Changes on the batch's list, so a later failure
       removes them, newest first, after the frames in them; a section's growth goes back with the frame that caused
       it. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)
@@ -252,10 +257,11 @@ screens.
       when the page has none) on page 'Checkout' (made when the file has none)", "the section grows to fit"); it reads
       no file, so whether the page and section exist is answered when applied. The review card says "lands in section
       'Payment' on page 'Checkout'", "in a new section …", "on a new page …"; Show me pans to where it lands, except on a
-      page still to make — worked out by the rules the write places it by (a section still to make where the write will
-      put it, holding nothing), with the size the write will measure where it is known before the build: the spec's
-      `box`, else a copy's source's size and turn, else a new frame's 100×100 (a hugging layout's size is known only once
-      built). A section's growth is said in the card only as "the section grows to fit" in Details; it is
+      page still to make — worked out by the write's own placing code, over the whole batch in order: each op is placed
+      beside what the ops before it will land, in the sections they make (where the write will put them) or grow. It
+      uses the size the write will measure where that is known before the build: each side the spec gives (`box`, else
+      `layout.width` / `layout.height`), else a copy's source's size and turn, else a new frame's 100 (a hugging side's
+      size is known only once built, so a hugging frame's Show me can be off). A section's growth is said in the card only as "the section grows to fit" in Details; it is
       not counted toward the review's layer limit (a container growing to hold the new frame, not a change to a layer).
     - Not built: moving or resizing an existing section beyond growing it, a section's fills or other fields, page
       dividers, ordering the new page among the others (it is appended), and re-placing a keyed result when the spec
