@@ -40,6 +40,7 @@ import { componentKey, componentRootOf } from "../../bridge/src/component-spec.t
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import { pageHolding } from "./places";
+import { matchByName } from "../../bridge/src/name-match.ts";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -105,6 +106,19 @@ function foreignIn(n: SceneNode, key: string): SceneNode | null {
   return null;
 }
 
+/** "leave `page` out", "leave `section` and `createSection` out": the placement fields of `fields` that `op` carries, to
+ *  leave out (a create flag left in without its name is refused). */
+function leaveOut(op: WriteOp, fields: readonly ("page" | "createPage" | "section" | "createSection")[]): string {
+  const has = fields.filter((f) => op[f] !== undefined).map((f) => "`" + f + "`");
+  return "leave " + (has.length > 1 ? has.slice(0, -1).join(", ") + " and " + has[has.length - 1] : has.join("")) + " out";
+}
+
+/** Whether name `ref` matches `item` alone among `items` (by id or by name, as a page or section is looked up). */
+function onlyOne<T extends BaseNode>(ref: string, items: readonly T[], item: T): boolean {
+  const m = matchByName(ref, items, (n) => n.name, (n) => [n.id]);
+  return m.kind === "one" && m.item === item;
+}
+
 /**
  * For every createTree op of a batch whose spec carries a key the file already has a result for: plan the update and
  * resolve its patches, setting the op's target `update`. A key used by two ops of one batch, a `page` other than the
@@ -149,7 +163,8 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     // make is not: nothing is made for an update).
     const on = pageHolding(root);
     if (op.page !== undefined && on && on !== t.dest.page.node) {
-      bad(what + ": its result " + label(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is — leave `page` out");
+      // Its section too: left in, it would be looked for on the page the op then lands on.
+      bad(what + ": its result " + label(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is — " + leaveOut(op, ["page", "createPage", "section", "createSection"]));
       continue;
     }
     const inSection = root.parent && root.parent.type === "SECTION" ? root.parent : null;
@@ -163,13 +178,17 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       // The other way there, when the op asks for a section to make: the result's page, and its section unless the op
       // names that already (naming the page alone would still ask for a section it does not have). The result on another
       // page means `page` was left out (one naming another page than the result's is refused above).
+      // By name only when each name it would send matches the result's alone (on its page, and in the file); else by
+      // its section's id, which names its page too (and is never a name to make: sent with no `createSection`).
       const same = !!inSection && s.name === inSection.name;
       const page = !s.node && inSection
-        ? away
-          ? same ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`"
-          : same ? "" : ", or name its section: `section: '" + inSection.name + "'`"
+        ? !(on && onlyOne(inSection.name, on.findAllWithCriteria({ types: ["SECTION"] }), inSection) && (!away || onlyOne(away.name, figma.root.children, away)))
+          ? ", or name its section by its id: `section: '" + inSection.id + "'`" + (op.createSection === true ? " with no `createSection`" : "")
+          : away
+            ? same ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`"
+            : same ? "" : ", or name its section: `section: '" + inSection.name + "'`"
         : "";
-      bad(what + ": its result " + label(root) + where + named + "; an update stays where the result is — leave `section` out" + page);
+      bad(what + ": its result " + label(root) + where + named + "; an update stays where the result is — " + leaveOut(op, ["section", "createSection"]) + page);
       continue;
     }
     const old = readOld(root, key);

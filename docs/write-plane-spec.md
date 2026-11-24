@@ -267,8 +267,10 @@ screens.
       a frame in that; the harness pins the one checkpoint pair).
     - **A keyed re-send stays where its result is.** `page` and `section` must be absent or the result's; an update
       neither moves its result nor makes a page or section for it (a re-send into a section its result is not in is
-      refused, and nothing is made; the refusal says how to reach the result: leave `section` out, or name the result's
-      section and, when it is on another page, that page — only the page when the op already names its section).
+      refused, and nothing is made; the refusal says how to reach the result: leave `section` out (`createSection` with
+      it), or name the result's section and, when it is on another page, that page — only the page when the op already
+      names its section; its section's id instead when either name would match more than one, sent with no
+      `createSection`. One naming another page is told to leave out `page` and every other placement field it has).
     - **Reply, dry run, card.** The op that made a page or section names it (`pageCreated`, `sectionCreated`: ids);
       a page or section the file had is not named. The dry run says where the frame lands ("in section 'Payment' (made
       when the page has none) on page 'Checkout' (made when the file has none)", "the section grows if needed"); it reads

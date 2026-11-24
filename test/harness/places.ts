@@ -639,14 +639,14 @@ export const cases: Case[] = [{
     const again = await write(k, [keyed]);
     ok(`[PLACE-KEYED] a section of the same name only on the result's page: a new section here, said so, with the result's page to name (${again.error})`,
       made.ok === true && again.ok === false
-      && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Pay' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` out, or name its page: `page: '" + home + "'`").test(again.error ?? "")
+      && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Pay' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` and `createSection` out, or name its page: `page: '" + home + "'`").test(again.error ?? "")
       && !/in section 'Pay', not 'Pay'/.test(again.error ?? ""));
     // Another section's name to make: naming the result's page alone would still ask for a section it does not have —
     // the hint names both its section and its page. Each hint, followed, updates the result.
     const other = await write(k, [{ ...keyed, section: "Other" }]);
     ok(`[PLACE-KEYED] another name, a new section here: the hint names the result's section and its page (${other.error})`,
       other.ok === false
-      && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Other' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` out, or name its section and its page: `section: 'Pay', page: '" + home + "'`").test(other.error ?? "")
+      && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Other' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` and `createSection` out, or name its section and its page: `section: 'Pay', page: '" + home + "'`").test(other.error ?? "")
       && !/or name its page:/.test(other.error ?? ""));
     const followed = await write(k, [{ ...keyed, section: "Pay", page: home }]);
     const pageOnly = await write(k, [{ ...keyed, page: home }]);
@@ -658,14 +658,132 @@ export const cases: Case[] = [{
     const elsewhere = await write(here, [{ ...keyed, section: "Other" }]);
     ok(`[PLACE-KEYED] another name on the result's page: the hint names its section (${elsewhere.error})`,
       mine.ok === true && elsewhere.ok === false
-      && /is in section 'Pay', but `section` 'Other' would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` out, or name its section: `section: 'Pay'`/.test(elsewhere.error ?? ""));
+      && /is in section 'Pay', but `section` 'Other' would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` and `createSection` out, or name its section: `section: 'Pay'`/.test(elsewhere.error ?? ""));
     // …and the same with the result's page named: the page is right, so naming its section is the way.
     const ownPage = here.figma.currentPage.name;
     const named = await write(here, [{ ...keyed, section: "Other", page: ownPage }]);
     ok(`[PLACE-KEYED] another name, the result's own page named: the hint names its section (${named.error})`,
-      named.ok === false && /would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` out, or name its section: `section: 'Pay'`/.test(named.error ?? ""));
+      named.ok === false && /would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` and `createSection` out, or name its section: `section: 'Pay'`/.test(named.error ?? ""));
     const namedFollowed = await write(here, [{ ...keyed, page: ownPage }]);
     ok("[PLACE-KEYED] …followed, it updates the result", namedFollowed.ok === true && found(here, namedFollowed)?.id === found(here, mine)?.id);
+  },
+}, {
+  name: "a keyed re-send refused for its page or section: every hint, followed as written, updates the result",
+  async run() {
+    // The op as the hint says to send it: each field it names to leave out, out; each field it names to send, sent.
+    const hints = (e: string): { leave: string[]; send: Record<string, string> | null } => {
+      const m = /an update stays where the result is — leave ((?:`\w+`(?:, | and )?)+) out(?:, or [^`]*: `([^`]+)`(?: with no ((?:`\w+`(?:, | and )?)+))?)?/.exec(e);
+      if (!m) return { leave: [], send: null };
+      const leave = [...(m[1] ?? "").matchAll(/`(\w+)`/g)].map((x) => x[1] ?? "");
+      const send = m[2] ? Object.fromEntries([...m[2].matchAll(/(\w+): '([^']*)'/g)].map((x) => [x[1] ?? "", x[2] ?? ""])) : null;
+      const drop = m[3] ? [...m[3].matchAll(/`(\w+)`/g)].map((x) => x[1] ?? "") : [];
+      return { leave, send: send ? { ...send, ...Object.fromEntries(drop.map((d) => [d, ""])) } : null };
+    };
+    const without = (op: WriteOp, fields: readonly string[]): WriteOp => {
+      const o: WriteOp = { ...op };
+      for (const f of fields) Reflect.deleteProperty(o, f);
+      return o;
+    };
+    const sendAs = (op: WriteOp, send: Record<string, string>): WriteOp => {
+      const o: WriteOp = { ...op };
+      for (const [k, v] of Object.entries(send)) { if (v === "") Reflect.deleteProperty(o, k); else Reflect.set(o, k, v); }
+      return o;
+    };
+    /** Each hint of refusal `r`, followed on `w` as written: both update the result `made`. */
+    const follow = async (w: World, r: WriteResult, op: WriteOp, made: WriteResult, what: string, wantSend: boolean): Promise<void> => {
+      const e = r.error ?? "";
+      const h = hints(e);
+      const left = h.leave.length ? await write(w, [without(op, h.leave)]) : null;
+      const sent = h.send ? await write(w, [sendAs(op, h.send)]) : null;
+      ok(`[PLACE-KEYED-HINT] ${what}: refused, and each hint followed as written updates the result (${e}; leave ${h.leave.join("+")}: ${left?.error ?? left?.ok}; send ${JSON.stringify(h.send)}: ${sent?.error ?? sent?.ok})`,
+        r.ok === false && left?.ok === true && found(w, left)?.id === found(w, made)?.id
+        && (!wantSend || (sent?.ok === true && found(w, sent)?.id === found(w, made)?.id)));
+    };
+    const keyed: WriteOp = { op: "createTree", section: "Pay", createSection: true, tree: screen("K", { key: "flows:pay" }) };
+    const sectionNamed = (w: World, name: string): FakeNode[] => w.alive().filter((n) => n.type === "SECTION" && n.name === name);
+    /** A second section named `name` on `page` of `w` (the current one by default; made by a write, then renamed as the
+     *  designer would). */
+    const twin = async (w: World, name: string, page?: string): Promise<void> => {
+      const r = await write(w, [{ op: "createTree", ...(page ? { page } : {}), section: name + " copy", createSection: true, tree: screen("Twin") }]);
+      const s = parentOf(found(w, r));
+      if (!r.ok || !s) throw new Error("twin: " + String(r.error));
+      s.name = name;
+    };
+
+    // The result's section name twice on its page: the name would match both, so its id is the one to send — with no
+    // `createSection` (an id is never a name to make). Leaving out `section` means `createSection` too.
+    const a = await flowsWorld();
+    const aMade = await write(a, [keyed]);
+    await twin(a, "Pay");
+    const aOther = await write(a, [{ ...keyed, section: "Other" }]);
+    ok(`[PLACE-KEYED-HINT] its section's name twice on its page: the hint gives its id, not its name (${aOther.error})`,
+      aMade.ok === true && sectionNamed(a, "Pay").length === 2 && /leave `section` and `createSection` out, or name its section by its id: `section: '[^']+'` with no `createSection`/.test(aOther.error ?? "")
+      && !/`section: 'Pay'`/.test(aOther.error ?? ""));
+    await follow(a, aOther, { ...keyed, section: "Other" }, aMade, "its section's name twice on its page", true);
+
+    // The same on another page than the one the op lands on (no page named): its id names its page too. (A section
+    // the fixture has: its id is in Figma's form, `6:2`, which a section with no page is looked up by.)
+    const onFlows: WriteOp = { op: "createTree", section: "Payments", createSection: true, tree: screen("K", { key: "flows:paid" }) };
+    const b = await flowsWorld();
+    const bMade = await write(b, [{ ...onFlows, page: "Flows" }]);
+    await twin(b, "Payments", "Flows");
+    const bOther = await write(b, [{ ...onFlows, section: "Other" }]);
+    ok(`[PLACE-KEYED-HINT] its section's name twice on another page: the hint gives its id (${bOther.error})`,
+      bMade.ok === true && /on page 'Flows'/.test(bOther.error ?? "")
+      && /name its section by its id: `section: '6:2'` with no `createSection`/.test(bOther.error ?? "") && !/page: '/.test(bOther.error ?? ""));
+    await follow(b, bOther, { ...onFlows, section: "Other" }, bMade, "its section's name twice on another page", true);
+    // …and the section's own name sent: naming its page would still match both, so again its id.
+    const bSame = await write(b, [onFlows]);
+    ok(`[PLACE-KEYED-HINT] the same name, twice on the result's page: its id, not its page (${bSame.error})`,
+      /name its section by its id: `section: '6:2'` with no `createSection`/.test(bSame.error ?? "") && !/name its page/.test(bSame.error ?? ""));
+    await follow(b, bSame, onFlows, bMade, "the same name, twice on the result's page", true);
+
+    // The result's page name twice in the file: naming it would match both, so its section's id instead.
+    const c = await flowsWorld();
+    const cMade = await write(c, [{ ...onFlows, page: "Flows" }]);
+    c.pages.screens.name = "Flows";
+    const cOther = await write(c, [{ ...onFlows, section: "Other" }]);
+    ok(`[PLACE-KEYED-HINT] its page's name twice in the file: the hint gives its section's id (${cOther.error})`,
+      cMade.ok === true && /name its section by its id: `section: '6:2'` with no `createSection`/.test(cOther.error ?? "") && !/page: '/.test(cOther.error ?? ""));
+    await follow(c, cOther, { ...onFlows, section: "Other" }, cMade, "its page's name twice in the file", true);
+    const cSame = await write(c, [onFlows]);
+    await follow(c, cSame, onFlows, cMade, "its page's name twice, the same section name", true);
+
+    // Unique names, the op asking to make its section: leaving `section` out means `createSection` too; naming it works.
+    const d = await flowsWorld();
+    const dMade = await write(d, [keyed]);
+    const dOther = await write(d, [{ ...keyed, section: "Other" }]);
+    ok(`[PLACE-KEYED-HINT] unique names, a section to make: leave out both, or name its section (${dOther.error})`,
+      /leave `section` and `createSection` out, or name its section: `section: 'Pay'`/.test(dOther.error ?? ""));
+    await follow(d, dOther, { ...keyed, section: "Other" }, dMade, "unique names, a section to make", true);
+    d.figma.currentPage = d.pages.screens;
+    const dAway = await write(d, [{ ...keyed, section: "Other" }]);
+    await follow(d, dAway, { ...keyed, section: "Other" }, dMade, "unique names on another page", true);
+    const dSame = await write(d, [keyed]);
+    await follow(d, dSame, keyed, dMade, "unique names on another page, the same section name", true);
+
+    // Another section the page has, the op asking to make it (made only when missing): leave out both.
+    const e = await flowsWorld();
+    const eSpec = screen("Keyed", { key: "flows:keyed" });
+    const eMade = await write(e, [{ op: "createTree", page: "Flows", section: "Payments", tree: eSpec }]);
+    const eOp: WriteOp = { op: "createTree", page: "Flows", section: "Onboarding", createSection: true, tree: eSpec };
+    const eMoved = await write(e, [eOp]);
+    ok(`[PLACE-KEYED-HINT] another section it has, asked to make: leave out both (${eMoved.error})`,
+      /is in section 'Payments', not 'Onboarding'; an update stays where the result is — leave `section` and `createSection` out/.test(eMoved.error ?? ""));
+    await follow(e, eMoved, eOp, eMade, "another section it has, asked to make", false);
+
+    // Another page, asked to make: leaving `page` out means `createPage` too — and its section too (looked for on the
+    // page the op would then land on), with `createSection`.
+    const pOp: WriteOp = { op: "createTree", page: "Fresh", createPage: true, section: "Payments", createSection: true, tree: eSpec };
+    const pMoved = await write(e, [pOp]);
+    ok(`[PLACE-KEYED-HINT] another page, asked to make: leave out every placement field it has (${pMoved.error})`,
+      /is on page 'Flows', not 'Fresh'; an update stays where the result is — leave `page`, `createPage`, `section` and `createSection` out/.test(pMoved.error ?? ""));
+    await follow(e, pMoved, pOp, eMade, "another page, asked to make", false);
+    const qOp: WriteOp = { op: "createTree", page: "Screens", tree: eSpec };
+    const qMoved = await write(e, [qOp]);
+    ok(`[PLACE-KEYED-HINT] another page it has, nothing to make: leave \`page\` out (${qMoved.error})`,
+      /an update stays where the result is — leave `page` out/.test(qMoved.error ?? ""));
+    await follow(e, qMoved, qOp, eMade, "another page it has", false);
   },
 }, {
   name: "the review card says where it lands: a section, a new section, a new page",

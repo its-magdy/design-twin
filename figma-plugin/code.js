@@ -11140,6 +11140,14 @@
     }
     return null;
   }
+  function leaveOut(op, fields) {
+    const has2 = fields.filter((f) => op[f] !== void 0).map((f) => "`" + f + "`");
+    return "leave " + (has2.length > 1 ? has2.slice(0, -1).join(", ") + " and " + has2[has2.length - 1] : has2.join("")) + " out";
+  }
+  function onlyOne(ref2, items, item) {
+    const m = matchByName(ref2, items, (n) => n.name, (n) => [n.id]);
+    return m.kind === "one" && m.item === item;
+  }
   async function resolveKeyed(ops, targets) {
     const problems = [];
     const seen = /* @__PURE__ */ new Map();
@@ -11186,7 +11194,7 @@
       if (!root) continue;
       const on = pageHolding(root);
       if (op.page !== void 0 && on && on !== t.dest.page.node) {
-        bad(what + ": its result " + label4(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+        bad(what + ": its result " + label4(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is \u2014 " + leaveOut(op, ["page", "createPage", "section", "createSection"]));
         continue;
       }
       const inSection = root.parent && root.parent.type === "SECTION" ? root.parent : null;
@@ -11196,8 +11204,8 @@
         const where = inSection ? " is in section '" + inSection.name + "'" + (away ? " on page '" + away.name + "'" : "") : " is not in a section";
         const named2 = s.node ? ", not '" + s.name + "'" : ", but `section` '" + s.name + "' would be a new section on " + (t.dest.page.current ? "the current page '" : "page '") + t.dest.page.name + "'";
         const same3 = !!inSection && s.name === inSection.name;
-        const page = !s.node && inSection ? away ? same3 ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`" : same3 ? "" : ", or name its section: `section: '" + inSection.name + "'`" : "";
-        bad(what + ": its result " + label4(root) + where + named2 + "; an update stays where the result is \u2014 leave `section` out" + page);
+        const page = !s.node && inSection ? !(on && onlyOne(inSection.name, on.findAllWithCriteria({ types: ["SECTION"] }), inSection) && (!away || onlyOne(away.name, figma.root.children, away))) ? ", or name its section by its id: `section: '" + inSection.id + "'`" + (op.createSection === true ? " with no `createSection`" : "") : away ? same3 ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`" : same3 ? "" : ", or name its section: `section: '" + inSection.name + "'`" : "";
+        bad(what + ": its result " + label4(root) + where + named2 + "; an update stays where the result is \u2014 " + leaveOut(op, ["section", "createSection"]) + page);
         continue;
       }
       const old = readOld(root, key);
