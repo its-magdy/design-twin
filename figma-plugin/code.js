@@ -13810,6 +13810,7 @@
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+    else if (!r.ok && keptOnPutBack.has(r)) text = "Design Twin put the preview back, but kept what you changed since: " + keptOnPutBack.get(r) + ".";
     if (text === null) return;
     toast(text, !r.ok);
     const m = { type: "writes", applied: n, ok: r.ok, text };
@@ -14112,8 +14113,11 @@
     if (!failed.length) return null;
     const back = new Set(restored);
     const stays = changes.filter((c) => !back.has(c)).map((c) => c.applied);
-    return { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " \u2014 what stays is listed in `applied`." : ".") };
+    const r = { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " \u2014 what stays is listed in `applied`." : ".") };
+    if (!stays.length) keptOnPutBack.set(r, failed.join("; "));
+    return r;
   }
+  var keptOnPutBack = /* @__PURE__ */ new WeakMap();
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
   }

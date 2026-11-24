@@ -196,6 +196,45 @@ export const cases: Case[] = [{
     // A batch with a delete or a keyed re-send is never offered a preview (neither can be put back): review-policy.test.ts.
   },
 }, {
+  name: "Review: Put back keeps a section side the designer resized while the preview was up, and tells the designer too",
+  async run() {
+    // The preview grows section 'Payments' (600×600) to 660×860; the designer drags its width to 900; then Put back (or
+    // Reject, which puts the preview back first). The review ends (the put-back counts it a problem), and the window and
+    // Figma's toast say which side was kept, at what size — as the agent's reply does.
+    const previewed = async (finish: "put-back" | "reject") => {
+      const w = await treeWorld({ flows: true, extra: { reviewer: "real" } });
+      w.figma.viewport = { scrollAndZoomIntoView: () => {} };
+      const s = w.flows?.payments;
+      const ops: WriteOp[] = [
+        { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Preview", x: 80, y: 80, box: { w: 500, h: 700 } } },
+        { op: "patchWhere", where: { name: "Welcome" }, scope: ["Flows"], set: { name: "Temporary name" } },
+      ];
+      const from = w.posted.length;
+      const reply = bridge(w, "pk", "write", { ops }).then((r) => r.result);
+      await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
+      const card = w.posted.slice(from).find((m) => m.type === "review");
+      await w.send({ type: "review-answer", id: String(card?.id), action: "preview" });
+      await tick(() => w.posted.some((m) => m.type === "review-state" && m.state === "previewing"));
+      if (s) s.width = 900;
+      const at = w.posted.length, toasts = w.notified.length;
+      await w.send({ type: "review-answer", id: String(card?.id), action: finish });
+      const r = asResult(await reply);
+      return { r, s, card, after: w.posted.slice(at), toasts: w.notified.slice(toasts) };
+    };
+    for (const finish of ["put-back", "reject"] as const) {
+      const p = await previewed(finish);
+      const said = /put the preview back.*section 'Payments' \(6:2\).*keeps its width, 900/;
+      const writes = p.after.find((m) => m.type === "writes");
+      ok(`[PREVIEW-KEPT] ${finish}: the card is ready to preview, and the section keeps the width the designer gave it, 900 (${p.s ? p.s.width + "×" + p.s.height : "none"})`,
+        p.card?.previewable === true && p.s?.width === 900 && p.s.height === 600);
+      ok(`[PREVIEW-KEPT] ${finish}: the review ends, and the agent's reply names the side kept (${p.r?.error})`,
+        p.after.some((m) => m.type === "review-end" && m.end === (finish === "put-back" ? "failed" : "rejected")) && p.r?.ok === false && /keeps its width, 900/.test(p.r.error ?? ""));
+      ok(`[PREVIEW-KEPT] ${finish}: the window's status line says which section side was kept, at what size (${String(writes?.text)})`,
+        writes !== undefined && writes.ok === false && said.test(String(writes.text)));
+      ok(`[PREVIEW-KEPT] ${finish}: …and so does Figma's toast (${JSON.stringify(p.toasts)})`, p.toasts.length === 1 && said.test(p.toasts[0] ?? ""));
+    }
+  },
+}, {
   name: "Review: the ticket — pending after the hold, asked again, a repeat answers at once, unknown is refused",
   async run() {
     const clock = fakeClock();

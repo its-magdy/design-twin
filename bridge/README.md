@@ -1448,7 +1448,8 @@ The card lists the batch in plain words with old → new values ("30 layers: rad
 #3b82f6 → #16a34a — 40 layers follow"), says why it waited, and has **Show me** per line, **Details** (the dry run's
 sentences), **Apply**, and **Reject** with an optional reason. For a source edit or a large batch it also offers
 **Preview on canvas**: the batch is applied for real (everyone in the file sees it), then **Keep** leaves it applied and
-**Put back** restores it (that leaves two undo entries); a preview left up when the plugin window closes cannot be put
+**Put back** restores it (that leaves two undo entries; a section side the designer resized while the preview was up keeps
+their size, which ends the review, and the window and the agent's reply both say so); a preview left up when the plugin window closes cannot be put
 back. A dry run reports `wouldWait` and `waitReason` (and `waitingTicket` if another write is waiting).
 
 **How the call waits — a ticket.** A call holds at most 45 s (MCP clients time a tool call out at 60 s by default).

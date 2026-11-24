@@ -352,6 +352,7 @@ function announce(r: WriteResult): void {
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+  else if (!r.ok && keptOnPutBack.has(r)) text = "Design Twin put the preview back, but kept what you changed since: " + keptOnPutBack.get(r) + ".";
   if (text === null) return;
   toast(text, !r.ok);
   const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
@@ -671,8 +672,15 @@ async function putBack(changes: readonly Change[]): Promise<WriteResult | null> 
   // Every change may have gone back but for what the designer has changed since (a section they resized): then
   // nothing is listed.
   const stays = changes.filter((c) => !back.has(c)).map((c) => c.applied);
-  return { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
+  const r: WriteResult = { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
+  // All of it went back but for what the designer changed since: said to them as well (announce), not only to the agent.
+  if (!stays.length) keptOnPutBack.set(r, failed.join("; "));
+  return r;
 }
+
+/** A put-back's result that left only what the designer changed since (a section side they resized), with what it
+ *  kept: announce says it in the window and Figma's toast, as it says any other end of a write. */
+const keptOnPutBack = new WeakMap<WriteResult, string>();
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */
 function undoNote(steps: number): string {
