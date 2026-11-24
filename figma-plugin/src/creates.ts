@@ -546,8 +546,8 @@ async function applyStyles(t: StylesTarget, refs: ResolvedRefs, consent: () => v
   const applied: AppliedWrite = {};
   const change: Change = {
     applied, kind: "created style table", what: "the styles of a createStyles table",
-    async restore(allowed) {
-      for (const e of edits.slice().reverse()) await e.restore(allowed);
+    async restore(allowed, ours) {
+      for (const e of edits.slice().reverse()) await e.restore(allowed, ours);
       for (const st of made.slice().reverse()) { if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off"); st.remove(); }
     },
   };

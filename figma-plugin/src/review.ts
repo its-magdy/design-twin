@@ -93,9 +93,27 @@ export function countUnreviewed(n: number): void { sinceApproval += n; }
 
 /** What putting a preview back came to (writes.ts putBack): `failed`, what stays when not all of it could go back (null
  *  when all of it went back or went with its layer); `gone`, a sentence for each change that went with a layer the
- *  designer deleted while it was on the canvas (write-batch.ts goneSentence): nothing of it is left to put back. */
-export interface PutBack { failed: WriteResult | null; gone: readonly string[] }
-const BACK: PutBack = { failed: null, gone: [] };
+ *  designer deleted while it was on the canvas (write-batch.ts goneSentence): nothing of it is left to put back;
+ *  `restored`, how many changes did go back. */
+export interface PutBack { failed: WriteResult | null; gone: readonly string[]; restored: number }
+const BACK: PutBack = { failed: null, gone: [], restored: 0 };
+
+/** What a refusal says of the preview it put back (in "(A preview of it was on the canvas; ….)"): put back, put back but
+ *  for the changes that went with their layers, or nothing of it, when every one did (it says why, never "put back"). */
+function backNote(back: PutBack): string {
+  if (!back.gone.length) return "it was put back";
+  return (back.restored ? "it was put back, but " : "nothing of it was put back: ") + back.gone.join("; ");
+}
+/** What the card says once its Put back button is done (it still waits for an answer). */
+function backState(back: PutBack): string {
+  const n = back.gone.length;
+  if (!n) return "Put back.";
+  if (!back.restored) return "Nothing was put back: the layers it changed were deleted.";
+  return "Put back, but " + n + (n === 1 ? " change went with a deleted layer." : " changes went with deleted layers.");
+}
+/** An earlier put-back of a card's preview (`a`, its Put back button) and a later one (`b`) as one: what went with its
+ *  layers in either; what the later one put back (what a refusal says was, or was not, put back is the later preview). */
+const bothBack = (a: PutBack, b: PutBack): PutBack => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
 
 /** What writes.ts hands a card: the batch, what it shows, and how to run it. */
 export interface CardInput {
@@ -126,6 +144,9 @@ export interface Card {
   /** what its previews loaded or imported (images, library items: writes.ts), which a put-back leaves: a card that ends
    *  unapplied says so instead of "nothing was changed" */
   landed: Landed;
+  /** what its Put back button put back so far (null before one), so a refusal after it still says what went with a
+   *  deleted layer, and that nothing of it went back when none did */
+  back: PutBack | null;
   /** every action on the card, one after another */
   chain: Promise<void>;
   /** settles once, with the batch's outcome */
@@ -171,7 +192,7 @@ export function openCard(input: CardInput): Card {
   const ticket = "rv-" + (++seq) + "-" + Math.random().toString(36).slice(2, 7);
   let settle: (r: WriteResult) => void = () => {};
   const outcome = new Promise<WriteResult>((res) => { settle = res; });
-  const card: Card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: undefined, cap: undefined, opened: Date.now() };
+  const card: Card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, back: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: undefined, cap: undefined, opened: Date.now() };
   current = card;
   card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
   const lines: ReviewCardLine[] = input.lines.map((l, i) => {
@@ -252,16 +273,18 @@ async function end(card: Card, e: Ending): Promise<void> {
     card.previewed = null;
     post(msg);
     if (back.failed) { const f = landedResult(back.failed, card.landed); card.input.announce(f, card.landed); finish(card, f); return; }
-    // A change whose layer the designer deleted meanwhile was not put back: it went with that layer, and is said so.
-    const note = back.gone.length ? "it was put back, but " + back.gone.join("; ") : "it was put back";
-    const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + note + ".)" }, card.landed);
+    // A change whose layer the designer deleted meanwhile was not put back: it went with that layer, and is said so (an
+    // earlier Put back's too); when every one did, nothing of it was put back, and it says that.
+    const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back ? bothBack(card.back, back) : back) + ".)" }, card.landed);
     card.input.announce(r, card.landed);
     finish(card, r);
     return;
   }
   post(msg);
-  // A preview put back earlier may have left an image or an import: said (landedResult); else word for word as ever.
-  const r = landedResult(refusal, card.landed);
+  // A preview put back earlier may have left an image or an import: said (landedResult); else word for word as ever. One
+  // whose Put back found layers deleted says what went with them, as the put-back said on the card.
+  const earlier = card.back && card.back.gone.length ? { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back) + ".)" } : refusal;
+  const r = landedResult(earlier, card.landed);
   card.input.announce(r, card.landed);
   finish(card, r);
 }
@@ -332,7 +355,9 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       finish(card, f);
       return;
     }
-    setState(card, "waiting", "Put back. It still waits for your answer.");
+    // Kept for the answer that ends the card: a refusal says what went with a deleted layer too.
+    card.back = card.back ? bothBack(card.back, back) : back;
+    setState(card, "waiting", backState(back) + " It still waits for your answer.");
   });
 }
 

@@ -2582,3 +2582,207 @@ cases.push({
       && err.includes("; " + wentWith("the changes to 'A' (" + String(a.id) + ")")));
   },
 });
+
+// ---- #206 review 12: a keyed copy never claims the designer's layer moved into it; what a build of the batch made is
+// the batch's own in every other build's put-back; a put-back that was refused is tried again once the rest went back; a
+// preview whose layers all went says nothing was put back, on the card and in a later refusal.
+
+cases.push({
+  name: "A keyed copy never stamps the designer's layer moved into it: a re-send that drops the copy refuses, never deletes it (#206)",
+  async run() {
+    for (const later of [true, false]) {
+      const w = await treeWorld({ kit: true });
+      const designer = w.scene.nodes["1:1"];
+      if (!designer) throw new Error("no designer layer");
+      // Plugin data, as every Figma layer has.
+      const data = new Map<string, string>();
+      Object.assign(designer, { getPluginData: (k: string) => data.get(k) ?? "", setPluginData: (k: string, v: string) => { data.set(k, v); } });
+      const first = await w.api.applyWrites([{ op: "createTree", tree: { name: "Source", children: [{ name: "Title", text: "original", handle: "title" }, { name: "Group", handle: "group" }] } }]);
+      const source = first.applied[0]?.id;
+      const ownGroup = first.applied[0]?.handles?.group;
+      let into: FakeNode | undefined;
+      // The designer moves their layer into the copy's group while its edit's text style is set.
+      w.hooks.onStyle = async () => {
+        if (into) return;
+        into = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Group" && n.id !== ownGroup);
+        if (into) (into.appendChild as (n: FakeNode) => void)(designer);
+      };
+      const tree = { key: "r12-keyed", name: "Keyed", children: [{ clone: String(source), name: "Copy", edits: { Title: { text: "updated", styles: { text: "Body" } } } }] };
+      const ops: WriteOp[] = later ? [{ op: "createTree", tree }, { op: "setFill", nodeId: "gone:1", color: "#fff" }] : [{ op: "createTree", tree }];
+      const r = await w.api.applyWrites(ops);
+      w.hooks.onStyle = undefined;
+      if (!into) throw new Error("no copy group");
+      const stamp = (designer.getPluginData as (k: string) => string)("dtwin.key");
+      // The same key sent again without the copy: the copy is to be removed, and it holds the designer's layer.
+      const again = await w.api.applyWrites([{ op: "createTree", tree: { key: "r12-keyed", name: "Keyed", children: [{ name: "Other" }] } }]);
+      ok(`[ANNOUNCE] a keyed copy, the designer's layer moved into it${later ? ", the batch then failed (the tree stays)" : ""}: their layer carries no stamp of the key (got ${JSON.stringify(r)}, stamp '${stamp}')`,
+        (later ? r.ok === false : r.ok === true) && stamp === "" && designer.parent === into && onPage(w, designer));
+      ok(`[ANNOUNCE] …${later ? "after the failed batch" : "after it landed"}: a re-send that drops the copy is refused for the designer's layer, which is still in the file (got ${JSON.stringify(again)})`,
+        again.ok === false && typeof again.error === "string" && again.error.includes("holds 'Existing A' (1:1), which this key did not build") && onPage(w, designer) && designer.removed !== true && onPage(w, into));
+    }
+  },
+}, {
+  name: "What a build of the batch made is the batch's: a tree moved into a later tree goes back with it, in both failure paths (#206)",
+  async run() {
+    for (const inBuild of [false, true]) {
+      const w = await treeWorld({ kit: true });
+      let moved = false;
+      // The designer moves the batch's first tree into the second while its text style is set.
+      w.hooks.onStyle = async () => {
+        const earlier = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Earlier");
+        const box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+        if (earlier && box && !moved) { (box.appendChild as (n: FakeNode) => void)(earlier); moved = true; }
+        if (inBuild) throw new Error("style refused");
+      };
+      const ops: WriteOp[] = [
+        { op: "createTree", tree: { name: "Earlier", children: [{ name: "E", text: "e" }] } },
+        { op: "createTree", tree: { name: "Later", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+        ...(inBuild ? [] : [{ op: "setFill", nodeId: "gone:1", color: "#fff" } as WriteOp]),
+      ];
+      const t = w.notified.length;
+      const r = await w.api.applyWrites(ops);
+      w.hooks.onStyle = undefined;
+      const err = String(r.error);
+      ok(`[ANNOUNCE] the batch's first tree moved into its second${inBuild ? ", whose build then failed" : ", then a later op failed"}: both are taken back, nothing stays (got ${JSON.stringify(r)}, toast ${JSON.stringify(w.notified.slice(t))})`,
+        moved && r.ok === false && r.applied.length === 0 && !w.alive().some((n) => n.name === "Earlier" || n.name === "Later")
+        && !err.includes("could not undo") && !err.includes("did not make") && err === (inBuild ? "style refused" : "setFill: no node with id 'gone:1' (invalid or removed)")
+        && (r.restored ?? []).length === (inBuild ? 1 : 2) && w.notified.slice(t).length === 1 && w.notified.slice(t).every((s) => s.startsWith("Design Twin undid " + (inBuild ? "1 earlier change" : "2 earlier changes") + " after an edit failed: ")));
+    }
+    // The first tree moved into the second, and the designer's own layer into the first: both stay, and each says it
+    // holds the designer's layer, never that the other tree is one the batch did not make.
+    {
+      const w = await treeWorld({ kit: true });
+      const designer = w.scene.nodes["1:1"];
+      if (!designer) throw new Error("no designer layer");
+      let earlier: FakeNode | undefined;
+      let later: FakeNode | undefined;
+      w.hooks.onStyle = async () => {
+        earlier = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Earlier");
+        later = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Later");
+        const box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+        if (!earlier || !box) return;
+        (box.appendChild as (n: FakeNode) => void)(earlier);
+        (earlier.appendChild as (n: FakeNode) => void)(designer);
+      };
+      const r = await w.api.applyWrites([
+        { op: "createTree", tree: { name: "Earlier", children: [{ name: "E", text: "e" }] } },
+        { op: "createTree", tree: { name: "Later", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+        { op: "setFill", nodeId: "gone:1", color: "#fff" },
+      ]);
+      w.hooks.onStyle = undefined;
+      if (!earlier || !later) throw new Error("no trees");
+      const err = String(r.error);
+      ok(`[ANNOUNCE] the batch's first tree moved into its second, the designer's layer into the first: both stay with it, each said to hold the designer's layer (got ${JSON.stringify(r)})`,
+        r.ok === false && onPage(w, designer) && designer.parent === earlier && onPage(w, earlier) && onPage(w, later) && r.applied.length === 2
+        && err.includes("could not undo the tree 'Later' (" + String(later.id) + ") (" + holds(later, designer) + ")")
+        && err.includes("could not undo the tree 'Earlier' (" + String(earlier.id) + ") (" + holds(earlier, designer) + ")") && !err.includes("holds 'Earlier'"));
+    }
+  },
+}, {
+  name: "A put-back refused for a layer it holds is tried again once the rest went back: a reason is never stale (#206)",
+  async run() {
+    const w = await treeWorld({ kit: true });
+    const first = await w.api.applyWrites([{ op: "createFrame", name: "Mover" }, { op: "createFrame", name: "Dest" }]);
+    const mover = w.scene.nodes[String(first.applied[0]?.id)];
+    const dest = w.scene.nodes[String(first.applied[1]?.id)];
+    if (!mover || !dest) throw new Error("no frames");
+    const home = mover.parent;
+    let box: FakeNode | undefined;
+    // The designer moves the layer the batch moved into the tree being built (it is not the batch's: an earlier one made it).
+    w.hooks.onStyle = async () => {
+      box = w.made.find((n) => n.removed !== true && peekRemoved(n, "name") === "Box");
+      if (box) (box.appendChild as (n: FakeNode) => void)(mover);
+    };
+    const r = await w.api.applyWrites([
+      { op: "move", nodeId: String(mover.id), parentId: String(dest.id) },
+      { op: "createTree", tree: { name: "Later", children: [{ name: "Box" }, { name: "T", text: "x", styles: { text: "Body" } }] } },
+      { op: "setFill", nodeId: "gone:1", color: "#fff" },
+    ]);
+    w.hooks.onStyle = undefined;
+    const err = String(r.error);
+    // The tree's put-back ran first (newest first) and was refused: it held the moved layer. The move's put-back then
+    // took that layer out of it, so the tree goes too, and nothing is said to stay.
+    ok(`[ANNOUNCE] a tree that held a moved layer at its put-back, the layer moved back out by an older put-back: the tree is taken back, the reply says nothing stays (got ${JSON.stringify(r)})`,
+      !!box && r.ok === false && r.applied.length === 0 && mover.parent === home && onPage(w, mover) && !w.alive().some((n) => n.name === "Later") && !err.includes("could not undo"));
+  },
+});
+
+/** A card over 25 renamed layers and a filled swatch whose put-back awaits its paint style (the first put-back, newest
+ *  first): `whileStyled` runs during that await. */
+async function swatchCard(w: World, id: string, nodes: Record<string, FakeNode>, target: FakeNode): Promise<{ reply: Promise<PostedMessage[]>; card: string; from: number }> {
+  Object.assign(w.figma, { viewport: { scrollAndZoomIntoView() { /* the preview's zoom */ } } });
+  for (const n of Object.values(nodes)) n.parent = w.pages.current;
+  target.parent = w.pages.current;
+  const ops: WriteOp[] = Object.keys(nodes).map((nodeId): WriteOp => ({ op: "patch", nodeId, set: { name: "New" } }));
+  ops.push({ op: "setFill", nodeId: String(target.id), color: "#aa0000" });
+  const from = w.posted.length;
+  const reply = bridgeWrite(w, id, ops);
+  await tick(() => w.posted.slice(from).some((m) => m.type === "review"));
+  const card = String(w.posted.slice(from).find((m) => m.type === "review")?.id);
+  await w.send({ type: "review-answer", id: card, action: "preview" });
+  await tick(() => w.posted.slice(from).some((m) => m.type === "review-state" && m.state === "previewing"));
+  return { reply, card, from };
+}
+/** 25 layers to rename, and a swatch whose paint-style put-back runs `whileStyled` (then sets the style). */
+function swatchScene(whileStyled: () => void): { nodes: Record<string, FakeNode>; target: FakeNode } {
+  const nodes: Record<string, FakeNode> = {};
+  for (let i = 1; i <= 25; i++) nodes["x:" + i] = { id: "x:" + i, type: "FRAME", name: "Old " + i, visible: true };
+  let paints: unknown = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+  const target: FakeNode = {
+    id: "sw:1", type: "RECTANGLE", name: "Swatch", fillStyleId: "S:paint", removed: false,
+    get fills() { return paints; },
+    set fills(value: unknown) { paints = value; target.fillStyleId = ""; },
+    async setFillStyleIdAsync(style: string) { await Promise.resolve(); whileStyled(); target.fillStyleId = style; },
+  };
+  return { nodes, target };
+}
+
+cases.push({
+  name: "A preview whose layers were all deleted during its put-back says nothing of it was put back: Reject, Put back, then Reject (#206)",
+  async run() {
+    for (const how of ["reject", "put back, then reject"] as const) {
+      let all: FakeNode[] = [];
+      const scene = swatchScene(() => { for (const n of all) markRemoved(n); });
+      all = [...Object.values(scene.nodes), scene.target];
+      const w = await treeWorld({ extra: { reviewer: "real", nodes: { ...scene.nodes, [String(scene.target.id)]: scene.target } } });
+      const { reply, card, from } = await swatchCard(w, "r12-all-" + how, scene.nodes, scene.target);
+      const previewed = scene.nodes["x:1"]?.name === "New";
+      let note: unknown;
+      if (how !== "reject") {
+        const at = w.posted.length;
+        await w.send({ type: "review-answer", id: card, action: "put-back" });
+        await tick(() => w.posted.slice(at).some((m) => m.type === "review-state" && m.state === "waiting"));
+        note = w.posted.slice(at).find((m) => m.type === "review-state" && m.state === "waiting")?.note;
+      }
+      await w.send({ type: "review-answer", id: card, action: "reject" });
+      const r = replyOf(await reply);
+      const err = String(r.error);
+      if (how !== "reject") ok(`[ANNOUNCE] Put back on a preview whose layers were all deleted during it: the card says nothing was put back (got ${JSON.stringify(note)})`,
+        note === "Nothing was put back: the layers it changed were deleted. It still waits for your answer.");
+      ok(`[ANNOUNCE] ${how} on a preview whose layers were all deleted during the put-back: the refusal says nothing of it was put back, and why (got ${JSON.stringify(r)})`,
+        previewed && from >= 0 && r.ok === false && r.refused === "rejected" && !err.includes("; it was put back")
+        && err.includes(" (A preview of it was on the canvas; nothing of it was put back: " + wentWith("the fill of 'Swatch' (sw:1)") + "; ")
+        && err.endsWith(wentWith("the changes to 'Old 1' (x:1)") + ".)"));
+    }
+  },
+}, {
+  name: "Put back on a preview after one of its layers was deleted says that change went with it, and a later Reject says so too (#206)",
+  async run() {
+    const scene = swatchScene(() => { /* nothing deleted during the put-back */ });
+    const w = await treeWorld({ extra: { reviewer: "real", nodes: { ...scene.nodes, [String(scene.target.id)]: scene.target } } });
+    const { reply, card } = await swatchCard(w, "r12-one", scene.nodes, scene.target);
+    const x1 = scene.nodes["x:1"];
+    if (!x1) throw new Error("no layer");
+    markRemoved(x1);
+    const at = w.posted.length;
+    await w.send({ type: "review-answer", id: card, action: "put-back" });
+    await tick(() => w.posted.slice(at).some((m) => m.type === "review-state" && m.state === "waiting"));
+    const note = w.posted.slice(at).find((m) => m.type === "review-state" && m.state === "waiting")?.note;
+    ok(`[ANNOUNCE] Put back on a preview after a layer it renamed was deleted: the card says that change went with a deleted layer, never a bare "Put back." (got ${JSON.stringify(note)})`,
+      note === "Put back, but 1 change went with a deleted layer. It still waits for your answer." && scene.nodes["x:2"]?.name === "Old 2");
+    await w.send({ type: "review-answer", id: card, action: "reject" });
+    const r = replyOf(await reply);
+    ok(`[ANNOUNCE] …then Reject: the refusal still says the change went with that layer (got ${JSON.stringify(r)})`,
+      r.ok === false && r.refused === "rejected" && typeof r.error === "string" && r.error.endsWith(" (A preview of it was on the canvas; it was put back, but " + wentWith("the changes to 'Old 1' (x:1)") + ".)"));
+  },
+});

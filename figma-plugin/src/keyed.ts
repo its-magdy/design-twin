@@ -480,7 +480,8 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
     // On the list before it is stamped: a stamp that throws removes it with the batch. Every node it made goes back, not
     // only its top one: a layer the designer moved out of it since is the batch's too (tree.ts discard).
     const mine = madeNodes(made, from);
-    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), on: n, made: true, restore() { takeBack([n, ...mine]); } });
+    const owns = [n, ...mine];
+    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), on: n, made: true, owns, restore(_allowed, ours) { takeBack(owns, ours); } });
     stampAll(made, key, from.pairs);
     built.push(n);
   }

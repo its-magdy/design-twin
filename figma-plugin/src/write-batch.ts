@@ -53,8 +53,12 @@ export interface Change {
   kind: string;
   /** What it is, for a sentence saying it could not be undone. */
   what: string;
-  /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. */
-  restore(allowed: () => boolean): void | Promise<void>;
+  /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped.
+   *  `ours` is the id of every node the batch made (batchMade): a made layer that holds only those is the batch's to take
+   *  back whole, whichever op of it made each one (node-lookup.ts takeBack). */
+  restore(allowed: () => boolean, ours: ReadonlySet<string>): void | Promise<void>;
+  /** Every node it made (a change that made nodes): with every other change's, what the batch made (batchMade). */
+  owns?: readonly SceneNode[];
   /** One of the layers a patchWhere changed (the same object for every one of them): a reply that lists what was put
    *  back counts them in one row instead of a row each. */
   group?: object;
@@ -66,6 +70,14 @@ export interface Change {
    *  never reads a node already gone (node-lookup.ts takeBack). */
   on?: BaseNode;
   made?: true;
+}
+
+/** The id of every node the batch made, by every change on `changes` that made any (`owns`): one build's layer moved
+ *  into another's is the batch's own in both, so a put-back or a cleanup takes it back with the layer that holds it. */
+export function batchMade(changes: readonly Change[]): Set<string> {
+  const out = new Set<string>();
+  for (const c of changes) if (c.owns) for (const n of c.owns) out.add(n.id);
+  return out;
 }
 
 /** `c` went with its node: one the batch did not make, removed from the file (node-lookup.ts removedWith). */
@@ -109,12 +121,28 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
   const failures: Array<[Change, string]> = [];
   let stop: { rest: Change[]; tail: string } | null = null;
   const left = [...changes].reverse();
+  const ours = batchMade(changes);
+  const undo = (c: Change, e: unknown): string => "could not undo " + c.what + " (" + errMsg(e) + ")";
   for (const [i, c] of left.entries()) {
     if (!allowed()) { stop = { rest: left.slice(i), tail: "" }; break; }
     if (wentWithNode(c)) continue; // gone already: classified below
-    try { await c.restore(allowed); restored.push(c); } catch (e) {
+    try { await c.restore(allowed, ours); restored.push(c); } catch (e) {
       if (e instanceof RestoreStopped) { stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" }; break; }
-      failures.push([c, "could not undo " + c.what + " (" + errMsg(e) + ")"]);
+      failures.push([c, undo(c, e)]);
+    }
+  }
+  // A made layer refused for what it held (node-lookup.ts takeBack) may hold nothing else once the older changes went
+  // back (a layer the batch moved, put back where it was): each is tried again until none more goes, so what the reply
+  // says stays, and why, is the file as the put-back left it. Only made ones: a take-back changes nothing when it throws.
+  for (let more = !stop; more && allowed();) {
+    more = false;
+    for (const f of failures) {
+      const c = f[0];
+      if (!c.made || wentWithNode(c) || !allowed()) continue;
+      try { await c.restore(allowed, ours); restored.push(c); failures.splice(failures.indexOf(f), 1); more = true; break; } catch (e) {
+        if (e instanceof RestoreStopped) break;
+        f[1] = undo(c, e);
+      }
     }
   }
   // Gone or not is decided once every put-back is done: a node can be deleted at any put-back's await, its own (after it

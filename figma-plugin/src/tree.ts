@@ -41,7 +41,7 @@ import { setPlannedComponents } from "./batch-plan";
 import { markCreated } from "./session";
 import { readIndex, stampNode, writeIndex } from "./keyed-store";
 import type { KeyedUpdate } from "./keyed";
-import type { Change, OpProblem } from "./write-batch";
+import { batchMade, type Change, type OpProblem } from "./write-batch";
 import type { BoundSpec } from "./bind";
 import { bindCounts, type BindCounts } from "../../bridge/src/bind-values.ts";
 import { goneFrom, holding, idsOf, inDocument, noNode, removedWith, stillInDocument, takeBack } from "./node-lookup";
@@ -225,16 +225,18 @@ export async function buildTree(t: TreeTarget, consent: () => void, changes: Cha
   if (key !== undefined) applied.key = key;
   if (made.handles.size) applied.handles = handleRecord(made.handles);
   if (t.summary.unbound) applied.unbound = t.summary.unbound;
+  const owns = [root, ...madeNodes(made)];
   return {
     applied,
     kind: "created tree",
     what: "the tree '" + root.name + "' (" + root.id + ")",
-    on: root, made: true,
+    on: root, made: true, owns,
     // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
     // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
-    // One of them holding a layer the designer moved into it: all of it stays (node-lookup.ts takeBack throws first).
-    restore() {
-      takeBack([root, ...madeNodes(made)]);
+    // One of them holding a layer the batch did not make (the designer's, moved into it): all of it stays (node-lookup.ts
+    // takeBack throws first). One another op of the batch made is the batch's: it goes with it (`ours`).
+    restore(_allowed, ours) {
+      takeBack(owns, ours);
       if (key !== undefined && readIndex(key) === root.id) writeIndex(key, indexWas);
     },
   };
@@ -295,8 +297,8 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     if (keys.size) applied.props = propRecord(keys);
     if (made.handles.size) applied.handles = handleRecord(made.handles);
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
-    const built = root;
-    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", on: built, made: true, restore() { takeBack([built, ...madeNodes(made)]); } };
+    const owns = [root, ...madeNodes(made)];
+    return { applied, kind: "created component", what: "the component '" + name + "' (" + root.id + ")", on: root, made: true, owns, restore(_allowed, ours) { takeBack(owns, ours); } };
   } catch (e) {
     discard(parts.slice().reverse().map((p): [SceneNode, string] => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made, START, "created component", changes);
     throw e;
@@ -325,14 +327,17 @@ function discard(nodes: ReadonlyArray<[SceneNode, string]>, made: Made, from: Ma
   // (it is cleaned up in the same turn it was made, so nothing of the designer's can be in it).
   const everyNode = all.map(([n]) => n);
   for (const c of made.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
-  const own = idsOf(everyNode);
+  // What an earlier op of the batch made is the batch's too (write-batch.ts batchMade): moved into this build, it goes
+  // with it, as the batch's put-back would take it back anyway.
+  const own = batchMade(changes);
+  for (const n of everyNode) own.add(n.id);
   for (const [n, what] of all) {
     // Below one that stayed: it stays with it, as it is (inDocument first: a removed node's parent throws when read).
     if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
     try { takeBack([n], own); } catch { /* checked below */ }
     if (!inDocument(n)) continue;
     stayed.push(n);
-    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() { takeBack([n], own); } });
+    changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: everyNode, restore(_allowed, ours) { takeBack([n], ours); } });
   }
 }
 /** The nodes a build made, from `from` on: each node it made, then every layer of each copy it made (a layer the
@@ -394,11 +399,13 @@ async function finish(made: Made, from: MadeFrom, consent: () => void): Promise<
 }
 
 /** Stamp every node a keyed build made with the key and its own spec; a copy's layers are marked as the key's, with no
- *  spec of their own (keyed.ts reads the copy's spec off the copy). */
+ *  spec of their own (keyed.ts reads the copy's spec off the copy). Only the layers the build made: one the designer
+ *  moved into a copy during an await is theirs, never the key's (a re-send would remove it with the copy). */
 export function stampAll(made: Made, key: string, from = 0): void {
+  const ours = idsOf(madeNodes(made));
   for (const [n, s] of made.pairs.slice(from)) {
     stampNode(n, key, s);
-    if (nodeKind(s) === "CLONE") restamp(n, key, true);
+    if (nodeKind(s) === "CLONE") restamp(n, key, true, ours);
   }
 }
 

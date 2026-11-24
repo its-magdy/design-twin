@@ -175,14 +175,16 @@ function at(root: SceneNode, path: readonly number[]): SceneNode | null {
 
 /** This plugin's keyed stamps on `n` and every layer below it (not an instance's own layers), cleared: a copy is not
  *  part of the result its source belongs to. With `key`, each layer is marked as that key's instead (no spec of its
- *  own: the copy's spec, on the copy, is what a re-send compares). */
-export function restamp(n: SceneNode, key: string | null, self: boolean): void {
+ *  own: the copy's spec, on the copy, is what a re-send compares). With `ours` (the ids of the layers the build made),
+ *  a layer below that is not one of them (the designer's, moved into the copy during an await) is left as it is, and
+ *  what is in it too: marked as the key's, a re-send that drops the copy would remove it with the copy. */
+export function restamp(n: SceneNode, key: string | null, self: boolean, ours?: ReadonlySet<string>): void {
   if (!self) {
     n.setPluginData(KEY_DATA, key === null ? "" : key);
     n.setPluginData(SPEC_DATA, "");
   }
   if (n.type === "INSTANCE" || !("children" in n)) return;
-  for (const c of n.children) restamp(c, key, false);
+  for (const c of n.children) if (!ours || ours.has(c.id)) restamp(c, key, false, ours);
 }
 
 /** Every layer below `n` (a copy), outer ones first, onto `out`: not an instance's own layers, which follow its main

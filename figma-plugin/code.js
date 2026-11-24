@@ -7671,6 +7671,11 @@
   function refusalReason(error) {
     return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "").replace(/(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
   }
+  function batchMade(changes) {
+    const out = /* @__PURE__ */ new Set();
+    for (const c of changes) if (c.owns) for (const n of c.owns) out.add(n.id);
+    return out;
+  }
   var wentWithNode = (c) => !c.made && c.on !== void 0 && removedWith(c.on);
   var goneSentence = (c) => c.what + " went with that layer: it was deleted from the file while the batch ran, so none of it stays";
   function staying(changes) {
@@ -7702,6 +7707,8 @@
     const failures = [];
     let stop = null;
     const left = [...changes].reverse();
+    const ours = batchMade(changes);
+    const undo = (c, e) => "could not undo " + c.what + " (" + errMsg(e) + ")";
     for (const [i, c] of left.entries()) {
       if (!allowed2()) {
         stop = { rest: left.slice(i), tail: "" };
@@ -7709,14 +7716,31 @@
       }
       if (wentWithNode(c)) continue;
       try {
-        await c.restore(allowed2);
+        await c.restore(allowed2, ours);
         restored.push(c);
       } catch (e) {
         if (e instanceof RestoreStopped) {
           stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" };
           break;
         }
-        failures.push([c, "could not undo " + c.what + " (" + errMsg(e) + ")"]);
+        failures.push([c, undo(c, e)]);
+      }
+    }
+    for (let more = !stop; more && allowed2(); ) {
+      more = false;
+      for (const f of failures) {
+        const c = f[0];
+        if (!c.made || wentWithNode(c) || !allowed2()) continue;
+        try {
+          await c.restore(allowed2, ours);
+          restored.push(c);
+          failures.splice(failures.indexOf(f), 1);
+          more = true;
+          break;
+        } catch (e) {
+          if (e instanceof RestoreStopped) break;
+          f[1] = undo(c, e);
+        }
       }
     }
     const gone = left.filter(wentWithNode);
@@ -8632,13 +8656,13 @@
     }
     return n;
   }
-  function restamp(n, key, self) {
+  function restamp(n, key, self, ours) {
     if (!self) {
       n.setPluginData(KEY_DATA, key === null ? "" : key);
       n.setPluginData(SPEC_DATA, "");
     }
     if (n.type === "INSTANCE" || !("children" in n)) return;
-    for (const c of n.children) restamp(c, key, false);
+    for (const c of n.children) if (!ours || ours.has(c.id)) restamp(c, key, false, ours);
   }
   function copiedLayers(n, out) {
     if (n.type === "INSTANCE" || !("children" in n)) return;
@@ -9486,17 +9510,20 @@
     if (key !== void 0) applied.key = key;
     if (made2.handles.size) applied.handles = handleRecord(made2.handles);
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
+    const owns = [root, ...madeNodes(made2)];
     return {
       applied,
       kind: "created tree",
       what: "the tree '" + root.name + "' (" + root.id + ")",
       on: root,
       made: true,
+      owns,
       // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
       // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
-      // One of them holding a layer the designer moved into it: all of it stays (node-lookup.ts takeBack throws first).
-      restore() {
-        takeBack([root, ...madeNodes(made2)]);
+      // One of them holding a layer the batch did not make (the designer's, moved into it): all of it stays (node-lookup.ts
+      // takeBack throws first). One another op of the batch made is the batch's: it goes with it (`ours`).
+      restore(_allowed, ours) {
+        takeBack(owns, ours);
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
       }
     };
@@ -9549,9 +9576,9 @@
       if (keys.size) applied.props = propRecord(keys);
       if (made2.handles.size) applied.handles = handleRecord(made2.handles);
       if (t.summary.unbound) applied.unbound = t.summary.unbound;
-      const built = root;
-      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", on: built, made: true, restore() {
-        takeBack([built, ...madeNodes(made2)]);
+      const owns = [root, ...madeNodes(made2)];
+      return { applied, kind: "created component", what: "the component '" + name + "' (" + root.id + ")", on: root, made: true, owns, restore(_allowed, ours) {
+        takeBack(owns, ours);
       } };
     } catch (e) {
       discard(parts.slice().reverse().map((p) => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made2, START, "created component", changes);
@@ -9564,7 +9591,8 @@
     const all = nodes.concat(rest);
     const everyNode = all.map(([n]) => n);
     for (const c of made2.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
-    const own4 = idsOf(everyNode);
+    const own4 = batchMade(changes);
+    for (const n of everyNode) own4.add(n.id);
     for (const [n, what] of all) {
       if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
       try {
@@ -9573,8 +9601,8 @@
       }
       if (!inDocument(n)) continue;
       stayed.push(n);
-      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
-        takeBack([n], own4);
+      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: everyNode, restore(_allowed, ours) {
+        takeBack([n], ours);
       } });
     }
   }
@@ -9613,9 +9641,10 @@
     checkMade(made2, from);
   }
   function stampAll(made2, key, from = 0) {
+    const ours = idsOf(madeNodes(made2));
     for (const [n, s] of made2.pairs.slice(from)) {
       stampNode(n, key, s);
-      if (nodeKind(s) === "CLONE") restamp(n, key, true);
+      if (nodeKind(s) === "CLONE") restamp(n, key, true, ours);
     }
   }
   function copyOf(r, s, made2) {
@@ -11073,8 +11102,9 @@
       const from = madeFrom(made2);
       const n = await buildSubtree(b.spec, b.parent, made2, consent2, changes);
       const mine = madeNodes(made2, from);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), on: n, made: true, restore() {
-        takeBack([n, ...mine]);
+      const owns = [n, ...mine];
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), on: n, made: true, owns, restore(_allowed, ours) {
+        takeBack(owns, ours);
       } });
       stampAll(made2, key, from.pairs);
       built.push(n);
@@ -11486,7 +11516,18 @@
   function countUnreviewed(n) {
     sinceApproval += n;
   }
-  var BACK = { failed: null, gone: [] };
+  var BACK = { failed: null, gone: [], restored: 0 };
+  function backNote(back) {
+    if (!back.gone.length) return "it was put back";
+    return (back.restored ? "it was put back, but " : "nothing of it was put back: ") + back.gone.join("; ");
+  }
+  function backState(back) {
+    const n = back.gone.length;
+    if (!n) return "Put back.";
+    if (!back.restored) return "Nothing was put back: the layers it changed were deleted.";
+    return "Put back, but " + n + (n === 1 ? " change went with a deleted layer." : " changes went with deleted layers.");
+  }
+  var bothBack = (a, b) => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
   var current3 = null;
   var seq = 0;
   var FINISHED_KEEP = 20;
@@ -11528,7 +11569,7 @@
     const outcome = new Promise((res) => {
       settle = res;
     });
-    const card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
+    const card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, back: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
     current3 = card;
     card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
     const lines = input.lines.map((l, i) => {
@@ -11608,14 +11649,14 @@
         finish2(card, f);
         return;
       }
-      const note = back.gone.length ? "it was put back, but " + back.gone.join("; ") : "it was put back";
-      const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + note + ".)" }, card.landed);
+      const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back ? bothBack(card.back, back) : back) + ".)" }, card.landed);
       card.input.announce(r2, card.landed);
       finish2(card, r2);
       return;
     }
     post2(msg);
-    const r = landedResult(refusal, card.landed);
+    const earlier = card.back && card.back.gone.length ? { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back) + ".)" } : refusal;
+    const r = landedResult(earlier, card.landed);
     card.input.announce(r, card.landed);
     finish2(card, r);
   }
@@ -11687,7 +11728,8 @@
         finish2(card, f);
         return;
       }
-      setState(card, "waiting", "Put back. It still waits for your answer.");
+      card.back = card.back ? bothBack(card.back, back) : back;
+      setState(card, "waiting", backState(back) + " It still waits for your answer.");
     });
   }
   async function showLines(id, index) {
@@ -12912,8 +12954,8 @@
       applied,
       kind: "created style table",
       what: "the styles of a createStyles table",
-      async restore(allowed2) {
-        for (const e of edits.slice().reverse()) await e.restore(allowed2);
+      async restore(allowed2, ours) {
+        for (const e of edits.slice().reverse()) await e.restore(allowed2, ours);
         for (const st of made2.slice().reverse()) {
           if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
           st.remove();
@@ -13226,8 +13268,8 @@
   }
   function createdNode(n) {
     markCreated(n);
-    return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, restore() {
-      takeBack([n]);
+    return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: [n], restore(_allowed, ours) {
+      takeBack([n], ours);
     } };
   }
   async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style, rule }, changes) {
@@ -13612,7 +13654,7 @@
           }),
           preview: (prior) => queueWork(async () => {
             const r = await runBatch(list, images, "preview", shown4, prior);
-            if ("card" in r) return { result: notApplied(), putBack: async () => ({ failed: null, gone: [] }) };
+            if ("card" in r) return { result: notApplied(), putBack: async () => ({ failed: null, gone: [], restored: 0 }) };
             const changes2 = r.changes;
             return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)), landed: r.landed };
           }),
@@ -13828,11 +13870,11 @@
   }
   async function putBack3(changes) {
     commitUndo();
-    const { failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
+    const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
     commitUndo();
     const went = gone.map(goneSentence);
-    if (!failed.length) return { failed: null, gone: went };
-    return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " \u2014 what stays is listed in `applied`." }, gone: went };
+    if (!failed.length) return { failed: null, gone: went, restored: restored.length };
+    return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " \u2014 what stays is listed in `applied`." }, gone: went, restored: restored.length };
   }
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
