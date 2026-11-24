@@ -538,4 +538,35 @@ export const cases: Case[] = [{
     ok("[PLACE-CARD] Show me knows where a frame lands on a page that exists, not on one still to make",
       card?.lines?.[0]?.show?.spot === true && card.lines[1]?.show?.spot === undefined && card.lines[2]?.show?.spot === true);
   },
+}, {
+  name: "a placed frame's computed spot in a section starts at the section's margin at least, whatever overhangs its edge",
+  async run() {
+    /** Payments (1200,0, 600×600) holding a turned layer that covers `covered` (section coordinates); `wall`: a tall frame
+     *  right of it on the page, so growing right runs into it. */
+    const tilted = async (covered: Box, wall: boolean): Promise<World & { f: NonNullable<World["flows"]> }> => {
+      const w = await flowsWorld();
+      const t: FakeNode = { id: "9:21", type: "FRAME", name: "Tilted", x: covered.x + 300, y: covered.y, width: 100, height: 100, rotation: -60,
+        absoluteBoundingBox: { x: 1200 + covered.x, y: covered.y, width: covered.width, height: covered.height } };
+      (w.f.payments.appendChild as (c: FakeNode) => void)(t);
+      if (wall) (w.f.page.appendChild as (c: FakeNode) => void)({ id: "9:22", type: "FRAME", name: "Wall", x: 1900, y: 0, width: 100, height: 3000 });
+      return w;
+    };
+    // It covers -83..317 × 80..380: beside it (417) the section would reach 'Wall', so a new row below (380+100) — at
+    // the margin, not at the turned layer's -83 left of the section's edge.
+    const w = await tilted({ x: -83, y: 80, width: 400, height: 300 }, true);
+    const s = await shownAt(w, { op: "createTree", page: "Flows", section: "Payments", tree: screen("Next") });
+    const n = found(w, s.r);
+    ok(`[PLACE-LEFT] a new row starts at the margin, not where a turned layer overhangs the left edge (${num(n, "x")},${num(n, "y")}; shown ${s.spot}; ${JSON.stringify(s.r.warnings)})`,
+      s.r.ok === true && num(n, "x") === SECTION_PAD && num(n, "y") === 480 && s.spot === "1280,480" && s.r.warnings === undefined && box(w.f.payments) === "1200,0,600,1404");
+    // It covers from 40 above the section's top: the next frame right of it is level with the margin, not with -40.
+    const w2 = await tilted({ x: 80, y: -40, width: 300, height: 400 }, false);
+    const t = await shownAt(w2, { op: "createTree", page: "Flows", section: "Payments", tree: screen("Beside") });
+    const n2 = found(w2, t.r);
+    ok(`[PLACE-LEFT] beside a layer overhanging the top edge: level with the margin (${num(n2, "x")},${num(n2, "y")}; shown ${t.spot}; ${JSON.stringify(t.r.warnings)})`,
+      t.r.ok === true && num(n2, "x") === 480 && num(n2, "y") === SECTION_PAD && t.spot === "1680,80" && !/sticks out/.test((t.r.warnings ?? []).join()));
+    // Given coordinates stay exact, even past the edge.
+    const w3 = await tilted({ x: -83, y: 80, width: 400, height: 300 }, true);
+    const pin = await write(w3, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Pinned", { x: -90, y: 600 }) }]);
+    ok("[PLACE-LEFT] given coordinates are kept as given", pin.ok === true && num(found(w3, pin), "x") === -90 && num(found(w3, pin), "y") === 600);
+  },
 }];

@@ -188,17 +188,18 @@ function anchored(spec: At, box: XY, fp: Footprint, held: readonly Box[]): XY {
  * Where a box of `w`×`h` goes among `held` (boxes in the same coordinates), by `at` — `pad` in from the edges when
  * nothing is held. Neither given: right of everything held, level with the topmost. Only `y`: right of everything held,
  * at that `y`. Only `x`: at that `x`, level with the topmost when that overlaps nothing, else below everything held in
- * its column. Only the given coordinates are kept; the other never lands on a layer.
+ * its column. Only the given coordinates are kept; the other never lands on a layer, and is never less than `floor`
+ * (in a section its margin: a layer that overhangs its left or top edge does not pull a new frame out with it).
  */
-function besideHeld(held: readonly Box[], at: At, w: number, h: number, pad: number): XY {
+function besideHeld(held: readonly Box[], at: At, w: number, h: number, pad: number, floor = -Infinity): XY {
   if (!held.length) return { x: at.x !== undefined ? at.x : pad, y: at.y !== undefined ? at.y : pad };
-  const top = Math.min(...held.map((b) => b.y));
-  if (at.x === undefined) return { x: Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP, y: at.y !== undefined ? at.y : top };
+  const top = Math.max(floor, Math.min(...held.map((b) => b.y)));
+  if (at.x === undefined) return { x: Math.max(floor, Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP), y: at.y !== undefined ? at.y : top };
   const x = at.x;
   if (at.y !== undefined) return { x, y: at.y };
   if (!held.some((b) => overlaps({ x, y: top, width: w, height: h }, b))) return { x, y: top };
   const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
-  return { x, y: Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP };
+  return { x, y: Math.max(floor, Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP) };
 }
 
 /** A box grown to `needW`×`needH` from its top-left (never shrunk); null when it already holds that. */
@@ -291,15 +292,16 @@ export class Canvas {
   }
   /** Where a node covering `fp` lands in a section (its x/y, in the section's coordinates), by the spec's x/y and what
    *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into
-   *  a neighbour; with one, as besideHeld says. */
+   *  a neighbour; with one, as besideHeld says. What it covers starts at the section's margin at least, on each side the
+   *  spec does not give (a row starts at the leftmost layer's edge, or at the margin when that is further left). */
   private inSection(h: Holder, spec: At, fp: Footprint): XY {
     if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
     const held = this.itemsOf(h).map((i) => i.box);
     const w = fp.width, ht = fp.height;
-    if (!held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD), fp, held);
-    const beside = besideHeld(held, {}, w, ht, SECTION_PAD);
+    if (!held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held);
+    const beside = besideHeld(held, {}, w, ht, SECTION_PAD, SECTION_PAD);
     if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held);
-    const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
+    const below = { x: Math.max(SECTION_PAD, Math.min(...held.map((b) => b.x))), y: Math.max(SECTION_PAD, Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
     return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held);
   }
   /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */

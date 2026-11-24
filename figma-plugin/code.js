@@ -9361,15 +9361,15 @@
     }
     return { x: spec.x !== void 0 ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== void 0 ? spec.y : Math.round(box.y - fp.dy) };
   }
-  function besideHeld(held, at3, w, h, pad) {
+  function besideHeld(held, at3, w, h, pad, floor = -Infinity) {
     if (!held.length) return { x: at3.x !== void 0 ? at3.x : pad, y: at3.y !== void 0 ? at3.y : pad };
-    const top = Math.min(...held.map((b) => b.y));
-    if (at3.x === void 0) return { x: Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP, y: at3.y !== void 0 ? at3.y : top };
+    const top = Math.max(floor, Math.min(...held.map((b) => b.y)));
+    if (at3.x === void 0) return { x: Math.max(floor, Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP), y: at3.y !== void 0 ? at3.y : top };
     const x = at3.x;
     if (at3.y !== void 0) return { x, y: at3.y };
     if (!held.some((b) => overlaps({ x, y: top, width: w, height: h }, b))) return { x, y: top };
     const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
-    return { x, y: Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP };
+    return { x, y: Math.max(floor, Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP) };
   }
   function grownBox(box, needW, needH) {
     const w = Math.max(box.width, Math.ceil(needW));
@@ -9438,15 +9438,16 @@
     }
     /** Where a node covering `fp` lands in a section (its x/y, in the section's coordinates), by the spec's x/y and what
      *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into
-     *  a neighbour; with one, as besideHeld says. */
+     *  a neighbour; with one, as besideHeld says. What it covers starts at the section's margin at least, on each side the
+     *  spec does not give (a row starts at the leftmost layer's edge, or at the margin when that is further left). */
     inSection(h, spec, fp) {
       if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
       const held = this.itemsOf(h).map((i) => i.box);
       const w = fp.width, ht = fp.height;
-      if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD), fp, held);
-      const beside = besideHeld(held, {}, w, ht, SECTION_PAD);
+      if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held);
+      const beside = besideHeld(held, {}, w, ht, SECTION_PAD, SECTION_PAD);
       if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held);
-      const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
+      const below = { x: Math.max(SECTION_PAD, Math.min(...held.map((b) => b.x))), y: Math.max(SECTION_PAD, Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
       return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held);
     }
     /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */
