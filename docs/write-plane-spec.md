@@ -208,8 +208,8 @@ screens.
       the target page, nested ones included. A section given by id with no `page` is the one of that id wherever it is
       in the file, its page then the op's (as every other id a write takes names a node on any page); the dry run says
       it lands "on the page that holds it". A name that matches several is refused with their ids; one that matches
-      nothing is refused with its closest names and the field that would make it (a section given as an id is not
-      made: the refusal says what that id is instead — a section on another page, another kind of layer, or no layer;
+      nothing is refused with its closest names and the field that would make it (a page or section given as an id is
+      not made: the refusal says what that id is instead — a section on another page, another kind of layer, or no layer;
       a link's dash form, `6-2`, is still looked up as a name, and missing, is said the same way with its colon form to
       send; a name past the batch's limit is not told to add the field either, nor one missing without it once the batch
       makes the most it may — both are told to send it in another batch). Making is asked for, never inferred

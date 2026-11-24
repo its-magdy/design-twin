@@ -9301,6 +9301,10 @@
         if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch");
         continue;
       }
+      if (idLike(op.page)) {
+        bad("page '" + op.page + "' matches no page in this file; " + await pageIdIs(op.page));
+        continue;
+      }
       const make = newPages.size >= MAX_NEW_PAGES ? "; the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "): to make it, send it with `createPage: true` in another batch" : "; to make it, add `createPage: true`";
       bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
     }
@@ -9388,6 +9392,19 @@
       bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
     }
     return { dests, problems };
+  }
+  async function pageIdIs(ref2) {
+    const colon = ref2.replace(/-/g, ":");
+    const looks = colon === ref2 ? "it looks like a node id" : "it looks like a node id as a link writes it";
+    let n = null;
+    try {
+      n = await figma.getNodeByIdAsync(colon);
+    } catch {
+      n = null;
+    }
+    if (!n || n.removed) return looks + ", and no layer of this file has " + (colon === ref2 ? "it" : "the id '" + colon + "'");
+    if (n.type === "PAGE") return looks + ": page '" + n.name + "' is '" + colon + "' \u2014 send `page: '" + colon + "'`";
+    return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a page";
   }
   async function idIs(ref2) {
     let n = null;

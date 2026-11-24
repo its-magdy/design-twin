@@ -102,6 +102,8 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     // Past the limit: said above for the op that asked; another op naming it is not told to ask too.
     const over = overPages.get(op.page);
     if (over !== undefined) { if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch"); continue; }
+    // An id in any form is never made (the wire check refuses one to make): what it is the id of instead.
+    if (idLike(op.page)) { bad("page '" + op.page + "' matches no page in this file; " + await pageIdIs(op.page)); continue; }
     // At the limit, the flag would put it past it: the way to make it is another batch.
     const make = newPages.size >= MAX_NEW_PAGES
       ? "; the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "): to make it, send it with `createPage: true` in another batch"
@@ -171,6 +173,18 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
   }
   return { dests, problems };
+}
+
+/** What `ref` (an id-like page, in any form, that is no page's id) is the id of, as the refusal says it: a link's form
+ *  (`0-1`) with its colon form to send when that is a page's. */
+async function pageIdIs(ref: string): Promise<string> {
+  const colon = ref.replace(/-/g, ":");
+  const looks = colon === ref ? "it looks like a node id" : "it looks like a node id as a link writes it";
+  let n: BaseNode | null = null;
+  try { n = await figma.getNodeByIdAsync(colon); } catch { n = null; }
+  if (!n || n.removed) return looks + ", and no layer of this file has " + (colon === ref ? "it" : "the id '" + colon + "'");
+  if (n.type === "PAGE") return looks + ": page '" + n.name + "' is '" + colon + "' — send `page: '" + colon + "'`";
+  return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a page";
 }
 
 /** What `ref` (an id-like section that is not on the op's page) is the id of, as the refusal says it. */

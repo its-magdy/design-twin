@@ -452,6 +452,37 @@ export const cases: Case[] = [{
     // Below the limit the flag is still the way.
     const room = await write(w, [{ op: "createTree", page: "Overflow", tree: screen("Late") }]);
     ok("[PLACE-REFUSE] below the limit, a missing page is told to add `createPage: true`", room.ok === false && /to make it, add `createPage: true`/.test(room.error ?? ""));
+    // A page given as an id that matches none is never a name to make (the wire check refuses one with `createPage`):
+    // said as what it is the id of instead, below the limit and at it, with no create flag to add.
+    const tens = (): WriteOp[] => Array.from({ length: MAX_NEW_PAGES }, (_, i): WriteOp => ({ op: "createTree", page: "New " + i, createPage: true, tree: screen("S" + i) }));
+    for (const [at, lead] of [["below the limit", []], ["at the limit", tens()]] as const) {
+      const n = lead.length;
+      const dash = await write(w, [...lead, { op: "createTree", page: "0-2", tree: screen("Late") }]);
+      ok(`[PLACE-REFUSE] ${at}, a page in a link's id form: its colon form, the page's, to send — no create flag (${dash.error})`,
+        dash.ok === false && new RegExp("ops\\[" + n + "\\] \\(createTree\\): page '0-2' matches no page in this file; it looks like a node id as a link writes it: page 'Screens' is '0:2' — send `page: '0:2'`").test(dash.error ?? "")
+        && !/createPage: true/.test(dash.error ?? ""));
+      const none = await write(w, [...lead, { op: "createTree", page: "77:7", tree: screen("Late") }]);
+      ok(`[PLACE-REFUSE] ${at}, a page id no layer has: said so — no create flag (${none.error})`,
+        none.ok === false && new RegExp("ops\\[" + n + "\\] \\(createTree\\): page '77:7' matches no page in this file; it looks like a node id, and no layer of this file has it").test(none.error ?? "")
+        && !/createPage: true/.test(none.error ?? ""));
+      const notPage = await write(w, [...lead, { op: "createTree", page: "6-2", tree: screen("Late") }]);
+      ok(`[PLACE-REFUSE] ${at}, another layer's id as a page: what it is the id of (${notPage.error})`,
+        notPage.ok === false && /page '6-2' matches no page in this file; it looks like a node id as a link writes it: '6:2' is the id of 'Payments' \(SECTION\), not of a page/.test(notPage.error ?? "")
+        && !/createPage: true/.test(notPage.error ?? ""));
+    }
+    // …followed as written, it lands on that page.
+    const p = await flowsWorld();
+    const dashFollowed = await write(p, [...tens(), { op: "createTree", page: "0:2", tree: screen("Late") }]);
+    ok(`[PLACE-REFUSE] …followed at the limit, it lands on the page (${dashFollowed.error})`,
+      dashFollowed.ok === true && parentOf(found(p, dashFollowed, MAX_NEW_PAGES)) === p.pages.screens);
+    // A section in a link's id form at the section limit: said as the section's id to send, not told to make it.
+    const sectionDash = await write(w, [
+      ...Array.from({ length: 25 }, (_, i): WriteOp => ({ op: "createTree", page: "Flows", section: "Area " + i, createSection: true, tree: screen("A" + i) })),
+      { op: "createTree", page: "Flows", section: "6-2", tree: screen("Late") },
+    ]);
+    ok(`[PLACE-REFUSE] at the section limit, a section in a link's id form: its colon form to send — no create flag (${sectionDash.error})`,
+      sectionDash.ok === false && /ops\[25\] \(createTree\): section '6-2' matches no section on page 'Flows'; it looks like a node id as a link writes it: section 'Payments' is '6:2' — send `section: '6:2'`/.test(sectionDash.error ?? "")
+      && !/createSection: true/.test(sectionDash.error ?? ""));
     // A section the batch makes is not on another page.
     const elsewhere = await write(w, [
       { op: "createTree", page: "Flows", section: "Fresh", createSection: true, tree: screen("F") },
