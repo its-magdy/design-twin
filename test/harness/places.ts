@@ -544,7 +544,20 @@ export const cases: Case[] = [{
     const onPage = await write(w, [{ op: "createTree", tree: screen("Top", { key: "flows:top" }) }]);
     const into = await write(w, [{ op: "createTree", section: "Ideas", createSection: true, tree: screen("Top", { key: "flows:top" }) }]);
     ok("[PLACE-KEYED] a result on the page itself, re-sent into a section: refused, and no section is made",
-      onPage.ok === true && into.ok === false && /is not in a section, not 'Ideas'/.test(into.error ?? "") && !kids(w.pages.current).some((n) => n.type === "SECTION"));
+      onPage.ok === true && into.ok === false && /is not in a section, but `section` 'Ideas' would be a new section on the current page/.test(into.error ?? "") && !kids(w.pages.current).some((n) => n.type === "SECTION"));
+    // The same batch sent again (a section to make, no page) once the designer has opened another page: the section of
+    // that name is on the page the result is on, not this one, so it would be a new one here — said as that, and how to
+    // reach the result's (its page named).
+    const k = await flowsWorld();
+    const keyed: WriteOp = { op: "createTree", section: "Pay", createSection: true, tree: screen("K", { key: "flows:pay" }) };
+    const made = await write(k, [keyed]);
+    const home = k.figma.currentPage.name;
+    k.figma.currentPage = k.pages.screens;
+    const again = await write(k, [keyed]);
+    ok(`[PLACE-KEYED] a section of the same name only on the result's page: a new section here, said so, with the result's page to name (${again.error})`,
+      made.ok === true && again.ok === false
+      && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Pay' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` out, or name its page: `page: '" + home + "'`").test(again.error ?? "")
+      && !/in section 'Pay', not 'Pay'/.test(again.error ?? ""));
   },
 }, {
   name: "the review card says where it lands: a section, a new section, a new page",
