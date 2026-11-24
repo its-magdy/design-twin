@@ -879,6 +879,18 @@ export const cases: Case[] = [{
     const dSame = await write(d, [keyed]);
     await follow(d, dSame, keyed, dMade, "unique names on another page, the same section name", true);
 
+    // Its section's one name looks like an id (a link's 77-7): sent as a name with `createSection` it is refused on the
+    // wire (an id is never a name to make), and without it, it is looked up as the id it looks like. So its id instead.
+    const idl = await flowsWorld();
+    const idlMade = await write(idl, [keyed]);
+    const idlSection = parentOf(found(idl, idlMade));
+    if (idlSection) idlSection.name = "77-7";
+    const idlOther = await write(idl, [{ ...keyed, section: "Other" }]);
+    ok(`[PLACE-KEYED-HINT] its section's name looks like an id: the hint gives its id, with no \`createSection\` (${idlOther.error})`,
+      idlMade.ok === true && !!idlSection && new RegExp("name its section by its id: `section: '" + idlSection.id + "'` with no `createSection`").test(idlOther.error ?? "")
+      && !/`section: '77-7'`/.test(idlOther.error ?? ""));
+    await follow(idl, idlOther, { ...keyed, section: "Other" }, idlMade, "its section's name looks like an id", true);
+
     // Another section the page has, the op asking to make it (made only when missing): leave out both.
     const e = await flowsWorld();
     const eSpec = screen("Keyed", { key: "flows:keyed" });

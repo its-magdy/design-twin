@@ -42,6 +42,7 @@ import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import { goneFrom, inDocument, nodeById, stillInDocument, stillToRestore, takeBack } from "./node-lookup";
 import { pageHolding } from "./places";
 import { matchByName } from "../../bridge/src/name-match.ts";
+import { idLike } from "../../bridge/src/place-spec.ts";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -186,11 +187,13 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       // The other way there, when the op asks for a section to make: the result's page, and its section unless the op
       // names that already (naming the page alone would still ask for a section it does not have). The result on another
       // page means `page` was left out (one naming another page than the result's is refused above).
-      // By name only when each name it would send matches the result's alone (on its page, and in the file); else by
-      // its section's id, which names its page too (and is never a name to make: sent with no `createSection`).
+      // By name only when each name it would send matches the result's alone (on its page, and in the file), and its
+      // section's name is not one that looks like an id (a link's 77-7: the wire refuses it with `createSection`, as a
+      // name to make); else by its section's id, which names its page too (and is never a name to make: sent with no
+      // `createSection`).
       const same = !!inSection && s.name === inSection.name;
       const page = !s.node && inSection
-        ? !(on && onlyOne(inSection.name, on.findAllWithCriteria({ types: ["SECTION"] }), inSection) && (!away || onlyOne(away.name, figma.root.children, away)))
+        ? idLike(inSection.name) || !(on && onlyOne(inSection.name, on.findAllWithCriteria({ types: ["SECTION"] }), inSection) && (!away || onlyOne(away.name, figma.root.children, away)))
           ? ", or name its section by its id: `section: '" + inSection.id + "'`" + (op.createSection === true ? " with no `createSection`" : "")
           : away
             ? same ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`"
