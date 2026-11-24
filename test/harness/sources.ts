@@ -125,7 +125,7 @@ function sourceWorld() {
   const row: FakeNode = { id: "3:1", type: "COMPONENT", name: "Row", key: "key-row", remote: false, children: [divider], getInstancesAsync: async () => [{ id: "I1" }, { id: "I2" }, { id: "I3" }] };
   divider.parent = row;
   const avatarDot = n("9:3", "Dot");
-  const avatar: FakeNode = { id: "9:2", type: "COMPONENT", name: "Avatar", key: KEY("e"), remote: true, children: [avatarDot], getInstancesAsync: async () => [{ id: "I9" }] };
+  const avatar: FakeNode = { id: "9:2", type: "COMPONENT", name: "Avatar", key: KEY("e"), remote: true, parent: null, children: [avatarDot], getInstancesAsync: async () => [{ id: "I9" }] };
   avatarDot.parent = avatar;
 
   const walk = (list: readonly FakeNode[], keep: (x: FakeNode) => boolean): FakeNode[] => list.flatMap((k) => [...(keep(k) ? [k] : []), ...walk(k.children ?? [], keep)]);

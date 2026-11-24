@@ -195,20 +195,68 @@ screens.
     paint in any `fills` (or a paint style's `paints`): `{type: "image", file}` or `{type: "image", hash}`. The MCP
     server reads each file (inside its directory, by real path; PNG, JPEG or GIF by its bytes; ≤ 8 MB, ≤ 4096 px a
     side; ≤ 32 MB a batch), rewrites the paint to carry the sha-256 of the bytes as `image`, and sends the bytes once
-    per image beside the ops; the plugin makes every image and checks every `hash` before the batch runs, and the
-    reply lists each made image's Figma hash for reuse. A crop, rotation and filters are not written yet.
+    per image beside the ops; the plugin checks every `hash` with the rest of the batch, and makes the images only
+    when the batch runs: once it resolved and, if it waits for review, once it is approved (or previewed). A batch
+    refused or rejected first loads no image; one refused after an image loaded says so to the designer and the agent,
+    as does an op that failed and put its layers back, and a card's later refusal after a preview it put back.
+    The reply lists each made image's Figma hash for reuse. A crop, rotation and filters are not written yet.
 13. **Placement.** The spec names a target page (the current one by default) and optionally a section; the
     plugin places a new top-level frame beside the existing ones without overlap. Explicit coordinates are
     optional. As built, the target is a page only (`page`); a section cannot be named yet.
 
 ### Safety
 
-14. **All or nothing, as far as the plugin can put things back.** Everything is checked before the file is touched: names resolve, fonts exist,
-    parents exist. A new tree is built to the side and attached only when complete. A patch batch keeps
-    the old values and restores them when a later op fails — best effort: nothing is put back once the designer
-    turns Allow edits off mid-batch, a restore can fail for one change, an imported library item and a deleted node
-    stay. `applied` lists the changes not put back and the deletes already run, not the imported items (a batch
-    that fails while importing has an empty `applied`).
+14. **All or nothing, as far as the plugin can put things back.** Everything is checked before the file is touched:
+    names resolve, fonts exist, parents exist. A new tree is built to the side and attached only when complete. A patch
+    batch keeps the old values and restores them when a later op fails — best effort: nothing is put back once the
+    designer turns Allow edits off mid-batch, a restore can fail for one change, an imported library item and a deleted
+    node stay. `applied` lists the changes not put back and the deletes already run, not the imported items (a batch
+    that fails while importing has an empty `applied`). A refusal whose put-back failed for one change says what stays,
+    never that nothing was changed. A node the designer deleted counts as missing even when Figma still hands it back by
+    id. A deleted main component is kept, soft-deleted, for its instances and an undo, and is not always `removed` (seen
+    live: one deleted after a preview still resolved and passed a `removed` check, though no page showed it). So every
+    lookup a write makes counts a node only when it is in the document: not `removed`, and its parent chain climbs to
+    the document node. A node with no parent, or under a removed one, is no node, so a write approved after its target
+    was deleted is refused, not applied to it. The batch holds what it resolved, and the file can change at any await
+    after (an image being made, an import, a font load, a text style being set), so each op checks the node it holds
+    again before it reads it at all, and after each of its own awaits: one deleted by then fails the op with the error
+    its lookup would have given, and the batch is put back. A tree or a keyed re-send checks its page, and each frame it
+    builds into, the same way, so it never builds into one that has gone; once its last await is done it checks every
+    node it made or keeps, so it never lands or reports a layer that went meanwhile. A keyed re-send's removals run
+    after the batch's last awaits (the orphan counts) and are checked again right before the first one: a layer the
+    designer put in a node about to go refuses them. The resolve before the first op holds nodes across awaits too (a
+    page load, a font load); one gone by then is refused as missing with the rest. (A removed node's handle reads only
+    its `id`, `removed` and `type`; Figma throws on reading anything else, so the check comes first.) An op that fails
+    partway puts back what it already did, a keyed re-send's reorder included, so a refusal that says nothing changed is
+    true. A failed build whose remove() Figma refuses leaves its layers in the file: those are listed in `applied` and
+    said not to be put back, never "nothing changed". An op that holds several targets in turn (a rule's matches, a
+    keyed re-send's new subtrees, a copy's patched layers, a component two instances name, the components a rule's
+    instances are of) checks each again once the last target's awaits are done, so target N never goes unnoticed at
+    target N+1's await. A failed build takes back every layer it made, not only its root: a child Figma would not
+    append, or one the designer moved out meanwhile (a layer of a copy included), is not below the root. It never takes
+    back a layer it did not make: a layer it made that now holds one of the designer's (moved into it meanwhile) stays,
+    with theirs in it as they left it, listed in `applied` and said not to be put back. What the batch made is decided
+    for the whole batch: a layer one op made, moved into another's meanwhile, goes back with it. Not once Allow edits is
+    off: the plugin puts nothing back then, so a build that fails takes back only its own layers, and an earlier op's
+    layer moved into it stays, with the layer that holds it. A put-back refused for what a layer held is tried again
+    once the older changes went back (one may have moved the designer's layer out), so what the reply says stays, and
+    why, is the file as the put-back left it. Allow edits turned off before that second try: the layer is counted with
+    what stays because the put-back stopped, never given a reason the file may no longer bear out. A keyed copy marks as
+    the key's only the layers it made, never one of the designer's moved into it: a re-send that drops the copy refuses
+    for that layer rather than removing it. A change to a layer the designer deleted while the batch ran, before its
+    put-back or at any put-back's await (its own, or a later one's: decided once all are done), went with that layer:
+    nothing of it is in the file, so it is neither listed in `applied`, nor said to be put back, nor said not to be, and
+    the reply (a rejected preview's too) says it went with the layer. A preview whose layers all went says nothing of it
+    was put back, never that it was; the card's Put back says so too, and a refusal after it still says what went with a
+    deleted layer, even one whose own put-back could not all go back. A layer the batch made is gone as it was before
+    the batch, and what else its build made or set (a layer moved out of it, a key's index entry) is still put back. A
+    change that made layers, every one of them gone by the end of the put-back (taken back with a layer of the batch
+    that held it, or deleted), is as it was before the batch: never listed in `applied`, nor said to stay or not to be
+    put back; with nothing put back (Allow edits already off), the reply says it was deleted. A node a keyed re-send
+    removes that has left the document by then is neither removed nor counted. A rule's `instanceOf` names a
+    soft-deleted main component an instance still has only by its exact id or key, never by its name, and a variant's
+    set is the one it is in once every instance's lookup is done. A library component is the one exception: it has no
+    parent by design, and is found (to make an instance of it; changing it is refused as the library's).
 15. **Never guess a name.** A name that matches nothing, or more than one thing, refuses the whole write
     before anything runs, listing every bad name with up to three candidates.
 16. **One undo per batch.** Figma ends an undo step at each addComponentProperty, editComponentProperty and
@@ -263,7 +311,8 @@ screens.
       withdrawn: its result is the outcome). Finished outcomes are kept a while (the newest 20, 30 min), so a repeat answers at once, and an MCP server
       restart loses nothing. A card whose ticket is not asked about within 2 min of its last pending answer ends
       "withdrawn — the agent stopped waiting"; no card stays up longer than 15 min. One waiting card at a time: a second
-      batch is refused at once, naming the waiting ticket (`refused: "waiting"`). A late poll gets a refusal that says
+      batch is refused at once, naming the waiting ticket (`refused: "waiting"`), and a Figma toast tells the designer
+      it was refused; the waiting card stays as it is. A late poll gets a refusal that says
       nothing changed. `figma_status` reports the last write's outcome (`lastFigmaWrite`), including one the designer
       answered after the agent stopped asking (`unseen`). A card going up also shows a Figma toast and takes down a
       stale red one. Closing the plugin window or reloading Figma drops a waiting card, applying nothing.

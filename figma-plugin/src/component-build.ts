@@ -30,6 +30,7 @@ import { planUpdate } from "../../bridge/src/tree-diff.ts";
 import { resolveRefs, treeUses, type ResolvedRefs } from "./tree-refs";
 import { setPlannedComponents } from "./batch-plan";
 import type { Change } from "./write-batch";
+import { goneFrom, inDocument, noNode } from "./node-lookup";
 
 export type Owner = ComponentNode | ComponentSetNode;
 const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
@@ -49,7 +50,8 @@ export async function localComponentsNamed(name: string): Promise<Owner[]> {
       }
     } catch { /* a page that will not load holds no component a name could match */ }
   }
-  return out;
+  // One found on a page and deleted at a later page's load is no component of the file (node-lookup.ts): never read.
+  return out.filter(inDocument);
 }
 
 /** What the file has under a component spec's name: nothing (build it), the one a write made (update it), or why the
@@ -77,11 +79,13 @@ export function fileDefs(spec: TreeNodeSpec, refs: ResolvedRefs): FileDef[] {
     if (d.type !== "INSTANCE_SWAP") return { name, type: d.type, defaultValue: d.default };
     const main = refs.components.get(String(d.default));
     if (!main) throw new Error("component '" + String(d.default) + "' was not resolved before the batch ran");
+    if (!inDocument(main)) throw new Error(noNode(main.id, "component")); // deleted since the batch resolved
     const out: FileDef = { name, type: d.type, defaultValue: main.type === "COMPONENT_SET" ? main.defaultVariant.id : main.id };
     if (d.preferredValues) {
       out.preferredValues = d.preferredValues.map((ref) => {
         const c = refs.components.get(ref);
         if (!c) throw new Error("component '" + ref + "' was not resolved before the batch ran");
+        if (!inDocument(c)) throw new Error(noNode(c.id, "component"));
         return { type: c.type, key: c.key };
       });
     }
@@ -266,7 +270,7 @@ export function unwireGoing(p: DefsPlan, consent: () => void, changes: Change[])
     for (const f of PROP_REF_FIELDS) { const v = was[f]; if (v !== undefined && w.unwire.indexOf(f) < 0) next[f] = v; }
     if (sameRefs(was, next)) continue;
     consent();
-    changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label(n), restore() { if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was); } });
+    changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label(n), on: n, restore() { if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was); } });
     if ("componentPropertyReferences" in n) n.componentPropertyReferences = next;
     out.push(n);
   }
@@ -285,7 +289,7 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
   for (const d of p.add) {
     consent();
     const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : undefined);
-    changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label(owner), restore() { owner.deleteComponentProperty(key); } });
+    changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label(owner), on: owner, restore() { owner.deleteComponentProperty(key); } });
     propertyCalled();
     keys.set(d.name, key);
     changed.set(d.name, key);
@@ -298,7 +302,7 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
     // A swap that had no suggestions gets none back (an empty list clears the ones this edit added).
     const back: { defaultValue: string | boolean; preferredValues?: InstanceSwapPreferredValue[] } = { defaultValue: e.was.defaultValue };
     if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
-    changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label(owner), restore() { owner.editComponentProperty(key, back); } });
+    changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label(owner), on: owner, restore() { owner.editComponentProperty(key, back); } });
     propertyCalled();
     keys.set(e.def.name, key);
     changed.set(e.def.name, key);
@@ -309,7 +313,7 @@ export function syncComponent(p: DefsPlan, unwired: readonly SceneNode[], built:
     const was = refsNow(n);
     if (sameRefs(was, r)) return;
     consent();
-    changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label(n), restore() { n.componentPropertyReferences = liveRefs(owner, was); } });
+    changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label(n), on: n, restore() { n.componentPropertyReferences = liveRefs(owner, was); } });
     n.componentPropertyReferences = r;
     touched.add(n);
   };
@@ -349,6 +353,8 @@ export async function orphanWarnings(removed: readonly SceneNode[]): Promise<str
     if (n.removed || n.type !== "COMPONENT" || !n.parent || n.parent.type !== "COMPONENT_SET") continue;
     let count = 0;
     try { count = (await n.getInstancesAsync()).length; } catch { continue; }
+    // Deleted meanwhile (node-lookup.ts): it leaves no instances behind that this write removes, and its name throws.
+    if (!inDocument(n)) continue;
     if (count) out.push("removing variant '" + n.name + "' of '" + n.parent.name + "' leaves " + count + " instance" + (count === 1 ? "" : "s") + " without a main component");
   }
   return out;
@@ -428,9 +434,13 @@ export async function componentImpact(ops: readonly WriteOp[]): Promise<WriteImp
     let instances = 0;
     const mains = found.ours.type === "COMPONENT_SET" ? found.ours.children.filter((k): k is ComponentNode => k.type === "COMPONENT") : [found.ours];
     for (const m of mains) { try { instances += (await m.getInstancesAsync()).length; } catch { /* not counted */ } }
+    // Found before those awaits: deleted or detached at one of them (node-lookup.ts), it is missing, and never read.
+    if (goneFrom(found.ours, (m) => { steps.push({ index, op: op.op, problem: m }); }, "component")) continue;
     // The variants the new table no longer has (its rows dropped), and the instances each leaves without a main.
     const old = readOld(found.ours, componentKey(c.name));
     const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];
+    // Those awaits too (a dropped variant's instances counted): gone at one, it is missing, never "would update".
+    if (goneFrom(found.ours, (m) => { steps.push({ index, op: op.op, problem: m }); }, "component")) continue;
     steps.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
   }
   return steps;

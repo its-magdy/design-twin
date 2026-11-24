@@ -252,6 +252,71 @@ list of merged PRs.
 - The plugin export loses less. An OpenType feature the designer turned off now reaches the IR as `font.openTypeOff`
   (before, only enabled ones survived); each layout grid carries its own variable bindings as `tokens`, on frames and
   grid styles; and an annotation carries its Dev Mode category's label as `category` beside `categoryId`.
+- A write the plugin refuses before anything changes now says so. That covers an image `hash` the file doesn't have,
+  a name that matches nothing, a bad op, Dev Mode, an op that failed and put itself back, and a batch whose file
+  changed while it waited for review. Figma's toast and the plugin window's status line say it was refused, that
+  nothing changed, and why. Before, the toast stayed silent and the window kept showing "Applying edits…". A write
+  that throws now says it could not run. A preview that throws ends its review card as failed, where before the card
+  stayed on "Putting it on the canvas…". An empty batch still says nothing, and the window goes back to the line it
+  showed before. An op the plugin refuses on arrival (a field missing that the server's schema let through) is said the
+  same way. A refusal that came after a library import or an image landed says what landed instead of "nothing
+  changed", in the toast, on the status line and in the error the agent gets. A batch refused before it runs, or a
+  write the designer rejects on its review card, no longer loads its images from disk into Figma first: they are made
+  only when the batch runs, once it resolved and was approved (a preview makes them too, and a card that then ends
+  unapplied says they stay). Unticking "Allow edits" while images load stops before the next one, and an image Figma
+  cannot open stops the images after it. An image a preview loaded is also said when the card is then refused on
+  Apply or on a second preview (the file changed meanwhile), and so is one loaded before an op that failed and put its
+  layers back. A variable or style the batch made itself, and put back when it failed, is no longer counted as an
+  imported library item. A write sent while another waits for review now gets a toast saying it was refused; the
+  waiting card stays as it is. A layer deleted after a preview was put back is now refused on Apply, even when Figma
+  still finds it by id: a deleted main component is kept so its instances and an undo can bring it back, and is not
+  always marked removed, so a write now counts a layer only when it is on a page of the file (a library component,
+  which sits on none, is still found). Before, Apply changed it and said it was applied. The same goes for a layer
+  deleted while the write runs, after it was checked (while its images load, say): that op fails as missing, and the
+  batch is put back and says what stays. Before, it was changed and the write said it was applied. That now holds during
+  an op's own waits too: a patch whose layer goes while its text style is set no longer writes it, and a new tree or a
+  keyed re-send no longer builds into a page or frame that went while a text's style was set; each fails as missing
+  and is put back. Such a layer is also said to be missing, not met with Figma's own "does not exist" read error. A
+  keyed re-send whose reorder Figma refuses partway puts its first moves back, so its "nothing changed" is true. A
+  new tree no longer lands, or counts, a text or a copy's layer that went while a style was set, a `createText` with no
+  parent no longer writes into a page that went while its font loaded, and a keyed re-send no longer silently leaves a
+  deleted layer out of its reorder or reports a layer it changed or built that went meanwhile: each fails as missing.
+  A keyed re-send's removals are checked again after their last wait, so a layer the designer drops into a variant
+  about to be removed refuses the removal instead of going with it. A layer deleted while the write is still being
+  checked (while a page or a font loads) is refused as missing rather than met with Figma's read error. A failed
+  build that Figma will not remove is listed in `applied` and said not to be put back, never "nothing changed"; a
+  layer the batch made that the designer deleted before a put-back counts as put back. An op that works through
+  several layers in turn (a rule's matches, a keyed re-send's new groups, a copy's edited layers) checks each again
+  once the last is done, so one that went at a later one's wait fails the op instead of being reported changed or
+  built. A rule whose page or layer goes while its pages load or its names resolve, a keyed re-send whose named page
+  goes while its result's page loads, and a component that goes between two uses of it are refused as missing (a swap
+  to such a component is no longer applied). A `createText` whose own new text goes while its font loads fails as
+  missing. A failed tree takes back every layer it made, a text Figma would not put in its frame or one the designer
+  moved out of it included, so its "nothing changed" is true; putting back a keyed tree the designer deleted puts the
+  key's earlier result back in the file's index, and a keyed re-send no longer removes or counts a variant that left
+  the document meanwhile. A refusal that lists several problems says what a preview had loaded once, without "nothing was changed".
+  Unticking "Allow edits" while an image preview is on the canvas names the loaded image in the toast and on the
+  status line too, and a refusal whose put-back failed says what stays instead of "Nothing was changed". A change to a
+  layer the designer deleted while the batch ran (before it was put back, or while it was being put back) is no longer
+  listed in `applied` nor called an edit that could not be put back: nothing of it is in the file, and the reply says it
+  went with that layer. A failed tree also takes back a layer of a copy that the designer moved out of the copy. A rule
+  by `instanceOf` counts an instance only while its main component is in the file, an instance of a set whose default
+  variant goes while its swap values resolve takes the set's default as it is then, and a component re-send's dry run
+  says its component is missing when it goes while its instances are counted (or a dropped variant's are). A failed
+  tree, or one put back, never deletes a layer of the designer's that they moved into one of its layers: that layer
+  stays, theirs in it, and the reply says why. A rule by `instanceOf` matches a deleted main component that an instance
+  still has by its exact id or key again (not by its name), and a variant moved out of its set while the rule resolves
+  is no longer counted as the set's. A layer deleted during a put-back, its own or a later one, takes its change with
+  it (never "put back" nor "could not undo"), and rejecting a preview after one of its layers was deleted says so. A
+  keyed copy no longer marks a layer the designer moved into it as the key's, so a later re-send that drops the copy
+  refuses for that layer instead of deleting it. A tree the designer moved into a later tree of the same batch goes
+  back with it, and a put-back refused for a layer it held is tried again once the rest went back, so the reply never
+  gives a stale reason. A preview whose layers were all deleted says nothing of it was put back (on Reject and on the
+  card's Put back), and a Reject after a Put back still says which change went with a deleted layer, even when the
+  last put-back could not all go back. Once "Allow edits" is off, a failed build no longer takes an earlier tree of
+  the batch with it, and a created layer that is gone by the end of a put-back (taken back with another, or deleted)
+  is never listed as applied or said to stay. "Allow edits" turned off before a refused put-back is tried again is said,
+  instead of a reason that may no longer be true.
 
 ## [0.1.6] - 2026-11-02
 

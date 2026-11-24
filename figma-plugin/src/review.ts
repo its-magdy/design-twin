@@ -10,7 +10,8 @@
 // THE CARD lists the batch in plain words (bridge/src/review-card.ts lines, old → new values with colour swatches; the
 // dry run's sentences under a collapsed Details), says why it waited, has a Show me per line and Show all (select and
 // zoom, or pan to where a new frame lands: no undo step), and Apply / Reject with an optional reason that goes back to
-// the agent. ONE card at a time: a write that arrives while one is up is refused at once, naming the waiting ticket.
+// the agent. ONE card at a time: a write that arrives while one is up is refused at once, naming the waiting ticket
+// (Figma's toast tells the designer; the card stays as it is).
 // When it goes up, the last red toast comes down and Figma's toast says a write waits (a minimised window is noticed).
 //
 // PREVIEW ON CANVAS, offered for a source edit or a bulk change (review-policy.ts previewOffered): the batch is applied
@@ -40,6 +41,7 @@ import { editsAllowedNow } from "./edits";
 import { clearErrorToast, toast } from "./toast";
 import type { ReviewCardLine, ReviewEnd, ReviewEndMsg, ReviewMsg, ReviewState, ReviewStateMsg } from "./messages";
 import { errMsg } from "./util";
+import { landedResult, mergeLanded, type Landed } from "./write-batch";
 
 export type { ReviewEnd };
 
@@ -89,6 +91,36 @@ export function countUnreviewed(n: number): void { sinceApproval += n; }
 
 // ---------------------------------------------------------------- the card
 
+/** What putting a preview back came to (writes.ts putBack): `failed`, what stays when not all of it could go back (null
+ *  when all of it went back or went with its layer); `gone`, a sentence for each change that went with a layer the
+ *  designer deleted while it was on the canvas (write-batch.ts goneSentence): nothing of it is left to put back;
+ *  `restored`, how many changes did go back. */
+export interface PutBack { failed: WriteResult | null; gone: readonly string[]; restored: number }
+const BACK: PutBack = { failed: null, gone: [], restored: 0 };
+
+/** What a refusal says of the preview it put back (in "(A preview of it was on the canvas; ….)"): put back, put back but
+ *  for the changes that went with their layers, or nothing of it, when every one did (it says why, never "put back"). */
+function backNote(back: PutBack): string {
+  if (!back.gone.length) return "it was put back";
+  return (back.restored ? "it was put back, but " : "nothing of it was put back: ") + back.gone.join("; ");
+}
+/** What the card says once its Put back button is done (it still waits for an answer). */
+function backState(back: PutBack): string {
+  const n = back.gone.length;
+  if (!n) return "Put back.";
+  if (!back.restored) return "Nothing was put back: the layers it changed were deleted.";
+  return "Put back, but " + n + (n === 1 ? " change went with a deleted layer." : " changes went with deleted layers.");
+}
+/** An earlier put-back of a card's preview (`a`, its Put back button) and a later one (`b`) as one: what went with its
+ *  layers in either; what the later one put back (what a refusal says was, or was not, put back is the later preview). */
+const bothBack = (a: PutBack, b: PutBack): PutBack => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
+/** A put-back that could not all go back (`failed`), after an earlier one of the card's preview (`earlier`, its Put back
+ *  button) found layers deleted: it says those went too. */
+function failedAfter(failed: WriteResult, earlier: PutBack | null): WriteResult {
+  if (!earlier || !earlier.gone.length) return failed;
+  return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+}
+
 /** What writes.ts hands a card: the batch, what it shows, and how to run it. */
 export interface CardInput {
   ops: readonly WriteOp[];
@@ -99,12 +131,14 @@ export interface CardInput {
   details: string[];
   why: string;
   previewable: boolean;
-  /** apply the batch, resolved again against the file as it is now (a scheduled run of its own) */
-  apply(): Promise<WriteResult>;
-  /** apply it as a preview: the result, and how to put it back */
-  preview(): Promise<{ result: WriteResult; putBack: () => Promise<WriteResult | null> }>;
+  /** apply the batch, resolved again against the file as it is now (a scheduled run of its own). `prior`: what the
+   *  card's previews landed (Card.landed), which a refusal or failure of this run says too */
+  apply(prior: Landed): Promise<WriteResult>;
+  /** apply it as a preview: the result, how to put it back, and what it and the previews before it added that nothing
+   *  puts back (`prior`, as for apply) */
+  preview(prior: Landed): Promise<{ result: WriteResult; putBack: () => Promise<PutBack>; landed?: Landed }>;
   /** say what a batch came to (writes.ts announce: Figma's toast and the window's status line) */
-  announce(r: WriteResult): void;
+  announce(r: WriteResult, landed?: Landed): void;
 }
 
 export interface Card {
@@ -112,7 +146,13 @@ export interface Card {
   input: CardInput;
   state: ReviewState;
   /** set while a preview is on the canvas */
-  previewed: { result: WriteResult; putBack: () => Promise<WriteResult | null> } | null;
+  previewed: { result: WriteResult; putBack: () => Promise<PutBack> } | null;
+  /** what its previews loaded or imported (images, library items: writes.ts), which a put-back leaves: a card that ends
+   *  unapplied says so instead of "nothing was changed" */
+  landed: Landed;
+  /** what its Put back button put back so far (null before one), so a refusal after it still says what went with a
+   *  deleted layer, and that nothing of it went back when none did */
+  back: PutBack | null;
   /** every action on the card, one after another */
   chain: Promise<void>;
   /** settles once, with the batch's outcome */
@@ -158,7 +198,7 @@ export function openCard(input: CardInput): Card {
   const ticket = "rv-" + (++seq) + "-" + Math.random().toString(36).slice(2, 7);
   let settle: (r: WriteResult) => void = () => {};
   const outcome = new Promise<WriteResult>((res) => { settle = res; });
-  const card: Card = { ticket, input, state: "waiting", previewed: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: undefined, cap: undefined, opened: Date.now() };
+  const card: Card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, back: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: undefined, cap: undefined, opened: Date.now() };
   current = card;
   card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
   const lines: ReviewCardLine[] = input.lines.map((l, i) => {
@@ -215,7 +255,8 @@ async function end(card: Card, e: Ending): Promise<void> {
       card.input.announce(r);
     } else {
       setState(card, "busy");
-      try { r = await card.input.apply(); } catch (e2) { r = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) }; }
+      // A refusal of the approved run says what the card's previews left too (writes.ts runBatch, from card.landed).
+      try { r = await card.input.apply(card.landed); } catch (e2) { r = landedResult({ ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) }, card.landed); }
     }
     finish(card, r);
     return;
@@ -227,24 +268,31 @@ async function end(card: Card, e: Ending): Promise<void> {
   if (p) {
     if (e.end === "edits-off" || !editsAllowedNow()) {
       post(msg);
-      const r: WriteResult = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
-      card.input.announce(r);
+      const r: WriteResult = landedResult({ ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." }, card.landed);
+      // What the preview loaded is said to the designer too, as it is to the agent.
+      card.input.announce(r, card.landed);
       finish(card, r);
       return;
     }
     setState(card, "busy", "Putting the preview back…");
-    const failed = await p.putBack();
+    const back = await p.putBack();
     card.previewed = null;
     post(msg);
-    if (failed) { card.input.announce(failed); finish(card, failed); return; }
-    const r: WriteResult = { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" };
-    card.input.announce(r);
+    if (back.failed) { const f = landedResult(failedAfter(back.failed, card.back), card.landed); card.input.announce(f, card.landed); finish(card, f); return; }
+    // A change whose layer the designer deleted meanwhile was not put back: it went with that layer, and is said so (an
+    // earlier Put back's too); when every one did, nothing of it was put back, and it says that.
+    const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back ? bothBack(card.back, back) : back) + ".)" }, card.landed);
+    card.input.announce(r, card.landed);
     finish(card, r);
     return;
   }
   post(msg);
-  card.input.announce(refusal);
-  finish(card, refusal);
+  // A preview put back earlier may have left an image or an import: said (landedResult); else word for word as ever. One
+  // whose Put back found layers deleted says what went with them, as the put-back said on the card.
+  const earlier = card.back && card.back.gone.length ? { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back) + ".)" } : refusal;
+  const r = landedResult(earlier, card.landed);
+  card.input.announce(r, card.landed);
+  finish(card, r);
 }
 
 function refusalFor(e: Ending): WriteResult {
@@ -277,16 +325,22 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       if (card.previewed || !card.input.previewable) { setState(card, card.state); return; }
       if (!editsAllowedNow()) { await end(card, { end: "edits-off" }); return; }
       setState(card, "busy", "Putting it on the canvas…");
-      const p = await card.input.preview();
+      // One that throws ends the card as a failed preview (else the card stayed on "Putting it on the canvas…").
+      let p: Awaited<ReturnType<CardInput["preview"]>>;
+      // It is given what the card's earlier previews landed (their put-backs left it): a refusal of this one says it too.
+      try { p = await card.input.preview(card.landed); } catch (e2) { p = { result: landedResult({ ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, card.landed), putBack: async () => BACK, landed: card.landed }; }
       if (!p.result.ok) {
         // It could not land whole (what it did was put back, as for any failed batch): the card ends with that result.
         post({ type: "review-end", id: card.ticket, end: "failed" });
         const r: WriteResult = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
-        card.input.announce(r);
+        card.input.announce(r, p.landed);
         finish(card, r);
         return;
       }
       card.previewed = p;
+      // What it loaded or imported stays whatever the card comes to (a put-back takes back only its layers). A second
+      // preview of the same batch loads the same images and items: the most either loaded, not their sum.
+      if (p.landed) card.landed = mergeLanded(card.landed, p.landed);
       // Show what it changed: the lines' layers and anything it made.
       const ids: string[] = [];
       for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);
@@ -298,15 +352,18 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
     // put-back
     if (!card.previewed) { setState(card, card.state); return; }
     setState(card, "busy", "Putting it back…");
-    const failed = await card.previewed.putBack();
+    const back = await card.previewed.putBack();
     card.previewed = null;
-    if (failed) {
+    if (back.failed) {
       post({ type: "review-end", id: card.ticket, end: "failed" });
-      card.input.announce(failed);
-      finish(card, failed);
+      const f = landedResult(failedAfter(back.failed, card.back), card.landed);
+      card.input.announce(f, card.landed);
+      finish(card, f);
       return;
     }
-    setState(card, "waiting", "Put back. It still waits for your answer.");
+    // Kept for the answer that ends the card: a refusal says what went with a deleted layer too.
+    card.back = card.back ? bothBack(card.back, back) : back;
+    setState(card, "waiting", backState(back) + " It still waits for your answer.");
   });
 }
 

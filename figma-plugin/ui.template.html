@@ -247,7 +247,13 @@
       if (frac == null) { p.className = "indet"; bar.style.width = ""; }
       else { p.className = ""; bar.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + "%"; }
     }
+    // A bridge write's run line, and the line it replaced: a write that ends saying nothing (an empty batch, #206) puts
+    // that line back at run-end, rather than leave "Applying edits…" up once nothing is applying.
+    var WRITE_LINE = "Applying edits requested over the bridge…";
+    var beforeWrite = null;
     function runBegin(info) {
+      var s = $("status");
+      beforeWrite = info.source === "bridge" && info.label === "write" && s ? { text: s.textContent, err: s.className === "err" } : null;
       running = info;
       cancelSent = false;
       var c = $("cancel"); if (c) { c.hidden = false; c.disabled = false; c.textContent = "Cancel export"; }
@@ -255,7 +261,7 @@
       setProgress(null);
       setBusy(true);
       setStatus(info.source !== "bridge" ? "Exporting…"
-        : info.label === "write" ? "Applying edits requested over the bridge…"
+        : info.label === "write" ? WRITE_LINE
         : "Export in progress — requested over the bridge (" + info.label + ")…");
     }
     // Tear the run chrome down. Deliberately does NOT clear `cancelSent`: the main thread sends
@@ -431,6 +437,9 @@
         // asked for it (its caller timed out, stalled out, or disconnected) — no one here clicked
         // anything, so the button's sentence would be a lie. The designer's own cancel wins if both.
         else if (m.abandoned) setStatus("Export cancelled — the caller went away.", true);
+        // A write that said nothing (its line is still the run's own): the line from before it comes back.
+        else if (beforeWrite && $("status") && $("status").textContent === WRITE_LINE) setStatus(beforeWrite.text, beforeWrite.err);
+        beforeWrite = null;
         return;
       }
       if (m.type === "progress") {

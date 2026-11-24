@@ -1051,19 +1051,19 @@
     const problems = [];
     const warnings = [];
     if (!isObj2(spec) || !repeats(spec, 0)) return { tree: spec, problems, warnings, labels };
-    const say = (m) => {
+    const say2 = (m) => {
       problems.push(m);
     };
     const fragments = {};
     const defs = spec.fragments;
     if (defs !== void 0) {
-      if (!isObj2(defs)) say("tree.fragments: must be an object of fragment name \u2192 node spec");
+      if (!isObj2(defs)) say2("tree.fragments: must be an object of fragment name \u2192 node spec");
       else for (const name of Object.keys(defs)) {
         const f = defs[name];
         const at3 = "tree.fragments[" + JSON.stringify(name) + "]";
-        if (!name.trim()) say("tree.fragments: a fragment name must be a non-empty string");
-        else if (!isObj2(f)) say(at3 + ": must be a node spec");
-        else if (f.key !== void 0) say(at3 + ".key: a key names a whole result, so only the spec's root carries it");
+        if (!name.trim()) say2("tree.fragments: a fragment name must be a non-empty string");
+        else if (!isObj2(f)) say2(at3 + ": must be a node spec");
+        else if (f.key !== void 0) say2(at3 + ".key: a key names a whole result, so only the spec's root carries it");
         else put(fragments, name, f);
       }
     }
@@ -1072,27 +1072,27 @@
     let tooMany = false;
     const applyEdits = (layers, edits, path, of, inWhat) => {
       if (!isObj2(edits)) {
-        say(path + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
+        say2(path + ": must be an object of a layer name " + inWhat + " \u2192 the fields it changes");
         return;
       }
       for (const layer of Object.keys(edits)) {
         const fields = edits[layer];
         const at3 = path + "[" + JSON.stringify(layer) + "]";
         if (!isObj2(fields)) {
-          say(at3 + ": must be an object of the fields to change");
+          say2(at3 + ": must be an object of the fields to change");
           continue;
         }
         const hits = layers.filter((l) => l.name === layer);
         if (hits.length !== 1) {
           const names = layers.map((l) => l.name).filter((x) => typeof x === "string");
-          say(at3 + ": " + (hits.length ? "matches " + hits.length + " layers of " + of + "; give them different names" : "no layer of " + of + " has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
+          say2(at3 + ": " + (hits.length ? "matches " + hits.length + " layers of " + of + "; give them different names" : "no layer of " + of + " has that name" + (nearestNames(layer, names).length ? "; closest: " + quoteList(nearestNames(layer, names)) : "")));
           continue;
         }
         const target = hits[0];
         if (!target) continue;
         for (const k of Object.keys(fields)) {
           if (NOT_EDITED.indexOf(k) >= 0) {
-            say(at3 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
+            say2(at3 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
             continue;
           }
           const v = fields[k];
@@ -1104,16 +1104,16 @@
     const expand = (n, path, stack, isRoot) => {
       if (tooMany) return [];
       if (!isObj2(n)) return [n];
-      if (!isRoot && n.fragments !== void 0) say(path + ".fragments: fragments are defined once, on the spec's root");
+      if (!isRoot && n.fragments !== void 0) say2(path + ".fragments: fragments are defined once, on the spec's root");
       if (isRoot && n.type === "COMPONENT_SET") return variants(n, path, stack);
       if (isRoot && n.type === "COMPONENT" && (n.variant !== void 0 || n.rows !== void 0 || n.columns !== void 0)) {
-        say(path + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
+        say2(path + ': a variant table (`variant`, `columns`, `rows`) makes a COMPONENT_SET; give the root `type: "COMPONENT_SET"`, or leave the table out for one component');
         return [];
       }
-      if (n.variant !== void 0) say(path + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
+      if (n.variant !== void 0) say2(path + ".variant: the base of a variant table, which only a COMPONENT_SET root has");
       if (n.use !== void 0) return place2(n, path, stack, isRoot);
       if (n.rows !== void 0) return spread(n, path);
-      if (n.columns !== void 0) say(path + ".columns: names the values of each row in `rows`, which this node does not have");
+      if (n.columns !== void 0) say2(path + ".columns: names the values of each row in `rows`, which this node does not have");
       if (++count2 > maxNodes) {
         tooMany = true;
         return [];
@@ -1133,21 +1133,21 @@
     const place2 = (n, path, stack, isRoot) => {
       const name = n.use;
       if (typeof name !== "string" || !name.trim()) {
-        say(path + ".use: must be a fragment's name");
+        say2(path + ".use: must be a fragment's name");
         return [];
       }
       if (!own(fragments, name)) {
         const near2 = nearestNames(name, Object.keys(fragments));
-        say(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
+        say2(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
         return [];
       }
       if (stack.indexOf(name) >= 0) {
-        say(path + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
+        say2(path + ".use: fragment '" + name + "' uses itself (" + stack.concat(name).map((s) => "'" + s + "'").join(" \u2192 ") + ")");
         return [];
       }
       used.add(name);
-      if (n.children !== void 0) say(path + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
-      if (n.rows !== void 0 || n.columns !== void 0) say(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
+      if (n.children !== void 0) say2(path + ".children: a fragment's layers come from the fragment; change one with `edits` (its layer name \u2192 fields)");
+      if (n.rows !== void 0 || n.columns !== void 0) say2(path + ": `rows` is on an instance (a node with `component`), not on a fragment");
       const body = copy(fragments[name]);
       if (!isObj2(body)) return [];
       if (n.edits !== void 0) applyEdits(layersOf(body, []), n.edits, path + ".edits", "fragment '" + name + "'", "in the fragment");
@@ -1156,7 +1156,7 @@
         if (n[k] !== void 0) put(body, k, copy(n[k]));
       }
       if (isRoot && (body.type === "COMPONENT" || body.type === "COMPONENT_SET")) {
-        say(path + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
+        say2(path + ": a component is written at the root itself (`type`, `name`, its fields), not placed from a fragment");
         return [];
       }
       return expand(body, path + " (fragment '" + name + "')", stack.concat(name), isRoot);
@@ -1166,29 +1166,29 @@
       const base = n.variant;
       const cols = n.columns;
       const rows = n.rows;
-      if (n.children !== void 0) say(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
-      if (n.use !== void 0) say(path + ".use: a component set is not a fragment");
-      if (!isObj2(base)) say(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
+      if (n.children !== void 0) say2(path + ".children: a component set's variants come from its table: `variant` (what every variant starts from), `columns` and one row of values per variant");
+      if (n.use !== void 0) say2(path + ".use: a component set is not a fragment");
+      if (!isObj2(base)) say2(path + ".variant: must be the node spec every variant starts from (a component's own fields and its `children`)");
       else {
-        if (base.type !== void 0 && base.type !== "COMPONENT") say(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
-        if (base.name !== void 0) say(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
-        if (base.handle !== void 0) say(path + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
+        if (base.type !== void 0 && base.type !== "COMPONENT") say2(path + ".variant.type: every variant is a COMPONENT, so the field is not needed");
+        if (base.name !== void 0) say2(path + ".variant.name: a variant's name is its row's values (\"Size=md, State=default\"); leave `name` out");
+        if (base.handle !== void 0) say2(path + '.variant.handle: a handle names one variant, and every variant starts from the base; give it in that row\'s object (`["md", "default", {"handle": "primary"}]`)');
         for (const k of ["key", "props", "use", "rows", "columns", "fragments", "variant", "component"]) {
           const why = VARIANT_FIXED[k];
-          if (base[k] !== void 0 && why !== void 0) say(path + ".variant." + k + ": not on a variant \u2014 " + why);
+          if (base[k] !== void 0 && why !== void 0) say2(path + ".variant." + k + ": not on a variant \u2014 " + why);
         }
       }
-      if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
+      if (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0)) say2(path + '.columns: must be a non-empty list of the variant properties, e.g. ["Size", "State"]');
       else {
-        if (new Set(cols).size !== cols.length) say(path + ".columns: names a property twice");
+        if (new Set(cols).size !== cols.length) say2(path + ".columns: names a property twice");
         const padded = cols.findIndex((c) => String(c).trim() !== c);
-        if (padded >= 0) say(path + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
+        if (padded >= 0) say2(path + ".columns[" + padded + "]: a variant property's name cannot start or end with a space");
         const proto = cols.indexOf("__proto__");
-        if (proto >= 0) say(path + ".columns[" + proto + "]: " + PROTO_NAME);
+        if (proto >= 0) say2(path + ".columns[" + proto + "]: " + PROTO_NAME);
         const odd = cols.findIndex((c) => /[=,]/.test(String(c)));
-        if (odd >= 0) say(path + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
+        if (odd >= 0) say2(path + ".columns[" + odd + `]: a variant property's name cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`);
       }
-      if (!Array.isArray(rows) || !rows.length) say(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
+      if (!Array.isArray(rows) || !rows.length) say2(path + ".rows: must be a non-empty list of rows, each its variant's values in column order (and, last, an optional object of the fields that variant changes)");
       if (problems.length !== before || !isObj2(base) || !Array.isArray(cols) || !Array.isArray(rows)) return [];
       const names = cols.map(String);
       const seen = /* @__PURE__ */ new Map();
@@ -1198,27 +1198,27 @@
         const r = path + ".rows[" + i + "]";
         const shape = "a list of " + names.length + " value" + (names.length === 1 ? "" : "s") + ", one per column (" + quoteList(names) + "), then optionally an object of the fields this variant changes";
         if (!Array.isArray(row)) {
-          say(r + ": must be " + shape);
+          say2(r + ": must be " + shape);
           return;
         }
         const cells = row;
         const last3 = cells[names.length];
         const over = cells.length === names.length + 1 && isObj2(last3) ? last3 : null;
         if (cells.length !== names.length && !over) {
-          say(r + ": must be " + shape);
+          say2(r + ": must be " + shape);
           return;
         }
         const values = cells.slice(0, names.length);
         const bad = values.findIndex((v2) => typeof v2 !== "string" || !v2.trim() || v2.trim() !== v2 || /[=,]/.test(v2));
         if (bad >= 0) {
           const v2 = values[bad];
-          say(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : v2.trim() !== v2 ? "cannot start or end with a space (Figma trims a variant's values)" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
+          say2(r + "[" + bad + "]: " + (typeof v2 !== "string" ? "must be a string (the variant's value of '" + String(names[bad]) + "')" : !v2.trim() ? "must be a non-empty value" : v2.trim() !== v2 ? "cannot start or end with a space (Figma trims a variant's values)" : `cannot hold '=' or ',' (Figma writes a variant's name as "Size=md, State=default")`));
           return;
         }
         const name = names.map((c, j) => c + "=" + String(values[j])).join(", ");
         const dup = seen.get(name);
         if (dup !== void 0) {
-          say(r + ": " + name + " is rows[" + dup + "]'s combination too; each variant needs its own");
+          say2(r + ": " + name + " is rows[" + dup + "]'s combination too; each variant needs its own");
           return;
         }
         seen.set(name, i);
@@ -1232,7 +1232,7 @@
             if (k === "edits" || x === void 0) continue;
             const why = own(VARIANT_FIXED, k) ? VARIANT_FIXED[k] : void 0;
             if (why !== void 0) {
-              say(r + "." + k + ": a row cannot change it \u2014 " + why);
+              say2(r + "." + k + ": a row cannot change it \u2014 " + why);
               continue;
             }
             if (x === null) delete v[k];
@@ -1255,27 +1255,27 @@
     const spread = (n, path) => {
       const at3 = path + ".rows";
       if (n.component === void 0 || n.type !== void 0 && n.type !== "INSTANCE") {
-        say(at3 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
+        say2(at3 + ": a row table is on an instance (a node with `component`); repeat other parts with a fragment (`use`)");
         return [];
       }
-      if (n.handle !== void 0) say(path + ".handle: a handle names one node, and a row table makes several; leave it out");
-      if (n.children !== void 0) say(path + ".children: an instance's layers come from its component");
+      if (n.handle !== void 0) say2(path + ".handle: a handle names one node, and a row table makes several; leave it out");
+      if (n.children !== void 0) say2(path + ".children: an instance's layers come from its component");
       const cols = n.columns;
       if (cols !== void 0 && (!Array.isArray(cols) || !cols.length || !cols.every((c) => typeof c === "string" && c.trim().length > 0))) {
-        say(path + ".columns: must be a non-empty list of property names");
+        say2(path + ".columns: must be a non-empty list of property names");
         return [];
       }
       if (Array.isArray(cols) && new Set(cols).size !== cols.length) {
-        say(path + ".columns: names a property twice");
+        say2(path + ".columns: names a property twice");
         return [];
       }
       const rows = n.rows;
       if (!Array.isArray(rows) || !rows.length) {
-        say(at3 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
+        say2(at3 + ": must be a non-empty list of rows" + (Array.isArray(cols) ? " (each a list of values, one per column)" : " (each an object of property name \u2192 value)"));
         return [];
       }
       if (n.props !== void 0 && !isObj2(n.props)) {
-        say(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
+        say2(path + ".props: must be an object of property name \u2192 value (the values every row shares)");
         return [];
       }
       const base = isObj2(n.props) ? n.props : {};
@@ -1285,24 +1285,24 @@
         let props = null;
         if (Array.isArray(cols)) {
           if (!Array.isArray(row) || row.length !== cols.length) {
-            say(r + ": must be a list of " + cols.length + " value" + (cols.length === 1 ? "" : "s") + ", one per column (" + quoteList(cols.map(String)) + ")");
+            say2(r + ": must be a list of " + cols.length + " value" + (cols.length === 1 ? "" : "s") + ", one per column (" + quoteList(cols.map(String)) + ")");
             return;
           }
           const bad = row.findIndex((v) => !propValue(v));
           if (bad >= 0) {
-            say(r + "[" + bad + "]: must be a string (a variant's value, a text) or a boolean");
+            say2(r + "[" + bad + "]: must be a string (a variant's value, a text) or a boolean");
             return;
           }
           props = {};
           for (const [j, c] of cols.entries()) put(props, String(c), row[j]);
         } else {
           if (!isObj2(row)) {
-            say(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
+            say2(r + ": must be an object of property name \u2192 value (or give `columns` and a list of values)");
             return;
           }
           const bad = Object.keys(row).find((k) => !propValue(row[k]) || !k.trim());
           if (bad !== void 0) {
-            say(r + (bad.trim() ? "." + bad + ": must be a string (a variant's value, a text) or a boolean" : ": has an empty property name"));
+            say2(r + (bad.trim() ? "." + bad + ": must be a string (a variant's value, a text) or a boolean" : ": has an empty property name"));
             return;
           }
           props = row;
@@ -1322,7 +1322,7 @@
       return out;
     };
     const [root] = expand(spec, "tree", [], true);
-    if (tooMany) say("tree: more than " + maxNodes + " nodes once its fragments and rows are expanded \u2014 send a large screen as several trees");
+    if (tooMany) say2("tree: more than " + maxNodes + " nodes once its fragments and rows are expanded \u2014 send a large screen as several trees");
     for (const name of Object.keys(fragments)) if (!used.has(name)) warnings.push("tree.fragments[" + JSON.stringify(name) + "]: no node uses it, so it is not built");
     return { tree: root === void 0 ? {} : root, problems, warnings, labels };
   }
@@ -1824,30 +1824,30 @@
   function fontOf(font) {
     return { family: font && font.family !== void 0 ? font.family : DEFAULT_FONT.family, weight: font && font.weight !== void 0 ? font.weight : DEFAULT_FONT.weight };
   }
-  function tokenProblems(n, t, kind, flex, inFlex, say) {
+  function tokenProblems(n, t, kind, flex, inFlex, say2) {
     const fits = kind === "FRAME" ? FRAME_TOKENS : kind === "TEXT" ? TEXT_TOKENS : INSTANCE_TOKENS;
     const l = isObj4(n.layout) ? n.layout : {};
     for (const k of Object.keys(t)) {
       if (t[k] === void 0 || !settable(TOKEN_RULES, k)) continue;
       const at3 = "`tokens." + k + "`";
       if (fits.indexOf(k) < 0) {
-        say(at3 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
+        say2(at3 + " is not on a" + (kind === "INSTANCE" ? "n " : " ") + kind + " node" + (kind === "INSTANCE" ? " (its content comes from its component)" : ""));
         continue;
       }
-      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say(at3 + ' needs auto-layout on the node (layout.display "flex")');
-      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say(at3 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
-      if (k === "width" && n.widthMode !== void 0) say(at3 + " sizes the node, which `widthMode` already does; leave one out");
-      if (k === "height" && n.heightMode !== void 0) say(at3 + " sizes the node, which `heightMode` already does; leave one out");
-      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say(at3 + " needs auto-layout on the node or its parent");
+      if ((k === "itemSpacing" || k.startsWith("padding")) && !flex) say2(at3 + ' needs auto-layout on the node (layout.display "flex")');
+      if (k === "counterAxisSpacing" && (!flex || l.flexWrap === void 0)) say2(at3 + ' is the gap between wrapped tracks: it needs `layout.flexWrap: "wrap"`');
+      if (k === "width" && n.widthMode !== void 0) say2(at3 + " sizes the node, which `widthMode` already does; leave one out");
+      if (k === "height" && n.heightMode !== void 0) say2(at3 + " sizes the node, which `heightMode` already does; leave one out");
+      if ((k === "minWidth" || k === "maxWidth" || k === "minHeight" || k === "maxHeight") && !flex && !inFlex) say2(at3 + " needs auto-layout on the node or its parent");
     }
     const fills = nameList(t.fills);
     if (t.fills !== void 0 && Array.isArray(n.fills)) {
       const onPaints = n.fills.map((p) => isObj4(p) && isObj4(p.tokens) ? p.tokens.color : void 0);
-      for (const name of fills) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
+      for (const name of fills) if (onPaints.indexOf(name) < 0) say2("`tokens.fills` names '" + name + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
     const strokes = nameList(t.strokes);
     const colors = isObj4(n.strokes) && Array.isArray(n.strokes.colors) ? n.strokes.colors : null;
-    if (t.strokes !== void 0 && colors && colors.length !== strokes.length) say("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
+    if (t.strokes !== void 0 && colors && colors.length !== strokes.length) say2("`tokens.strokes` names " + strokes.length + " variable" + (strokes.length === 1 ? "" : "s") + " for " + colors.length + " stroke colour" + (colors.length === 1 ? "" : "s") + "; give one per colour, in order (or leave `strokes.colors` out)");
   }
   var NODE_ID = /^[^\s:;]+:[^\s:;]+$/;
   var INSTANCE_LAYER = /^I[^\s]*;/;
@@ -1866,18 +1866,18 @@
     type: "a copy's type is its source's, so the field is refused",
     children: "a copy's layers come from its source; change them with `edits` (a layer's name or id \u2192 its fields)"
   };
-  function placeProblems(n, parentFlex, say, warn) {
+  function placeProblems(n, parentFlex, say2, warn) {
     const isRoot = parentFlex === null;
     for (const axis of ["widthMode", "heightMode"]) {
-      if (n[axis] === "fill" && parentFlex !== true) say("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
+      if (n[axis] === "fill" && parentFlex !== true) say2("`" + axis + ': "fill"` needs a parent with auto-layout' + (isRoot ? " (this is the root)" : ""));
     }
     if (parentFlex !== true) {
-      for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say("`" + k + "` needs a parent with auto-layout");
+      for (const k of ["absolute", "grow", "alignSelf"]) if (n[k] !== void 0) say2("`" + k + "` needs a parent with auto-layout");
     }
     if (n.absolute === true && parentFlex === true) {
-      for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
-      if (n.grow === 1) say("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
-      if (n.alignSelf === "stretch") say('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
+      for (const axis of ["widthMode", "heightMode"]) if (n[axis] === "fill") say2("`" + axis + ': "fill"` is not on an `absolute` child (it is out of the auto-layout flow)');
+      if (n.grow === 1) say2("`grow: 1` is not on an `absolute` child (it is out of the auto-layout flow)");
+      if (n.alignSelf === "stretch") say2('`alignSelf: "stretch"` is not on an `absolute` child (it is out of the auto-layout flow)');
     }
     if (parentFlex === true && n.absolute !== true && (n.x !== void 0 || n.y !== void 0)) {
       warn("`x`/`y` have no effect inside auto-layout (add `absolute: true` to place it)");
@@ -1903,14 +1903,14 @@
     };
     let count2 = 0;
     let tooMany = false;
-    const handleOf = (n, say) => {
+    const handleOf = (n, say2) => {
       if (typeof n.handle !== "string" || !n.handle) return;
-      if (seenHandles.has(n.handle)) say("handle '" + n.handle + "' is used twice; a handle names one node");
+      if (seenHandles.has(n.handle)) say2("handle '" + n.handle + "' is used twice; a handle names one node");
       seenHandles.add(n.handle);
     };
     const cloneNode = (n, path, parentFlex) => {
       const before = problems.length;
-      const say = (msg) => {
+      const say2 = (msg) => {
         problems.push(path + ": " + msg);
       };
       const own4 = {};
@@ -1924,21 +1924,21 @@
       problems.push(...objectProblems(own4, CLONE_RULES, path));
       const self = Object.keys(set).length ? patch(set, path) : null;
       if (self) problems.push(...self.problems);
-      if (parentFlex !== null && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
-      else if (n.key !== void 0) say("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
-      if (parentFlex === null && n.hidden !== void 0) say("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
-      placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
+      if (parentFlex !== null && n.key !== void 0) say2("`key` names a whole result, so only the root carries it");
+      else if (n.key !== void 0) say2("a copy as the root cannot carry a `key` yet (a re-send would make a second copy); put the copy in a frame that carries the key");
+      if (parentFlex === null && n.hidden !== void 0) say2("`hidden` on the root copy: the copy shows what its source shows; hide it with a patch once it has landed");
+      placeProblems(n, parentFlex, say2, (m) => summary.warnings.push(path + ": " + m));
       const edits = [];
       if (isObj4(n.edits)) {
         const keys = Object.keys(n.edits).filter((k) => isObj4(n.edits) && n.edits[k] !== void 0);
-        if (!keys.length) say("`edits` is empty; leave it out for an exact copy");
+        if (!keys.length) say2("`edits` is empty; leave it out for an exact copy");
         for (const k of keys) {
           if (!k.trim()) {
-            say("`edits` has an empty layer name");
+            say2("`edits` has an empty layer name");
             continue;
           }
           if (n.clone === k) {
-            say("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields");
+            say2("`edits` names the source itself ('" + k + "'); change the copy with the node's own fields");
             continue;
           }
           const r = patch(n.edits[k], path + ".edits[" + JSON.stringify(k) + "]");
@@ -1946,7 +1946,7 @@
           edits.push(r);
         }
       }
-      handleOf(n, say);
+      handleOf(n, say2);
       if (problems.length !== before) return;
       summary.clones++;
       addRef(summary.sources, n.clone);
@@ -1987,24 +1987,24 @@
       const kind = nodeKind(n);
       if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
       const flex = isFlex(n);
-      const say = (msg) => {
+      const say2 = (msg) => {
         problems.push(path + ": " + msg);
       };
       if (compType !== null && !isRoot && !(isVariant && compType === "COMPONENT")) {
-        say('`type: "' + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
+        say2('`type: "' + compType + "\"` is only on the spec's root: a component is made whole, by a spec of its own (put an instance of it here, by name, once it exists)");
       }
-      if (isVariant && compType !== "COMPONENT") say("a component set holds only its variants (each a COMPONENT)");
+      if (isVariant && compType !== "COMPONENT") say2("a component set holds only its variants (each a COMPONENT)");
       if (isCompRoot) {
-        if (typeof n.name !== "string" || !n.name.trim()) say("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
-        if (n.key !== void 0) say("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
-        if (n.component !== void 0 && n.component !== n.name) say("`component` on a component root is only the read's echo of its own `name`; leave it out");
+        if (typeof n.name !== "string" || !n.name.trim()) say2("a component needs a `name`: a later spec uses it by that name, and sending the same name again updates it in place");
+        if (n.key !== void 0) say2("a component's name is its key: leave `key` out (the same name sent again updates it in place)");
+        if (n.component !== void 0 && n.component !== n.name) say2("`component` on a component root is only the read's echo of its own `name`; leave it out");
         if (n.props !== void 0) problems.push(...propDefsProblems(n.props, path + ".props", columns));
       }
-      if (isVariant && n.props !== void 0) say("a variant's properties are the set's: declare them in the root's `props`");
-      if (isVariant && n.key !== void 0) say("a component's name is its key: leave `key` out");
+      if (isVariant && n.props !== void 0) say2("a variant's properties are the set's: declare them in the root's `props`");
+      if (isVariant && n.key !== void 0) say2("a component's name is its key: leave `key` out");
       if (n.propRefs !== void 0 && isObj4(n.propRefs) && propRefsShape(n.propRefs) === null) {
-        if (!comp) say("`propRefs` wires a layer to a property of the component it is in, so it is only inside a COMPONENT or COMPONENT_SET root");
-        else if (isCompRoot || isVariant) say("`propRefs` wires a layer inside the component to one of its properties; the component itself cannot be wired");
+        if (!comp) say2("`propRefs` wires a layer to a property of the component it is in, so it is only inside a COMPONENT or COMPONENT_SET root");
+        else if (isCompRoot || isVariant) say2("`propRefs` wires a layer inside the component to one of its properties; the component itself cannot be wired");
         else {
           for (const f of PROP_REF_FIELDS) {
             const prop = n.propRefs[f];
@@ -2014,65 +2014,65 @@
             const has2 = comp.defs.get(prop);
             if (has2 === void 0) {
               const near2 = nearestNames(prop, [...comp.defs.keys()]);
-              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+              say2(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
               continue;
             }
             comp.used.add(prop);
-            if (has2 !== want) say(at4 + " names '" + prop + "', a " + has2 + " property; `" + f + "` follows a " + want + " property");
-            if (f === "characters" && kind !== "TEXT") say(at4 + ": only a TEXT layer's text follows a property");
+            if (has2 !== want) say2(at4 + " names '" + prop + "', a " + has2 + " property; `" + f + "` follows a " + want + " property");
+            if (f === "characters" && kind !== "TEXT") say2(at4 + ": only a TEXT layer's text follows a property");
             const def = comp.defaults.get(prop);
-            if (has2 === want && f === "characters" && n.text !== void 0 && n.text !== def) say("`text` " + JSON.stringify(n.text) + " differs from the default of '" + prop + "' (" + JSON.stringify(def) + "), which the text follows (`propRefs.characters`); change the property's default instead");
-            if (has2 === want && f === "visible" && n.hidden !== void 0 && typeof def === "boolean" && n.hidden !== !def) say("`hidden: " + String(n.hidden) + "` differs from the default of '" + prop + "' (" + String(def) + "), which the layer's visibility follows (`propRefs.visible`); change the property's default instead");
-            if (f === "mainComponent" && kind !== "INSTANCE") say(at4 + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
+            if (has2 === want && f === "characters" && n.text !== void 0 && n.text !== def) say2("`text` " + JSON.stringify(n.text) + " differs from the default of '" + prop + "' (" + JSON.stringify(def) + "), which the text follows (`propRefs.characters`); change the property's default instead");
+            if (has2 === want && f === "visible" && n.hidden !== void 0 && typeof def === "boolean" && n.hidden !== !def) say2("`hidden: " + String(n.hidden) + "` differs from the default of '" + prop + "' (" + String(def) + "), which the layer's visibility follows (`propRefs.visible`); change the property's default instead");
+            if (f === "mainComponent" && kind !== "INSTANCE") say2(at4 + ": only an INSTANCE swaps its component (this is a " + String(kind) + ")");
           }
         }
       }
-      if (!isRoot && n.key !== void 0) say("`key` names a whole result, so only the root carries it");
+      if (!isRoot && n.key !== void 0) say2("`key` names a whole result, so only the root carries it");
       if (kind === "TEXT") {
-        if (typeof n.text !== "string") say("a TEXT node needs `text`");
-        for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say("`" + k + "` is not on a TEXT node");
+        if (typeof n.text !== "string") say2("a TEXT node needs `text`");
+        for (const k of ["children", "layout", "clip", "radius", "sizeLimits", "strokesInLayout"]) if (n[k] !== void 0) say2("`" + k + "` is not on a TEXT node");
         if (n.maxLines !== void 0 && n.truncate !== true) summary.warnings.push(path + ": `maxLines` has no effect without `truncate: true`, so it is not set");
       } else if (kind === "FRAME") {
-        for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say("`" + k + "` is only on a TEXT node (give the node `text`)");
+        for (const k of ["text", "font", "autoResize", "truncate", "maxLines"]) if (n[k] !== void 0) say2("`" + k + "` is only on a TEXT node (give the node `text`)");
       } else if (kind === "INSTANCE") {
-        if (n.component === void 0) say("an INSTANCE node needs `component` (a component's name, key or id)");
-        for (const k of Object.keys(n)) if (n[k] !== void 0 && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
+        if (n.component === void 0) say2("an INSTANCE node needs `component` (a component's name, key or id)");
+        for (const k of Object.keys(n)) if (n[k] !== void 0 && !INSTANCE_FIELDS.has(k) && settable(NODE_RULES, k)) say2("`" + k + "` is not on an INSTANCE node (its content comes from its component; set its `props`)");
       }
       if (kind !== "INSTANCE") {
-        for (const k of ["component", "props"]) if (n[k] !== void 0 && !isCompRoot && !(isVariant && k === "props")) say("`" + k + "` is only on an INSTANCE node");
+        for (const k of ["component", "props"]) if (n[k] !== void 0 && !isCompRoot && !(isVariant && k === "props")) say2("`" + k + "` is only on an INSTANCE node");
       }
-      if (isObj4(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say("`styles.text` is only on a TEXT node");
+      if (isObj4(n.styles) && n.styles.text !== void 0 && kind !== "TEXT") say2("`styles.text` is only on a TEXT node");
       for (const axis of ["widthMode", "heightMode"]) {
-        if (n[axis] === "hug" && !flex && kind === "FRAME") say("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
+        if (n[axis] === "hug" && !flex && kind === "FRAME") say2("`" + axis + ': "hug"` needs the node itself to have auto-layout (layout.display "flex") or be TEXT');
       }
-      if (isObj4(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say);
-      placeProblems(n, parentFlex, say, (m) => summary.warnings.push(path + ": " + m));
-      if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say("`sizeLimits` needs auto-layout on the node or its parent");
+      if (isObj4(n.tokens) && kind !== null && kind !== "CLONE") tokenProblems(n, n.tokens, kind, flex, parentFlex === true, say2);
+      placeProblems(n, parentFlex, say2, (m) => summary.warnings.push(path + ": " + m));
+      if (n.sizeLimits !== void 0 && !flex && parentFlex !== true) say2("`sizeLimits` needs auto-layout on the node or its parent");
       if (kind === "FRAME" && n.strokesInLayout === true && !flex) summary.warnings.push(path + ": `strokesInLayout` has no effect without auto-layout on the frame, so it is not set");
       if (isObj4(n.layout) && n.layout.display === "flex") {
         const l = n.layout;
         const column = l.flexDirection === "column";
-        if (l.alignItems === "baseline" && column) say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
+        if (l.alignItems === "baseline" && column) say2('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
         if (l.flexWrap === void 0) {
-          for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs `flexWrap: "wrap"`');
+          for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say2("`layout." + k + '` needs `flexWrap: "wrap"`');
         }
         if (l.flexWrap !== void 0 && (column ? l.rowGap : l.columnGap) !== void 0) {
-          say("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
+          say2("`layout." + (column ? "rowGap" : "columnGap") + "` is the main-axis gap in a wrapping " + (column ? "column" : "row") + "; use `gap`, and `" + (column ? "columnGap" : "rowGap") + "` between the wrapped tracks");
         }
       }
-      if (kind === "TEXT" && isObj4(n.strokes) && n.strokes.weights !== void 0) say("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
+      if (kind === "TEXT" && isObj4(n.strokes) && n.strokes.weights !== void 0) say2("`strokes.weights` (per side) is not on a TEXT node; use `strokes.weight`");
       if (isObj4(n.sizeLimits)) {
         const m = n.sizeLimits;
-        if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say("`sizeLimits.minWidth` is above `maxWidth`");
-        if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say("`sizeLimits.minHeight` is above `maxHeight`");
+        if (isNum(m.minWidth) && isNum(m.maxWidth) && m.minWidth > m.maxWidth) say2("`sizeLimits.minWidth` is above `maxWidth`");
+        if (isNum(m.minHeight) && isNum(m.maxHeight) && m.minHeight > m.maxHeight) say2("`sizeLimits.minHeight` is above `maxHeight`");
       }
       if (isObj4(n.layout) && n.layout.mode === "absolute") {
         const l = n.layout;
-        if (l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
-        else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
+        if (l.display !== void 0) say2('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+        else for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && k !== "width" && k !== "height" && settable(LAYOUT_RULES, k)) say2("`layout." + k + '` is an auto-layout field; `mode: "absolute"` has none (use `display: "flex"`)');
       }
-      if (isObj4(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
-      handleOf(n, say);
+      if (isObj4(n.layout) && n.layout.display === void 0 && n.layout.mode === void 0) say2('`layout` needs `display: "flex"` (or `mode: "absolute"` for none)');
+      handleOf(n, say2);
       if (problems.length === before && kind !== null && kind !== "CLONE") {
         const styled = isObj4(n.styles) && typeof n.styles.text === "string";
         if (kind === "TEXT") {
@@ -2134,16 +2134,16 @@
     const size2 = sized ? " " + sized : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
     const nodes = s.frames + s.texts + s.instances + s.clones;
-    const plural3 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
+    const plural4 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
     const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
-      return e ? " with " + plural3(e, "layer") + " changed" : "";
+      return e ? " with " + plural4(e, "layer") + " changed" : "";
     };
     const c = s.component;
-    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural3(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
+    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural4(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
     const parts = [
-      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural3(s.frames, "frame") + ", " + plural3(s.texts, "text") + (s.instances ? ", " + plural3(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
+      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural4(s.frames, "frame") + ", " + plural4(s.texts, "text") + (s.instances ? ", " + plural4(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
     ];
     if (s.clones > (spec.clone !== void 0 ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
     if (c && c.props.length) parts.push("properties " + quoteList(c.props));
@@ -2155,7 +2155,7 @@
     if (components2.length) parts.push("components " + quoteList(components2));
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
-    if (s.unbound) parts.push(plural3(s.unbound, "raw value") + " left unbound");
+    if (s.unbound) parts.push(plural4(s.unbound, "raw value") + " left unbound");
     const checked = (components2.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
@@ -2250,7 +2250,7 @@
     const summary = { fields: [], refs: { variables: [], textStyles: [] }, unbound: 0 };
     if (!isObj4(set)) return { problems: [path + ': must be an object of the fields to change, e.g. {text: "\u2026"}'], summary };
     const problems = [];
-    const say = (m) => {
+    const say2 = (m) => {
       problems.push(path + ": " + m);
     };
     for (const [k, v] of Object.entries(set)) {
@@ -2268,34 +2268,34 @@
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
     const fields = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
-    if (!fields.length && !problems.length) say("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
+    if (!fields.length && !problems.length) say2("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
     if (problems.length) return { problems, summary };
     const l = isObj4(set.layout) ? set.layout : null;
     if (l) {
-      if (l.mode !== void 0 && l.display !== void 0) say('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
+      if (l.mode !== void 0 && l.display !== void 0) say2('`layout` is either `display: "flex"` or `mode: "absolute"`, not both');
       else if (l.mode !== void 0) {
-        for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && settableIn(PATCH_LAYOUT_RULES).indexOf(k) >= 0) say("`layout." + k + '` is an auto-layout field; `mode: "absolute"` removes auto-layout');
+        for (const k of Object.keys(l)) if (l[k] !== void 0 && k !== "mode" && settableIn(PATCH_LAYOUT_RULES).indexOf(k) >= 0) say2("`layout." + k + '` is an auto-layout field; `mode: "absolute"` removes auto-layout');
       }
-      if (l.alignItems === "baseline" && l.flexDirection === "column") say('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
+      if (l.alignItems === "baseline" && l.flexDirection === "column") say2('`layout.alignItems: "baseline"` works only in a row (Figma refuses it in a column)');
       if (l.flexWrap === "nowrap") {
-        for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say("`layout." + k + '` needs wrapping; `flexWrap: "nowrap"` turns it off');
+        for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0) say2("`layout." + k + '` needs wrapping; `flexWrap: "nowrap"` turns it off');
       }
     }
     const box = isObj4(set.box) ? set.box : null;
-    if (box && box.w !== void 0 && set.widthMode !== void 0 && set.widthMode !== "fixed") say('`box.w` gives a fixed width, which `widthMode: "' + String(set.widthMode) + '"` contradicts; leave one out');
-    if (box && box.h !== void 0 && set.heightMode !== void 0 && set.heightMode !== "fixed") say('`box.h` gives a fixed height, which `heightMode: "' + String(set.heightMode) + '"` contradicts; leave one out');
+    if (box && box.w !== void 0 && set.widthMode !== void 0 && set.widthMode !== "fixed") say2('`box.w` gives a fixed width, which `widthMode: "' + String(set.widthMode) + '"` contradicts; leave one out');
+    if (box && box.h !== void 0 && set.heightMode !== void 0 && set.heightMode !== "fixed") say2('`box.h` gives a fixed height, which `heightMode: "' + String(set.heightMode) + '"` contradicts; leave one out');
     const t = isObj4(set.tokens) ? set.tokens : {};
-    if (t.width !== void 0 && t.width !== null && set.widthMode !== void 0 && set.widthMode !== "fixed") say("`tokens.width` sizes the node, which `widthMode` already does; leave one out");
-    if (t.height !== void 0 && t.height !== null && set.heightMode !== void 0 && set.heightMode !== "fixed") say("`tokens.height` sizes the node, which `heightMode` already does; leave one out");
+    if (t.width !== void 0 && t.width !== null && set.widthMode !== void 0 && set.widthMode !== "fixed") say2("`tokens.width` sizes the node, which `widthMode` already does; leave one out");
+    if (t.height !== void 0 && t.height !== null && set.heightMode !== void 0 && set.heightMode !== "fixed") say2("`tokens.height` sizes the node, which `heightMode` already does; leave one out");
     if (Array.isArray(set.fills) && t.fills !== void 0) {
       const onPaints = set.fills.map((p) => isObj4(p) && isObj4(p.tokens) ? p.tokens.color : void 0);
-      if (t.fills === null) say("`tokens.fills: null` unbinds the node's paints, and `fills` replaces them; give one");
-      else for (const name of typeof t.fills === "string" ? [t.fills] : Array.isArray(t.fills) ? t.fills : []) if (onPaints.indexOf(name) < 0) say("`tokens.fills` names '" + String(name) + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
+      if (t.fills === null) say2("`tokens.fills: null` unbinds the node's paints, and `fills` replaces them; give one");
+      else for (const name of typeof t.fills === "string" ? [t.fills] : Array.isArray(t.fills) ? t.fills : []) if (onPaints.indexOf(name) < 0) say2("`tokens.fills` names '" + String(name) + "', which no paint in `fills` is bound to; bind the paint instead: `fills[i].tokens.color`");
     }
     const st = isObj4(set.strokes) ? set.strokes : null;
     if (st && Array.isArray(st.colors) && t.strokes !== void 0 && t.strokes !== null) {
       const n = typeof t.strokes === "string" ? 1 : Array.isArray(t.strokes) ? t.strokes.length : 0;
-      if (n !== st.colors.length) say("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
+      if (n !== st.colors.length) say2("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
     }
     if (problems.length) return { problems, summary };
     summary.fields = fields;
@@ -6588,7 +6588,17 @@
     return p;
   }
   var str2 = (v) => typeof v === "string" ? v : void 0;
-  async function resolveImages(list, table) {
+  function refuser(problems) {
+    return (uses, message) => {
+      const seen = /* @__PURE__ */ new Set();
+      for (const u of uses) {
+        if (seen.has(u.index)) continue;
+        seen.add(u.index);
+        problems.push({ index: u.index, op: u.op, message: u.path + ": " + message });
+      }
+    };
+  }
+  async function checkImages(list, table) {
     const ids = /* @__PURE__ */ new Map();
     const hashes = /* @__PURE__ */ new Map();
     for (const [index, op] of list.entries()) {
@@ -6613,41 +6623,24 @@
       }
     }
     const problems = [];
-    const refuse2 = (uses, message) => {
-      const seen = /* @__PURE__ */ new Set();
-      for (const u of uses) {
-        if (seen.has(u.index)) continue;
-        seen.add(u.index);
-        problems.push({ index: u.index, op: u.op, message: u.path + ": " + message });
-      }
-    };
-    const out = /* @__PURE__ */ new Map();
-    const images = [];
+    const refuse2 = refuser(problems);
+    const pending2 = [];
     for (const [id, e] of ids) {
       const b64 = table && Object.prototype.hasOwnProperty.call(table, id) ? table[id] : void 0;
       if (b64 === void 0) {
         refuse2(e.uses, "the image '" + e.file + "' came without its bytes (figma_write on the MCP server reads the file and sends them with the batch)");
         continue;
       }
-      let img;
-      try {
-        img = figma.createImage(figma.base64Decode(b64));
-      } catch (err) {
-        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-        continue;
-      }
-      let size2;
-      try {
-        size2 = await img.getSizeAsync();
-      } catch (err) {
-        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
-        continue;
-      }
-      out.set(id, img.hash);
-      images.push({ file: e.file, hash: img.hash, w: size2.width, h: size2.height });
+      pending2.push({ id, file: e.file, b64, uses: e.uses });
     }
     for (const [hash, uses] of hashes) {
-      const img = figma.getImageByHash(hash);
+      let img;
+      try {
+        img = figma.getImageByHash(hash);
+      } catch (err) {
+        refuse2(uses, "Figma could not look up the image with hash '" + hash + "' (" + errMsg(err) + ")");
+        continue;
+      }
       let ok = img !== null;
       if (img) {
         try {
@@ -6658,7 +6651,36 @@
       }
       if (!ok) refuse2(uses, "the file has no image with hash '" + hash + "' (a `hash` names an image already in the file: the `hash` of an image fill in the read, or one a write's reply gave in `images`)");
     }
-    return { problems, made: out, images };
+    return { problems, pending: pending2 };
+  }
+  async function makeImages(pending2, allowed2) {
+    const problems = [];
+    const refuse2 = refuser(problems);
+    const out = /* @__PURE__ */ new Map();
+    const images = [];
+    const hashes = /* @__PURE__ */ new Set();
+    const result = (revoked) => ({ problems, made: out, images, loaded: hashes.size, revoked });
+    for (const e of pending2) {
+      if (!allowed2()) return result(true);
+      let img;
+      try {
+        img = figma.createImage(figma.base64Decode(e.b64));
+      } catch (err) {
+        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
+        break;
+      }
+      hashes.add(img.hash);
+      let size2;
+      try {
+        size2 = await img.getSizeAsync();
+      } catch (err) {
+        refuse2(e.uses, "'" + e.file + "' is not an image Figma can open (" + errMsg(err) + ")");
+        break;
+      }
+      out.set(e.id, img.hash);
+      images.push({ file: e.file, hash: img.hash, w: size2.width, h: size2.height });
+    }
+    return result(!allowed2());
   }
 
   // ../bridge/src/tree-diff.ts
@@ -7026,6 +7048,73 @@
     return { ref: n, spec, children };
   }
 
+  // src/node-lookup.ts
+  async function nodeById(id) {
+    const n = await figma.getNodeByIdAsync(id);
+    return n && inDocument(n) ? n : null;
+  }
+  function inDocument(n) {
+    let top = n;
+    for (; ; ) {
+      if (top.removed) return false;
+      const p = top.parent;
+      if (!p) break;
+      top = p;
+    }
+    if (top.type === "DOCUMENT") return true;
+    return (top.type === "COMPONENT" || top.type === "COMPONENT_SET") && top.remote === true;
+  }
+  function noNode(id, what = "node") {
+    return "no " + what + " with id '" + id + "' (invalid or removed)";
+  }
+  function stillInDocument(n, what = "node", prefix = "") {
+    if (!inDocument(n)) throw new Error(prefix + noNode(n.id, what));
+  }
+  function goneFrom(n, bad, what = "node", prefix = "") {
+    if (inDocument(n)) return false;
+    bad(prefix + noNode(n.id, what));
+    return true;
+  }
+  function goneAmong(nodes, bad, what = "node", prefix = "") {
+    for (const n of nodes) if (goneFrom(n, bad, what, prefix)) return true;
+    return false;
+  }
+  function takeBack(nodes, ours = idsOf(nodes)) {
+    for (const n of nodes) {
+      if (removedWith(n)) continue;
+      const other = otherBelow(n, ours);
+      if (other) throw new Error("'" + n.name + "' (" + n.id + ") now holds '" + other.name + "' (" + other.id + "), a layer the batch did not make, so it stays: taking it back would delete that layer too");
+    }
+    for (const n of nodes) if (!removedWith(n)) n.remove();
+  }
+  function idsOf(nodes) {
+    const out = /* @__PURE__ */ new Set();
+    for (const n of nodes) out.add(n.id);
+    return out;
+  }
+  function otherBelow(n, ours) {
+    if (n.type === "INSTANCE" || !("children" in n)) return null;
+    for (const c of n.children) {
+      if (!ours.has(c.id)) return c;
+      const d = otherBelow(c, ours);
+      if (d) return d;
+    }
+    return null;
+  }
+  function removedWith(n) {
+    for (let a = n; a; a = a.parent) if (a.removed) return true;
+    return false;
+  }
+  function stillToRestore(n, what = "node") {
+    if (removedWith(n)) throw new Error(noNode(n.id, what));
+  }
+  function holding(n, consent2, what = "node", prefix = "") {
+    return () => {
+      stillInDocument(n, what, prefix);
+      consent2();
+    };
+  }
+
   // src/tree-refs.ts
   var noRefs = () => ({ instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() });
   var isKey = (ref2) => /^[0-9a-f]{40}$/i.test(ref2);
@@ -7097,6 +7186,7 @@
       if ("error" in f) return f;
       if ("later" in f) return { error: "component '" + ref2 + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
       const c = f.ok;
+      if (!inDocument(c)) return { error: noNode(c.id, "component") };
       return { ok: c.type === "COMPONENT_SET" ? c.defaultVariant : c };
     };
     const found = /* @__PURE__ */ new Map();
@@ -7124,7 +7214,7 @@
           bad(u, typeMismatch(u, typed));
           continue;
         }
-        imported.push({ use: u, get: f.later });
+        imported.push({ use: u, get: f.later, local: f.local === true });
         continue;
       }
       const err = await accept(u, f.ok, refs2, loadFont, swapOf);
@@ -7140,15 +7230,17 @@
         const late = [];
         const lateReport = reporter(late);
         const once = /* @__PURE__ */ new Map();
-        for (const { use, get } of imported) {
+        let landed = 0;
+        for (const { use, get, local } of imported) {
           const k = use.kind + "\0" + use.ref;
           let got = once.get(k);
           if (!got) {
-            if (!allowed2()) return { problems: [], revoked: true };
+            if (!allowed2()) return { problems: [], revoked: true, imported: landed };
             try {
               got = { item: await get(allowed2) };
+              if (!local) landed++;
             } catch (e) {
-              if (e instanceof ImportsRevoked) return { problems: [], revoked: true };
+              if (e instanceof ImportsRevoked) return { problems: [], revoked: true, imported: landed };
               got = { error: e };
             }
             once.set(k, got);
@@ -7161,7 +7253,7 @@
           if (err) lateReport.bad(use, err);
         }
         lateReport.finish();
-        return { problems: late, revoked: false };
+        return { problems: late, revoked: false, imported: landed };
       }
     };
   }
@@ -7206,13 +7298,13 @@
       return null;
     }
     const c = item;
+    if (!inDocument(c)) return noNode(c.id, "component");
     const node = u.node;
     if (!node) {
       refs2.components.set(u.ref, c);
       return null;
     }
     const set = c.type === "COMPONENT_SET" ? c : c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
-    const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
     let defs;
     try {
       defs = (set || c).componentPropertyDefinitions;
@@ -7223,6 +7315,8 @@
     if ("errors" in mapped) return mapped.errors.join("; ");
     const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
     if (swapErr) return swapErr;
+    if (!inDocument(c)) return noNode(c.id, "component");
+    const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
     const shown4 = set ? variantFor(set, main, mapped.ok, defs) : main;
     if ("missing" in shown4) {
       const have = set ? set.children.filter((k) => k.type === "COMPONENT").map((k) => k.name) : [];
@@ -7396,12 +7490,12 @@
       async findComponent(ref2) {
         let byId = null;
         try {
-          byId = /^[I\d][\d:;I-]*$/.test(ref2) ? await figma.getNodeByIdAsync(ref2) : null;
+          byId = /^[I\d][\d:;I-]*$/.test(ref2) ? await nodeById(ref2) : null;
         } catch {
           byId = null;
         }
         if (byId && (byId.type === "COMPONENT" || byId.type === "COMPONENT_SET")) return { ok: byId };
-        const all = await allComponents();
+        const all = (await allComponents()).filter(inDocument);
         const exact = all.filter((c) => c.key === ref2 || c.id === ref2);
         const first2 = exact[0];
         if (first2 && exact.length === 1) return { ok: first2 };
@@ -7485,6 +7579,7 @@
     }
     if (one.type) types.set(ref2, one.type);
     return {
+      local: true,
       later: async () => {
         if (!one.made) throw new Error(what + " '" + ref2 + "' was to be made by ops[" + one.op + "], which has not run");
         return one.made;
@@ -7560,11 +7655,33 @@
   }
 
   // src/write-batch.ts
-  function batchRefusal(problems) {
+  function batchRefusal(problems, after = {}) {
     const line = (p) => "ops[" + p.index + "] (" + p.op + "): " + p.message;
     const first2 = problems[0];
-    if (problems.length === 1 && first2) return line(first2) + ". Nothing was changed.";
-    return problems.length + " problems \u2014 nothing was changed:\n" + problems.map(line).join("\n");
+    const landed = after.landed && hasLanded(after.landed) ? after.landed : null;
+    const failed = after.failed && after.failed.length ? after.failed : null;
+    if (failed) {
+      const kept = " Not all of the batch could be put back: " + failed.join("; ") + "." + (landed ? " " + landedStays(landed) : "");
+      if (problems.length === 1 && first2) return line(first2) + "." + kept;
+      return problems.length + " problems:\n" + problems.map(line).join("\n") + "\n" + kept.slice(1);
+    }
+    if (problems.length === 1 && first2) return line(first2) + ". " + (landed ? landedNote(landed) : "Nothing was changed.");
+    return problems.length + " problems \u2014 " + (landed ? "no layer was changed, but the batch had already " + landedText(landed) : "nothing was changed") + ":\n" + problems.map(line).join("\n");
+  }
+  function refusalReason(error) {
+    return (error || "unknown error").replace(/\. (Nothing was changed|No layer was changed, but the batch had already [^.:\n]*|The batch had already [^.:\n]*; that stays)\.$/, "").replace(/(\d+ problems) — (nothing was changed|no layer was changed, but the batch had already [^.:\n]*):\n/, "$1: ").replace(/\n/g, "; ");
+  }
+  function batchMade(changes) {
+    const out = /* @__PURE__ */ new Set();
+    for (const c of changes) if (c.owns) for (const n of c.owns) out.add(n.id);
+    return out;
+  }
+  var wentWithNode = (c) => !c.made && c.on !== void 0 && removedWith(c.on);
+  var asBefore = (c) => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
+  var goneSentence = (c) => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+  function staying(changes) {
+    const gone = (c) => wentWithNode(c) || asBefore(c);
+    return { stays: changes.filter((c) => !gone(c)), gone: changes.filter(gone) };
   }
   function restoredRows(changes) {
     const out = [];
@@ -7589,30 +7706,96 @@
   };
   async function restoreChanges(changes, allowed2) {
     const restored = [];
-    const failed = [];
+    const failures = [];
+    let stop = null;
     const left = [...changes].reverse();
+    const ours = batchMade(changes);
+    const undo = (c, e) => "could not undo " + c.what + " (" + errMsg(e) + ")";
     for (const [i, c] of left.entries()) {
       if (!allowed2()) {
-        failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
+        stop = { rest: left.slice(i), tail: "" };
         break;
       }
+      if (wentWithNode(c)) continue;
       try {
-        await c.restore(allowed2);
+        await c.restore(allowed2, ours);
         restored.push(c);
       } catch (e) {
         if (e instanceof RestoreStopped) {
-          failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
+          stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" };
           break;
         }
-        failed.push("could not undo " + c.what + " (" + errMsg(e) + ")");
+        failures.push([c, undo(c, e)]);
       }
     }
-    return { restored, failed };
+    for (let more = !stop; more; ) {
+      more = false;
+      const tried = /* @__PURE__ */ new Set();
+      for (const f of failures) {
+        const c = f[0];
+        if (!c.made || wentWithNode(c)) continue;
+        if (!allowed2()) {
+          stop = { rest: [], tail: "" };
+          break;
+        }
+        try {
+          await c.restore(allowed2, ours);
+          restored.push(c);
+          failures.splice(failures.indexOf(f), 1);
+          more = true;
+          break;
+        } catch (e) {
+          if (e instanceof RestoreStopped) {
+            stop = { rest: [], tail: "" };
+            break;
+          }
+          tried.add(c);
+          f[1] = undo(c, e);
+        }
+      }
+      if (stop) {
+        const untried = failures.filter(([c]) => c.made && !wentWithNode(c) && !tried.has(c));
+        for (const u of untried) failures.splice(failures.indexOf(u), 1);
+        stop.rest = untried.map(([c]) => c);
+      }
+    }
+    const gone = left.filter(wentWithNode);
+    const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+    restored.push(...back);
+    const settled = /* @__PURE__ */ new Set([...gone, ...back]);
+    const failed = failures.filter(([c]) => !settled.has(c)).map(([, s]) => s);
+    const kept = stop ? stop.rest.filter((c) => !settled.has(c)) : [];
+    if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
+    const isGone = new Set(gone);
+    const done = /* @__PURE__ */ new Set([...restored, ...gone]);
+    return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
   }
   function countChanges(changes) {
     const counts = /* @__PURE__ */ new Map();
     for (const c of changes) counts.set(c.kind, (counts.get(c.kind) || 0) + 1);
     return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
+  }
+  var hasLanded = (l) => l.imported > 0 || l.images > 0;
+  var plural3 = (n, what) => n + " " + what + (n === 1 ? "" : "s");
+  function landedText(l) {
+    const parts = [];
+    if (l.images) parts.push("loaded " + plural3(l.images, "image file") + " into Figma");
+    if (l.imported) parts.push("imported " + plural3(l.imported, "library item"));
+    return parts.join(" and ");
+  }
+  var landedNote = (l) => "No layer was changed, but the batch had already " + landedText(l) + ".";
+  var landedStays = (l) => "The batch had already " + landedText(l) + "; that stays.";
+  function mergeLanded(a, b) {
+    return { images: Math.max(a.images, b.images), imported: Math.max(a.imported, b.imported) };
+  }
+  function landedResult(r, l) {
+    if (r.ok || !hasLanded(l) || typeof r.error !== "string") return r;
+    let error = r.error.replace(/Nothing (in the file )?was changed\./, landedNote(l));
+    if (error === r.error && r.error.indexOf(landedText(l)) < 0) {
+      const untouched = !r.applied.length && !(r.restored && r.restored.length);
+      error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
+    }
+    return error === r.error ? r : { ...r, error };
   }
 
   // src/patch.ts
@@ -7648,10 +7831,10 @@
   function unfit(node, set) {
     const kind = [];
     const state = [];
-    const say = (list) => (field, m) => {
+    const say2 = (list) => (field, m) => {
       list.push("set." + field + ": " + m);
     };
-    const fixed = say(kind), now = say(state);
+    const fixed = say2(kind), now = say2(state);
     const what = "'" + node.name + "' is a " + node.type;
     for (const f of ["text", "styles", "autoResize"]) if (set[f] !== void 0 && node.type !== "TEXT") fixed(f, "only on a TEXT node; " + what);
     if (set.props !== void 0 && node.type !== "INSTANCE") fixed("props", "only on an INSTANCE node; " + what);
@@ -7764,7 +7947,7 @@
         continue;
       }
       uses.push(...patchUses(index, set));
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) {
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
@@ -7779,25 +7962,32 @@
     return { targets, problems, imports: r.imports, importCount: r.importCount };
   }
   async function resolvePatchNode(nd, set, later2, loadFont, bad, fontsLater = false) {
+    const gone = () => goneFrom(nd, bad);
+    if (gone()) return null;
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
       bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page");
       return null;
     }
     const node = nd;
+    const name = node.name;
     const fit = unfit(node, set);
     const misfits = later2 ? fit.kind : [...fit.kind, ...fit.state];
     for (const m of misfits) bad(m);
     if (node.type === "TEXT" && !fontsLater) {
-      for (const f of await fontsToKeep(node)) {
+      const fonts = await fontsToKeep(node);
+      if (gone()) return null;
+      for (const f of fonts) {
         const err = await loadFont(f);
-        if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
+        if (err) bad("'" + name + "' uses the " + err + ", so it cannot be changed");
       }
+      if (gone()) return null;
     }
     let props = null;
     if (set.props && node.type === "INSTANCE") {
       const main = await node.getMainComponentAsync();
+      if (gone()) return null;
       if (!main) {
-        bad("set.props: the instance '" + node.name + "' has no main component to read its properties from");
+        bad("set.props: the instance '" + name + "' has no main component to read its properties from");
         return null;
       }
       const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
@@ -7817,6 +8007,7 @@
         bad("set.props: " + swapErr);
         return null;
       }
+      if (gone()) return null;
       if (!later2) {
         const v = await variantProblem(node, mapped.ok);
         if (v) {
@@ -7824,11 +8015,12 @@
           return null;
         }
       }
+      if (gone()) return null;
       props = mapped.ok;
     }
     const bound = /* @__PURE__ */ new Map();
-    for (const k of NUMBER_TOKEN_FIELDS) {
-      const id = boundId(node, k);
+    const boundIds2 = NUMBER_TOKEN_FIELDS.map((k) => boundId(node, k));
+    for (const id of boundIds2) {
       if (!id || bound.has(id)) continue;
       let v = null;
       try {
@@ -7838,8 +8030,9 @@
       }
       if (v) bound.set(id, v);
     }
+    if (gone()) return null;
     if (misfits.length) return null;
-    return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
+    return { node, name, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: /* @__PURE__ */ new Map(), variables: /* @__PURE__ */ new Map(), textStyles: /* @__PURE__ */ new Map(), components: /* @__PURE__ */ new Map() }, bound, ...fontsLater && node.type === "TEXT" ? { fontsLater: true } : {} };
   }
   function canonical3(v) {
     if (v === void 0) return "undefined";
@@ -7952,13 +8145,14 @@
     }
     return out;
   }
-  async function keepText(t) {
-    for (const f of await fontsToKeep(t)) {
-      try {
-        await figma.loadFontAsync(f);
-      } catch {
-        throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
-      }
+  async function keepText(t, still = () => {
+  }) {
+    const fonts = await fontsToKeep(t);
+    still();
+    for (const f of fonts) {
+      const failed = await figma.loadFontAsync(f).then(() => false, () => true);
+      still();
+      if (failed) throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
     }
     const chars = t.characters;
     const runs = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
@@ -7979,7 +8173,11 @@
     }
     const vars = await variablesById(ids);
     return async (allowed2) => {
-      const check = checker(allowed2);
+      const stop = checker(allowed2);
+      const check = () => {
+        stop();
+        stillToRestore(t);
+      };
       if (t.characters !== chars) t.characters = chars;
       if (whole) {
         const style = typeof whole.textStyleId === "string" ? whole.textStyleId : null;
@@ -8052,7 +8250,7 @@
       check();
     };
   }
-  async function snapshot(t) {
+  async function snapshot(t, still) {
     const n = t.node;
     const set = t.set;
     const tok = set.tokens || {};
@@ -8143,7 +8341,7 @@
     });
     for (const link of links) steps2.push(link);
     if (textRuns && n.type === "TEXT") {
-      const text = await keepText(n);
+      const text = await keepText(n, still);
       steps2.push((check) => text(() => {
         check();
         return true;
@@ -8157,7 +8355,11 @@
       }
     });
     return async (allowed2) => {
-      const check = checker(allowed2);
+      const stop = checker(allowed2);
+      const check = () => {
+        stop();
+        stillToRestore(n);
+      };
       const failed = [];
       for (const step of steps2) {
         check();
@@ -8278,6 +8480,8 @@
     }
   }
   async function patchCopy(t, node, consent2) {
+    stillInDocument(node);
+    const name = node.name;
     const on = { ...t, node };
     const fit = unfit(node, t.set);
     const problems = fit.kind.concat(fit.state);
@@ -8285,38 +8489,47 @@
       const v = await variantProblem(node, on.props);
       if (v) problems.push(v);
     }
-    if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+    if (problems.length) throw new Error("'" + name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
     if (on.fontsLater && node.type === "TEXT") {
       for (const f of await fontsToKeep(node)) {
         try {
           await figma.loadFontAsync(f);
         } catch {
-          throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
+          throw new Error("'" + name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
         }
       }
     }
-    consent2();
-    await setFields(on, consent2);
+    const held = holding(node, consent2);
+    held();
+    await setFields(on, held);
   }
   async function applyPatch(t, consent2, allowed2, changes) {
+    const still = () => stillInDocument(t.node);
+    still();
     await checkBeforeApply(t);
+    still();
     if (t.fontsLater && t.node.type === "TEXT") {
-      for (const f of await fontsToKeep(t.node)) {
-        try {
-          await figma.loadFontAsync(f);
-        } catch {
-          throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
-        }
+      const fonts = await fontsToKeep(t.node);
+      still();
+      for (const f of fonts) {
+        const failed = await figma.loadFontAsync(f).then(() => false, () => true);
+        still();
+        if (failed) throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
       }
     }
-    const restore = await snapshot(t);
+    const kept = await snapshot(t, still);
+    still();
     consent2();
+    const restore = async (ok) => {
+      stillToRestore(t.node);
+      await kept(ok);
+    };
     const applied = { id: t.node.id };
     if (t.unbound) applied.unbound = t.unbound;
-    const change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+    const change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", on: t.node, restore };
     changes.push(change);
     try {
-      await setFields(t, consent2);
+      await setFields(t, holding(t.node, consent2));
     } catch (e) {
       if (allowed2()) {
         try {
@@ -8382,7 +8595,7 @@
       const id = s.clone;
       if (id === void 0) continue;
       const at3 = path + ".clone";
-      const nd = await figma.getNodeByIdAsync(id);
+      const nd = await nodeById(id);
       if (!nd) {
         bad(at3 + ": no node with id '" + id + "' (invalid or removed)");
         continue;
@@ -8402,34 +8615,37 @@
       const page = pageOf2(nd);
       if (page) await page.loadAsync();
       const before = { n: 0 };
-      const say = (m) => {
+      const say2 = (m) => {
         before.n++;
         bad(m);
       };
+      const gone = () => goneFrom(nd, say2, "node", at3 + ": ");
+      if (gone()) continue;
       const self = clonePatch(s);
-      const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say(under(path, m)), fontsLater) : null;
+      const selfTarget = self ? await resolvePatchNode(nd, self, true, loadFont, (m) => say2(under(path, m)), fontsLater) : null;
       const edits = [];
       const named2 = /* @__PURE__ */ new Map();
       for (const [ref2, set] of cloneEdits(s)) {
+        if (gone()) break;
         const where = path + ".edits[" + JSON.stringify(ref2) + "]";
         const layer = findLayer(nd, ref2);
         if ("error" in layer) {
-          say(where + ": " + layer.error);
+          say2(where + ": " + layer.error);
           continue;
         }
         let inMain = layer.ok;
         while (inMain && inMain !== nd && inMain.type !== "COMPONENT" && inMain.type !== "COMPONENT_SET") inMain = inMain.parent;
         if (inMain && inMain !== nd) {
-          say(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
+          say2(where + ": " + label(layer.ok) + (inMain === layer.ok ? " is" : " is inside") + " a main component of the source, which the copy holds as an instance; patch that instance once the copy has landed");
           continue;
         }
         const twice = named2.get(layer.ok.id);
         if (twice !== void 0) {
-          say(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
+          say2(where + ": names " + label(layer.ok) + ", which the edit '" + twice + "' names too; give its fields in one edit");
           continue;
         }
         named2.set(layer.ok.id, ref2);
-        const t = await resolvePatchNode(layer.ok, set, true, loadFont, (m) => say(under(where, m)), fontsLater);
+        const t = await resolvePatchNode(layer.ok, set, true, loadFont, (m) => say2(under(where, m)), fontsLater);
         if (t) edits.push(t);
       }
       if (before.n) continue;
@@ -8459,15 +8675,22 @@
     }
     return n;
   }
-  function restamp(n, key, self) {
+  function restamp(n, key, self, ours) {
     if (!self) {
       n.setPluginData(KEY_DATA, key === null ? "" : key);
       n.setPluginData(SPEC_DATA, "");
     }
     if (n.type === "INSTANCE" || !("children" in n)) return;
-    for (const c of n.children) restamp(c, key, false);
+    for (const c of n.children) if (!ours || ours.has(c.id)) restamp(c, key, false, ours);
   }
-  function makeCopy(r, patches) {
+  function copiedLayers(n, out) {
+    if (n.type === "INSTANCE" || !("children" in n)) return;
+    for (const c of n.children) {
+      out.push(c);
+      copiedLayers(c, out);
+    }
+  }
+  function makeCopy(r, patches, strays) {
     const places = [];
     for (const e of r.edits) {
       const p = placeIn(r.source, e.node);
@@ -8492,6 +8715,7 @@
         copy2.remove();
       } catch {
       }
+      if (!copy2.removed) strays.push(copy2);
       throw e;
     }
     return copy2;
@@ -8513,7 +8737,7 @@
       } catch {
       }
     }
-    return out;
+    return out.filter(inDocument);
   }
   async function existingComponent(type, name) {
     const found = await localComponentsNamed(name);
@@ -8529,11 +8753,13 @@
       if (d.type !== "INSTANCE_SWAP") return { name, type: d.type, defaultValue: d.default };
       const main = refs2.components.get(String(d.default));
       if (!main) throw new Error("component '" + String(d.default) + "' was not resolved before the batch ran");
+      if (!inDocument(main)) throw new Error(noNode(main.id, "component"));
       const out = { name, type: d.type, defaultValue: main.type === "COMPONENT_SET" ? main.defaultVariant.id : main.id };
       if (d.preferredValues) {
         out.preferredValues = d.preferredValues.map((ref2) => {
           const c = refs2.components.get(ref2);
           if (!c) throw new Error("component '" + ref2 + "' was not resolved before the batch ran");
+          if (!inDocument(c)) throw new Error(noNode(c.id, "component"));
           return { type: c.type, key: c.key };
         });
       }
@@ -8713,7 +8939,7 @@
       }
       if (sameRefs(was, next)) continue;
       consent2();
-      changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label2(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "unwired layer", what: "the property wiring of " + label2(n), on: n, restore() {
         if ("componentPropertyReferences" in n) n.componentPropertyReferences = liveRefs(p.owner, was);
       } });
       if ("componentPropertyReferences" in n) n.componentPropertyReferences = next;
@@ -8728,7 +8954,7 @@
     for (const d of p.add) {
       consent2();
       const key = owner.addComponentProperty(d.name, d.type, d.defaultValue, d.preferredValues ? { preferredValues: d.preferredValues } : void 0);
-      changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label2(owner), restore() {
+      changes.push({ applied: { id: owner.id }, kind: "added property", what: "the property '" + d.name + "' of " + label2(owner), on: owner, restore() {
         owner.deleteComponentProperty(key);
       } });
       propertyCalled();
@@ -8742,7 +8968,7 @@
       const key = owner.editComponentProperty(e.key, next);
       const back = { defaultValue: e.was.defaultValue };
       if (e.def.type === "INSTANCE_SWAP") back.preferredValues = e.was.preferredValues || [];
-      changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), restore() {
+      changes.push({ applied: { id: owner.id }, kind: "edited property", what: "the property '" + e.def.name + "' of " + label2(owner), on: owner, restore() {
         owner.editComponentProperty(key, back);
       } });
       propertyCalled();
@@ -8755,7 +8981,7 @@
       const was = refsNow(n);
       if (sameRefs(was, r)) return;
       consent2();
-      changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label2(n), restore() {
+      changes.push({ applied: { id: n.id }, kind: "wired layer", what: "the property wiring of " + label2(n), on: n, restore() {
         n.componentPropertyReferences = liveRefs(owner, was);
       } });
       n.componentPropertyReferences = r;
@@ -8802,6 +9028,7 @@
       } catch {
         continue;
       }
+      if (!inDocument(n)) continue;
       if (count2) out.push("removing variant '" + n.name + "' of '" + n.parent.name + "' leaves " + count2 + " instance" + (count2 === 1 ? "" : "s") + " without a main component");
     }
     return out;
@@ -8888,8 +9115,14 @@
         } catch {
         }
       }
+      if (goneFrom(found.ours, (m) => {
+        steps2.push({ index, op: op.op, problem: m });
+      }, "component")) continue;
       const old = readOld(found.ours, componentKey(c.name));
       const orphans = old ? await orphanWarnings(planUpdate(old, checked.expanded).removals) : [];
+      if (goneFrom(found.ours, (m) => {
+        steps2.push({ index, op: op.op, problem: m });
+      }, "component")) continue;
       steps2.push({ index, op: op.op, plan: { create: [], update: [what] }, affects: { instances }, change: "would update " + what + " in place (" + instances + " instance" + (instances === 1 ? "" : "s") + " follow)" + orphans.map((w) => "; " + w).join("") });
     }
     return steps2;
@@ -9213,6 +9446,7 @@
       for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
       for (const c of clones.values()) cloneTargets.push(c);
       if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
+      if (goneFrom(page.ok, bad, "page")) continue;
       await page.ok.loadAsync();
       targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {} });
     }
@@ -9257,12 +9491,18 @@
     if (m.kind === "many") return { error: "page '" + ref2 + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
     return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
   }
-  async function buildTree(t, consent2) {
+  async function buildTree(t, consent2, changes) {
     const comp = componentRootOf(t.spec);
-    if (comp) return buildComponent(t, comp.type, comp.name, consent2);
+    if (comp) return buildComponent(t, comp.type, comp.name, consent2, changes);
     const made2 = newMade(t.refs, t.clones);
     const rootCopy = nodeKind(t.spec) === "CLONE" ? t.clones.get(t.spec) : void 0;
-    const root = rootCopy ? copyOf(rootCopy, t.spec, made2) : figma.createFrame();
+    let root;
+    try {
+      root = rootCopy ? copyOf(rootCopy, t.spec, made2) : figma.createFrame();
+    } catch (e) {
+      discard([], made2, START, "created tree", changes);
+      throw e;
+    }
     const key = t.spec.key;
     const indexWas = key !== void 0 ? readIndex(key) : "";
     let shown4 = true;
@@ -9270,7 +9510,7 @@
       shown4 = rootCopy ? root.visible : t.spec.hidden !== true;
       root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made2);
-      await finish(made2, 0, 0, consent2);
+      await finish(made2, START, holding(t.page, consent2, "page"));
       const { x, y } = placement(t.page, root.id, t.spec);
       t.page.appendChild(root);
       root.x = x;
@@ -9282,27 +9522,32 @@
       }
       markCreated(root);
     } catch (e) {
-      try {
-        root.remove();
-      } catch {
-      }
+      discard([[root, "the unfinished tree"]], made2, START, "created tree", changes);
       throw e;
     }
     const applied = { id: root.id, created: createdCount(made2) };
     if (key !== void 0) applied.key = key;
     if (made2.handles.size) applied.handles = handleRecord(made2.handles);
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
+    const owns = [root, ...madeNodes(made2)];
     return {
       applied,
       kind: "created tree",
       what: "the tree '" + root.name + "' (" + root.id + ")",
-      restore() {
-        root.remove();
+      on: root,
+      made: true,
+      owns,
+      // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
+      // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
+      // One of them holding a layer the batch did not make (the designer's, moved into it): all of it stays (node-lookup.ts
+      // takeBack throws first). One another op of the batch made is the batch's: it goes with it (`ours`).
+      restore(_allowed, ours) {
+        takeBack(owns, ours);
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
       }
     };
   }
-  async function buildComponent(t, type, name, consent2) {
+  async function buildComponent(t, type, name, consent2, changes) {
     const made2 = newMade(t.refs, t.clones);
     const key = componentKey(name);
     const parts = [];
@@ -9335,7 +9580,7 @@
         }
         arrangeVariants(set, t.spec, null);
       }
-      await finish(made2, 0, 0, consent2);
+      await finish(made2, START, holding(t.page, consent2, "page"));
       const keys = addDefs(root, fileDefs(t.spec, t.refs));
       wireAll(made2.pairs, keys);
       const { x, y } = placement(t.page, root.id, t.spec);
@@ -9350,19 +9595,43 @@
       if (keys.size) applied.props = propRecord(keys);
       if (made2.handles.size) applied.handles = handleRecord(made2.handles);
       if (t.summary.unbound) applied.unbound = t.summary.unbound;
-      const built = root;
-      return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
-        built.remove();
+      const owns = [root, ...madeNodes(made2)];
+      return { applied, kind: "created component", what: "the component '" + name + "' (" + root.id + ")", on: root, made: true, owns, restore(_allowed, ours) {
+        takeBack(owns, ours);
       } };
     } catch (e) {
-      for (const p of parts.slice().reverse()) {
-        try {
-          if (!p.removed) p.remove();
-        } catch {
-        }
-      }
+      discard(parts.slice().reverse().map((p) => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made2, START, "created component", changes);
       throw e;
     }
+  }
+  function discard(nodes, made2, from, kind, changes) {
+    const stayed = [];
+    const rest = made2.strays.slice(from.strays).map((c) => [c, "the unfinished copy"]).concat(madeNodes(made2, from).map((c) => [c, "the unfinished layer"]));
+    const all = nodes.concat(rest);
+    const everyNode = all.map(([n]) => n);
+    for (const c of made2.strays.slice(from.strays)) if (!removedWith(c)) copiedLayers(c, everyNode);
+    const own4 = editsAllowedNow() ? batchMade(changes) : /* @__PURE__ */ new Set();
+    for (const n of everyNode) own4.add(n.id);
+    for (const [n, what] of all) {
+      if (inDocument(n) && stayed.some((s) => below(n, s))) continue;
+      try {
+        takeBack([n], own4);
+      } catch {
+      }
+      if (!inDocument(n)) continue;
+      stayed.push(n);
+      const owns = everyNode.filter((m) => !removedWith(m) && below(m, n));
+      changes.push({ applied: { id: n.id }, kind, what: what + " '" + n.name + "' (" + n.id + ")", on: n, made: true, owns, restore(_allowed, ours) {
+        takeBack([n], ours);
+      } });
+    }
+  }
+  function madeNodes(made2, from = START) {
+    return made2.pairs.slice(from.pairs).map(([n]) => n).concat(made2.layers.slice(from.layers));
+  }
+  function below(n, of) {
+    for (let p = n; p; p = p.parent) if (p === of) return true;
+    return false;
   }
   function createdCount(made2) {
     const out = { frames: made2.frames, texts: made2.texts };
@@ -9371,28 +9640,38 @@
     return out;
   }
   function newMade(refs2, clones) {
-    return { frames: 0, texts: 0, instances: 0, clones: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, copies: clones, styled: [], patches: [], pairs: [] };
+    return { frames: 0, texts: 0, instances: 0, clones: 0, handles: /* @__PURE__ */ new Map(), refs: refs2, copies: clones, styled: [], patches: [], pairs: [], layers: [], strays: [] };
   }
-  async function finish(made2, styledFrom, patchesFrom, consent2) {
-    for (const [text, style] of made2.styled.slice(styledFrom)) {
+  var START = { styled: 0, patches: 0, pairs: 0, layers: 0, strays: 0 };
+  var madeFrom = (made2) => ({ styled: made2.styled.length, patches: made2.patches.length, pairs: made2.pairs.length, layers: made2.layers.length, strays: made2.strays.length });
+  function checkMade(made2, from = START) {
+    for (const [n] of made2.pairs.slice(from.pairs)) stillInDocument(n);
+    for (const p of made2.patches.slice(from.patches)) stillInDocument(p.node);
+  }
+  async function finish(made2, from, consent2) {
+    for (const [text, style] of made2.styled.slice(from.styled)) {
+      stillInDocument(text);
       await text.setTextStyleIdAsync(style.id);
       consent2();
     }
-    for (const p of made2.patches.slice(patchesFrom)) {
+    for (const p of made2.patches.slice(from.patches)) {
       await patchCopy(p.target, p.node, consent2);
       consent2();
     }
+    checkMade(made2, from);
   }
   function stampAll(made2, key, from = 0) {
+    const ours = idsOf(madeNodes(made2));
     for (const [n, s] of made2.pairs.slice(from)) {
       stampNode(n, key, s);
-      if (nodeKind(s) === "CLONE") restamp(n, key, true);
+      if (nodeKind(s) === "CLONE") restamp(n, key, true, ours);
     }
   }
   function copyOf(r, s, made2) {
-    const copy2 = makeCopy(r, made2.patches);
+    const copy2 = makeCopy(r, made2.patches, made2.strays);
     made2.clones++;
     made2.pairs.push([copy2, s]);
+    copiedLayers(copy2, made2.layers);
     if (s.handle) made2.handles.set(s.handle, copy2.id);
     return copy2;
   }
@@ -9408,15 +9687,15 @@
         copy2.remove();
       } catch {
       }
+      if (copy2.parent !== parent && !copy2.removed) made2.strays.push(copy2);
       throw e;
     }
     return copy2;
   }
-  async function buildSubtree(spec, parent, made2, consent2) {
+  async function buildSubtree(spec, parent, made2, consent2, changes) {
+    stillInDocument(parent);
     const kind = nodeKind(spec);
-    const first2 = made2.pairs.length;
-    const styledFrom = made2.styled.length;
-    const patchesFrom = made2.patches.length;
+    const from = madeFrom(made2);
     let node = null;
     try {
       if (kind === "TEXT") {
@@ -9434,16 +9713,11 @@
         node = f;
         applyFrame(f, spec, parent, made2);
       }
-      await finish(made2, styledFrom, patchesFrom, consent2);
+      await finish(made2, from, holding(parent, consent2));
     } catch (e) {
-      const made0 = made2.pairs[first2];
+      const made0 = made2.pairs[from.pairs];
       const n = node || (made0 ? made0[0] : null);
-      if (n) {
-        try {
-          n.remove();
-        } catch {
-        }
-      }
+      discard(n ? [[n, "the unfinished node"]] : [], made2, from, "created node", changes);
       throw e;
     }
     if (!node) throw new Error("the subtree '" + String(spec.name) + "' was not built");
@@ -9458,6 +9732,15 @@
   function occupied(c) {
     const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
     return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
+  }
+  function treeGone(t) {
+    if (!inDocument(t.page)) return noNode(t.page.id, "page");
+    if (t.update && !inDocument(t.update.root)) return noNode(t.update.root.id);
+    for (const c of t.clones.values()) {
+      if (!inDocument(c.source)) return noNode(c.source.id);
+      for (const e of c.edits) if (!inDocument(e.node)) return noNode(e.node.id);
+    }
+    return null;
   }
   function landingSpot(t) {
     const at3 = placement(t.page, "", t.spec);
@@ -9614,6 +9897,7 @@
   function applyInstance(s, parent, made2) {
     const r = made2.refs.instances.get(s);
     if (!r) throw new Error("component '" + String(s.component) + "' was not resolved before the batch ran");
+    if (!inDocument(r.main)) throw new Error(noNode(r.main.id, "component"));
     made2.instances++;
     const inst = r.main.createInstance();
     made2.pairs.push([inst, s]);
@@ -9937,7 +10221,7 @@
       if (op.op === "patch" && op.nodeId) {
         let nd = null;
         try {
-          nd = await figma.getNodeByIdAsync(op.nodeId);
+          nd = await nodeById(op.nodeId);
         } catch {
           nd = null;
         }
@@ -10421,7 +10705,7 @@
         if (op.op === "patch") {
           let nd = null;
           try {
-            nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+            nd = op.nodeId ? await nodeById(op.nodeId) : null;
           } catch {
             nd = null;
           }
@@ -10465,9 +10749,9 @@
   async function findResult(key) {
     const id = readIndex(key);
     if (!id) return null;
-    const n = await figma.getNodeByIdAsync(id);
+    const n = await nodeById(id);
     if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
-    return await loadPageOf(n) ? n : null;
+    return await loadPageOf(n) && inDocument(n) ? n : null;
   }
   async function loadPageOf(n) {
     let p = n.parent;
@@ -10546,9 +10830,10 @@
           bad(found.problem);
           continue;
         }
-        if ("ours" in found && await loadPageOf(found.ours)) root = found.ours;
+        if ("ours" in found && await loadPageOf(found.ours) && inDocument(found.ours)) root = found.ours;
       } else root = await findResult(key);
       if (!root) continue;
+      if (op.page !== void 0 && goneFrom(t.page, bad, "page")) continue;
       if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
         bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
         continue;
@@ -10582,9 +10867,11 @@
           if (!Object.keys(u.set).length) u.set = null;
         }
         for (const n of textsFollowing(defs)) {
+          if (goneFrom(n, bad, "node", what + ": ")) continue;
           const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
           for (const f of fonts) {
             const m = await loadFont(f);
+            if (goneFrom(n, bad, "node", what + ": ")) break;
             if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
           }
         }
@@ -10592,13 +10879,14 @@
       const patches = /* @__PURE__ */ new Map();
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
-        const say = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
+        if (goneFrom(u.ref, bad, "node", u.path + ": ")) continue;
+        const say2 = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
         const checked = checkPatch(u.set);
         if (checked.problems.length) {
-          for (const m of checked.problems) say(m);
+          for (const m of checked.problems) say2(m);
           continue;
         }
-        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say);
+        const p = await resolvePatchNode(u.ref, u.set, true, loadFont, say2);
         if (!p) continue;
         p.refs = t.refs;
         patches.set(i, p);
@@ -10608,7 +10896,7 @@
     return { problems };
   }
   function checkRemoval(u, n) {
-    if (n.removed) return;
+    if (!inDocument(n)) return;
     const f = foreignIn(n, u.key);
     if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
   }
@@ -10674,7 +10962,7 @@
       if (x.getPluginData(KEY_DATA) === u.key) n++;
       if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count2(c);
     };
-    for (const x of removalsOf(u)) count2(x);
+    for (const x of removalsOf(u)) if (inDocument(x)) count2(x);
     return n;
   }
   function removalsOf(u) {
@@ -10702,6 +10990,7 @@
       applied: { id: n.id },
       kind: "updated node",
       what: "the place, clipping or size limits of " + label3(n),
+      on: n,
       async restore() {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
         if (size2) {
@@ -10711,6 +11000,7 @@
         for (const [k, id] of bound) {
           if (boundTo(n, k) === id) continue;
           const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+          stillToRestore(n);
           n.setBoundVariable(k, v);
         }
       }
@@ -10741,22 +11031,23 @@
       else if ((f === "x" || f === "y") && s[f] !== void 0 && (onPage || !inFlex || s.absolute === true)) put2(f, s[f]);
     }
   }
+  var childOf = (n, parent) => !n.removed && n.parent === parent;
   function arrange(parent, want) {
     for (const [i, n] of want.entries()) {
-      if (n.parent !== parent) continue;
+      if (!childOf(n, parent)) continue;
       if (parent.children[i] !== n) parent.insertChild(i, n);
     }
   }
-  function applyOrder(o, built, replaced) {
+  function applyOrder(o, built, replaced, allowed2, changes) {
     const parent = o.parent;
     const was = parent.children.slice();
     const nodes = [];
     const olds = [];
     for (const e of o.order) {
       const n = "ref" in e ? e.ref : built[e.build];
-      if (n && n.parent === parent) nodes.push(n);
+      if (n && childOf(n, parent)) nodes.push(n);
       const r = "build" in e ? replaced[e.build] : null;
-      if (r && r.parent === parent) olds.push(r);
+      if (r && childOf(r, parent)) olds.push(r);
     }
     const seq2 = nodes.concat(olds);
     const slots = was.map((c, i) => seq2.indexOf(c) >= 0 ? i : -1).filter((i) => i >= 0);
@@ -10765,15 +11056,29 @@
       const n = seq2[k];
       if (n) want[slot] = n;
     });
-    arrange(parent, want);
-    return {
+    const putBack4 = () => {
+      arrange(parent, was.filter((c) => childOf(c, parent)));
+    };
+    const change = {
       applied: { id: parent.id },
       kind: "reordered frame",
       what: "the order of the layers in " + label3(parent),
-      restore() {
-        arrange(parent, was.filter((c) => c.parent === parent));
-      }
+      on: parent,
+      restore: putBack4
     };
+    changes.push(change);
+    try {
+      arrange(parent, want);
+    } catch (e) {
+      if (allowed2()) {
+        try {
+          putBack4();
+          changes.splice(changes.indexOf(change), 1);
+        } catch {
+        }
+      }
+      throw e;
+    }
   }
   function restamp2(stamps, key, changes) {
     const was = stamps.map((s) => [s.ref, s.ref.getPluginData(SPEC_DATA)]);
@@ -10781,8 +11086,9 @@
       applied: {},
       kind: "stored spec",
       what: "the spec stored on " + stamps.length + " node(s)",
+      // A node deleted since took its stored spec with it: nothing to put back on it (its fields throw when read).
       restore() {
-        for (const [n, v] of was) n.setPluginData(SPEC_DATA, v);
+        for (const [n, v] of was) if (!n.removed) n.setPluginData(SPEC_DATA, v);
       }
     });
     for (const s of stamps) stampNode(s.ref, key, s.spec);
@@ -10793,6 +11099,7 @@
     const unwired = u.component ? unwireGoing(u.component.defs, consent2, changes) : [];
     for (const [i, up] of plan.updates.entries()) {
       const p = u.patches.get(i);
+      stillInDocument(up.ref);
       if (up.extras.length) {
         consent2();
         applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes);
@@ -10802,6 +11109,7 @@
         await applyPatch(p, consent2, allowed2, changes);
       }
       if (up.extras.length) {
+        stillInDocument(up.ref);
         consent2();
         applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes);
       }
@@ -10811,18 +11119,22 @@
     const built = [];
     for (const b of plan.builds) {
       consent2();
-      const from = made2.pairs.length;
-      const n = await buildSubtree(b.spec, b.parent, made2, consent2);
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), restore() {
-        n.remove();
+      const from = madeFrom(made2);
+      const n = await buildSubtree(b.spec, b.parent, made2, consent2, changes);
+      const mine = madeNodes(made2, from);
+      const owns = [n, ...mine];
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), on: n, made: true, owns, restore(_allowed, ours) {
+        takeBack(owns, ours);
       } });
-      stampAll(made2, key, from);
+      stampAll(made2, key, from.pairs);
       built.push(n);
     }
+    for (const k of plan.kept) stillInDocument(k.ref);
+    checkMade(made2);
     const replaced = plan.builds.map((b) => b.replaces);
     for (const o of plan.orders) {
       consent2();
-      changes.push(applyOrder(o, built, replaced));
+      applyOrder(o, built, replaced, allowed2, changes);
     }
     if (plan.stamps.length) {
       consent2();
@@ -10837,7 +11149,7 @@
         const size2 = { w: root.width, h: root.height };
         const at3 = root.children.map((c) => [c, c.x, c.y]);
         const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), restore() {
+        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), on: root, restore() {
           for (const [c, x, y] of at3) if (!c.removed) {
             c.x = x;
             c.y = y;
@@ -11022,7 +11334,7 @@
           }
           case "setFill":
           case "setText": {
-            const n = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+            const n = op.nodeId ? await nodeById(op.nodeId) : null;
             if (!n || n.type === "PAGE" || n.type === "DOCUMENT") break;
             read.name = n.name;
             ids.push(n.id);
@@ -11090,7 +11402,7 @@
           }
           case "createFrame":
           case "createText": {
-            const p = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+            const p = op.parentId ? await nodeById(op.parentId) : null;
             if (p && p.type !== "PAGE" && p.type !== "DOCUMENT") {
               read.parent = p.name;
               ids.push(p.id);
@@ -11143,7 +11455,7 @@
     for (const id of ids.slice(0, SHOW_CAP)) {
       let n = null;
       try {
-        n = await figma.getNodeByIdAsync(id);
+        n = await nodeById(id);
       } catch {
         n = null;
       }
@@ -11165,7 +11477,7 @@
     return nodes.length;
   }
   async function panTo(spot) {
-    const page = await figma.getNodeByIdAsync(spot.pageId);
+    const page = await nodeById(spot.pageId);
     if (page && page.type === "PAGE" && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
     figma.viewport.center = { x: spot.x + 200, y: spot.y + 200 };
   }
@@ -11224,6 +11536,22 @@
   function countUnreviewed(n) {
     sinceApproval += n;
   }
+  var BACK = { failed: null, gone: [], restored: 0 };
+  function backNote(back) {
+    if (!back.gone.length) return "it was put back";
+    return (back.restored ? "it was put back, but " : "nothing of it was put back: ") + back.gone.join("; ");
+  }
+  function backState(back) {
+    const n = back.gone.length;
+    if (!n) return "Put back.";
+    if (!back.restored) return "Nothing was put back: the layers it changed were deleted.";
+    return "Put back, but " + n + (n === 1 ? " change went with a deleted layer." : " changes went with deleted layers.");
+  }
+  var bothBack = (a, b) => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
+  function failedAfter(failed, earlier) {
+    if (!earlier || !earlier.gone.length) return failed;
+    return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+  }
   var current3 = null;
   var seq = 0;
   var FINISHED_KEEP = 20;
@@ -11265,7 +11593,7 @@
     const outcome = new Promise((res) => {
       settle = res;
     });
-    const card = { ticket, input, state: "waiting", previewed: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
+    const card = { ticket, input, state: "waiting", previewed: null, landed: { imported: 0, images: 0 }, back: null, chain: Promise.resolve(), outcome, settle, done: false, waiters: [], idle: void 0, cap: void 0, opened: Date.now() };
     current3 = card;
     card.cap = setTimeout(() => act(card, () => end(card, { end: "timed-out" })), REVIEW_CARD_MAX_MS);
     const lines = input.lines.map((l, i) => {
@@ -11310,19 +11638,19 @@
     if (e.end === "approved" || e.end === "kept") {
       post2(msg);
       sinceApproval = 0;
-      let r;
+      let r2;
       if (e.end === "kept" && card.previewed) {
-        r = card.previewed.result;
-        card.input.announce(r);
+        r2 = card.previewed.result;
+        card.input.announce(r2);
       } else {
         setState(card, "busy");
         try {
-          r = await card.input.apply();
+          r2 = await card.input.apply(card.landed);
         } catch (e2) {
-          r = { ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) };
+          r2 = landedResult({ ok: false, applied: [], error: "the approved write could not run: " + errMsg(e2) }, card.landed);
         }
       }
-      finish2(card, r);
+      finish2(card, r2);
       return;
     }
     const refusal = refusalFor(e);
@@ -11330,28 +11658,31 @@
     if (p) {
       if (e.end === "edits-off" || !editsAllowedNow()) {
         post2(msg);
-        const r2 = { ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." };
-        card.input.announce(r2);
-        finish2(card, r2);
+        const r3 = landedResult({ ok: false, applied: p.result.applied, refused: "edits-off", error: "'Allow edits' was turned off while a preview of this write was on the canvas, so the preview stays applied (listed in `applied`); nothing was put back." }, card.landed);
+        card.input.announce(r3, card.landed);
+        finish2(card, r3);
         return;
       }
       setState(card, "busy", "Putting the preview back\u2026");
-      const failed = await p.putBack();
+      const back = await p.putBack();
       card.previewed = null;
       post2(msg);
-      if (failed) {
-        card.input.announce(failed);
-        finish2(card, failed);
+      if (back.failed) {
+        const f = landedResult(failedAfter(back.failed, card.back), card.landed);
+        card.input.announce(f, card.landed);
+        finish2(card, f);
         return;
       }
-      const r = { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; it was put back.)" };
-      card.input.announce(r);
-      finish2(card, r);
+      const r2 = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back ? bothBack(card.back, back) : back) + ".)" }, card.landed);
+      card.input.announce(r2, card.landed);
+      finish2(card, r2);
       return;
     }
     post2(msg);
-    card.input.announce(refusal);
-    finish2(card, refusal);
+    const earlier = card.back && card.back.gone.length ? { ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back) + ".)" } : refusal;
+    const r = landedResult(earlier, card.landed);
+    card.input.announce(r, card.landed);
+    finish2(card, r);
   }
   function refusalFor(e) {
     if (e.end === "rejected") return { ok: false, applied: [], refused: "rejected", error: rejectedMessage(e.reason), ...e.reason !== void 0 ? { reason: e.reason } : {} };
@@ -11381,15 +11712,21 @@
           return;
         }
         setState(card, "busy", "Putting it on the canvas\u2026");
-        const p = await card.input.preview();
+        let p;
+        try {
+          p = await card.input.preview(card.landed);
+        } catch (e2) {
+          p = { result: landedResult({ ok: false, applied: [], error: "the preview could not run: " + errMsg(e2) }, card.landed), putBack: async () => BACK, landed: card.landed };
+        }
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
           const r = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
-          card.input.announce(r);
+          card.input.announce(r, p.landed);
           finish2(card, r);
           return;
         }
         card.previewed = p;
+        if (p.landed) card.landed = mergeLanded(card.landed, p.landed);
         const ids = [];
         for (const s of card.input.shows) for (const x of s.ids) if (ids.length < SHOW_CAP) ids.push(x);
         for (const a of p.result.applied) if (a.id && ids.length < SHOW_CAP) ids.push(a.id);
@@ -11406,15 +11743,17 @@
         return;
       }
       setState(card, "busy", "Putting it back\u2026");
-      const failed = await card.previewed.putBack();
+      const back = await card.previewed.putBack();
       card.previewed = null;
-      if (failed) {
+      if (back.failed) {
         post2({ type: "review-end", id: card.ticket, end: "failed" });
-        card.input.announce(failed);
-        finish2(card, failed);
+        const f = landedResult(failedAfter(back.failed, card.back), card.landed);
+        card.input.announce(f, card.landed);
+        finish2(card, f);
         return;
       }
-      setState(card, "waiting", "Put back. It still waits for your answer.");
+      card.back = card.back ? bothBack(card.back, back) : back;
+      setState(card, "waiting", backState(back) + " It still waits for your answer.");
     });
   }
   async function showLines(id, index) {
@@ -11521,7 +11860,7 @@
       };
       const nodeId = op.nodeId || "";
       const ref2 = op.collection || "";
-      const nd = await figma.getNodeByIdAsync(nodeId);
+      const nd = await nodeById(nodeId);
       let node = null;
       if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
       else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");
@@ -11581,6 +11920,7 @@
   }
   function applyMode(t) {
     const { node, collection, modeId } = t;
+    stillInDocument(node);
     const prev = (node.explicitVariableModes || {})[collection.id];
     if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
     else node.setExplicitVariableModeForCollection(collection, modeId);
@@ -11588,6 +11928,7 @@
       applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
       kind: "variable mode change",
       what: "the '" + collection.name + "' mode on node " + node.id,
+      on: node,
       restore() {
         if (prev === void 0) node.clearExplicitVariableModeForCollection(collection);
         else node.setExplicitVariableModeForCollection(collection, prev);
@@ -11613,6 +11954,10 @@
     if (typeof p.loadAsync === "function") await p.loadAsync();
   }
   async function layersIn(rule, bad, selected) {
+    const scoped = await scopeLayers(rule, bad, selected);
+    return goneAmong(scoped.hits.map((h) => h.node), bad, "layer") ? { hits: [] } : scoped;
+  }
+  async function scopeLayers(rule, bad, selected) {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     const walk = (n, page) => {
@@ -11630,7 +11975,7 @@
         for (const id of selected) {
           let n = null;
           try {
-            n = await figma.getNodeByIdAsync(id);
+            n = await nodeById(id);
           } catch {
             n = null;
           }
@@ -11641,6 +11986,7 @@
         bad('scope "selection": ' + (selected ? "the selected layers it looked in are gone" : 'nothing is selected in Figma \u2014 select the layers to look in, or use "page" or "file"'));
         return { hits: out };
       }
+      if (goneAmong(sel, bad, "layer")) return { hits: out };
       for (const n of sel) if (!inSource(n)) walk(n, pageOf3(n) || figma.currentPage);
       return { hits: out, selection: sel.map((n) => n.id) };
     }
@@ -11665,19 +12011,23 @@
         bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
         continue;
       }
+      if (goneFrom(p, bad, "page")) continue;
       for (const k of p.children) walk(k, p);
     }
     return { hits: out };
   }
-  async function ownersOf(n) {
-    let main = null;
+  async function mainOf2(n) {
     try {
-      main = await n.getMainComponentAsync();
+      return await n.getMainComponentAsync();
     } catch {
-      main = null;
+      return null;
     }
-    if (!main) return [];
-    return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
+  }
+  function ownersNow(main) {
+    if (!main || removedWith(main)) return { live: [], retained: null };
+    if (!inDocument(main)) return { live: [], retained: main };
+    const set = main.parent;
+    return { live: set && set.type === "COMPONENT_SET" ? [main, set] : [main], retained: null };
   }
   async function matchesOf(rule, layers, bad) {
     const w = rule.where;
@@ -11697,6 +12047,7 @@
         }
         if (v) pool.set(id, v);
       }
+      if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
       const m = matchByName(w.variable, [...pool.values()], (v) => v.name, (v) => [v.id, v.key]);
       if (m.kind === "one") variableId = m.item.id;
       else if (m.kind === "many") {
@@ -11710,14 +12061,25 @@
     const owners = /* @__PURE__ */ new Map();
     let ownerId = null;
     if (w.instanceOf !== void 0) {
-      const pool = /* @__PURE__ */ new Map();
+      const mains = /* @__PURE__ */ new Map();
       for (const h of layers) {
         if (h.node.type !== "INSTANCE") continue;
-        const os = await ownersOf(h.node);
-        owners.set(h.node.id, os);
-        for (const o of os) pool.set(o.id, o);
+        mains.set(h.node.id, await mainOf2(h.node));
       }
-      const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
+      if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
+      const pool = /* @__PURE__ */ new Map();
+      const retained = /* @__PURE__ */ new Map();
+      for (const [id, main] of mains) {
+        const now = ownersNow(main);
+        owners.set(id, now.retained ? [now.retained] : now.live);
+        for (const o of now.live) pool.set(o.id, o);
+        if (now.retained) retained.set(now.retained.id, now.retained);
+      }
+      const ref2 = w.instanceOf;
+      const byExact = (c) => c.id === ref2 || c.key === ref2;
+      const kept = [...retained.values()].filter(byExact);
+      const keptOne = kept.length === 1 && ![...pool.values()].some(byExact) ? kept[0] : void 0;
+      const m = keptOne ? { kind: "one", item: keptOne } : matchByName(ref2, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
       if (m.kind === "one") ownerId = m.item.id;
       else if (m.kind === "many") {
         bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of \u2014 pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", "));
@@ -11840,7 +12202,7 @@
           continue;
         }
         misfits++;
-        if (named2.length < RULE_SAMPLES) named2.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+        if (named2.length < RULE_SAMPLES) named2.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage && inDocument(h.page) ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
       }
       if (misfits) {
         bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch \u2014 narrow the rule (another kind, a name) or the scope: " + named2.join(" | ") + (misfits > named2.length ? " | \u2026" : ""));
@@ -12616,8 +12978,8 @@
       applied,
       kind: "created style table",
       what: "the styles of a createStyles table",
-      async restore(allowed2) {
-        for (const e of edits.slice().reverse()) await e.restore(allowed2);
+      async restore(allowed2, ours) {
+        for (const e of edits.slice().reverse()) await e.restore(allowed2, ours);
         for (const st of made2.slice().reverse()) {
           if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
           st.remove();
@@ -12779,7 +13141,7 @@
       const bad = (message) => {
         problems.push({ index, op: op.op, message });
       };
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) {
         bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)");
         continue;
@@ -12802,7 +13164,7 @@
         deletes.set(index, { node });
         continue;
       }
-      const pd = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+      const pd = op.parentId ? await nodeById(op.parentId) : null;
       if (!pd) {
         bad("no parent with id '" + String(op.parentId) + "' (invalid or removed)");
         continue;
@@ -12812,6 +13174,7 @@
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
+      if (goneFrom(node, bad) || goneFrom(pd, bad, "parent")) continue;
       if (!changesBefore2(index)) {
         const wrong = placeProblem(node, pd, op.index);
         if (wrong) {
@@ -12824,11 +13187,14 @@
     return { moves, deletes, problems };
   }
   function checkDelete(t) {
+    stillInDocument(t.node);
     const foreign = foreignBelow(t.node);
     if (foreign) throw new Error(holds2(t.node, foreign));
   }
   function applyMove(t) {
     const { node, parent } = t;
+    stillInDocument(node);
+    stillInDocument(parent, "parent");
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
@@ -12843,6 +13209,7 @@
       applied,
       kind: "moved node",
       what: "the move of " + label4(node),
+      on: node,
       restore() {
         from.insertChild(Math.min(at3, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
         if ((node.width !== w || node.height !== h) && "resize" in node) node.resize(w, h);
@@ -12903,15 +13270,19 @@
     const fonts = len > 0 ? node.getRangeAllFontNames(0, len) : node.fontName !== figma.mixed ? [node.fontName] : [];
     await Promise.all(fonts.map((f) => figma.loadFontAsync(f)));
   }
+  var parentGone = (parentId) => "parent '" + parentId + "' not found (invalid or removed id)";
   async function resolveParent(parentId) {
     if (!parentId) return figma.currentPage;
-    const p = await figma.getNodeByIdAsync(parentId);
-    if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
+    const p = await nodeById(parentId);
+    if (!p) throw new Error(parentGone(parentId));
     if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
     for (let a = p; a; a = a.parent) {
       if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
     }
-    if (p.type === "PAGE") await p.loadAsync();
+    if (p.type === "PAGE") {
+      await p.loadAsync();
+      if (!inDocument(p)) throw new Error(parentGone(parentId));
+    }
     return p;
   }
   var EditsRevoked = class extends Error {
@@ -12921,8 +13292,8 @@
   }
   function createdNode(n) {
     markCreated(n);
-    return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", restore() {
-      n.remove();
+    return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: [n], restore(_allowed, ours) {
+      takeBack([n], ours);
     } };
   }
   async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style, rule }, changes) {
@@ -12959,15 +13330,24 @@
           await figma.loadFontAsync(t.fontName);
         } catch (e) {
           if (editsAllowedNow()) {
-            t.remove();
+            takeBack([t]);
             changes.pop();
           }
           throw e;
         }
         if (!editsAllowedNow()) {
-          t.remove();
+          takeBack([t]);
           changes.pop();
           consent();
+        }
+        if (!inDocument(parent)) {
+          takeBack([t]);
+          changes.pop();
+          throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page"));
+        }
+        if (!inDocument(t)) {
+          changes.pop();
+          throw new Error(noNode(t.id));
         }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
@@ -12975,21 +13355,22 @@
         parent.appendChild(t);
         return change.applied;
       }
-      // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or
+      // setFill/setText THROW rather than no-op. nodeById resolves to null for an invalid or
       // removed id (and for invisible instance children when skipInvisibleInstanceChildren is on), and
       // not every node type carries fills/characters. Returning {id} in those cases reported a write
       // that never happened — over MCP the agent reads that as success and builds on a false premise.
       case "setFill": {
-        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+        const nd = op.nodeId ? await nodeById(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
         const paint = solidPaint(op.color, "setFill color");
         consent();
         if (nd.type === "TEXT") {
-          const restore = await keepText(nd);
+          const restore = await keepText(nd, () => stillInDocument(nd, "node", "setFill: "));
+          stillInDocument(nd, "node", "setFill: ");
           consent();
           nd.fills = [paint];
-          const change2 = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+          const change2 = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
           changes.push(change2);
           return change2.applied;
         }
@@ -13001,6 +13382,7 @@
           applied: ifDefined("id", op.nodeId),
           kind: "fill change",
           what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+          on: nd,
           // The paints, then the paint style they came from (setting paints detaches it).
           async restore(allowed2) {
             target.fills = old;
@@ -13014,15 +13396,18 @@
         return change.applied;
       }
       case "setText": {
-        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+        const nd = op.nodeId ? await nodeById(op.nodeId) : null;
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
+        const still = () => stillInDocument(nd, "node", "setText: ");
+        still();
         consent();
-        const restore = await keepText(nd);
+        const restore = await keepText(nd, still);
+        still();
         consent();
         nd.characters = op.text || "";
-        const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
+        const change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
         changes.push(change);
         return change.applied;
       }
@@ -13040,9 +13425,11 @@
       // tree lands whole or not at all.
       case "createTree": {
         if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
+        const gone = treeGone(tree);
+        if (gone !== null) throw new Error(gone);
         consent();
         if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
-        const change = await buildTree(tree, consent);
+        const change = await buildTree(tree, consent, changes);
         changes.push(change);
         return change.applied;
       }
@@ -13058,13 +13445,21 @@
       case "patchWhere": {
         if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
         const group = {};
+        const named2 = (t, e) => new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
         for (const t of rule.matches) {
           consent();
           try {
             (await applyPatch(t, consent, editsAllowedNow, changes)).group = group;
           } catch (e) {
             if (e instanceof EditsRevoked) throw e;
-            throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+            throw named2(t, e);
+          }
+        }
+        for (const t of rule.matches) {
+          try {
+            stillInDocument(t.node);
+          } catch (e) {
+            throw named2(t, e);
           }
         }
         const first2 = rule.matches[0];
@@ -13113,19 +13508,29 @@
     const r = await runBatch(list, images, "submit", NO_EXPECT);
     return "card" in r ? r : { done: r.result };
   }
+  var landedOf = (out) => out.prior ? mergeLanded(out.prior, out.landed) : out.landed;
   var NO_EXPECT = /* @__PURE__ */ new Map();
-  async function runBatch(list, images, mode, expect) {
-    const out = { changes: [], layers: 0 };
+  async function runBatch(list, images, mode, expect, prior) {
+    const out = { changes: [], layers: 0, landed: { imported: 0, images: 0 }, prior };
+    const landed = () => landedOf(out);
     if (list.length) commitUndo();
-    const r = await gatedWrites(list, images, mode, out, expect);
+    let r;
+    try {
+      r = await gatedWrites(list, images, mode, out, expect);
+    } catch (e) {
+      if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(landed()));
+      throw e;
+    }
     if (list.length) commitUndo();
     if ("card" in r) return r;
-    if (mode !== "preview" && r.refused !== "waiting") announce(r);
+    const all = landed();
+    r = landedResult(r, all);
+    if (mode !== "preview" && list.length) announce(r, all);
     if (mode === "submit" && list.length && r.refused !== "waiting") {
       rememberWrite(r);
       if (r.applied.length) countUnreviewed(out.layers);
     }
-    return { result: r, changes: out.changes };
+    return { result: r, changes: out.changes, landed: all };
   }
   function commitUndo() {
     try {
@@ -13134,20 +13539,40 @@
       console.error("[export] figma.commitUndo failed:", e);
     }
   }
-  function announce(r) {
+  function announce(r, landed) {
     const n = r.applied.length;
     const edits = n + " edit" + (n === 1 ? "" : "s");
+    const some = landed && hasLanded(landed) ? landed : null;
     let text = null;
-    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
-    else if (r.refused === "rejected") text = "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
+    if (r.refused === "waiting") {
+      say(WAITING, 0, false, false);
+      return;
+    }
+    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "") : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+    else if (r.refused === "rejected") text = some ? "Design Twin did not apply the edit request \u2014 it was rejected. No layer changed, but its preview had already " + landedText(some) + "." : "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
-    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
+    else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed" + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
+    else if (!r.ok) text = some ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
     if (text === null) return;
-    toast(text, !r.ok);
-    const m = { type: "writes", applied: n, ok: r.ok, text };
+    say(text, n, r.ok);
+  }
+  var REFUSED = "Design Twin refused an edit request \u2014 nothing changed: ";
+  var WAITING = "Design Twin refused another edit request while one waits for your review \u2014 nothing changed.";
+  function announceRefused(error) {
+    say(REFUSED + refusalReason(error), 0, false);
+  }
+  function announceWaiting() {
+    toast(WAITING, true);
+  }
+  function say(text, applied, ok, toasts = true) {
+    if (toasts) toast(text, !ok);
+    const m = { type: "writes", applied, ok, text };
     figma.ui.postMessage(m);
+  }
+  function announceThrown(e, landed) {
+    say(landed ? "Design Twin could not finish an edit request: " + errMsg(e) + " \u2014 some of it may be in the file." : "Design Twin could not run an edit request \u2014 nothing changed: " + errMsg(e), 0, false);
   }
   async function gatedWrites(list, images, mode, out, expect) {
     try {
@@ -13180,8 +13605,7 @@
     }
     const badTable = imageTableError(images);
     if (badTable !== null) return { ok: false, applied, error: badTable + ". Nothing was changed." };
-    const imgs = await resolveImages(list, images);
-    setBatchImages(imgs.made);
+    const imgs = await checkImages(list, images);
     const resolveBatch = async () => {
       setBatchPlan(null);
       const creates2 = await resolveCreateOps(list);
@@ -13214,7 +13638,7 @@
     const firstProblem = problems[0];
     if (firstProblem) {
       const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
-      return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
+      return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems, { landed: landedOf(out) }) };
     }
     if (mode === "submit" && list.length) {
       const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
@@ -13248,20 +13672,30 @@
           why: decision.reason,
           previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
           // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
-          apply: () => queueWork(async () => {
-            const r = await runBatch(list, images, "approved", shown4);
+          apply: (prior) => queueWork(async () => {
+            const r = await runBatch(list, images, "approved", shown4, prior);
             return "card" in r ? notApplied() : r.result;
           }),
-          preview: () => queueWork(async () => {
-            const r = await runBatch(list, images, "preview", shown4);
-            if ("card" in r) return { result: notApplied(), putBack: async () => null };
+          preview: (prior) => queueWork(async () => {
+            const r = await runBatch(list, images, "preview", shown4, prior);
+            if ("card" in r) return { result: notApplied(), putBack: async () => ({ failed: null, gone: [], restored: 0 }) };
             const changes2 = r.changes;
-            return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)) };
+            return { result: r.result, putBack: () => queueWork(() => putBack3(changes2)), landed: r.landed };
           }),
           announce
         });
         return { card };
       }
+    }
+    let madeImages = [];
+    if (imgs.pending.length) {
+      const m = await makeImages(imgs.pending, editsAllowedNow);
+      out.landed.images += m.loaded;
+      if (m.revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+      setBatchImages(m.made);
+      madeImages = m.images;
+      const firstBad = m.problems[0];
+      if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems, { landed: landedOf(out) }) };
     }
     const changes = out.changes;
     countPropertySteps(changes);
@@ -13269,29 +13703,27 @@
     const fail = async (i, op, e) => {
       const revoked = e instanceof EditsRevoked;
       const off = revoked || !editsAllowedNow();
-      const { restored, failed } = off ? { restored: [], failed: [] } : await restoreChanges(changes, editsAllowedNow);
-      const back = new Set(restored);
-      const kept = !revoked && off && changes.length ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied" : "";
+      const { restored, failed, gone: gone2, stays } = off ? { restored: [], failed: [], ...staying(changes) } : await restoreChanges(changes, editsAllowedNow);
+      const kept = !revoked && off && stays.length ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied" : "";
       return {
         ok: false,
         // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
-        applied: [...changes.filter((c) => !back.has(c)).map((c) => c.applied), ...rows.filter((a) => a !== void 0 && a.deleted === true)],
+        applied: [...stays.map((c) => c.applied), ...rows.filter((a) => a !== void 0 && a.deleted === true)],
         failedAt: i,
         failedOp: op && op.op,
-        error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
+        error: errMsg(e) + [...failed, ...gone2.map(goneSentence)].map((s) => "; " + s).join("") + kept,
         ...revoked ? { refused: "edits-off" } : {},
         ...restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}
       };
     };
     const refuseLate = async (late) => {
       const firstLate = late[0];
-      const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
-      const back = new Set(restored);
+      const { restored, failed, stays } = await restoreChanges(changes, editsAllowedNow);
       return {
         ok: false,
-        applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
+        applied: stays.map((c) => c.applied),
         ...firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {},
-        error: batchRefusal(late) + (failed.length ? "; " + failed.join("; ") : ""),
+        error: batchRefusal(late, { landed: landedOf(out), failed }),
         ...restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}
       };
     };
@@ -13304,10 +13736,11 @@
     if (creates.targets.size) {
       if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       if (creates.importCount) {
-        const { problems: late, revoked } = await creates.imports(editsAllowedNow);
+        const { problems: late, revoked, imported } = await creates.imports(editsAllowedNow);
+        out.landed.imported += imported || 0;
         if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
         const firstLate = late[0];
-        if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+        if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late, { landed: landedOf(out) }) };
       }
       try {
         for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;
@@ -13321,7 +13754,8 @@
     for (const step of [trees, patches, rules, sources]) {
       if (!step.importCount) continue;
       if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-      const { problems: late, revoked } = await step.imports(editsAllowedNow);
+      const { problems: late, revoked, imported } = await step.imports(editsAllowedNow);
+      out.landed.imported += imported || 0;
       if (revoked) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       if (late.length) return refuseLate(late);
     }
@@ -13387,6 +13821,26 @@
       const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
       return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
     };
+    const orphans = /* @__PURE__ */ new Map();
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
+        orphans.set(i, await orphanWarnings(removalsOf(t.update)));
+      } catch (e) {
+        return lostWith(i, op, e);
+      }
+    }
+    for (const [i, t] of trees.targets) {
+      const op = list[i];
+      if (!op || !t.update) continue;
+      try {
+        stillInDocument(t.update.root);
+        for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
+      } catch (e) {
+        return lostWith(i, op, e);
+      }
+    }
     for (const [i, t] of trees.targets) {
       const op = list[i];
       if (!op || !t.update) continue;
@@ -13396,10 +13850,10 @@
         if (n) row.removed = n;
         else delete row.removed;
       }
+      for (const m of orphans.get(i) || []) warnings.push("ops[" + i + "]: " + m);
       try {
-        for (const m of await orphanWarnings(removalsOf(t.update))) warnings.push("ops[" + i + "]: " + m);
         for (const n of removalsOf(t.update)) {
-          if (n.removed) continue;
+          if (!inDocument(n)) continue;
           consent();
           const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
           const id = n.id;
@@ -13433,18 +13887,18 @@
     }
     const done = rows.filter((a) => a !== void 0);
     const undo = propertyUndoSteps();
-    return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}, ...imgs.images.length ? { images: imgs.images } : {} };
+    return { ok: true, applied: done, ...warnings.length ? { warnings } : {}, ...undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}, ...madeImages.length ? { images: madeImages } : {} };
   }
   function notApplied() {
     return { ok: false, applied: [], error: "the write could not run. Nothing was changed." };
   }
   async function putBack3(changes) {
     commitUndo();
-    const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+    const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
     commitUndo();
-    if (!failed.length) return null;
-    const back = new Set(restored);
-    return { ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " \u2014 what stays is listed in `applied`." };
+    const went = gone.map(goneSentence);
+    if (!failed.length) return { failed: null, gone: went, restored: restored.length };
+    return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " \u2014 what stays is listed in `applied`." }, gone: went, restored: restored.length };
   }
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
@@ -13532,15 +13986,25 @@
   }
   async function handleBridge(cmd, args, id) {
     const parsed = parseCommandRequest(cmd, args);
-    if (!parsed.ok) throw new Error(parsed.error);
+    if (!parsed.ok) {
+      if (cmd === "write" && !isEmptyBatch(args)) announceRefused(parsed.error);
+      throw new Error(parsed.error);
+    }
     const req = parsed.req;
     if (req.cmd === "write") return bridgeWrite(req.args, id);
     if (req.cmd === "writeTicket") return answerTicket(req.args.ticket, holdOf(req.args.holdMs), req.args.cancel === true);
     return scheduleRun(runKind(req.cmd), work(req), bridgeRun(req.cmd, id));
   }
+  var isEmptyBatch = (args) => {
+    const ops = typeof args === "object" && args !== null ? args.ops : void 0;
+    return Array.isArray(ops) && ops.length === 0;
+  };
   async function bridgeWrite(args, id) {
     const waiting = waitingTicket();
-    if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+    if (waiting !== null) {
+      if (args.ops.length) announceWaiting();
+      return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+    }
     const s = await scheduleRun(runKind("write"), () => submitWrites(args.ops, args.images), bridgeRun("write", id));
     return "done" in s ? s.done : holdNew(s.card, holdOf(args.holdMs));
   }

@@ -33,6 +33,7 @@ import type { OpProblem } from "./write-batch";
 import { plannedComponent, plannedStyles, plannedVariables, plannedWhere, type Planned } from "./batch-plan";
 import { componentRootOf, propDefComponents, propDefsOf } from "../../bridge/src/component-spec.ts";
 import { valueProps } from "../../bridge/src/tree-diff.ts";
+import { inDocument, nodeById, noNode } from "./node-lookup";
 
 /** What a node of a spec resolved to, for the build. */
 export interface ResolvedRefs {
@@ -132,8 +133,9 @@ export function patchUses(index: number, set: PatchSet): Use[] {
 }
 
 /** A name that resolved, or why it did not. `later` = a key the file does not have, to import; it calls `allowed`
- *  before each import it runs (a component key may take two: a component, then a component set). */
-type Found<T> = { ok: T } | { error: string } | { later: (allowed: () => boolean) => Promise<T> };
+ *  before each import it runs (a component key may take two: a component, then a component set). `local`: no import,
+ *  but a name a create op of the batch makes, found once it has run (never counted as an import). */
+type Found<T> = { ok: T } | { error: string } | { later: (allowed: () => boolean) => Promise<T>; local?: true };
 /** Thrown by an import that found "Allow edits" off: the batch stops there, refused as edits-off. */
 export class ImportsRevoked extends Error {}
 
@@ -142,8 +144,10 @@ export interface RefResolution {
   refs: ResolvedRefs;
   problems: OpProblem[];
   /** Run the imports, then check what they brought in (property names, variable types, fonts). Every problem, or none;
-   *  `revoked` when `allowed` said no before an import (the imports before it stay: an import cannot be put back). */
-  imports(allowed: () => boolean): Promise<{ problems: OpProblem[]; revoked: boolean }>;
+   *  `revoked` when `allowed` said no before an import (the imports before it stay: an import cannot be put back);
+   *  `imported`, how many library items it did bring in (what stays in the file whatever the batch comes to): a name a
+   *  create op of the batch makes resolves here too, but is no import — a failure puts it back with the batch. */
+  imports(allowed: () => boolean): Promise<{ problems: OpProblem[]; revoked: boolean; imported?: number }>;
   /** How many items the imports will bring in (0: nothing to import). */
   importCount: number;
 }
@@ -164,6 +168,8 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
     if ("error" in f) return f;
     if ("later" in f) return { error: "component '" + ref + "' is a library's that this file does not have yet; use it in an instance first (by its key), then swap to it" };
     const c = f.ok;
+    // Found once per name and held across every later lookup's awaits: gone since, it is missing (node-lookup.ts).
+    if (!inDocument(c)) return { error: noNode(c.id, "component") };
     return { ok: c.type === "COMPONENT_SET" ? c.defaultVariant : c };
   };
   // One lookup per distinct name; one problem per op per name (the first place it is used, and how many more).
@@ -177,7 +183,7 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
   const report = reporter(problems);
   const bad = report.bad;
 
-  const imported: Array<{ use: Use; get: (allowed: () => boolean) => Promise<unknown> }> = [];
+  const imported: Array<{ use: Use; get: (allowed: () => boolean) => Promise<unknown>; local: boolean }> = [];
   for (const u of uses) {
     const f: Found<unknown> = u.kind === "component" && (u.suggestion || u.swapDefault) ? await lookup(u.kind, (u.swapDefault ? "default" : "suggest") + "\u0000" + u.ref, () => file.swapDef(u.ref, u.swapDefault === true))
       : u.kind === "component" ? await lookup(u.kind, u.ref, () => file.component(u.ref))
@@ -188,7 +194,7 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
       // A library variable listed by name says its type before it is imported: a wrong one is refused now.
       const typed = file.libraryType(u.ref);
       if (u.kind === "variable" && typed && u.type && typed !== u.type) { bad(u, typeMismatch(u, typed)); continue; }
-      imported.push({ use: u, get: f.later });
+      imported.push({ use: u, get: f.later, local: f.local === true });
       continue;
     }
     const err = await accept(u, f.ok, refs, loadFont, swapOf);
@@ -205,13 +211,15 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
       // Each distinct item imports once, however many places name it; one at a time (an import is a network round
       // trip Figma serialises anyway), in spec order, with consent checked before each.
       const once = new Map<string, { item: unknown } | { error: unknown }>();
-      for (const { use, get } of imported) {
+      let landed = 0;
+      for (const { use, get, local } of imported) {
         const k = use.kind + "\u0000" + use.ref;
         let got = once.get(k);
         if (!got) {
-          if (!allowed()) return { problems: [], revoked: true };
-          try { got = { item: await get(allowed) }; } catch (e) {
-            if (e instanceof ImportsRevoked) return { problems: [], revoked: true };
+          if (!allowed()) return { problems: [], revoked: true, imported: landed };
+          // A name the batch's own create op made is no library import: a failure puts it back with the batch.
+          try { got = { item: await get(allowed) }; if (!local) landed++; } catch (e) {
+            if (e instanceof ImportsRevoked) return { problems: [], revoked: true, imported: landed };
             got = { error: e };
           }
           once.set(k, got);
@@ -221,7 +229,7 @@ export async function resolveRefs(uses: readonly Use[], loadFont: (f: FontName) 
         if (err) lateReport.bad(use, err);
       }
       lateReport.finish();
-      return { problems: late, revoked: false };
+      return { problems: late, revoked: false, imported: landed };
     },
   };
 }
@@ -270,17 +278,23 @@ async function accept(u: Use, item: unknown, refs: ResolvedRefs, loadFont: (f: F
     return null;
   }
   const c = item as ComponentNode | ComponentSetNode;
+  // A component is looked up once per name (and imported once per key), then held across every later use's awaits (a
+  // text style's font, a swap's lookup): one deleted or detached since is missing, never read (node-lookup.ts).
+  if (!inDocument(c)) return noNode(c.id, "component");
   const node = u.node;
   // A swap property's default or suggestion: the component itself (a set shows its default variant).
   if (!node) { refs.components.set(u.ref, c); return null; }
   const set = c.type === "COMPONENT_SET" ? c : c.parent && c.parent.type === "COMPONENT_SET" ? c.parent : null;
-  const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
   let defs: ComponentPropertyDefinitions;
   try { defs = (set || c).componentPropertyDefinitions; } catch { defs = {}; }
   const mapped = mapProps(valueProps(node.props || {}), defs, (set || c).name, true);
   if ("errors" in mapped) return mapped.errors.join("; ");
   const swapErr = await swapIds(mapped.ok, defs, (set || c).name, swapOf);
   if (swapErr) return swapErr;
+  if (!inDocument(c)) return noNode(c.id, "component"); // gone during the swaps' lookups
+  // A set's default variant, read only now: the one it had before the swaps' lookups may be deleted or moved out by now
+  // (node-lookup.ts), and the instance is of the set's default as it is when it is placed.
+  const main = c.type === "COMPONENT_SET" ? c.defaultVariant : c;
   // An instance hugs only when the variant it ends up as has auto-layout (checkTree cannot know; Figma would refuse
   // mid-build): the variant the given variant values pick, the default's values for the rest.
   const shown = set ? variantFor(set, main, mapped.ok, defs) : main;
@@ -453,9 +467,11 @@ function fileLookups() {
     },
     async findComponent(ref: string): Promise<Found<ComponentNode | ComponentSetNode>> {
       let byId: BaseNode | null = null;
-      try { byId = /^[I\d][\d:;I-]*$/.test(ref) ? await figma.getNodeByIdAsync(ref) : null; } catch { byId = null; }
+      try { byId = /^[I\d][\d:;I-]*$/.test(ref) ? await nodeById(ref) : null; } catch { byId = null; }
       if (byId && (byId.type === "COMPONENT" || byId.type === "COMPONENT_SET")) return { ok: byId };
-      const all = await allComponents();
+      // Walked page by page, each page load an await (and kept for the batch's later lookups): a component found on one
+      // page and deleted since is no component of the file (node-lookup.ts), and never read.
+      const all = (await allComponents()).filter(inDocument);
       const exact = all.filter((c) => c.key === ref || c.id === ref);
       const first = exact[0];
       if (first && exact.length === 1) return { ok: first };
@@ -545,6 +561,7 @@ function later<T>(what: string, ref: string, planned: ReadonlyArray<Planned<T>>,
   }
   if (one.type) types.set(ref, one.type);
   return {
+    local: true,
     later: async () => {
       if (!one.made) throw new Error(what + " '" + ref + "' was to be made by ops[" + one.op + "], which has not run");
       return one.made;

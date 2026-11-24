@@ -35,10 +35,11 @@ import { ownSpec, planUpdate, type ChildOrder, type ExtraField, type Plan } from
 import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { KEY_DATA, readIndex, readOld, SPEC_DATA, stampNode } from "./keyed-store";
 import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
-import { buildSubtree, createdCount, newMade, stampAll, type TreeTarget } from "./tree";
+import { buildSubtree, checkMade, createdCount, madeFrom, madeNodes, newMade, stampAll, type TreeTarget } from "./tree";
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
 import type { Change, OpProblem } from "./write-batch";
+import { goneFrom, inDocument, nodeById, stillInDocument, stillToRestore, takeBack } from "./node-lookup";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -58,9 +59,10 @@ const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
 async function findResult(key: string): Promise<FrameNode | null> {
   const id = readIndex(key);
   if (!id) return null;
-  const n = await figma.getNodeByIdAsync(id);
+  const n = await nodeById(id);
   if (!n || n.type !== "FRAME" || n.removed || n.getPluginData(KEY_DATA) !== key) return null;
-  return (await loadPageOf(n)) ? n : null;
+  // Deleted while its page loaded (node-lookup.ts): there is no result, as if it had gone before the batch.
+  return (await loadPageOf(n)) && inDocument(n) ? n : null;
 }
 /** Load the page `n` is on (dynamic-page: before its children are read); false when it is on none. */
 async function loadPageOf(n: BaseNode): Promise<boolean> {
@@ -141,9 +143,11 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
     if (comp) {
       const found = await existingComponent(comp.type, comp.name);
       if ("problem" in found) { bad(found.problem); continue; }
-      if ("ours" in found && (await loadPageOf(found.ours))) root = found.ours;
+      if ("ours" in found && (await loadPageOf(found.ours)) && inDocument(found.ours)) root = found.ours;
     } else root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
+    // The page the op names, held across the result's page load (node-lookup.ts): gone, it is missing, never read.
+    if (op.page !== undefined && goneFrom(t.page, bad, "page")) continue;
     if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
       bad(what + ": its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is — leave `page` out");
       continue;
@@ -175,14 +179,22 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
         if (stays.indexOf("visible") >= 0) delete u.set.hidden;
         if (!Object.keys(u.set).length) u.set = null;
       }
+      // Each text is held across the earlier texts' font loads and its own (node-lookup.ts): gone, it is missing, never read.
       for (const n of textsFollowing(defs)) {
+        if (goneFrom(n, bad, "node", what + ": ")) continue;
         const fonts = n.fontName === figma.mixed ? n.getRangeAllFontNames(0, n.characters.length) : [n.fontName];
-        for (const f of fonts) { const m = await loadFont(f); if (m) bad(what + ": " + label(n) + " follows a property whose default changes, and its " + m); }
+        for (const f of fonts) {
+          const m = await loadFont(f);
+          if (goneFrom(n, bad, "node", what + ": ")) break;
+          if (m) bad(what + ": " + label(n) + " follows a property whose default changes, and its " + m);
+        }
       }
     }
     const patches = new Map<number, PatchTarget>();
     for (const [i, u] of plan.updates.entries()) {
       if (!u.set) continue;
+      // Held across the earlier patches' awaits (their fonts): gone by now, it is missing, and its name is never read.
+      if (goneFrom(u.ref, bad, "node", u.path + ": ")) continue;
       const say = (m: string): void => bad(u.path + " (" + label(u.ref) + "): " + m);
       const checked = checkPatch(u.set);
       if (checked.problems.length) { for (const m of checked.problems) say(m); continue; }
@@ -201,7 +213,7 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
 /** Throws when a node an update is about to remove now holds a layer its key did not build (one an op of the same batch,
  *  or the designer, put there since the batch was checked): it is run on every removal before the first one. */
 export function checkRemoval(u: KeyedUpdate, n: SceneNode): void {
-  if (n.removed) return;
+  if (!inDocument(n)) return; // gone already: nothing of it is removed (writes.ts), and it is never read
   const f = foreignIn(n, u.key);
   if (f) throw new Error(label(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label(f) + ", which that key did not build; nothing was removed");
 }
@@ -282,7 +294,8 @@ export function removalCount(u: KeyedUpdate): number {
     if (x.getPluginData(KEY_DATA) === u.key) n++;
     if (x.type !== "INSTANCE" && "children" in x) for (const c of x.children) count(c);
   };
-  for (const x of removalsOf(u)) count(x);
+  // One out of the document already is not removed by the update (writes.ts), so it is not counted.
+  for (const x of removalsOf(u)) if (inDocument(x)) count(x);
   return n;
 }
 
@@ -325,15 +338,19 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
     applied: { id: n.id },
     kind: "updated node",
     what: "the place, clipping or size limits of " + label(n),
+    on: n,
     async restore() {
       for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
       if (size) {
         if ((n.width !== size.w || n.height !== size.h) && "resize" in n) n.resize(size.w, size.h);
         for (const [k, v] of size.sizing) if (v !== undefined && Reflect.get(n, k) !== v) Reflect.set(n, k, v);
       }
+      // Each variable looked up is an await: the node removed meanwhile has nothing left to bind back, and its fields
+      // throw (node-lookup.ts stillToRestore: the batch's put-back says the change went with it).
       for (const [k, id] of bound) {
         if (boundTo(n, k) === id) continue;
         const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
+        stillToRestore(n);
         n.setBoundVariable(k, v);
       }
     },
@@ -368,25 +385,32 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
   }
 }
 
+/** Whether `n` is one of `parent`'s children now. A removed node is no one's (and Figma throws on reading any field of
+ *  it but `id`, `removed` and `type`, its `parent` included: so `removed` is read first). */
+const childOf = (n: SceneNode, parent: BaseNode): boolean => !n.removed && n.parent === parent;
+
 /** Put `parent`'s children in `want` order (each a child of it), node by node from the first place. */
 function arrange(parent: FrameNode, want: readonly SceneNode[]): void {
   for (const [i, n] of want.entries()) {
-    if (n.parent !== parent) continue;
+    if (!childOf(n, parent)) continue;
     if (parent.children[i] !== n) parent.insertChild(i, n);
   }
 }
 
-/** Put a frame's spec children in the new order; the designer's own layers keep their places. */
-function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>): Change {
+/** Put a frame's spec children in the new order; the designer's own layers keep their places. Its Change is on `changes`
+ *  before the first move: a move Figma refuses partway puts back the ones before it here, so the op leaves nothing (as a
+ *  patch does); one that cannot be put back stays on the list, and the batch reports it. Synchronous, its put-back too:
+ *  it never awaits, so nothing the update holds can change between one order and the next (node-lookup.ts). */
+function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], replaced: ReadonlyArray<SceneNode | null>, allowed: () => boolean, changes: Change[]): void {
   const parent = o.parent as FrameNode;
   const was = parent.children.slice(); // a copy: Figma's array is frozen, and live
   const nodes: SceneNode[] = [];
   const olds: SceneNode[] = [];
   for (const e of o.order) {
     const n = "ref" in e ? e.ref : built[e.build];
-    if (n && n.parent === parent) nodes.push(n);
+    if (n && childOf(n, parent)) nodes.push(n);
     const r = "build" in e ? replaced[e.build] : null;
-    if (r && r.parent === parent) olds.push(r);
+    if (r && childOf(r, parent)) olds.push(r);
   }
   // The slots the spec's children hold now (built ones were appended last; a node built anew still has its old one
   // beside it) take them in spec order, then the old ones about to be removed: so a node built anew takes the place
@@ -395,13 +419,23 @@ function applyOrder(o: ChildOrder<SceneNode>, built: readonly SceneNode[], repla
   const slots = was.map((c, i) => (seq.indexOf(c) >= 0 ? i : -1)).filter((i) => i >= 0);
   const want = was.slice();
   slots.forEach((slot, k) => { const n = seq[k]; if (n) want[slot] = n; });
-  arrange(parent, want);
-  return {
+  const putBack = (): void => { arrange(parent, was.filter((c) => childOf(c, parent))); };
+  const change: Change = {
     applied: { id: parent.id },
     kind: "reordered frame",
     what: "the order of the layers in " + label(parent),
-    restore() { arrange(parent, was.filter((c) => c.parent === parent)); },
+    on: parent,
+    restore: putBack,
   };
+  changes.push(change);
+  try {
+    arrange(parent, want);
+  } catch (e) {
+    if (allowed()) {
+      try { putBack(); changes.splice(changes.indexOf(change), 1); } catch { /* the batch's restore tries again and reports it */ }
+    }
+    throw e;
+  }
 }
 
 /** Store the new own spec on every kept node whose spec changed; its Change (on `changes` first) puts the old back. */
@@ -411,7 +445,8 @@ function restamp(stamps: Plan<SceneNode>["stamps"], key: string, changes: Change
     applied: {},
     kind: "stored spec",
     what: "the spec stored on " + stamps.length + " node(s)",
-    restore() { for (const [n, v] of was) n.setPluginData(SPEC_DATA, v); },
+    // A node deleted since took its stored spec with it: nothing to put back on it (its fields throw when read).
+    restore() { for (const [n, v] of was) if (!n.removed) n.setPluginData(SPEC_DATA, v); },
   });
   for (const s of stamps) stampNode(s.ref, key, s.spec);
 }
@@ -419,6 +454,9 @@ function restamp(stamps: Plan<SceneNode>["stamps"], key: string, changes: Change
 /**
  * Apply a planned update: every change it makes goes onto `changes` as it lands, so the batch can put all of it back.
  * `consent` is checked before each step and after each await. The nodes to remove are left to the batch (removalsOf).
+ * Every node the plan holds was resolved before the batch ran, and each step can await (a patch's fonts, a text style
+ * set): so each step checks the node it uses is still in the document before it reads it (node-lookup.ts), and one
+ * deleted or detached by then fails the op as missing, and the batch is put back.
  */
 export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<AppliedWrite> {
   const { plan, key } = u;
@@ -427,25 +465,40 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
   const unwired = u.component ? unwireGoing(u.component.defs, consent, changes) : [];
   for (const [i, up] of plan.updates.entries()) {
     const p = u.patches.get(i);
+    stillInDocument(up.ref);
     if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, PLACE_FIELDS, t.refs.variables, changes); }
     if (p) { consent(); await applyPatch(p, consent, allowed, changes); }
-    if (up.extras.length) { consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
+    if (up.extras.length) { stillInDocument(up.ref); consent(); applyExtras(up.ref, up.spec, up.extras, AFTER_FIELDS, t.refs.variables, changes); }
     changed.push({ id: up.ref.id, ...(up.spec.handle !== undefined ? { handle: up.spec.handle } : {}), fields: up.fields });
   }
   const made = newMade(t.refs, t.clones);
   const built: SceneNode[] = [];
   for (const b of plan.builds) {
     consent();
-    const from = made.pairs.length;
-    const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent);
-    // On the list before it is stamped: a stamp that throws removes it with the batch.
-    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), restore() { n.remove(); } });
-    stampAll(made, key, from);
+    const from = madeFrom(made);
+    const n = await buildSubtree(b.spec, b.parent as FrameNode | ComponentNode | ComponentSetNode, made, consent, changes);
+    // On the list before it is stamped: a stamp that throws removes it with the batch. Every node it made goes back, not
+    // only its top one: a layer the designer moved out of it since is the batch's too (tree.ts discard).
+    const mine = madeNodes(made, from);
+    const owns = [n, ...mine];
+    changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label(n), on: n, made: true, owns, restore(_allowed, ours) { takeBack(owns, ours); } });
+    stampAll(made, key, from.pairs);
     built.push(n);
   }
+  // The builds were the op's last awaits (a reorder never awaits, nor does its put-back): every node it holds is checked once
+  // here, before the reorders, the stamps, the component's wiring and the reply: each node of the result it keeps (the
+  // result itself, the nodes it changed, reorders or restamps among them) and every node it just built, each subtree's
+  // layers included (a later subtree's style await comes after an earlier one's). One deleted or
+  // detached at an earlier op's await or at one of its own fails the op as missing: never silently left out of a
+  // reorder, nor reported as changed or built.
+  for (const k of plan.kept) stillInDocument(k.ref);
+  checkMade(made);
   const replaced = plan.builds.map((b) => b.replaces);
-  for (const o of plan.orders) { consent(); changes.push(applyOrder(o, built, replaced)); }
-  if (plan.stamps.length) { consent(); restamp(plan.stamps, key, changes); }
+  for (const o of plan.orders) { consent(); applyOrder(o, built, replaced, allowed, changes); }
+  if (plan.stamps.length) {
+    consent();
+    restamp(plan.stamps, key, changes);
+  }
   // A component: its new variants laid out in the set, its definitions and its layers' wiring brought to the spec.
   let props = new Map<string, string>();
   let rewired = 0;
@@ -456,7 +509,7 @@ export async function applyUpdate(t: TreeTarget, u: KeyedUpdate, consent: () => 
       const size = { w: root.width, h: root.height };
       const at = root.children.map((c) => [c, c.x, c.y] as const);
       const sizing = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), restore() {
+      changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label(root), on: root, restore() {
         for (const [c, x, y] of at) if (!c.removed) { c.x = x; c.y = y; }
         // resize first: it makes both axes fixed, so the sizing modes are put back after it
         if (root.width !== size.w || root.height !== size.h) root.resize(size.w, size.h);

@@ -4,7 +4,7 @@ import { checkPatch } from "../../bridge/src/patch-spec.ts";
 import { MAX_TREE_NODES, NUMBER_TOKEN_FIELDS } from "../../bridge/src/tree-spec.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import { componentApi, followsDefault, MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, variantValues, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
+import { componentApi, followsDefault, markRemoved, MIXED, TEXT_RANGE_DEFAULTS, TEXT_RANGE_METHODS, textRuns, variantValues, type FakeCollection, type FakeNode, type FakeVariable, type Scene } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
@@ -20,7 +20,7 @@ const targetsOf = () => {
 /** A node with ExplicitVariableModesMixin: `explicitVariableModes` keyed by collection id, set and cleared with the
  *  collection OBJECT. The deprecated id-string form throws, as it does under the manifest's documentAccess
  *  "dynamic-page"; a modeId the collection does not have throws, as Figma's does. */
-function modeNode(id: string, name: string, start: Record<string, string> = {}): FakeNode & { explicitVariableModes: Record<string, string> } {
+export function modeNode(id: string, name: string, start: Record<string, string> = {}): FakeNode & { explicitVariableModes: Record<string, string> } {
   const n = {
     id, type: "FRAME", name, explicitVariableModes: { ...start },
     setExplicitVariableModeForCollection(c: unknown, modeId: string) {
@@ -42,7 +42,7 @@ function modeNode(id: string, name: string, start: Record<string, string> = {}):
  *  with Light/Dark, two collections both named "Spacing", one whose modes share a name, a library collection the
  *  file already uses (reachable by id only), and one the team library offers but the file does not use. */
 const THEME: FakeCollection = { id: "VariableCollectionId:7:1", key: "theme-key", name: "Theme", modes: [{ modeId: "7:0", name: "Light" }, { modeId: "7:1", name: "Dark" }], defaultModeId: "7:0" };
-const modeScene = (): Scene => ({
+export const modeScene = (): Scene => ({
   collections: {
     [THEME.id]: THEME,
     "VariableCollectionId:8:1": { id: "VariableCollectionId:8:1", name: "Spacing", modes: [{ modeId: "8:0", name: "Compact" }], defaultModeId: "8:0" },
@@ -63,7 +63,8 @@ const modeScene = (): Scene => ({
 function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>, extra: Scene = modeScene()) {
   const created: FakeNode[] = [];
   const made = (n: FakeNode): FakeNode => {
-    n.remove = () => { const i = created.indexOf(n); if (i >= 0) created.splice(i, 1); n.removed = true; };
+    n.remove = () => { const i = created.indexOf(n); if (i >= 0) created.splice(i, 1); markRemoved(n); };
+    n.parent = w.figma.currentPage; // Figma makes a new node on the current page
     created.push(n);
     return n;
   };
@@ -162,6 +163,9 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
     for (const k of existing) appendTo(pg)(k);
     return pg;
   };
+  // The page Figma creates nodes on: figma.currentPage once the world exists (a test may switch it), "Page 1" before.
+  let live: { figma: { currentPage: FakeNode } } | null = null;
+  const currentPage = (): FakeNode => (live ? live.figma.currentPage : current);
   const current = page("0:1", "Page 1", [
     { id: "1:1", type: "FRAME", name: "Existing A", x: 0, y: 40, width: 390, height: 844 },
     { id: "1:2", type: "FRAME", name: "Existing B", x: 500, y: -20, width: 390, height: 844 },
@@ -219,7 +223,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       // Each property's current value under the key setProperties takes: a set or plain component's definitions, the
       // variant's own value for a VARIANT property, else what was set (or the default).
       Object.defineProperty(fields, "componentProperties", {
-        enumerable: true,
+        enumerable: true, configurable: true,
         get() {
           const owner = parentOf(main)?.type === "COMPONENT_SET" ? parentOf(main) : main;
           const defs = (owner?.componentPropertyDefinitions ?? {}) as Record<string, { type: string; defaultValue: unknown }>;
@@ -304,12 +308,12 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       fields.width = w; fields.height = h;
       if (isNode(fields.boundVariables)) { const b = { ...fields.boundVariables }; delete b.width; delete b.height; fields.boundVariables = b; }
     };
+    // Removed, the node's fields throw when read, as Figma's do (markRemoved); calling remove() again throws so too.
     fields.remove = () => {
       const parent = parentOf(fields);
       if (parent) parent.children = kids(parent).filter((k) => k !== n);
-      fields.parent = null;
-      fields.removed = true;
       unregister(n);
+      markRemoved(n);
     };
     // An instance has the children API too, and refuses a new child (insertInto), as Figma's does.
     if (type !== "TEXT") { fields.children = []; fields.appendChild = type !== "INSTANCE" ? appendTo(n) : (c: FakeNode) => insertInto(n)(0, c); fields.insertChild = insertInto(n); }
@@ -320,11 +324,11 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
     }
     if (type === "COMPONENT") {
       // A variant's values are read from its name, as Figma reads them (null outside a set).
-      Object.defineProperty(fields, "variantProperties", { enumerable: false, get: () => (parentOf(fields)?.type === "COMPONENT_SET" ? variantValues(String(fields.name)) : null) });
+      Object.defineProperty(fields, "variantProperties", { enumerable: false, configurable: true, get: () => (parentOf(fields)?.type === "COMPONENT_SET" ? variantValues(String(fields.name)) : null) });
       fields.createInstance = () => node("INSTANCE", n);
-      fields.getInstancesAsync = async () => made.filter((m) => m.type === "INSTANCE" && m.mainComponent === n && !m.removed);
+      fields.getInstancesAsync = async () => made.filter((m) => !m.removed && m.type === "INSTANCE" && m.mainComponent === n);
     }
-    if (type === "COMPONENT_SET") Object.defineProperty(fields, "defaultVariant", { enumerable: false, get: () => kids(n).find((k) => k.type === "COMPONENT") ?? null });
+    if (type === "COMPONENT_SET") Object.defineProperty(fields, "defaultVariant", { enumerable: false, configurable: true, get: () => kids(n).find((k) => k.type === "COMPONENT") ?? null });
     // Figma's clone(): a new node with every value and layer of this one (plugin data included), on the current page.
     fields.clone = () => {
       if (trap.has("clone")) throw new Error("in Figma: cannot clone " + String(fields.name));
@@ -348,7 +352,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
     raw.set(n, fields);
     made.push(n);
     register(n);
-    appendTo(current)(n); // Figma puts a new node on the current page
+    appendTo(currentPage())(n); // Figma puts a new node on the current page (figma.currentPage, wherever it is now)
     return n;
   };
   // ---- the design system (opts.kit)
@@ -365,7 +369,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       if (!list.length) throw new Error("in Figma: combineAsVariants needs at least one component");
       for (const c of list) if (c.type !== "COMPONENT" || parentOf(c)?.type === "COMPONENT_SET") throw new Error("in Figma: only components outside a set can be combined");
       const set = node("COMPONENT_SET");
-      if (parent !== current && typeof parent.appendChild === "function") (parent.appendChild as (c: FakeNode) => void)(set);
+      if (parent !== currentPage() && typeof parent.appendChild === "function") (parent.appendChild as (c: FakeNode) => void)(set);
       for (const c of list) appendTo(set)(c);
       return set;
     },
@@ -385,13 +389,14 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       },
     } : {}),
   });
+  live = w;
   reg.nodes = w.scene.nodes;
   reg.styles = w.scene.styles;
   for (const pg of pages) { register(pg); for (const k of kids(pg)) register(k); }
   await w.allowEdits();
   /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
    *  parent is null, so everything below it is gone with it, as in Figma) */
-  const onPage = (n: FakeNode | null): boolean => (n === null ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
+  const onPage = (n: FakeNode | null): boolean => (n === null || n.removed === true ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
   return { ...w, made, alive, cloned, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
 }
@@ -420,6 +425,10 @@ const KIT_STYLES: FakeNode[] = [
 /** The kit: a "Components" page with a Button set (variants by Size; Label text, Icon boolean, Glyph swap), a Badge
  *  without auto-layout, two components both named Card; and a library with a colour and a number variable (listed by
  *  name), an Avatar component and a Caption text style (by key only). */
+/** A set's default variant read as Figma reads it: its first variant now (one deleted or moved out is not it). */
+function liveDefault(set: FakeNode): void {
+  Object.defineProperty(set, "defaultVariant", { enumerable: false, configurable: true, get: () => kids(set).find((k) => k.type === "COMPONENT") ?? null });
+}
 function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const comp = (id: string, name: string, extra: FakeNode): FakeNode => {
     const c: FakeNode = { id, type: "COMPONENT", name, key: "local-" + id, layoutMode: "HORIZONTAL", parent: null, getPluginData: () => "", ...extra };
@@ -435,8 +444,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   const medium = comp("5:2", "Size=Medium", { parent: set, variantProperties: { Size: "Medium" } });
   Object.defineProperty(medium, "componentPropertyDefinitions", { get() { throw new Error("in Figma: componentPropertyDefinitions can only be read on a component set or a non-variant component"); } });
   const large = comp("5:6", "Size=Large", { parent: set, variantProperties: { Size: "Large" } });
-  set.defaultVariant = medium;
   set.children = [medium, large];
+  liveDefault(set);
   const badge = comp("5:3", "Badge", { layoutMode: "NONE", componentPropertyDefinitions: {} });
   const cards = [comp("5:4", "Card", { componentPropertyDefinitions: {} }), comp("5:5", "Card", { componentPropertyDefinitions: {} })];
   // A Chip set whose default variant has no auto-layout and whose Large one has; a local component named like a key.
@@ -447,8 +456,8 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   } };
   const chipSmall = comp("6:2", "Size=Small, Tone=Off", { parent: chip, layoutMode: "NONE", variantProperties: { Size: "Small", Tone: "Off" } });
   const chipLarge = comp("6:3", "Size=Large, Tone=On", { parent: chip, variantProperties: { Size: "Large", Tone: "On" } });
-  chip.defaultVariant = chipSmall;
   chip.children = [chipSmall, chipLarge];
+  liveDefault(chip);
   const lookalike = comp("6:4", KEY("e"), { componentPropertyDefinitions: {} });
   // A variant property whose name is "__proto__" (any string is a valid property name in Figma; a variant's key is its name).
   const odd = comp("6:5", "Odd", { componentPropertyDefinitions: JSON.parse('{"__proto__": {"type": "VARIANT", "defaultValue": "Off", "variantOptions": ["On", "Off"]}}') as Record<string, unknown> });
@@ -458,11 +467,13 @@ function designKit(instanceOf: (main: FakeNode) => FakeNode) {
   } };
   const twinFlat = comp("7:2", "Kind=A", { parent: twin, layoutMode: "NONE", variantProperties: { Kind: "A" } });
   const twinFlex = comp("7:3", "Kind=A", { parent: twin, variantProperties: { Kind: "A" } });
-  twin.defaultVariant = twinFlat;
   twin.children = [twinFlat, twinFlex];
+  liveDefault(twin);
   const all = [set, medium, large, badge, ...cards, chip, chipSmall, chipLarge, lookalike, odd, twin, twinFlat, twinFlex];
   const page: FakeNode = { id: "0:5", type: "PAGE", name: "Components", selection: [], children: [set, badge, ...cards, chip, lookalike, odd, twin], loadAsync: async () => {},
     findAllWithCriteria: (c: { types: string[] }) => all.filter((n) => c.types.includes(String(n.type))) };
+  // On the page, as Figma has them: a write checks a component is still in the document as it places it (node-lookup.ts).
+  for (const k of [set, badge, ...cards, chip, lookalike, odd, twin]) k.parent = page;
   const avatar = comp("9:1", "Avatar", { layoutMode: "NONE", remote: true, componentPropertyDefinitions: { "Initials#2:0": { type: "TEXT", defaultValue: "AB" } } });
   const library = {
     components: { [KEY("e")]: avatar } as Record<string, FakeNode>,
@@ -1607,7 +1618,7 @@ export const cases: Case[] = [{
     const midway = await w.api.applyWrites([{ op: "createFrame", name: "Half", layoutMode: "VERTICAL", parentId: h.screen }]);
     w.trap.clear();
     ok("[PATCH-MORE] Figma refusing a value on a frame just made: the frame is removed, nothing applied",
-      midway.ok === false && midway.applied.length === 0 && !w.made.some((n) => n.name === "Half" && !n.removed));
+      midway.ok === false && midway.applied.length === 0 && !w.made.some((n) => !n.removed && n.name === "Half"));
     const load = w.figma.loadFontAsync;
     w.figma.loadFontAsync = async () => { throw new Error("font failed to load"); };
     const noFont = await w.api.applyWrites([{ op: "createText", text: "x", parentId: h.screen }]);
