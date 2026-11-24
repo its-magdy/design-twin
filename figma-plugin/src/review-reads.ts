@@ -18,6 +18,7 @@ import type { ModeTarget } from "./variable-modes";
 import type { DeleteTarget, MoveTarget } from "./structure";
 import { createdThisSession } from "./session";
 import { errMsg } from "./util";
+import { nodeById } from "./node-lookup";
 
 /** The resolved batch, as writes.ts resolveBatch has it. */
 export interface ResolvedTargets {
@@ -193,7 +194,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
         }
         case "setFill":
         case "setText": {
-          const n = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+          const n = op.nodeId ? await nodeById(op.nodeId) : null;
           if (!n || n.type === "PAGE" || n.type === "DOCUMENT") break;
           read.name = n.name;
           ids.push(n.id);
@@ -269,7 +270,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
         }
         case "createFrame":
         case "createText": {
-          const p = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
+          const p = op.parentId ? await nodeById(op.parentId) : null;
           if (p && p.type !== "PAGE" && p.type !== "DOCUMENT") { read.parent = p.name; ids.push(p.id); }
           // A frame lands at 0,0 in its parent, its size given or Figma's 100 (writes.ts). A text's size is its font's:
           // known only once built, so it is not counted.
@@ -331,7 +332,7 @@ export async function selectAndZoom(ids: readonly string[]): Promise<number> {
   const byPage = new Map<PageNode, SceneNode[]>();
   for (const id of ids.slice(0, SHOW_CAP)) {
     let n: BaseNode | null = null;
-    try { n = await figma.getNodeByIdAsync(id); } catch { n = null; }
+    try { n = await nodeById(id); } catch { n = null; }
     if (!n || n.type === "PAGE" || n.type === "DOCUMENT" || !("visible" in n)) continue;
     let p: BaseNode | null = n.parent;
     while (p && p.type !== "PAGE") p = p.parent;
@@ -352,7 +353,7 @@ export async function selectAndZoom(ids: readonly string[]): Promise<number> {
 
 /** Pan to where a new frame will land (on its page). */
 export async function panTo(spot: Spot): Promise<void> {
-  const page = await figma.getNodeByIdAsync(spot.pageId);
+  const page = await nodeById(spot.pageId);
   if (page && page.type === "PAGE" && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
   figma.viewport.center = { x: spot.x + 200, y: spot.y + 200 };
 }

@@ -21,6 +21,7 @@ import { patchUses, resolveRefs, type RefResolution, type Use } from "./tree-ref
 import { boundVariableIds } from "./sources";
 import { errMsg } from "./util";
 import type { OpProblem } from "./write-batch";
+import { goneAmong, goneFrom, inDocument, nodeById, removedWith } from "./node-lookup";
 
 /** A patchWhere op whose rule matched and whose every match resolved as a patch. */
 export interface RuleTarget {
@@ -61,8 +62,15 @@ async function loadPage(p: PageNode): Promise<void> {
   if (typeof p.loadAsync === "function") await p.loadAsync(); // dynamic-page: before its layers are walked
 }
 
-/** The layers the scope holds, in document order, each once: what a rule is tested against. Problems go to `bad`. */
+/** The layers the scope holds, in document order, each once: what a rule is tested against. Problems go to `bad`. Each
+ *  page load (and each selected layer's lookup) is an await the designer can delete a page or a layer at (node-lookup.ts):
+ *  a page is checked once it loads, before its layers are read, and every layer once the last await is done. Gone, it
+ *  is missing: no layers come back. */
 async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: readonly string[]): Promise<{ hits: Hit[]; selection?: string[] }> {
+  const scoped = await scopeLayers(rule, bad, selected);
+  return goneAmong(scoped.hits.map((h) => h.node), bad, "layer") ? { hits: [] } : scoped;
+}
+async function scopeLayers(rule: CheckedRule, bad: (m: string) => void, selected?: readonly string[]): Promise<{ hits: Hit[]; selection?: string[] }> {
   const out: Hit[] = [];
   const seen = new Set<string>();
   const walk = (n: SceneNode, page: PageNode): void => {
@@ -80,11 +88,13 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: 
       sel = [];
       for (const id of selected) {
         let n: BaseNode | null = null;
-        try { n = await figma.getNodeByIdAsync(id); } catch { n = null; }
+        try { n = await nodeById(id); } catch { n = null; }
         if (n && n.type !== "PAGE" && n.type !== "DOCUMENT") sel.push(n);
       }
     }
     if (!sel.length) { bad("scope \"selection\": " + (selected ? "the selected layers it looked in are gone" : "nothing is selected in Figma — select the layers to look in, or use \"page\" or \"file\"")); return { hits: out }; }
+    // Each looked up at an await: one found, then deleted at a later one's lookup, is missing, never read.
+    if (goneAmong(sel, bad, "layer")) return { hits: out };
     for (const n of sel) if (!inSource(n)) walk(n, pageOf(n) || figma.currentPage);
     return { hits: out, selection: sel.map((n) => n.id) };
   }
@@ -103,21 +113,33 @@ async function layersIn(rule: CheckedRule, bad: (m: string) => void, selected?: 
   }
   for (const p of pages) {
     try { await loadPage(p); } catch (e) { bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")"); continue; }
+    if (goneFrom(p, bad, "page")) continue;
     for (const k of p.children) walk(k, p);
   }
   return { hits: out };
 }
 
-/** The components an instance is of, as a rule may name them: its main component, and the set it is a variant of. */
-async function ownersOf(n: InstanceNode): Promise<Array<ComponentNode | ComponentSetNode>> {
-  let main: ComponentNode | null = null;
-  try { main = await n.getMainComponentAsync(); } catch { main = null; }
-  if (!main) return [];
-  return main.parent && main.parent.type === "COMPONENT_SET" ? [main, main.parent] : [main];
+/** The main component an instance is of (null: none, or its lookup failed). */
+async function mainOf(n: InstanceNode): Promise<ComponentNode | null> {
+  try { return await n.getMainComponentAsync(); } catch { return null; }
+}
+
+/** The components an instance whose main component is `main` is of, as a rule may name them, read once every instance's
+ *  lookup is done (a main found at one await can be deleted, detached or moved out of its set at a later one's): `live`,
+ *  its main and the set it is a variant of now, when the main is in the document; `retained`, a main out of the document
+ *  that the instance still returns, not removed (soft-deleted: Figma keeps it for its instances and an undo), which a
+ *  rule names only by its exact id or key, never its name, and never by a set it was in; a removed one, neither (its
+ *  fields throw when read). */
+function ownersNow(main: ComponentNode | null): { live: Array<ComponentNode | ComponentSetNode>; retained: ComponentNode | null } {
+  if (!main || removedWith(main)) return { live: [], retained: null };
+  if (!inDocument(main)) return { live: [], retained: main };
+  const set = main.parent;
+  return { live: set && set.type === "COMPONENT_SET" ? [main, set] : [main], retained: null };
 }
 
 /** The layers of `layers` op `rule` matches, in document order. A `variable` or `instanceOf` name that matches nothing
- *  or several things goes to `bad` (and nothing matches). */
+ *  or several things goes to `bad` (and nothing matches). Resolving either name awaits: every layer is checked after
+ *  those awaits, before the name is matched and any layer read again (node-lookup.ts); one gone is missing. */
 async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: string) => void): Promise<Hit[]> {
   const w = rule.where;
   let variableId: string | null = null;
@@ -133,6 +155,7 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
       try { v = await figma.variables.getVariableByIdAsync(id); } catch { v = null; }
       if (v) pool.set(id, v);
     }
+    if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
     const m = matchByName(w.variable, [...pool.values()], (v) => v.name, (v) => [v.id, v.key]);
     if (m.kind === "one") variableId = m.item.id;
     else if (m.kind === "many") { bad("where.variable: '" + w.variable + "' matches " + m.matches.length + " variables — pass one's id or key: " + m.matches.slice(0, 3).map((v) => "'" + v.name + "' (" + v.id + ")").join(", ")); return []; }
@@ -143,14 +166,30 @@ async function matchesOf(rule: CheckedRule, layers: readonly Hit[], bad: (m: str
   const owners = new Map<string, Array<ComponentNode | ComponentSetNode>>();
   let ownerId: string | null = null;
   if (w.instanceOf !== undefined) {
-    const pool = new Map<string, ComponentNode | ComponentSetNode>();
+    const mains = new Map<string, ComponentNode | null>();
     for (const h of layers) {
       if (h.node.type !== "INSTANCE") continue;
-      const os = await ownersOf(h.node);
-      owners.set(h.node.id, os);
-      for (const o of os) pool.set(o.id, o);
+      mains.set(h.node.id, await mainOf(h.node));
     }
-    const m = matchByName(w.instanceOf, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
+    if (goneAmong(layers.map((h) => h.node), bad, "layer")) return [];
+    // Each instance's component was found at an await and held across the later ones': what it is of is read only now
+    // (ownersNow). One deleted or detached by now, or before (soft-deleted), is no component of the file by its name
+    // (node-lookup.ts), and a variant moved out of its set is no longer of the set; only a main the instance still
+    // returns and that is not removed is named by its exact id or key, as it was before it went.
+    const pool = new Map<string, ComponentNode | ComponentSetNode>();
+    const retained = new Map<string, ComponentNode>();
+    for (const [id, main] of mains) {
+      const now = ownersNow(main);
+      owners.set(id, now.retained ? [now.retained] : now.live);
+      for (const o of now.live) pool.set(o.id, o);
+      if (now.retained) retained.set(now.retained.id, now.retained);
+    }
+    const ref = w.instanceOf;
+    const byExact = (c: ComponentNode | ComponentSetNode): boolean => c.id === ref || c.key === ref;
+    const kept = [...retained.values()].filter(byExact);
+    // An exact id or key wins outright (matchByName): a retained main by its own, when no live component has it.
+    const keptOne = kept.length === 1 && ![...pool.values()].some(byExact) ? kept[0] : undefined;
+    const m = keptOne ? { kind: "one" as const, item: keptOne } : matchByName(ref, [...pool.values()], (c) => c.name, (c) => [c.id, c.key]);
     if (m.kind === "one") ownerId = m.item.id;
     else if (m.kind === "many") { bad("where.instanceOf: '" + w.instanceOf + "' matches " + m.matches.length + " components the instances in scope are of — pass one's id or key: " + m.matches.slice(0, 3).map((c) => "'" + c.name + "' (" + c.id + (c.remote ? ", a library's" : "") + ")").join(", ")); return []; }
     else { bad("where.instanceOf: no instance in " + describeScope(rule.scope) + " is of a component named '" + w.instanceOf + "'" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "")); return []; }
@@ -249,7 +288,9 @@ export async function resolveRuleOps(ops: readonly WriteOp[], mode: RuleMode = {
       const t = await resolvePatchNode(h.node, set, later, loadFont, (m) => { said.push(m); }, fontsLater);
       if (t && !said.length) { resolved.push(t); continue; }
       misfits++;
-      if (named.length < RULE_SAMPLES) named.push("'" + h.node.name + "' (" + h.node.id + (h.page !== figma.currentPage ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
+      // A match deleted since it was found (at an earlier match's awaits) is named by its id alone: its name throws; so
+      // does its page's, when that went.
+      if (named.length < RULE_SAMPLES) named.push((inDocument(h.node) ? "'" + h.node.name + "' " : "") + "(" + h.node.id + (h.page !== figma.currentPage && inDocument(h.page) ? ", page '" + h.page.name + "'" : "") + "): " + (said.length ? said.join("; ") : "cannot take this patch"));
     }
     if (misfits) { bad(misfits + " of the " + hits.length + " layers its rule matches cannot take this patch — narrow the rule (another kind, a name) or the scope: " + named.join(" | ") + (misfits > named.length ? " | …" : "")); continue; }
     // The names its `set` uses resolve in the dry run too (nothing is imported until a real run applies).

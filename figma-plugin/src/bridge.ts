@@ -1,6 +1,6 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
-import { submitWrites } from "./writes";
+import { announceRefused, announceWaiting, submitWrites } from "./writes";
 import { designImpact } from "./creates";
 import { editsAllowed } from "./edits";
 import { answerTicket, holdNew, holdOf, lastWrite, layersSinceApproval, reviewWrites, waitingTicket } from "./review";
@@ -50,7 +50,12 @@ export async function handleBridge(cmd: string, args: unknown, id?: string): Pro
   // missing nodeId still reads "No node id provided." (NO_NODE_ID, the collectors' own text), an
   // unknown `cmd` still reads "unknown cmd: <cmd>", and an undeclared key is ignored as it always was.
   const parsed = parseCommandRequest(cmd, args);
-  if (!parsed.ok) throw new Error(parsed.error);
+  if (!parsed.ok) {
+    // A write refused here (an op missing a field the MCP server's schema let through) is said in the window like any
+    // other refused write (#206) — an empty batch excepted, which says nothing.
+    if (cmd === "write" && !isEmptyBatch(args)) announceRefused(parsed.error);
+    throw new Error(parsed.error);
+  }
   // WHEN it runs is not the branch's to say: the command's run traits (commands.ts runKind) decide, through
   // the one scheduler (state.ts scheduleRun). A branch below only says WHAT runs, so a new command cannot
   // forget to queue, and no caller — this window's buttons, a daemon, an MCP server — can bypass the order.
@@ -63,13 +68,22 @@ export async function handleBridge(cmd: string, args: unknown, id?: string): Pro
   return scheduleRun(runKind(req.cmd), work(req), bridgeRun(req.cmd, id));
 }
 
+const isEmptyBatch = (args: unknown): boolean => {
+  const ops = typeof args === "object" && args !== null ? (args as { ops?: unknown }).ops : undefined;
+  return Array.isArray(ops) && ops.length === 0;
+};
+
 // applyWrites' first half (writes.ts submitWrites) refuses the batch whole while "Allow edits" is off (edits.ts) — the
 // gate lives there, not here, so no caller of it can skip it. A batch that waits for review is answered after the hold:
 // its result if the designer answered by then, else `{pending, ticket}` (review.ts).
 async function bridgeWrite(args: WriteArgs, id: string | undefined): Promise<WriteReply> {
-  // One card at a time: refused before a run starts (the window keeps showing the card that waits).
+  // One card at a time: refused before a run starts (the window keeps showing the card that waits), and the designer is
+  // told in Figma's toast that another request was refused.
   const waiting = waitingTicket();
-  if (waiting !== null) return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+  if (waiting !== null) {
+    if (args.ops.length) announceWaiting();
+    return { ok: false, applied: [], refused: "waiting", error: waitingMessage(waiting) };
+  }
   const s = await scheduleRun(runKind("write"), () => submitWrites(args.ops, args.images), bridgeRun("write", id));
   return "done" in s ? s.done : holdNew(s.card, holdOf(args.holdMs));
 }

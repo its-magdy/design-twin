@@ -26,6 +26,7 @@ import type { PatchSet } from "../../bridge/src/patch-spec.ts";
 import { KEY_DATA, SPEC_DATA } from "./keyed-store";
 import { resolvePatchNode, type PatchTarget } from "./patch";
 import { patchUses, type Use } from "./tree-refs";
+import { goneFrom, nodeById } from "./node-lookup";
 
 /** A copy whose source and edits resolved. */
 export interface CloneTarget {
@@ -106,7 +107,7 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
     const id = s.clone;
     if (id === undefined) continue;
     const at = path + ".clone";
-    const nd = await figma.getNodeByIdAsync(id);
+    const nd = await nodeById(id);
     if (!nd) { bad(at + ": no node with id '" + id + "' (invalid or removed)"); continue; }
     if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad(at + ": " + label(nd) + " is a " + nd.type + "; a copy is of a layer on a page"); continue; }
     if (nd.type === "COMPONENT" || nd.type === "COMPONENT_SET") { bad(at + ": " + label(nd) + " is a main component; place an instance of it (`component`) instead of a copy of it"); continue; }
@@ -115,6 +116,10 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
     if (page) await page.loadAsync(); // dynamic-page: before the source's layers are read
     const before = { n: 0 };
     const say = (m: string): void => { before.n++; bad(m); };
+    // Held across the page load and each patch's own awaits (node-lookup.ts): gone at one, the source is missing, as its
+    // lookup would have said, and none of its layers is read.
+    const gone = (): boolean => goneFrom(nd, say, "node", at + ": ");
+    if (gone()) continue;
     // `later`: the checks that read the file as it is now (auto-layout, the parent's) are run against the copy, in its
     // place, right before its patch is set (patchCopy): the copy's parent is not the source's.
     const self = clonePatch(s);
@@ -122,6 +127,7 @@ export async function resolveClones(copies: ReadonlyArray<{ s: TreeNodeSpec; pat
     const edits: PatchTarget[] = [];
     const named = new Map<string, string>();
     for (const [ref, set] of cloneEdits(s)) {
+      if (gone()) break;
       const where = path + ".edits[" + JSON.stringify(ref) + "]";
       const layer = findLayer(nd, ref);
       if ("error" in layer) { say(where + ": " + layer.error); continue; }
@@ -169,22 +175,35 @@ function at(root: SceneNode, path: readonly number[]): SceneNode | null {
 
 /** This plugin's keyed stamps on `n` and every layer below it (not an instance's own layers), cleared: a copy is not
  *  part of the result its source belongs to. With `key`, each layer is marked as that key's instead (no spec of its
- *  own: the copy's spec, on the copy, is what a re-send compares). */
-export function restamp(n: SceneNode, key: string | null, self: boolean): void {
+ *  own: the copy's spec, on the copy, is what a re-send compares). With `ours` (the ids of the layers the build made),
+ *  a layer below that is not one of them (the designer's, moved into the copy during an await) is left as it is, and
+ *  what is in it too: marked as the key's, a re-send that drops the copy would remove it with the copy. */
+export function restamp(n: SceneNode, key: string | null, self: boolean, ours?: ReadonlySet<string>): void {
   if (!self) {
     n.setPluginData(KEY_DATA, key === null ? "" : key);
     n.setPluginData(SPEC_DATA, "");
   }
   if (n.type === "INSTANCE" || !("children" in n)) return;
-  for (const c of n.children) restamp(c, key, false);
+  for (const c of n.children) if (!ours || ours.has(c.id)) restamp(c, key, false, ours);
+}
+
+/** Every layer below `n` (a copy), outer ones first, onto `out`: not an instance's own layers, which follow its main
+ *  component and cannot be moved out of it. The copy made them all, so a cleanup takes back one moved out of it. */
+export function copiedLayers(n: SceneNode, out: SceneNode[]): void {
+  if (n.type === "INSTANCE" || !("children" in n)) return;
+  for (const c of n.children) {
+    out.push(c);
+    copiedLayers(c, out);
+  }
 }
 
 /**
  * Make the copy a resolved spec node names: its source cloned, its keyed stamps cleared, and its patches (its own, then
  * each edit's, mapped onto the copy's layer by place) queued on `patches` for once the tree is made. The copy is on
- * the current page until its caller puts it in its parent. Throws when the source no longer holds an edit's layer.
+ * the current page until its caller puts it in its parent. Throws when the source no longer holds an edit's layer; a copy
+ * Figma will not remove then goes on `strays`, for the build's cleanup to take back or report (tree.ts discard).
  */
-export function makeCopy(r: CloneTarget, patches: CopyPatch[]): SceneNode {
+export function makeCopy(r: CloneTarget, patches: CopyPatch[], strays: SceneNode[]): SceneNode {
   const places: Array<{ target: PatchTarget; path: number[] }> = [];
   for (const e of r.edits) {
     const p = placeIn(r.source, e.node);
@@ -206,7 +225,8 @@ export function makeCopy(r: CloneTarget, patches: CopyPatch[]): SceneNode {
     }
   } catch (e) {
     patches.length = from;
-    try { copy.remove(); } catch { /* already gone */ }
+    try { copy.remove(); } catch { /* left for the build's cleanup */ }
+    if (!copy.removed) strays.push(copy);
     throw e;
   }
   return copy;

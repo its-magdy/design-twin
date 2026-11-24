@@ -6,7 +6,7 @@ import type { RuleMatch } from "../../bridge/src/rule-spec.ts";
 import type { WriteImpactReply, WriteOp, WriteReply, WriteResult } from "../../bridge/src/commands.ts";
 import { lineText } from "../../bridge/src/review-card.ts";
 import { ok } from "../assert.ts";
-import type { FakeNode, PostedMessage } from "../fake-figma.ts";
+import { markRemoved, type FakeNode, type PostedMessage } from "../fake-figma.ts";
 import type { Case } from "./helpers.ts";
 import { treeWorld } from "./writes.ts";
 
@@ -240,5 +240,51 @@ export const cases: Case[] = [{
     const ours = (await matchOf(w, op)).match;
     const foreign = await write(w, [{ ...op, token: theirs }]);
     ok(`[RULE] another session's token for the same ids is refused (got ${String(foreign.error)})`, !!theirs && !!ours && theirs !== ours.token && !foreign.ok && /26 then and now: other layers, or a token from before the plugin was reloaded/.test(String(foreign.error)));
+  },
+}, {
+  name: "patchWhere: a match the designer deletes while another match resolves is named missing, never read (#206)",
+  async run() {
+    const w = await ruleWorld();
+    const last = w.footers().at(-1);
+    if (!last) throw new Error("no footer to match");
+    const realLoad = w.figma.loadFontAsync;
+    if (!realLoad) throw new Error("the world loads no fonts");
+    let hits = 0;
+    // The first match's patch resolves (its fonts load): the designer deletes the last match then.
+    w.figma.loadFontAsync = async (f: { family: string; style: string }) => {
+      const inPatch = new Error().stack?.includes("resolvePatchNode") === true;
+      await realLoad(f);
+      if (inPatch && !hits++) markRemoved(last);
+    };
+    const r = await write(w, [TEXT_RULE]);
+    w.figma.loadFontAsync = realLoad;
+    const missing = "(" + String(last.id) + ", page 'Screens'): no node with id '" + String(last.id) + "' (invalid or removed)";
+    ok(`[RULE] a match removed while another resolves: refused, that match named missing by id, no read error (got ${String(r.error)})`,
+      hits === 1 && !r.ok && r.applied.length === 0 && String(r.error).includes("1 of the 4 layers its rule matches cannot take this patch") && String(r.error).includes(missing) && !String(r.error).includes("in get_"));
+  },
+}, {
+  name: "patchWhere by selection, approved: a selected layer deleted while another is looked up again is refused as missing, never read (#206)",
+  async run() {
+    const w = await ruleWorld({ extra: { reviewer: "real", clientStorage: { reviewWrites: false } } });
+    const home = w.alive().find((n) => n.name === "Home");
+    const profile = w.alive().find((n) => n.name === "Profile");
+    if (!home || !profile) throw new Error("no screens");
+    w.figma.currentPage.selection = [home, profile];
+    const from = w.posted.length;
+    const reply = w.send({ type: "bridge", id: "sel-gone", cmd: "write", args: { ops: [{ op: "patchWhere", where: { text: "Terms v1" }, scope: "selection", set: { text: "Terms v2" } }] } }).then((posted) => {
+      const r = posted.find((m) => m.type === "bridge-result" && m.id === "sel-gone");
+      return r && r.ok ? (r.result as WriteReply) : undefined;
+    });
+    for (let i = 0; i < 200 && !w.posted.slice(from).some((m) => m.type === "review"); i++) await new Promise((res) => setTimeout(res, 0));
+    const card = w.posted.slice(from).find((m) => m.type === "review");
+    // On approval the selected layers are looked up again by id: the second lookup deletes the first.
+    const lookup = w.figma.getNodeByIdAsync;
+    w.figma.getNodeByIdAsync = async (id: string) => { if (id === profile.id) markRemoved(home); return lookup(id); };
+    await w.send({ type: "review-answer", id: String(card?.id), action: "apply" });
+    const got = await reply;
+    w.figma.getNodeByIdAsync = lookup;
+    const r = got && !("pending" in got) ? got : undefined;
+    ok(`[RULE] a selected layer deleted while the next one is looked up on approval: refused as missing (got ${JSON.stringify(r).slice(0, 400)})`,
+      !!card && !!r && r.ok === false && r.applied.length === 0 && String(r.error).includes("no layer with id '" + String(home.id) + "' (invalid or removed)") && !String(r.error).includes("in get_"));
   },
 }];

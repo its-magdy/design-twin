@@ -36,7 +36,7 @@ interface FakeSocket {
   close(): void; send(d: string): void;
 }
 interface Timer { fn: (() => void) | null; ms: number }
-interface PluginMsg { type: string; allowed?: unknown; on?: unknown; action?: unknown; index?: unknown; state?: string; note?: string; reason?: unknown; lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
+interface PluginMsg { type: string; allowed?: unknown; on?: unknown; action?: unknown; index?: unknown; state?: string; note?: string; reason?: unknown; lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown; count?: number; name?: string | null }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
@@ -269,6 +269,33 @@ check("a write notice from the main thread lands on the status line (red when re
   const shown = w.el("status").textContent === "Design Twin applied 2 edits to this file." && w.el("status").className !== "err";
   w.msg({ type: "writes", applied: 0, ok: false, text: "Design Twin refused an edit request — 'Allow edits' is off." });
   return shown && /refused/.test(w.el("status").textContent) && w.el("status").className === "err";
+})());
+// An empty bridge write (#206) runs and ends with no `writes` notice: the window must not keep "Applying edits…" once the
+// run is over, so it goes back to the line it showed before; a run that said something keeps what it said.
+check("a write run that ends saying nothing puts back the line from before it; one that said something keeps it", (() => {
+  const w = boot();
+  w.msg({ type: "selection", count: 0 });
+  const before = w.el("status").textContent;
+  w.msg({ type: "run-begin", source: "bridge", label: "write", requestId: "e1" });
+  const during = w.el("status").textContent;
+  w.msg({ type: "run-end" });
+  const back = w.el("status").textContent === before && w.el("status").className !== "err";
+  // A red line from before (an earlier refusal) comes back red.
+  w.msg({ type: "writes", applied: 0, ok: false, text: "Design Twin refused an edit request — 'Allow edits' is off." });
+  w.msg({ type: "run-begin", source: "bridge", label: "write", requestId: "e2" });
+  w.msg({ type: "run-end" });
+  const backRed = /'Allow edits' is off/.test(w.el("status").textContent) && w.el("status").className === "err";
+  // A run that said something keeps it.
+  w.msg({ type: "run-begin", source: "bridge", label: "write", requestId: "e3" });
+  w.msg({ type: "writes", applied: 1, ok: true, text: "Design Twin applied 1 edit to this file." });
+  w.msg({ type: "run-end" });
+  const kept = w.el("status").textContent === "Design Twin applied 1 edit to this file.";
+  // …as does one that put a review card up.
+  w.msg({ type: "run-begin", source: "bridge", label: "write", requestId: "e4" });
+  w.msg({ type: "review", id: "rv-e-a", lines: [], details: [], why: "x", previewable: false, waitMs: 900000 });
+  w.msg({ type: "run-end" });
+  const card = /review it below/.test(w.el("status").textContent);
+  return during === "Applying edits requested over the bridge…" && back && backRed && kept && card;
 })());
 
 console.log("Review each change first:");

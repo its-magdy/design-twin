@@ -30,10 +30,14 @@ import { solid } from "./tree";
 import { mapProps, patchUses, resolveRefs, swapIds, swapTarget, variantFor, type RefResolution, type ResolvedRefs, type Use } from "./tree-refs";
 import { errMsg } from "./util";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { goneFrom, holding, nodeById, stillInDocument, stillToRestore } from "./node-lookup";
 
 /** A patch op whose node, fonts and names all resolved. */
 export interface PatchTarget {
   node: SceneNode;
+  /** the node's name as the batch resolved it: what an error says of it once it is removed (Figma then reads no field
+   *  of it but `id`, `removed` and `type`) */
+  name: string;
   set: PatchSet;
   unbound: number;
   /** `props` keyed as setProperties takes them (null when the patch sets none) */
@@ -204,7 +208,7 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
     // Checked by writeOpError already; this is the narrowing, and a last line.
     if (!isPatchSet(set)) { bad("the patch did not pass its check"); continue; }
     uses.push(...patchUses(index, set));
-    const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+    const nd = op.nodeId ? await nodeById(op.nodeId) : null;
     if (!nd) { bad("no node with id '" + String(op.nodeId) + "' (invalid or removed)"); continue; }
     // A text's fonts can be bound to variables, so after a variable edit of the batch (sources.ts) the fonts it has when
     // the patch runs are not known yet: keepText loads them then, and a missing one fails the op (the batch is put back).
@@ -225,23 +229,32 @@ export async function resolvePatchOps(ops: readonly WriteOp[]): Promise<{ target
  * resolution of the patch's names (patchUses → resolveRefs).
  */
 export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boolean, loadFont: (f: FontName) => Promise<string | null>, bad: (message: string) => void, fontsLater = false): Promise<PatchTarget | null> {
+  // Deleted or detached since its caller found it, or at one of the awaits below (node-lookup.ts): missing, as its lookup
+  // would have said, and nothing more of it is read (a removed node's fields throw).
+  const gone = (): boolean => goneFrom(nd, bad);
+  if (gone()) return null;
   if (nd.type === "DOCUMENT" || nd.type === "PAGE") { bad("'" + nd.name + "' is a " + nd.type + "; a patch changes a layer on a page"); return null; }
   const node = nd;
+  const name = node.name;
   const fit = unfit(node, set);
   const misfits = later ? fit.kind : [...fit.kind, ...fit.state];
   for (const m of misfits) bad(m);
   // A text change keeps the text as it was, run by run, to put back: its fonts must load either way (`fontsLater`: checked
   // when it applies, by keepText).
   if (node.type === "TEXT" && !fontsLater) {
-    for (const f of await fontsToKeep(node)) {
+    const fonts = await fontsToKeep(node);
+    if (gone()) return null;
+    for (const f of fonts) {
       const err = await loadFont(f);
-      if (err) bad("'" + node.name + "' uses the " + err + ", so it cannot be changed");
+      if (err) bad("'" + name + "' uses the " + err + ", so it cannot be changed");
     }
+    if (gone()) return null;
   }
   let props: Record<string, string | boolean> | null = null;
   if (set.props && node.type === "INSTANCE") {
     const main = await node.getMainComponentAsync();
-    if (!main) { bad("set.props: the instance '" + node.name + "' has no main component to read its properties from"); return null; }
+    if (gone()) return null;
+    if (!main) { bad("set.props: the instance '" + name + "' has no main component to read its properties from"); return null; }
     const owner = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent : null;
     let defs: ComponentPropertyDefinitions;
     try { defs = (owner || main).componentPropertyDefinitions; } catch { defs = {}; }
@@ -249,21 +262,24 @@ export async function resolvePatchNode(nd: BaseNode, set: PatchSet, later: boole
     if ("errors" in mapped) { for (const e of mapped.errors) bad("set.props: " + e); return null; }
     const swapErr = await swapIds(mapped.ok, defs, (owner || main).name, swapTarget);
     if (swapErr) { bad("set.props: " + swapErr); return null; }
+    if (gone()) return null;
     if (!later) { const v = await variantProblem(node, mapped.ok); if (v) { bad(v); return null; } }
+    if (gone()) return null;
     props = mapped.ok;
   }
   // The variables the node's number fields are bound to now: a raw value set by the patch unbinds one, and a
   // restore binds it back.
   const bound = new Map<string, Variable>();
-  for (const k of NUMBER_TOKEN_FIELDS) {
-    const id = boundId(node, k);
+  const boundIds = NUMBER_TOKEN_FIELDS.map((k) => boundId(node, k));
+  for (const id of boundIds) {
     if (!id || bound.has(id)) continue;
     let v: Variable | null = null;
     try { v = await figma.variables.getVariableByIdAsync(id); } catch { v = null; }
     if (v) bound.set(id, v);
   }
+  if (gone()) return null;
   if (misfits.length) return null;
-  return { node, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map(), components: new Map() }, bound, ...(fontsLater && node.type === "TEXT" ? { fontsLater: true as const } : {}) };
+  return { node, name, set, unbound: checkPatch(set).summary.unbound, props, refs: { instances: new Map(), variables: new Map(), textStyles: new Map(), components: new Map() }, bound, ...(fontsLater && node.type === "TEXT" ? { fontsLater: true as const } : {}) };
 }
 
 // ---------------------------------------------------------------- keeping and putting back
@@ -360,12 +376,15 @@ async function variablesById(ids: Iterable<string>): Promise<Map<string, Variabl
  *  range property on top of it (RANGE_PROPS: font, size, spacing, case, decoration and its details, paragraph and list
  *  settings, link, paints), its paint style; then, last, the variables its runs were bound to (a raw value set above
  *  unbinds one). An empty text has no runs: the same properties are kept on the node. Every font it needs to be put back
- *  (fontsToKeep) is loaded here, before the caller changes anything; one that does not load is an error. */
-export async function keepText(t: TextNode): Promise<Restore> {
-  for (const f of await fontsToKeep(t)) {
-    try { await figma.loadFontAsync(f); } catch {
-      throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
-    }
+ *  (fontsToKeep) is loaded here, before the caller changes anything; one that does not load is an error. `still` is called
+ *  after each of those awaits, before the text is read again: it throws when the text is gone by then (holding). */
+export async function keepText(t: TextNode, still: () => void = () => {}): Promise<Restore> {
+  const fonts = await fontsToKeep(t);
+  still();
+  for (const f of fonts) {
+    const failed = await figma.loadFontAsync(f).then(() => false, () => true);
+    still();
+    if (failed) throw new Error("'" + t.name + "' uses the font '" + f.family + " " + f.style + "', which is not available, so a change to it could not be put back");
   }
   const chars = t.characters;
   const runs: Segment[] = chars.length ? t.getStyledTextSegments([...SEGMENT_FIELDS]) : [];
@@ -381,7 +400,10 @@ export async function keepText(t: TextNode): Promise<Restore> {
   if (whole) for (const [, id] of whole.bound) if (id) ids.push(id);
   const vars = await variablesById(ids);
   return async (allowed) => {
-    const check = checker(allowed);
+    // After each await: "Allow edits" still on, and the text not removed meanwhile (its fields would throw; what was
+    // set on it went with it, which the batch's put-back says: node-lookup.ts stillToRestore).
+    const stop = checker(allowed);
+    const check = (): void => { stop(); stillToRestore(t); };
     if (t.characters !== chars) t.characters = chars;
     if (whole) {
       // Its style (kept when it already matches), then the properties on top, then the bindings.
@@ -452,8 +474,9 @@ function keepStyleLink(n: SceneNode, field: "fillStyleId" | "strokeStyleId"): ((
   };
 }
 
-/** Everything the patch can change on the node, as it is now, and the restore that puts it back in a fixed order. */
-async function snapshot(t: PatchTarget): Promise<Restore> {
+/** Everything the patch can change on the node, as it is now, and the restore that puts it back in a fixed order.
+ *  `still` is checked after its awaits (keepText). */
+async function snapshot(t: PatchTarget, still: () => void): Promise<Restore> {
   const n = t.node;
   const set = t.set;
   const tok = set.tokens || {};
@@ -552,7 +575,7 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
   for (const link of links) steps.push(link);
   // 6. the text, run by run
   if (textRuns && n.type === "TEXT") {
-    const text = await keepText(n);
+    const text = await keepText(n, still);
     steps.push((check) => text(() => { check(); return true; }));
   }
   // 7. the variables that were bound, bound again where a raw value above (or the patch) unbound them
@@ -564,7 +587,11 @@ async function snapshot(t: PatchTarget): Promise<Restore> {
     }
   });
   return async (allowed) => {
-    const check = checker(allowed);
+    // After each await (a paint style, a text style set back): "Allow edits" still on, and the node not removed meanwhile.
+    // Removed, nothing is left to put back on it (its fields throw): the rest of the steps are not run, and the batch's
+    // put-back says the change went with the node (node-lookup.ts stillToRestore).
+    const stop = checker(allowed);
+    const check = (): void => { stop(); stillToRestore(n); };
     const failed: string[] = [];
     for (const step of steps) {
       check();
@@ -698,18 +725,24 @@ async function setFields(t: PatchTarget, consent: () => void): Promise<void> {
  * the copy is new, and a throw removes it with the tree it is in.
  */
 export async function patchCopy(t: PatchTarget, node: SceneNode, consent: () => void): Promise<void> {
+  // The copy's layer, made before the build's first await: deleted or detached at one of them (node-lookup.ts), it fails
+  // as missing. Checked before it is read, and before anything is set after the awaits here (holding: the text-style
+  // await in setFields too); between them nothing of it is read but its name, kept from before.
+  stillInDocument(node);
+  const name = node.name;
   const on: PatchTarget = { ...t, node };
   const fit = unfit(node, t.set);
   const problems = fit.kind.concat(fit.state);
   if (on.props && node.type === "INSTANCE") { const v = await variantProblem(node, on.props); if (v) problems.push(v); }
-  if (problems.length) throw new Error("'" + node.name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
+  if (problems.length) throw new Error("'" + name + "' (" + node.id + ", a layer of a copy): " + problems.join("; "));
   if (on.fontsLater && node.type === "TEXT") {
     for (const f of await fontsToKeep(node)) {
-      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
     }
   }
-  consent();
-  await setFields(on, consent);
+  const held = holding(node, consent);
+  held();
+  await setFields(on, held);
 }
 
 /**
@@ -719,22 +752,39 @@ export async function patchCopy(t: PatchTarget, node: SceneNode, consent: () => 
  * then: the plugin then changes nothing more). `consent` is checked after every await.
  */
 export async function applyPatch(t: PatchTarget, consent: () => void, allowed: () => boolean, changes: Change[]): Promise<Change> {
+  // Resolved before the batch ran: deleted or detached since (before this op, or at any of its awaits), it fails as its
+  // lookup would have. Checked before the node is read at all, and after every await (node-lookup.ts holding).
+  const still = (): void => stillInDocument(t.node);
+  still();
   await checkBeforeApply(t);
+  still();
   // Every field of a text (its size and resizing included) needs its fonts loaded: the ones it has now, when they were
   // left to this point.
   if (t.fontsLater && t.node.type === "TEXT") {
-    for (const f of await fontsToKeep(t.node)) {
-      try { await figma.loadFontAsync(f); } catch { throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed"); }
+    const fonts = await fontsToKeep(t.node);
+    still();
+    for (const f of fonts) {
+      const failed = await figma.loadFontAsync(f).then(() => false, () => true);
+      still();
+      if (failed) throw new Error("'" + t.node.name + "' uses the font '" + f.family + " " + f.style + "', which is not available in this file, so it cannot be changed");
     }
   }
-  const restore = await snapshot(t);
+  const kept = await snapshot(t, still);
+  still();
   consent();
+  // A node removed since its fields were set reads nothing back (Figma throws on every field of it but `id`): what it
+  // was set to went with it, and that is what the reply says, not Figma's read errors.
+  const restore: Restore = async (ok) => {
+    stillToRestore(t.node);
+    await kept(ok);
+  };
   const applied: AppliedWrite = { id: t.node.id };
   if (t.unbound) applied.unbound = t.unbound;
-  const change: Change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", restore };
+  const change: Change = { applied, kind: "patched node", what: "the changes to '" + t.node.name + "' (" + t.node.id + ")", on: t.node, restore };
   changes.push(change);
   try {
-    await setFields(t, consent);
+    // The node checked again after the text-style await, before the fields after it are set.
+    await setFields(t, holding(t.node, consent));
   } catch (e) {
     if (allowed()) {
       // Put back here so the op leaves nothing; if that fails or is stopped, the Change stays for the batch to report.

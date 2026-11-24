@@ -6,13 +6,13 @@ import { EDITS_OFF_MESSAGE, reviewLines, waitingMessage, writeOpError, type Appl
 import { cardLines } from "../../bridge/src/review-card.ts";
 import { previewOffered, reviewDecision } from "../../bridge/src/review-policy.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
-import { countUnreviewed, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card } from "./review";
+import { countUnreviewed, keptOnPutBack, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card, type PutBack } from "./review";
 import { readBatch, SHOW_CAP } from "./review-reads";
 import { queueWork } from "./state";
 import { toast } from "./toast";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
-import { buildTree, resolveTreeOps, type TreeTarget } from "./tree";
-import { makeDest } from "./places";
+import { buildTree, resolveTreeOps, treeGone, type TreeTarget } from "./tree";
+import { destGone, makeDest } from "./places";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
@@ -23,10 +23,11 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, restoreChanges, restoredRows, RestoreStopped, type Change, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, goneSentence, hasLanded, landedResult, landedText, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
-import { resolveImages, setBatchImages } from "./images";
+import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
+import { inDocument, nodeById, noNode, stillInDocument, takeBack } from "./node-lookup";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -51,23 +52,27 @@ async function loadNodeFonts(node: TextNode): Promise<void> {
 // Resolve an explicit parentId to a container, or throw. Same contract as setFill/setText below: a
 // write that didn't land where it was asked to must NOT report success.
 //
-// This is resolved BEFORE the node is created, deliberately. getNodeByIdAsync resolves to null for an
+// This is resolved BEFORE the node is created, deliberately. nodeById resolves to null for an
 // invalid or removed id — and for invisible instance children when skipInvisibleInstanceChildren is
 // on (which the design-system read toggles) — so a stale id is ordinary, not exotic. The old code
 // silently fell back to currentPage: an agent composing a tree (createFrame root -> createFrame
 // parentId:root -> children) got ok:true and a flat pile of nodes on the canvas. Validating first
 // also means a bad parent fails WITHOUT leaving an orphan node the caller can't see in `applied`.
+const parentGone = (parentId: string): string => "parent '" + parentId + "' not found (invalid or removed id)";
 async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNode> {
   if (!parentId) return figma.currentPage;
-  const p = await figma.getNodeByIdAsync(parentId);
-  if (!p) throw new Error("parent '" + parentId + "' not found (invalid or removed id)");
+  const p = await nodeById(parentId);
+  if (!p) throw new Error(parentGone(parentId));
   if (!("appendChild" in p)) throw new Error("parent '" + p.name + "' (" + p.type + ") cannot have children");
   for (let a: BaseNode | null = p; a; a = a.parent) {
     if (a.type === "INSTANCE") throw new Error("parent '" + p.name + "' is " + (a === p ? "an instance" : "inside the instance '" + a.name + "'") + ", which cannot take new children");
   }
   // manifest documentAccess is "dynamic-page": appendChild on a PageNode requires the page to be
   // loaded first, or it throws. The read plane already does this (collect.ts / components.ts).
-  if (p.type === "PAGE") await p.loadAsync();
+  if (p.type === "PAGE") {
+    await p.loadAsync();
+    if (!inDocument(p)) throw new Error(parentGone(parentId)); // deleted while it loaded
+  }
   return p as ChildrenMixin & BaseNode;
 }
 
@@ -95,7 +100,7 @@ interface Resolved {
 /** A node an op just created, as a Change whose undo removes it. */
 function createdNode(n: SceneNode): Change {
   markCreated(n);
-  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", restore() { n.remove(); } };
+  return { applied: { id: n.id }, kind: "created node", what: "the new node '" + n.name + "' (" + n.id + ")", on: n, made: true, owns: [n], restore(_allowed, ours) { takeBack([n], ours); } };
 }
 
 // Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
@@ -133,23 +138,29 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       changes.push(change);
       try { await figma.loadFontAsync(t.fontName as FontName); } catch (e) {
         // The font did not load: take back the empty node (unless edits are off by now: then it stays, and is reported).
-        if (editsAllowedNow()) { t.remove(); changes.pop(); }
+        if (editsAllowedNow()) { takeBack([t]); changes.pop(); }
         throw e;
       }
       // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
-      if (!editsAllowedNow()) { t.remove(); changes.pop(); consent(); }
+      if (!editsAllowedNow()) { takeBack([t]); changes.pop(); consent(); }
+      // The parent deleted during it (node-lookup.ts): likewise, and the op fails as its lookup would have. The current
+      // page too, when no parent was named: the text was made on it, and it is not one the designer can see any more.
+      if (!inDocument(parent)) { takeBack([t]); changes.pop(); throw new Error(op.parentId ? parentGone(op.parentId) : noNode(parent.id, "page")); }
+      // The text itself deleted or detached during it: it is in no page, so nothing of the op is in the file; it fails as
+      // missing, and is never written to nor put back on a page.
+      if (!inDocument(t)) { changes.pop(); throw new Error(noNode(t.id)); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
       parent.appendChild(t);
       return change.applied;
     }
-    // setFill/setText THROW rather than no-op. getNodeByIdAsync resolves to null for an invalid or
+    // setFill/setText THROW rather than no-op. nodeById resolves to null for an invalid or
     // removed id (and for invisible instance children when skipInvisibleInstanceChildren is on), and
     // not every node type carries fills/characters. Returning {id} in those cases reported a write
     // that never happened — over MCP the agent reads that as success and builds on a false premise.
     case "setFill": {
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
       const paint = solidPaint(op.color, "setFill color");
@@ -157,10 +168,12 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // A text's paints and paint-style links can differ from run to run even when the paints look the same: kept run by
       // run (keepText loads the fonts that needs).
       if (nd.type === "TEXT") {
-        const restore = await keepText(nd);
+        // Deleted while its fonts loaded (node-lookup.ts): checked after each load, before the text is read again.
+        const restore = await keepText(nd, () => stillInDocument(nd, "node", "setFill: "));
+        stillInDocument(nd, "node", "setFill: ");
         consent();
         nd.fills = [paint];
-        const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", restore };
+        const change: Change = { applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
         changes.push(change);
         return change.applied;
       }
@@ -169,7 +182,7 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       const oldStyle = target.fillStyleId;
       target.fills = [paint];
       const change: Change = {
-        applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")",
+        applied: ifDefined("id", op.nodeId), kind: "fill change", what: "the fill of '" + nd.name + "' (" + nd.id + ")", on: nd,
         // The paints, then the paint style they came from (setting paints detaches it).
         async restore(allowed) {
           target.fills = old;
@@ -183,15 +196,19 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       return change.applied;
     }
     case "setText": {
-      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
+      const nd = op.nodeId ? await nodeById(op.nodeId) : null;
       if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
+      // Deleted while its fonts loaded (node-lookup.ts): checked after each load, before the text is read again.
+      const still = (): void => stillInDocument(nd, "node", "setText: ");
+      still();
       consent();
-      const restore = await keepText(nd);
+      const restore = await keepText(nd, still);
+      still();
       consent();
       nd.characters = op.text || "";
-      const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", restore };
+      const change: Change = { applied: ifDefined("id", op.nodeId), kind: "text change", what: "the text of '" + nd.name + "' (" + nd.id + ")", on: nd, restore };
       changes.push(change);
       return change.applied;
     }
@@ -209,15 +226,22 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     // tree lands whole or not at all.
     case "createTree": {
       if (!tree) throw new Error("createTree: the op was not resolved before the batch ran");
+      // What it holds from before the batch ran (its page, a layer it copies, the result it updates) is still there; a
+      // component it places is checked as it is placed (tree.ts treeGone).
+      const gone = treeGone(tree);
+      if (gone !== null) throw new Error(gone);
       consent();
       // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
       // one by one, as they land.
       if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
       // The page and section it lands in that the batch makes, when this is the first op landing there (places.ts):
-      // each a change of its own, so a later failure removes it after the frames in it.
+      // each a change of its own, so a later failure removes it after the frames in it. A page it made is held across
+      // its load: deleted meanwhile, the op fails as missing.
       const made = await makeDest(tree.dest, consent, changes);
+      const lost = destGone(tree.dest);
+      if (lost !== null) throw new Error(lost);
       consent();
-      const change = await buildTree(tree, consent);
+      const change = await buildTree(tree, consent, changes);
       changes.push(change);
       return made.page || made.section ? { ...change.applied, ...(made.page ? { pageCreated: made.page } : {}), ...(made.section ? { sectionCreated: made.section } : {}) } : change.applied;
     }
@@ -233,13 +257,18 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
     case "patchWhere": {
       if (!rule) throw new Error("patchWhere: the op was not resolved before the batch ran");
       const group = {};
+      // Named as the batch resolved it: a node removed since has no name Figma will read.
+      const named = (t: PatchTarget, e: unknown): Error => new Error("'" + t.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
       for (const t of rule.matches) {
         consent();
         try { (await applyPatch(t, consent, editsAllowedNow, changes)).group = group; } catch (e) {
           if (e instanceof EditsRevoked) throw e;
-          throw new Error("'" + t.node.name + "' (" + t.node.id + "), one of the " + rule.matches.length + " layers its rule matches: " + errMsg(e));
+          throw named(t, e);
         }
       }
+      // Each match's patch awaits (its fonts, a text style): one deleted or detached at a later match's awaits fails the op
+      // as missing (node-lookup.ts), never counted as applied.
+      for (const t of rule.matches) { try { stillInDocument(t.node); } catch (e) { throw named(t, e); } }
       const first = rule.matches[0];
       return { matched: rule.matches.length, pages: rule.match.pages.length, ...(first && first.unbound ? { unbound: first.unbound } : {}) };
     }
@@ -306,31 +335,46 @@ export async function submitWrites(ops: WriteOp[], images?: ImageTable): Promise
 /** How a batch runs: as first sent (it may wait for review), as the designer approved it, or as a preview of it. */
 type Mode = "submit" | "approved" | "preview";
 /** What a run leaves beside its result: the changes it made (a preview puts them back) and the existing layers it
- *  counted for the review (review-policy.ts). */
-interface RunOut { changes: Change[]; layers: number }
+ *  counted for the review (review-policy.ts); what it landed, and what the card's earlier previews had (`prior`). */
+interface RunOut { changes: Change[]; layers: number; landed: Landed; prior?: Landed | undefined }
+/** What is in the file from this batch besides its changes: what its run landed, and what earlier previews of it had. */
+const landedOf = (out: RunOut): Landed => out.prior ? mergeLanded(out.prior, out.landed) : out.landed;
 /** What a card showed of each patchWhere op's matches (op index → its token and the selection it looked in, rules.ts): on
  *  approval they must still match. */
 type Expect = ReadonlyMap<number, ShownRule>;
 const NO_EXPECT: Expect = new Map();
 
-async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode, expect: Expect): Promise<{ result: WriteResult; changes: Change[] } | { card: Card }> {
+// `prior`: what the card's earlier previews of this batch landed (review.ts card.landed), which their put-backs left in
+// the file: a refusal or failure of this run says it, as it says what this run landed itself.
+async function runBatch(list: WriteOp[], images: ImageTable | undefined, mode: Mode, expect: Expect, prior?: Landed): Promise<{ result: WriteResult; changes: Change[]; landed: Landed } | { card: Card }> {
   // One batch is one Cmd-Z step. Figma keeps every plugin action in a single undo step until commitUndo(), so
   // without these the designer's first Cmd-Z undid every batch since the plugin started (seen live: it removed a
   // frame an earlier batch had created). Commit before, so the batch never joins earlier work, and after, so
   // the next one never joins it. Committing with nothing pending is a no-op.
-  const out: RunOut = { changes: [], layers: 0 };
+  const out: RunOut = { changes: [], layers: 0, landed: { imported: 0, images: 0 }, prior };
+  const landed = (): Landed => landedOf(out);
   if (list.length) commitUndo();
-  const r = await gatedWrites(list, images, mode, out, expect);
+  let r: WriteResult | { card: Card };
+  try {
+    r = await gatedWrites(list, images, mode, out, expect);
+  } catch (e) {
+    // A write that throws is said too (its run's "Applying edits…" line must not stay up), then fails as it did.
+    if (mode !== "preview" && list.length) announceThrown(e, out.changes.length > 0 || hasLanded(landed()));
+    throw e;
+  }
   if (list.length) commitUndo();
   if ("card" in r) return r;
-  // A preview is said by its card; a batch refused because another waits is said by that card already.
-  if (mode !== "preview" && r.refused !== "waiting") announce(r);
+  // A refusal after an import or an image landed tells the agent so, as the designer is told (write-batch.ts).
+  const all = landed();
+  r = landedResult(r, all);
+  // A preview is said by its card. An empty batch says nothing.
+  if (mode !== "preview" && list.length) announce(r, all);
   if (mode === "submit" && list.length && r.refused !== "waiting") {
     rememberWrite(r);
     // What a batch that did not wait changed counts toward the next forced review (review-policy.ts).
     if (r.applied.length) countUnreviewed(out.layers);
   }
-  return { result: r, changes: out.changes };
+  return { result: r, changes: out.changes, landed: all };
 }
 
 function commitUndo(): void {
@@ -338,26 +382,76 @@ function commitUndo(): void {
 }
 
 // A write is never silent: whatever changed the file (or was refused from changing it) is said in Figma's own
-// toast AND on the plugin window's status line (ui.template.html `writes`). An empty batch changed nothing and
-// says nothing.
-function announce(r: WriteResult): void {
+// toast AND on the plugin window's status line (ui.template.html `writes`), which it replaces — the write's run put
+// "Applying edits…" there. An empty batch changed nothing and says nothing (runBatch does not call this for one).
+// A batch refused in its run because another waits for review is said on the status line only: that card's toast went
+// up a moment ago. One refused before any run (bridge.ts, the usual case) is said in a toast only (announceWaiting).
+// `landed`: what the batch added that nothing puts back (library imports, images), so a refusal never says "nothing
+// changed" after one.
+function announce(r: WriteResult, landed?: Landed): void {
   const n = r.applied.length;
   const edits = n + " edit" + (n === 1 ? "" : "s");
+  const some = landed && hasLanded(landed) ? landed : null;
   let text: string | null = null;
+  if (r.refused === "waiting") {
+    say(WAITING, 0, false, false);
+    return;
+  }
   if (r.refused === "edits-off") text = n
-    ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
-    : "Design Twin refused an edit request — 'Allow edits' is off.";
-  else if (r.refused === "rejected") text = "Design Twin did not apply the edit request — it was rejected. Nothing changed.";
+    ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "")
+    : "Design Twin refused an edit request — 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+  // Rejected after a preview that loaded an image (or imported an item) and was put back: that stays, and is said.
+  else if (r.refused === "rejected") text = some
+    ? "Design Twin did not apply the edit request — it was rejected. No layer changed, but its preview had already " + landedText(some) + "."
+    : "Design Twin did not apply the edit request — it was rejected. Nothing changed.";
   else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
   else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
   else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
-  else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed: " + (r.error || "unknown error");
-  else if (!r.ok && keptOnPutBack.has(r)) text = "Design Twin put the preview back, but kept what you changed since: " + keptOnPutBack.get(r) + ".";
+  // Put back after an op failed: an image loaded (or an item imported) before it stays, and is said.
+  else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed"
+    + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
+  // A preview put back but for what the designer changed since (a section side they resized): said to them too.
+  else if (!r.ok && keptOnPutBack.has(r)) text = "Design Twin put the preview back, but kept what you changed since: " + keptOnPutBack.get(r) + "."
+    + (some ? " Its preview had already " + landedText(some) + "; that stays." : "");
+  // Refused before anything changed (#206): a check before the first op (an image hash the file does not have, a name
+  // that resolves to nothing, a bad op, Dev Mode, a file that changed while the batch waited for review), or an op
+  // that failed and put itself back before anything else had landed. No layer changed then, but a library item imported
+  // or an image loaded before the refusal stays, and is said.
+  else if (!r.ok) text = some
+    ? "Design Twin refused an edit request — no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error)
+    : REFUSED + refusalReason(r.error);
   if (text === null) return;
-  toast(text, !r.ok);
-  const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
+  say(text, n, r.ok);
+}
+
+const REFUSED = "Design Twin refused an edit request — nothing changed: ";
+const WAITING = "Design Twin refused another edit request while one waits for your review — nothing changed.";
+
+/** A write refused before it reached the batch (bridge.ts: the wire guard), said like any other refusal. */
+export function announceRefused(error: string): void {
+  say(REFUSED + refusalReason(error), 0, false);
+}
+
+/** A write refused before any run because a card already waits (bridge.ts): Figma's toast only. No run began, so the
+ *  window's line is still the card's "review it below", which stays; the card itself is left as it is. */
+export function announceWaiting(): void {
+  toast(WAITING, true);
+}
+
+/** The toast and the status line for `text` (red unless `ok`); `toasts: false` for the status line only. */
+function say(text: string, applied: number, ok: boolean, toasts = true): void {
+  if (toasts) toast(text, !ok);
+  const m: WritesMsg = { type: "writes", applied, ok, text };
   figma.ui.postMessage(m);
 }
+
+/** A write that threw (runBatch): `landed` when it had changed the file before it did. */
+function announceThrown(e: unknown, landed: boolean): void {
+  say(landed
+    ? "Design Twin could not finish an edit request: " + errMsg(e) + " — some of it may be in the file."
+    : "Design Twin could not run an edit request — nothing changed: " + errMsg(e), 0, false);
+}
+
 
 // The plan of what the batch's create ops make (batch-plan.ts) lives exactly as long as the batch.
 // So do the images it made (images.ts).
@@ -400,10 +494,9 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   }
   const badTable = imageTableError(images);
   if (badTable !== null) return { ok: false, applied, error: badTable + ". Nothing was changed." };
-  // The images first, once (images.ts): each one the paints read from disk made from its bytes, each `hash` checked
-  // against the file. Making an image adds no node; one Figma cannot open refuses the batch with the rest of its problems.
-  const imgs = await resolveImages(list, images);
-  setBatchImages(imgs.made);
+  // The images first (images.ts): each `hash` checked against the file, each image from disk checked for its bytes. None
+  // is made yet: that waits until the batch runs (after its review, below), so a batch refused first loads no image.
+  const imgs = await checkImages(list, images);
   // Every name an op carries is resolved against the file before the first op runs (spec decisions 14, 15): a
   // collection, mode, page, component, variable or style that matches nothing or several things, a missing node, a node
   // that cannot take a field, a font that does not load, a node this session did not create — the batch is refused
@@ -436,12 +529,12 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     // Approved (or previewed) after a wait: the designer may have changed the file while the card was up, so the batch
     // was resolved again just now, against the file as it is; one the file no longer accepts is refused whole.
     const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
-    return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems) };
+    return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems, { landed: landedOf(out) }) };
   }
   // A bulk change by rule always waits for the designer (`bulkByRule`); on approval its matches were counted again just
   // now (resolveRuleOps with the card's tokens), and a batch whose matches drifted from the card's was refused above.
   // The designer's review (review.ts, spec decision 18): decided here, once the whole batch resolved (a batch that would
-  // be refused never puts a card up) and before anything touches the file (the library imports below included).
+  // be refused never puts a card up) and before anything touches the file (the images and library imports below included).
   if (mode === "submit" && list.length) {
     const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
     out.layers = reads.layers;
@@ -472,17 +565,34 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
         ops: list, lines, shows, details: reviewLines(list), why: decision.reason,
         previewable: previewOffered({ sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, deletes: structure.deletes.size > 0, keyedResend }),
         // Each a run of its own on the plugin's run chain, after whatever runs now: the batch is resolved again then.
-        apply: () => queueWork(async () => { const r = await runBatch(list, images, "approved", shown); return "card" in r ? notApplied() : r.result; }),
-        preview: () => queueWork(async () => {
-          const r = await runBatch(list, images, "preview", shown);
-          if ("card" in r) return { result: notApplied(), putBack: async () => null };
+        apply: (prior) => queueWork(async () => { const r = await runBatch(list, images, "approved", shown, prior); return "card" in r ? notApplied() : r.result; }),
+        preview: (prior) => queueWork(async () => {
+          const r = await runBatch(list, images, "preview", shown, prior);
+          if ("card" in r) return { result: notApplied(), putBack: async (): Promise<PutBack> => ({ failed: null, gone: [], restored: 0 }) };
           const changes = r.changes;
-          return { result: r.result, putBack: () => queueWork(() => putBack(changes)) };
+          return { result: r.result, putBack: () => queueWork(() => putBack(changes)), landed: r.landed };
         }),
         announce,
       });
       return { card };
     }
+  }
+  // The images from disk are made only now (images.ts makeImages): the whole batch resolved, and a batch that waits for
+  // the designer was approved (resolved again then, against the file as it is) or is being previewed — so a batch
+  // refused, rejected or withdrawn before it runs loads none. Making one hands its bytes to Figma (no node), so "Allow
+  // edits" is asked before each; unticked partway, nothing more is made. One Figma cannot open refuses the batch, and
+  // the images after it are not made. Ones made before either stay (nothing removes an image), and the refusal says so
+  // (runBatch: landedResult, announce). A preview needs its images to show them: it makes them, and a put-back leaves
+  // them loaded, with no layer of the batch using them (review.ts says so if the card then ends unapplied).
+  let madeImages: MadeImage[] = [];
+  if (imgs.pending.length) {
+    const m = await makeImages(imgs.pending, editsAllowedNow);
+    out.landed.images += m.loaded;
+    if (m.revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    setBatchImages(m.made);
+    madeImages = m.images;
+    const firstBad = m.problems[0];
+    if (firstBad) return { ok: false, applied, failedAt: firstBad.index, failedOp: firstBad.op, error: batchRefusal(m.problems, { landed: landedOf(out) }) };
   }
   const changes: Change[] = out.changes;
   countPropertySteps(changes);
@@ -494,31 +604,31 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     // what stopped the batch or the op failed for its own reason after the box was unticked (a font load that rejects
     // late): after that the plugin changes nothing, not even to undo its own work, and the reply says what stayed.
     const off = revoked || !editsAllowedNow();
-    const { restored, failed } = off ? { restored: [], failed: [] } : await restoreChanges(changes, editsAllowedNow);
-    const back = new Set(restored);
-    const kept = !revoked && off && changes.length
-      ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(changes) + ", so they stay applied"
+    // A change whose layer the designer deleted while the batch ran went with it: neither put back nor applied.
+    const { restored, failed, gone, stays } = off ? { restored: [], failed: [], ...staying(changes) } : await restoreChanges(changes, editsAllowedNow);
+    const kept = !revoked && off && stays.length
+      ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied"
       : "";
     return {
       ok: false,
       // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
-      applied: [...changes.filter((c) => !back.has(c)).map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
+      applied: [...stays.map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
       failedAt: i,
       failedOp: op && op.op,
-      error: errMsg(e) + (failed.length ? "; " + failed.join("; ") : "") + kept,
+      error: errMsg(e) + [...failed, ...gone.map(goneSentence)].map((s) => "; " + s).join("") + kept,
       ...(revoked ? { refused: "edits-off" as const } : {}),
       ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
   };
-  // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole.
+  // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole. One
+  // that could not be put back stays (listed in `applied`), and the refusal says so — never that nothing was changed.
   const refuseLate = async (late: OpProblem[]): Promise<WriteResult> => {
     const firstLate = late[0];
-    const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
-    const back = new Set(restored);
+    const { restored, failed, stays } = await restoreChanges(changes, editsAllowedNow);
     return {
-      ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied),
+      ok: false, applied: stays.map((c) => c.applied),
       ...(firstLate ? { failedAt: firstLate.index, failedOp: firstLate.op } : {}),
-      error: batchRefusal(late) + (failed.length ? "; " + failed.join("; ") : ""),
+      error: batchRefusal(late, { landed: landedOf(out), failed }),
       ...(restored.length ? { restored: restored.map((c) => c.applied).reverse() } : {}),
     };
   };
@@ -532,10 +642,11 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   if (creates.targets.size) {
     if (!editsAllowedNow()) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     if (creates.importCount) {
-      const { problems: late, revoked } = await creates.imports(editsAllowedNow);
+      const { problems: late, revoked, imported } = await creates.imports(editsAllowedNow);
+      out.landed.imported += imported || 0;
       if (revoked) return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
       const firstLate = late[0];
-      if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late) };
+      if (firstLate) return { ok: false, applied, failedAt: firstLate.index, failedOp: firstLate.op, error: batchRefusal(late, { landed: landedOf(out) }) };
     }
     try {
       for (const [i, row] of await applyCreates(creates, consent, changes)) rows[i] = row;
@@ -553,7 +664,8 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   for (const step of [trees, patches, rules, sources]) {
     if (!step.importCount) continue;
     if (!editsAllowedNow()) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
-    const { problems: late, revoked } = await step.imports(editsAllowedNow);
+    const { problems: late, revoked, imported } = await step.imports(editsAllowedNow);
+    out.landed.imported += imported || 0;
     // Unticked between imports: the ones before stay (an import cannot be put back, and it only makes the item
     // available), nothing else runs.
     if (revoked) return changes.length ? revokedAfterCreates() : { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
@@ -614,17 +726,36 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const lost = (deleted ? [deleted + " node(s) deleted"] : []).concat(gone);
     return lost.length ? { ...r, applied: r.applied.concat(goneRows), error: r.error + "; already gone before it, which cannot be brought back: " + lost.join(", ") } : r;
   };
+  // A variant dropped from a set's table: its instances lose their main component (said, not refused). Counted for every
+  // re-send first: those are the batch's last awaits, and the designer can change the file at any of them (node-lookup.ts),
+  // so what the removals hold is checked again after them, right before the first removal: the result each re-send
+  // updates is still in the document, and each node it removes still holds only what its key built.
+  const orphans = new Map<number, string[]>();
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try { orphans.set(i, await orphanWarnings(removalsOf(t.update))); } catch (e) { return lostWith(i, op, e); }
+  }
+  for (const [i, t] of trees.targets) {
+    const op = list[i];
+    if (!op || !t.update) continue;
+    try {
+      stillInDocument(t.update.root);
+      for (const n of removalsOf(t.update)) checkRemoval(t.update, n);
+    } catch (e) { return lostWith(i, op, e); }
+  }
   for (const [i, t] of trees.targets) {
     const op = list[i];
     if (!op || !t.update) continue;
     // The reply counts what is removed now, after every other op (a later op may have moved a node out).
     const row = rows[i];
     if (row) { const n = removalCount(t.update); if (n) row.removed = n; else delete row.removed; }
+    for (const m of orphans.get(i) || []) warnings.push("ops[" + i + "]: " + m);
     try {
-      // A variant dropped from a set's table: its instances lose their main component (said, not refused).
-      for (const m of await orphanWarnings(removalsOf(t.update))) warnings.push("ops[" + i + "]: " + m);
       for (const n of removalsOf(t.update)) {
-        if (n.removed) continue;
+        // Out of the document already (the designer deleted or detached it, at the orphan count's awaits or before): it is
+        // not this re-send's to remove, nor to claim (node-lookup.ts); never read.
+        if (!inDocument(n)) continue;
         consent();
         const what = (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET" ? "variant '" : "'") + n.name + "' (" + n.id + ")";
         const id = n.id;
@@ -652,7 +783,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   }
   const done: AppliedWrite[] = rows.filter((a): a is AppliedWrite => a !== undefined);
   const undo = propertyUndoSteps();
-  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}), ...(imgs.images.length ? { images: imgs.images } : {}) };
+  return { ok: true, applied: done, ...(warnings.length ? { warnings } : {}), ...(undo > 1 ? { undoSteps: undo, undoNote: undoNote(undo) } : {}), ...(madeImages.length ? { images: madeImages } : {}) };
 }
 
 /** A run that could not even start its batch (it cannot happen: only a first send puts a card up). */
@@ -662,25 +793,21 @@ function notApplied(): WriteResult {
 
 /** Put a preview back (review.ts Put back, or a card that ended while previewing): its own Cmd-Z step, after the
  *  preview's — so the designer's undo history has two entries for a preview that was put back (a Cmd-Z after it brings
- *  the preview back; the plugin cannot remove a step). Null when all of it went back; else what stays. */
-async function putBack(changes: readonly Change[]): Promise<WriteResult | null> {
+ *  the preview back; the plugin cannot remove a step). `failed` null when all of it went back, else what stays; `gone`,
+ *  what went with a layer the designer deleted meanwhile (write-batch.ts goneSentence), never called put back; `restored`,
+ *  how many changes were put back (none, when every layer went: the reply says nothing was). */
+async function putBack(changes: readonly Change[]): Promise<PutBack> {
   commitUndo();
-  const { restored, failed } = await restoreChanges(changes, editsAllowedNow);
+  const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
   commitUndo();
-  if (!failed.length) return null;
-  const back = new Set(restored);
+  const went = gone.map(goneSentence);
+  if (!failed.length) return { failed: null, gone: went, restored: restored.length };
   // Every change may have gone back but for what the designer has changed since (a section they resized): then
-  // nothing is listed.
-  const stays = changes.filter((c) => !back.has(c)).map((c) => c.applied);
-  const r: WriteResult = { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
-  // All of it went back but for what the designer changed since: said to them as well (announce), not only to the agent.
+  // nothing is listed, and that is said to them as well (announce), not only to the agent.
+  const r: WriteResult = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
   if (!stays.length) keptOnPutBack.set(r, failed.join("; "));
-  return r;
+  return { failed: r, gone: went, restored: restored.length };
 }
-
-/** A put-back's result that left only what the designer changed since (a section side they resized), with what it
- *  kept: announce says it in the window and Figma's toast, as it says any other end of a write. */
-const keptOnPutBack = new WeakMap<WriteResult, string>();
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */
 function undoNote(steps: number): string {

@@ -19,6 +19,7 @@
 import { INHERITED, type WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import type { Change, OpProblem } from "./write-batch";
+import { nodeById, stillInDocument } from "./node-lookup";
 
 type ModeNode = BaseNode & ExplicitVariableModesMixin;
 
@@ -59,7 +60,7 @@ export async function resolveModeOps(ops: readonly WriteOp[]): Promise<{ targets
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
     const nodeId = op.nodeId || "";
     const ref = op.collection || "";
-    const nd = await figma.getNodeByIdAsync(nodeId);
+    const nd = await nodeById(nodeId);
     let node: ModeNode | null = null;
     if (!nd) bad("no node with id '" + nodeId + "' (invalid or removed)");
     else if (!("setExplicitVariableModeForCollection" in nd)) bad("node '" + nd.name + "' is a " + nd.type + ", which cannot carry a variable mode");
@@ -121,6 +122,7 @@ function modeName(collection: VariableCollection, modeId: string | undefined | n
 /** Apply a resolved mode op, keeping the mode it replaces. */
 export function applyMode(t: ModeTarget): Change {
   const { node, collection, modeId } = t;
+  stillInDocument(node); // resolved before the batch ran: deleted since, it fails as its lookup would have
   const prev: string | undefined = (node.explicitVariableModes || {})[collection.id];
   if (modeId === null) node.clearExplicitVariableModeForCollection(collection);
   else node.setExplicitVariableModeForCollection(collection, modeId);
@@ -128,6 +130,7 @@ export function applyMode(t: ModeTarget): Change {
     applied: { id: node.id, collection: collection.name, from: modeName(collection, prev), to: modeName(collection, modeId) },
     kind: "variable mode change",
     what: "the '" + collection.name + "' mode on node " + node.id,
+    on: node,
     restore() {
       if (prev === undefined) node.clearExplicitVariableModeForCollection(collection);
       else node.setExplicitVariableModeForCollection(collection, prev);

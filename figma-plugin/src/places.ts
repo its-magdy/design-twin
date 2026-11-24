@@ -42,6 +42,7 @@ import type { WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import { idLike, MAX_NEW_PAGES, MAX_NEW_SECTIONS, nodeIdLike, SECTION_PAD } from "../../bridge/src/place-spec.ts";
 import { newRestorePass, RestoreStopped, type Change, type OpProblem, type RestorePass } from "./write-batch";
+import { inDocument, nodeById, noNode } from "./node-lookup";
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
 export const PLACE_GAP = 100;
@@ -55,6 +56,25 @@ export interface Dest { page: PageDest; section: SectionDest | null }
 
 const label = (n: BaseNode): string => "'" + n.name + "' (" + n.id + ")";
 const pageWords = (p: PageDest): string => (p.current ? "the current page '" + p.name + "'" : "page '" + p.name + "'");
+
+/** What `dest` holds of the file (its page and section, found or made already) that is no longer in the document
+ *  (node-lookup.ts): the error its lookup would have given, or null. */
+export function destGone(dest: Dest): string | null {
+  const p = dest.page.node, s = dest.section ? dest.section.node : null;
+  if (p && !inDocument(p)) return noNode(p.id, "page");
+  if (s && !inDocument(s)) return noNode(s.id, "section");
+  return null;
+}
+
+/** `consent` for a build that lands in `dest` and holds it across its awaits (node-lookup.ts holding): each call checks
+ *  its page and section are still in the document (destGone throws as missing), then consent. */
+export function holdingDest(dest: Dest, consent: () => void): () => void {
+  return () => {
+    const gone = destGone(dest);
+    if (gone !== null) throw new Error(gone);
+    consent();
+  };
+}
 
 /**
  * Where each createTree op of the batch lands, by op index, and every problem with it. Existing pages that an op lands
@@ -112,6 +132,12 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
   }
   // Every page an op lands on, loaded (dynamic-page) before its sections are read or anything is appended to it.
   for (const d of pages.values()) if (d.node) await d.node.loadAsync();
+  // Held across those loads (node-lookup.ts): a page deleted meanwhile is missing, never read.
+  for (const [index, page] of pageFor) {
+    if (!page.node || inDocument(page.node)) continue;
+    problems.push({ index, op: "createTree", message: noNode(page.node.id, "page") });
+    pageFor.delete(index);
+  }
   // The sections on each page, read once.
   const sectionsOn = new Map<PageDest, SectionNode[]>();
   const sectionsOf = (p: PageDest): SectionNode[] => {
@@ -181,8 +207,8 @@ async function pageIdIs(ref: string): Promise<string> {
   const colon = ref.replace(/-/g, ":");
   const looks = colon === ref ? "it looks like a node id" : "it looks like a node id as a link writes it";
   let n: BaseNode | null = null;
-  try { n = await figma.getNodeByIdAsync(colon); } catch { n = null; }
-  if (!n || n.removed) return looks + ", and no layer of this file has " + (colon === ref ? "it" : "the id '" + colon + "'");
+  try { n = await nodeById(colon); } catch { n = null; }
+  if (!n) return looks + ", and no layer of this file has " + (colon === ref ? "it" : "the id '" + colon + "'");
   if (n.type === "PAGE") return looks + ": page '" + n.name + "' is '" + colon + "' — send `page: '" + colon + "'`";
   return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a page";
 }
@@ -190,8 +216,8 @@ async function pageIdIs(ref: string): Promise<string> {
 /** What `ref` (an id-like section that is not on the op's page) is the id of, as the refusal says it. */
 async function idIs(ref: string): Promise<string> {
   let n: BaseNode | null = null;
-  try { n = await figma.getNodeByIdAsync(ref); } catch { n = null; }
-  if (!n || n.removed) return "it looks like a node id, and no layer of this file has it";
+  try { n = await nodeById(ref); } catch { n = null; }
+  if (!n) return "it looks like a node id, and no layer of this file has it";
   if (n.type !== "SECTION") return "it is the id of '" + n.name + "' (" + n.type + "), not of a section";
   const on = pageHolding(n);
   return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " — leave `page` out, or name that page";
@@ -205,8 +231,8 @@ async function linkIdIs(ref: string, page: PageDest, pageNamed: boolean): Promis
   if (colon === ref) return idIs(ref);
   const looks = "it looks like a node id as a link writes it";
   let n: BaseNode | null = null;
-  try { n = await figma.getNodeByIdAsync(colon); } catch { n = null; }
-  if (!n || n.removed) return looks + ", and no layer of this file has the id '" + colon + "'";
+  try { n = await nodeById(colon); } catch { n = null; }
+  if (!n) return looks + ", and no layer of this file has the id '" + colon + "'";
   if (n.type !== "SECTION") return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a section";
   const on = pageHolding(n);
   const away = pageNamed && on && on !== page.node ? on : null;
@@ -217,8 +243,8 @@ async function linkIdIs(ref: string, page: PageDest, pageNamed: boolean): Promis
 async function sectionById(ref: string): Promise<SectionNode | null> {
   if (!nodeIdLike(ref)) return null;
   let n: BaseNode | null = null;
-  try { n = await figma.getNodeByIdAsync(ref); } catch { n = null; }
-  return n && n.type === "SECTION" && !n.removed ? n : null;
+  try { n = await nodeById(ref); } catch { n = null; }
+  return n && n.type === "SECTION" ? n : null;
 }
 
 /** What a node covers in its parent's coordinates, rotation included: its canvas box (absoluteBoundingBox, page

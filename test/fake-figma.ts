@@ -68,6 +68,8 @@ export interface PostedMessage {
    *  `review-end` (id, end) / `review-shown` (text); main.ts `review-writes` (on) */
   lines?: ReviewCardLine[]; details?: string[]; why?: string; previewable?: boolean; waitMs?: number; end?: string; on?: boolean;
   state?: string; note?: string; text?: string;
+  /** writes.ts `writes` (text, ok, applied: how many edits stayed) */
+  applied?: number;
 }
 export interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
@@ -89,7 +91,7 @@ export interface FakeFigma {
   commitUndo(): void;
   currentPage: FakePage;
   fileKey: string;
-  root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData: (key: string) => string; setPluginData: (key: string, value: string) => void };
+  root: FakeNode & { type: "DOCUMENT"; id: string; parent: null; removed: false; name: string; documentColorProfile: string; children: FakeNode[]; getPluginData: (key: string) => string; setPluginData: (key: string, value: string) => void };
   loadAllPagesAsync(): Promise<void>;
   /** Absent unless a case passes one: the plugin's reads must not need them (a read leaves the view alone). */
   setCurrentPageAsync?(page: FakePage): Promise<void>;
@@ -321,6 +323,57 @@ export function skipAwareInstance(instance: FakeNode, skipping: () => boolean): 
   return instance;
 }
 
+/** The fields a held handle on a removed node still reads (seen live, #206): the rest throw. */
+const REMOVED_READABLE = new Set(["id", "removed", "type"]);
+/** What a removed node held, behind the getters that now throw (peekRemoved reads it). */
+const removedFields = new WeakMap<object, Map<string, unknown>>();
+/**
+ * Figma's node.remove() as a plugin holding the node sees it: `removed` true, no parent, and every field but `id`,
+ * `removed` and `type` throws when read, as Figma's does (seen live: `name` threw "in get_name: The node with id "1:8" does
+ * not exist"; `id` and `removed` read). Its methods are fields too, so calling one throws the same way. Setting a field
+ * still stores it (not modelled: whether Figma's setters throw). In place, so every reference to the node sees it: a
+ * fixture node and a world's proxied one alike. A field defined non-configurable is left readable. Returns `n`.
+ */
+export function markRemoved(n: FakeNode): FakeNode {
+  if (removedFields.has(n)) return n;
+  const id = String(n.id);
+  const kept = new Map<string, unknown>();
+  removedFields.set(n, kept);
+  // Out of its parent's layers, as in Figma.
+  const p = n.parent;
+  if (typeof p === "object" && p !== null && "children" in p) {
+    const list = (p as FakeNode).children;
+    if (Array.isArray(list) && list.includes(n)) (p as FakeNode).children = list.filter((k: FakeNode) => k !== n);
+  }
+  n.parent = null;
+  n.removed = true;
+  // Every value read first (a computed field can read another), then every field replaced.
+  const fields: Array<[string, boolean]> = [];
+  for (const key of Object.getOwnPropertyNames(n)) {
+    if (REMOVED_READABLE.has(key)) continue;
+    const d = Object.getOwnPropertyDescriptor(n, key);
+    if (!d || !d.configurable) continue;
+    let v: unknown;
+    try { v = d.get ? d.get.call(n) : d.value; } catch { v = undefined; }
+    kept.set(key, v);
+    fields.push([key, d.enumerable === true]);
+  }
+  for (const [key, enumerable] of fields) {
+    Object.defineProperty(n, key, {
+      configurable: true, enumerable,
+      get: () => { throw new Error("in get_" + key + ': The node with id "' + id + '" does not exist'); },
+      set: (v: unknown) => { kept.set(key, v); },
+    });
+  }
+  return n;
+}
+/** A field of a node as it was when markRemoved removed it (a test checking what stayed); the field itself when it was
+ *  not removed. */
+export function peekRemoved(n: FakeNode, key: string): unknown {
+  const kept = removedFields.get(n);
+  return kept ? kept.get(key) : n[key];
+}
+
 // ---- the plugin bundle: built once per process from the current sources
 const built = await esbuild.build({ ...pluginBuildOptions(), write: false, logLevel: "silent" });
 const bundleText = built.outputFiles?.[0]?.text;
@@ -376,6 +429,26 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const currentPage = delta.currentPage ?? base.currentPage ?? { name: "Page 1", selection: [], children: [] };
   const selection = delta.selection ?? base.selection;
   if (selection) currentPage.selection = selection;
+  // Figma's document node (figma.root): every page's parent, so the top of every attached node's parent chain (the
+  // write path counts a node only when its chain climbs to it: node-lookup.ts). A page the scene gives with no parent
+  // is the root's: the current page, the scene's pages, any a case puts in `root.children` later, and one a lookup by id
+  // finds. A node the scene gives with no `parent` field at all is on the current page once a lookup by id finds it; a
+  // case that means one detached from the document (a soft-deleted main component, a library one) says `parent: null`.
+  let pageList: FakeNode[] = [];
+  const adopt = (p: FakeNode): void => { if (p.parent === undefined) p.parent = root; };
+  const root: FakeFigma["root"] = {
+    type: "DOCUMENT", id: "0:0", parent: null, removed: false,
+    name: file.name ?? "", documentColorProfile: file.colorProfile ?? "",
+    get children() { return pageList; },
+    set children(list: FakeNode[]) { pageList = list; for (const p of list) adopt(p); },
+    getPluginData: (k) => rootData.get(k) ?? (rootPluginData ? rootPluginData(k) : ""),
+    setPluginData: (k, v) => { if (v === "") rootData.delete(k); else rootData.set(k, v); },
+  };
+  const onCurrentPage = (n: FakeNode): FakeNode => {
+    if (n.type === "PAGE") adopt(n);
+    else if (n.type !== "DOCUMENT" && !("parent" in n)) n.parent = currentPage;
+    return n;
+  };
   const posted: PostedMessage[] = [];
   const notified: string[] = [];
   const undo: World["undo"] = { commits: 0, implicit: 0, onImplicit: null };
@@ -386,6 +459,8 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   // The document's own plugin data: what the plugin sets reads back; anything else is what the scene says (or "").
   const rootData = new Map<string, string>();
   const teamLibrary = delta.teamLibrary ?? base.teamLibrary;
+  root.children = delta.pages ?? base.pages ?? [];
+  adopt(currentPage);
 
   const figma: FakeFigma = {
     mixed: MIXED,
@@ -406,12 +481,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     commitUndo: () => { undo.commits++; },
     currentPage,
     fileKey: file.fileKey ?? "",
-    root: {
-      name: file.name ?? "", documentColorProfile: file.colorProfile ?? "",
-      children: delta.pages ?? base.pages ?? [],
-      getPluginData: (k) => rootData.get(k) ?? (rootPluginData ? rootPluginData(k) : ""),
-      setPluginData: (k, v) => { if (v === "") rootData.delete(k); else rootData.set(k, v); },
-    },
+    root,
     loadAllPagesAsync: async () => {},
     getImageByHash: (hash) => scene.images[hash] ?? null,
     createImage: (data) => {
@@ -424,7 +494,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
       return img;
     },
     base64Decode: (data) => new Uint8Array(Buffer.from(data, "base64")),
-    getNodeByIdAsync: async (id) => scene.nodes[id] ?? null,
+    getNodeByIdAsync: async (id) => { const n = scene.nodes[id]; return n ? onCurrentPage(n) : null; },
     getStyleByIdAsync: async (id) => {
       const s = scene.styles[id];
       return typeof s === "function" ? s() : s ?? null;
@@ -719,6 +789,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     const field = d.type === "TEXT" ? "characters" : d.type === "BOOLEAN" ? "visible" : null;
     if (field && value.defaultValue !== undefined && value.defaultValue !== d.defaultValue) {
       for (const l of layers()) {
+        if (l.removed === true) continue; // gone with remove(): Figma walks the layers it has
         const r = l.componentPropertyReferences;
         if (typeof r !== "object" || r === null || !Object.prototype.hasOwnProperty.call(r, field) || (r as Record<string, unknown>)[field] !== key) continue;
         followingDefault = true;
@@ -732,6 +803,7 @@ export function componentApi(node: FakeNode, layers: () => readonly FakeNode[], 
     guard("deleteComponentProperty");
     if (!defs.delete(key)) throw new Error("in Figma: no property " + key);
     for (const l of layers()) {
+      if (l.removed === true) continue;
       const r = l.componentPropertyReferences;
       if (typeof r !== "object" || r === null) continue;
       const left: Record<string, unknown> = {};

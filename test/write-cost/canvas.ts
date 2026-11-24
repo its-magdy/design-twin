@@ -137,7 +137,7 @@ export function canvas(): Canvas {
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
       ...pluginData(),
       get absoluteBoundingBox() { return box(n); },
-      clone() { return cloneOf(n); },
+      clone() { return onPage(cloneOf(n)); },
     };
     n.setBoundVariable = binder(n);
     nodes[id] = n;
@@ -165,7 +165,7 @@ export function canvas(): Canvas {
       resize(w: number, h: number) { n.width = w; n.height = h; },
       ...pluginData(),
       remove() { if (n.parent?.children) n.parent.children.splice(n.parent.children.indexOf(n), 1); n.parent = null; delete nodes[id]; },
-      clone() { return cloneOf(n); },
+      clone() { return onPage(cloneOf(n)); },
     });
     Object.defineProperty(n, "absoluteBoundingBox", { get: () => box(n) }); // after: Object.assign would read a getter
     n.setBoundVariable = binder(n);
@@ -230,6 +230,13 @@ export function canvas(): Canvas {
 
   // Figma's clone(): a new node with every value and layer of this one, not yet in any parent (the plugin puts it in
   // one). A field read through an accessor (a text's characters and name, the bounding box) is the accessor's own.
+  // Figma makes a new node (createFrame, createText, createComponent, a clone()) on the current page: a write's build is
+  // in the document from the start, before it is moved where it goes.
+  const onPage = (n: CNode): CNode => {
+    const page = current ? current.figma.currentPage : pages[0];
+    if (page) adopt(page as CNode, n);
+    return n;
+  };
   const cloneOf = (src: CNode): CNode => {
     if (src.type === "INSTANCE" || src.id.startsWith("I")) throw new Error("canvas: copying an instance is not modelled");
     const copy = src.type === "TEXT" ? textNode({ text: String(src.characters ?? "") }) : frameLike(src.type, { name: src.name });
@@ -249,6 +256,7 @@ export function canvas(): Canvas {
       const id = nextId();
       const p: CPage = { id, type: "PAGE", name, children: [], parent: null, selection: [], appendChild(ch: CNode) { adopt(p, ch); }, insertChild(at: number, ch: CNode) { adopt(p, ch, at); }, loadAsync: async () => {},
         findAllWithCriteria: (c: { types: string[] }) => findAll(p, c.types) };
+      if (current) (p as FakeNode).parent = current.figma.root; // a page added once the world is up (see world())
       nodes[id] = p;
       pages.push(p);
       return p;
@@ -322,9 +330,9 @@ export function canvas(): Canvas {
       };
       const scene: Scene = { file: { name: "Sample App" }, pages, currentPage: first, nodes, variables, collections: { [COLLECTION.id]: COLLECTION } };
       current = fakeWorld(scene, {}, {
-        createFrame: () => frameLike("FRAME", { name: "Frame" }),
-        createText: () => textNode({ text: "" }),
-        createComponent: () => writtenComponent("COMPONENT"),
+        createFrame: () => onPage(frameLike("FRAME", { name: "Frame" })),
+        createText: () => onPage(textNode({ text: "" })),
+        createComponent: () => onPage(writtenComponent("COMPONENT")),
         combineAsVariants: (list: FakeNode[], parent: FakeNode) => {
           const set = writtenComponent("COMPONENT_SET");
           for (const k of list) adopt(set, k as CNode);
@@ -345,6 +353,8 @@ export function canvas(): Canvas {
         // the live table, not the copy fakeWorld made: a node a write creates is found by the next op that names it
         getNodeByIdAsync: async (id: string) => nodes[id] ?? null,
       });
+      // Every page's parent is the document, as in Figma: a write counts a node only when its chain climbs to it.
+      for (const p of pages) (p as FakeNode).parent = current.figma.root;
       return current;
     },
   };
