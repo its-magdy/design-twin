@@ -381,7 +381,7 @@ export class Canvas {
   }
   /** What `n` covers at `x`, `y` in its holder, `w`×`h` turned as it is (a section: its holder's box, at x/y). */
   private itemFor(n: SceneNode, x: number, y: number, w: number, h: number): Item {
-    if (n.type === "SECTION") { const b = this.of(n).box; b.x = x; b.y = y; return { id: n.id, name: n.name, box: b }; }
+    if (n.type === "SECTION") { const b = this.of(n).box; b.x = x; b.y = y; b.width = w; b.height = h; return { id: n.id, name: n.name, box: b }; }
     const fp = footprint(w, h, n);
     return { id: n.id, name: n.name, box: { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height } };
   }

@@ -9553,6 +9553,8 @@
         const b = this.of(n).box;
         b.x = x;
         b.y = y;
+        b.width = w;
+        b.height = h;
         return { id: n.id, name: n.name, box: b };
       }
       const fp = footprint(w, h, n);
@@ -11646,14 +11648,19 @@
               for (const id of changed2) if (id !== root.id) ids.push(id);
               counted = changed2;
               if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
-              const size2 = givenSize(tt.spec);
-              if (treeAfter(i)) canvas.reshape(
-                root,
-                tt.spec.x !== void 0 ? tt.spec.x : root.x,
-                tt.spec.y !== void 0 ? tt.spec.y : root.y,
-                size2.w !== void 0 ? size2.w : root.width,
-                size2.h !== void 0 ? size2.h : root.height
-              );
+              const u = tt.update.plan.updates.filter((x) => x.ref === root)[0];
+              if (u && treeAfter(i)) {
+                const box = u.set && u.set.box;
+                const moved = (f) => u.extras.indexOf(f) >= 0;
+                const sx = tt.spec.x, sy = tt.spec.y;
+                canvas.reshape(
+                  root,
+                  moved("x") && sx !== void 0 ? sx : root.x,
+                  moved("y") && sy !== void 0 ? sy : root.y,
+                  box && box.w !== void 0 ? box.w : root.width,
+                  box && box.h !== void 0 ? box.h : root.height
+                );
+              }
               break;
             }
             const copied = tt.clones.get(tt.spec);

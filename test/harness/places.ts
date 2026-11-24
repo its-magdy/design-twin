@@ -612,6 +612,15 @@ export const cases: Case[] = [{
     const shifted = await shownAt(w1, [{ op: "createTree", page: "Screens", tree: { ...spec, x: 500, y: 0 } }, next], 1);
     ok(`[PLACE-BATCH] after a keyed re-send that moves its frame (shown ${shifted.spot}, landed ${canvasAt(found(w1, shifted.r, 1))})`,
       shifted.r.ok === true && canvasAt(found(w1, shifted.r, 1)) === "700,0" && shifted.spot === "700,0");
+    // …and one whose x/y did not change, after the designer moved it (x 2000): the update leaves it there, and so does Show me.
+    const w8 = await treeWorld();
+    const pinnedSpec = { ...spec, x: 0, y: 0 };
+    const seed8 = await write(w8, [{ op: "createTree", page: "Screens", tree: pinnedSpec }]);
+    const r8 = found(w8, seed8);
+    if (r8) r8.x = 2000;
+    const kept = await shownAt(w8, [{ op: "createTree", page: "Screens", tree: { ...pinnedSpec, name: "Keyed again" } }, next], 1);
+    ok(`[PLACE-BATCH] after a keyed re-send that keeps its x/y: where the designer put it counts (shown ${kept.spot}, landed ${canvasAt(found(w8, kept.r, 1))})`,
+      kept.r.ok === true && num(found(w8, kept.r, 0), "x") === 2000 && canvasAt(found(w8, kept.r, 1)) === "2200,0" && kept.spot === "2200,0");
     // A legacy frame made 1100 wide on 'Screens' (at 0,0, as createFrame puts it), then a tree: right of it.
     const w2 = await treeWorld();
     const legacy = await shownAt(w2, [{ op: "createFrame", name: "Legacy", width: 1100, height: 100, parentId: "0:2" }, next], 1);

@@ -11,7 +11,6 @@ import { countLayers } from "../../bridge/src/review-policy.ts";
 import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } from "./sources";
 import type { TreeTarget } from "./tree";
 import { Canvas, landing, pageHolding } from "./places";
-import { givenSize } from "../../bridge/src/tree-spec.ts";
 import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { RuleTarget } from "./rules";
@@ -246,11 +245,16 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
             for (const id of changed) if (id !== root.id) ids.push(id);
             counted = changed;
             if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
-            // Where it is after the update: the x/y and sides the new spec gives (a set that only gains variants is
-            // counted at its size now), so a later op is placed beside it.
-            const size = givenSize(tt.spec);
-            if (treeAfter(i)) canvas.reshape(root, tt.spec.x !== undefined ? tt.spec.x : root.x, tt.spec.y !== undefined ? tt.spec.y : root.y,
-              size.w !== undefined ? size.w : root.width, size.h !== undefined ? size.h : root.height);
+            // Where it is after the update, so a later op is placed beside it: the x/y and size its plan sets on the root
+            // (keyed.ts sets them as planned; a set that only gains variants is counted at its size now).
+            const u = tt.update.plan.updates.filter((x) => x.ref === root)[0];
+            if (u && treeAfter(i)) {
+              const box = u.set && u.set.box;
+              const moved = (f: "x" | "y"): boolean => u.extras.indexOf(f) >= 0;
+              const sx = tt.spec.x, sy = tt.spec.y;
+              canvas.reshape(root, moved("x") && sx !== undefined ? sx : root.x, moved("y") && sy !== undefined ? sy : root.y,
+                box && box.w !== undefined ? box.w : root.width, box && box.h !== undefined ? box.h : root.height);
+            }
             break;
           }
           // Where it lands (places.ts): a page or section still to make is said as new, and has no spot to pan to.
