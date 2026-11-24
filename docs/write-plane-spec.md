@@ -210,7 +210,9 @@ screens.
       it lands "on the page that holds it". A name that matches several is refused with their ids; one that matches
       nothing is refused with its closest names and the field that would make it (a section given as an id is not
       made: the refusal says what that id is instead — a section on another page, another kind of layer, or no layer;
-      a name past the batch's limit is not told to add the field either). Making is asked for, never inferred
+      a link's dash form, `6-2`, is still looked up as a name, and missing, is said the same way with its colon form to
+      send; a name past the batch's limit is not told to add the field either, nor one missing without it once the batch
+      makes the most it may — both are told to send it in another batch). Making is asked for, never inferred
       from a miss: `createPage: true` makes the page when the file has no page of that name, `createSection: true` the
       section when the page has none. A name the file has exactly once is used as it is — so the same batch sent again
       lands where the first send did, and making stays all-or-nothing safe to repeat — and a name it has several of is

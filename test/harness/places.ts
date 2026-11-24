@@ -431,6 +431,27 @@ export const cases: Case[] = [{
       sections.ok === false && /ops\[25\][^\n]*makes 26 sections/.test(se)
       && /ops\[26\] \(createTree\): section 'Area 25' matches no section on page 'Flows', and the batch already makes the most sections one batch may \(25\); send the ops for it in another batch/.test(se)
       && !/ops\[26\][^\n]*createSection: true/.test(se));
+    // At the limit (no op past it), another name missing with no create flag: adding the flag would put it past the
+    // limit, so it is told to send it in another batch, never to add the flag.
+    const full = await write(w, [
+      ...Array.from({ length: MAX_NEW_PAGES }, (_, i): WriteOp => ({ op: "createTree", page: "New " + i, createPage: true, tree: screen("S" + i) })),
+      { op: "createTree", page: "Overflow", tree: screen("Late") },
+    ]);
+    const fe = full.error ?? "";
+    ok(`[PLACE-REFUSE] at the page limit, a missing page with no createPage: told to send it in another batch (${fe})`,
+      full.ok === false && /ops\[10\] \(createTree\): page 'Overflow' matches no page in this file[^\n]*; the batch already makes the most pages one batch may \(10\): to make it, send it with `createPage: true` in another batch/.test(fe)
+      && !/add `createPage: true`/.test(fe));
+    const fullSections = await write(w, [
+      ...Array.from({ length: 25 }, (_, i): WriteOp => ({ op: "createTree", page: "Flows", section: "Area " + i, createSection: true, tree: screen("A" + i) })),
+      { op: "createTree", page: "Flows", section: "Overflow", tree: screen("Late") },
+    ]);
+    const fs = fullSections.error ?? "";
+    ok(`[PLACE-REFUSE] at the section limit, a missing section with no createSection: told to send it in another batch (${fs})`,
+      fullSections.ok === false && /ops\[25\] \(createTree\): section 'Overflow' matches no section on page 'Flows'[^\n]*; the batch already makes the most sections one batch may \(25\): to make it, send it with `createSection: true` in another batch/.test(fs)
+      && !/add `createSection: true`/.test(fs));
+    // Below the limit the flag is still the way.
+    const room = await write(w, [{ op: "createTree", page: "Overflow", tree: screen("Late") }]);
+    ok("[PLACE-REFUSE] below the limit, a missing page is told to add `createPage: true`", room.ok === false && /to make it, add `createPage: true`/.test(room.error ?? ""));
     // A section the batch makes is not on another page.
     const elsewhere = await write(w, [
       { op: "createTree", page: "Flows", section: "Fresh", createSection: true, tree: screen("F") },
@@ -719,6 +740,25 @@ export const cases: Case[] = [{
     ok(`[PLACE-ID] an id no layer has: said so, no createSection hint (${none.error})`, none.ok === false
       && /section '77:7' matches no section on the current page 'Page 1'; it looks like a node id, and no layer of this file has it/.test(none.error ?? "")
       && !/createSection/.test(none.error ?? ""));
+    // The dash form a Figma link writes ("6-2") is looked up as a name, as before; matching none, it is said to look
+    // like an id (a name like it cannot be made: the wire check refuses it), with the colon form to send.
+    const dash = await write(w, [{ op: "createTree", section: "6-2", tree: screen("By link id") }]);
+    ok(`[PLACE-ID] a section's id in its link form: said to look like one, with the colon form to send, no createSection hint (${dash.error})`, dash.ok === false
+      && /section '6-2' matches no section on the current page 'Page 1'; it looks like a node id as a link writes it: section 'Payments' is '6:2' — send `section: '6:2'`/.test(dash.error ?? "")
+      && !/createSection/.test(dash.error ?? ""));
+    const dashOn = await write(w, [{ op: "createTree", page: "Screens", section: "6-2", tree: screen("By link id") }]);
+    ok(`[PLACE-ID] …with a page named that does not hold it: the colon form, and \`page\` left out (${dashOn.error})`, dashOn.ok === false
+      && /it looks like a node id as a link writes it: section 'Payments' is '6:2' — send `section: '6:2'` and leave `page` out, or name page 'Flows'/.test(dashOn.error ?? ""));
+    const followed = await write(w, [{ op: "createTree", section: "6:2", tree: screen("By link id") }]);
+    ok("[PLACE-ID] …followed, it lands in the section", followed.ok === true && parentOf(found(w, followed)) === w.f.payments);
+    const dashFrame = await write(w, [{ op: "createTree", section: "6-11", tree: screen("Into a frame") }]);
+    ok(`[PLACE-ID] a frame's id in its link form: said to be a frame's, no createSection hint (${dashFrame.error})`, dashFrame.ok === false
+      && /section '6-11' matches no section on the current page 'Page 1'; it looks like a node id as a link writes it: '6:11' is the id of 'Welcome' \(FRAME\), not of a section/.test(dashFrame.error ?? "")
+      && !/createSection/.test(dashFrame.error ?? ""));
+    const dashNone = await write(w, [{ op: "createTree", section: "77-7", tree: screen("Nowhere") }]);
+    ok(`[PLACE-ID] a link-form id no layer has: said so, no createSection hint (${dashNone.error})`, dashNone.ok === false
+      && /section '77-7' matches no section on the current page 'Page 1'; it looks like a node id as a link writes it, and no layer of this file has the id '77:7'/.test(dashNone.error ?? "")
+      && !/createSection/.test(dashNone.error ?? ""));
     const dry = writeOpPreview({ op: "createTree", section: "6:2", tree: screen("By id") }, 0);
     ok(`[PLACE-ID] the dry run takes it, and says it lands on the section's own page (${JSON.stringify(dry.target)})`,
       dry.invalid === undefined && dry.target === "new frame in section '6:2' on the page that holds it");

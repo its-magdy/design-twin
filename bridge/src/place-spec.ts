@@ -56,6 +56,9 @@ export function placeError(o: Readonly<Record<string, unknown>>, at: string): st
 /** Whether `ref` reads as a Figma node id ("12:34"): a section given so, with no page, is the one of that id on any page
  *  (the plugin looks it up across the file; places.ts resolveDests). */
 export const nodeIdLike = (ref: string): boolean => /^\d+:\d+$/.test(ref);
+/** Whether `ref` reads as any node id, a link's dash form (`6-2`) and an instance layer's (`I1:2;3:4`) included: never a
+ *  name to make (the wire check refuses one), so a lookup that misses one says what it is instead. */
+export const idLike = (ref: string): boolean => ID_LIKE.test(ref);
 
 /** Where the op lands, in words: "in section 'Pay' (made when the page has none) on page 'Checkout'", "on the current page",
  *  "in section '6:2' on the page that holds it" (a section id with no page). */

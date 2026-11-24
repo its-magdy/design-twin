@@ -1420,6 +1420,7 @@
     return null;
   }
   var nodeIdLike = (ref2) => /^\d+:\d+$/.test(ref2);
+  var idLike = (ref2) => ID_LIKE.test(ref2);
   function describePlace(p) {
     const page = p.page !== void 0 ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "") : p.section !== void 0 && nodeIdLike(p.section) ? "on the page that holds it" : "on the current page";
     return p.section !== void 0 ? "in section '" + p.section + "'" + (p.createSection === true ? " (made when the page has none)" : "") + " " + page : page;
@@ -9300,7 +9301,8 @@
         if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch");
         continue;
       }
-      bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createPage: true`");
+      const make = newPages.size >= MAX_NEW_PAGES ? "; the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "): to make it, send it with `createPage: true` in another batch" : "; to make it, add `createPage: true`";
+      bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
     }
     for (const d of pages.values()) if (d.node) await d.node.loadAsync();
     const sectionsOn = /* @__PURE__ */ new Map();
@@ -9378,7 +9380,12 @@
         bad(miss + "; " + await idIs(op.section));
         continue;
       }
-      bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
+      if (idLike(op.section)) {
+        bad(miss + "; " + await linkIdIs(op.section, page, op.page !== void 0));
+        continue;
+      }
+      const make = madeSections >= MAX_NEW_SECTIONS ? "; the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "): to make it, send it with `createSection: true` in another batch" : "; to make it, add `createSection: true`";
+      bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
     }
     return { dests, problems };
   }
@@ -9393,6 +9400,22 @@
     if (n.type !== "SECTION") return "it is the id of '" + n.name + "' (" + n.type + "), not of a section";
     const on = pageHolding(n);
     return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " \u2014 leave `page` out, or name that page";
+  }
+  async function linkIdIs(ref2, page, pageNamed) {
+    const colon = ref2.replace(/-/g, ":");
+    if (colon === ref2) return idIs(ref2);
+    const looks = "it looks like a node id as a link writes it";
+    let n = null;
+    try {
+      n = await figma.getNodeByIdAsync(colon);
+    } catch {
+      n = null;
+    }
+    if (!n || n.removed) return looks + ", and no layer of this file has the id '" + colon + "'";
+    if (n.type !== "SECTION") return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a section";
+    const on = pageHolding(n);
+    const away = pageNamed && on && on !== page.node ? on : null;
+    return looks + ": section '" + n.name + "' is '" + colon + "' \u2014 send `section: '" + colon + "'`" + (away ? " and leave `page` out, or name page '" + away.name + "'" : "");
   }
   async function sectionById(ref2) {
     if (!nodeIdLike(ref2)) return null;

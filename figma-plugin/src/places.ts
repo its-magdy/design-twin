@@ -40,7 +40,7 @@
 import { builtSize, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
-import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, nodeIdLike, SECTION_PAD } from "../../bridge/src/place-spec.ts";
+import { idLike, MAX_NEW_PAGES, MAX_NEW_SECTIONS, nodeIdLike, SECTION_PAD } from "../../bridge/src/place-spec.ts";
 import { newRestorePass, RestoreStopped, type Change, type OpProblem, type RestorePass } from "./write-batch";
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
@@ -102,7 +102,11 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     // Past the limit: said above for the op that asked; another op naming it is not told to ask too.
     const over = overPages.get(op.page);
     if (over !== undefined) { if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch"); continue; }
-    bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createPage: true`");
+    // At the limit, the flag would put it past it: the way to make it is another batch.
+    const make = newPages.size >= MAX_NEW_PAGES
+      ? "; the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "): to make it, send it with `createPage: true` in another batch"
+      : "; to make it, add `createPage: true`";
+    bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
   }
   // Every page an op lands on, loaded (dynamic-page) before its sections are read or anything is appended to it.
   for (const d of pages.values()) if (d.node) await d.node.loadAsync();
@@ -159,7 +163,12 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     if (over !== undefined) { if (over !== index) bad(miss + ", and the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "); send the ops for it in another batch"); continue; }
     // An id is never made (the wire check refuses one to make): what it is the id of instead.
     if (nodeIdLike(op.section)) { bad(miss + "; " + await idIs(op.section)); continue; }
-    bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
+    // So is any other id form (a link's 6-2): looked up as a name, as above, and said as the id it looks like.
+    if (idLike(op.section)) { bad(miss + "; " + await linkIdIs(op.section, page, op.page !== undefined)); continue; }
+    const make = madeSections >= MAX_NEW_SECTIONS
+      ? "; the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "): to make it, send it with `createSection: true` in another batch"
+      : "; to make it, add `createSection: true`";
+    bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
   }
   return { dests, problems };
 }
@@ -172,6 +181,22 @@ async function idIs(ref: string): Promise<string> {
   if (n.type !== "SECTION") return "it is the id of '" + n.name + "' (" + n.type + "), not of a section";
   const on = pageHolding(n);
   return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " — leave `page` out, or name that page";
+}
+
+/** What `ref` (an id-like section in another form than `12:34`: a link's `6-2`, an instance layer's) is the id of, as
+ *  the refusal says it: with its colon form to send when it is a section's (and `page` to leave out when the op names
+ *  another than the section's). An instance layer's id already in its colon form is said as idIs says it. */
+async function linkIdIs(ref: string, page: PageDest, pageNamed: boolean): Promise<string> {
+  const colon = ref.replace(/-/g, ":");
+  if (colon === ref) return idIs(ref);
+  const looks = "it looks like a node id as a link writes it";
+  let n: BaseNode | null = null;
+  try { n = await figma.getNodeByIdAsync(colon); } catch { n = null; }
+  if (!n || n.removed) return looks + ", and no layer of this file has the id '" + colon + "'";
+  if (n.type !== "SECTION") return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a section";
+  const on = pageHolding(n);
+  const away = pageNamed && on && on !== page.node ? on : null;
+  return looks + ": section '" + n.name + "' is '" + colon + "' — send `section: '" + colon + "'`" + (away ? " and leave `page` out, or name page '" + away.name + "'" : "");
 }
 
 /** The section whose id is `ref` (on any page), or null: `ref` is no id, or not a section's. */
