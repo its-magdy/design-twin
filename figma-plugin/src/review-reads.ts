@@ -10,7 +10,8 @@ import type { OpRead } from "../../bridge/src/review-card.ts";
 import { countLayers } from "../../bridge/src/review-policy.ts";
 import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } from "./sources";
 import type { TreeTarget } from "./tree";
-import { Canvas, landing } from "./places";
+import { Canvas, landing, pageHolding } from "./places";
+import { givenSize } from "../../bridge/src/tree-spec.ts";
 import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { RuleTarget } from "./rules";
@@ -120,8 +121,20 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
   const warnings: string[] = [];
   const warn = (m: string): void => { if (warnings.indexOf(m) < 0) warnings.push(m); };
   const ops: OpLayers[] = [];
-  // Where each new tree lands is planned on one canvas, in batch order, so a later op lands beside the earlier ones (places.ts).
+  // Where each new tree lands is planned on one canvas, in batch order, so a later op lands beside the earlier ones (places.ts):
+  // the trees they land, and what they move, make or resize on a page or in a section (deletes run last: not counted).
   const canvas = new Canvas();
+  /** Whether a new tree comes after op `i`: only then is what op `i` changes on the canvas read (nothing is placed after it). */
+  const treeAfter = (i: number): boolean => list.slice(i + 1).some((o) => o.op === "createTree");
+  /** `n`'s page, loaded (dynamic-page: before the canvas reads what is on it). */
+  const loaded = async (n: BaseNode): Promise<void> => { const pg = n.type === "PAGE" ? n : pageHolding(n); if (pg) await pg.loadAsync(); };
+  /** A layer a patch sets `box` on, at its size then (a side the box leaves out stays). */
+  const patched = async (i: number, n: SceneNode, set: Record<string, unknown>): Promise<void> => {
+    const b = set.box as { w?: number; h?: number } | undefined;
+    if (!b || typeof b !== "object" || !treeAfter(i)) return;
+    await loaded(n);
+    canvas.reshape(n, n.x, n.y, typeof b.w === "number" ? b.w : n.width, typeof b.h === "number" ? b.h : n.height);
+  };
   for (const [i, op] of list.entries()) {
     const read: OpRead = {};
     const ids: string[] = [];
@@ -145,6 +158,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           const old: Record<string, unknown> = {};
           for (const k of Object.keys(set)) { const v = oldOf(p.node, k, set[k]); if (v !== undefined) old[k] = v; }
           read.old = old;
+          await patched(i, p.node, set);
           const main = mainComponentOf(p.node);
           if (main) { read.component = main.name; await follow({ component: main }); }
           break;
@@ -174,6 +188,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           }
           read.old = old;
           if (mixed.length) read.mixed = mixed;
+          for (const p of r.matches) await patched(i, p.node, p.set as Record<string, unknown>);
           break;
         }
         case "setFill":
@@ -231,6 +246,11 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
             for (const id of changed) if (id !== root.id) ids.push(id);
             counted = changed;
             if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
+            // Where it is after the update: the x/y and sides the new spec gives (a set that only gains variants is
+            // counted at its size now), so a later op is placed beside it.
+            const size = givenSize(tt.spec);
+            if (treeAfter(i)) canvas.reshape(root, tt.spec.x !== undefined ? tt.spec.x : root.x, tt.spec.y !== undefined ? tt.spec.y : root.y,
+              size.w !== undefined ? size.w : root.width, size.h !== undefined ? size.h : root.height);
             break;
           }
           // Where it lands (places.ts): a page or section still to make is said as new, and has no spot to pan to.
@@ -245,11 +265,26 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
         case "createText": {
           const p = op.parentId ? await figma.getNodeByIdAsync(op.parentId) : null;
           if (p && p.type !== "PAGE" && p.type !== "DOCUMENT") { read.parent = p.name; ids.push(p.id); }
+          // A frame lands at 0,0 in its parent, its size given or Figma's 100 (writes.ts). A text's size is its font's:
+          // known only once built, so it is not counted.
+          const into = op.parentId ? p : figma.currentPage;
+          if (op.op === "createFrame" && into && treeAfter(i)) {
+            await loaded(into);
+            const w = op.width, h = op.height;
+            canvas.add(into, op.name || "Frame", w && h ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 100, height: 100 });
+          }
           break;
         }
         case "move": {
           const m = t.moves.get(i);
-          if (m) { read.name = m.node.name; read.parent = m.parent.name; ids.push(m.node.id); }
+          if (m) {
+            read.name = m.node.name; read.parent = m.parent.name; ids.push(m.node.id);
+            if (treeAfter(i)) {
+              await loaded(m.node);
+              await loaded(m.parent);
+              canvas.move(m.node, m.parent);
+            }
+          }
           break;
         }
         case "delete": {

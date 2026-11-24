@@ -591,6 +591,68 @@ export const cases: Case[] = [{
       dry.invalid === undefined && dry.target === "new frame in section '6:2' on the page that holds it");
   },
 }, {
+  name: "Show me on a later op counts what the earlier ops of the batch change on the canvas: a keyed resize, a move, a legacy frame",
+  async run() {
+    const canvasAt = (n: FakeNode | undefined): string => {
+      const p = parentOf(n);
+      const o = p && p.type === "SECTION" ? { x: num(p, "x"), y: num(p, "y") } : { x: 0, y: 0 };
+      return (o.x + num(n, "x")) + "," + (o.y + num(n, "y"));
+    };
+    const next: WriteOp = { op: "createTree", page: "Screens", tree: { name: "Next", box: { w: 100, h: 100 } } };
+    // A keyed frame (100 wide, at 0,0 on the empty 'Screens') re-sent 1100 wide: the next frame goes right of 1100.
+    const w = await treeWorld();
+    const spec = { name: "Keyed", key: "screens:wide", box: { w: 100, h: 100 } };
+    await write(w, [{ op: "createTree", page: "Screens", tree: spec }]);
+    const resized = await shownAt(w, [{ op: "createTree", page: "Screens", tree: { ...spec, box: { w: 1100, h: 100 } } }, next], 1);
+    ok(`[PLACE-BATCH] after a keyed re-send that resizes its frame: shown where it lands (shown ${resized.spot}, landed ${canvasAt(found(w, resized.r, 1))})`,
+      resized.r.ok === true && canvasAt(found(w, resized.r, 1)) === "1200,0" && resized.spot === "1200,0");
+    // …and one that moves it (x 500): right of where it goes.
+    const w1 = await treeWorld();
+    await write(w1, [{ op: "createTree", page: "Screens", tree: spec }]);
+    const shifted = await shownAt(w1, [{ op: "createTree", page: "Screens", tree: { ...spec, x: 500, y: 0 } }, next], 1);
+    ok(`[PLACE-BATCH] after a keyed re-send that moves its frame (shown ${shifted.spot}, landed ${canvasAt(found(w1, shifted.r, 1))})`,
+      shifted.r.ok === true && canvasAt(found(w1, shifted.r, 1)) === "700,0" && shifted.spot === "700,0");
+    // A legacy frame made 1100 wide on 'Screens' (at 0,0, as createFrame puts it), then a tree: right of it.
+    const w2 = await treeWorld();
+    const legacy = await shownAt(w2, [{ op: "createFrame", name: "Legacy", width: 1100, height: 100, parentId: "0:2" }, next], 1);
+    ok(`[PLACE-BATCH] after a legacy createFrame on the page (shown ${legacy.spot}, landed ${canvasAt(found(w2, legacy.r, 1))})`,
+      legacy.r.ok === true && canvasAt(found(w2, legacy.r, 1)) === "1200,0" && legacy.spot === "1200,0");
+    // A 1100-wide frame at 0,0 on 'Page 1' moved onto 'Screens' (it keeps its x/y): right of it. And moved off the page
+    // a tree lands on, it no longer counts there.
+    const w3 = await treeWorld();
+    w3.pages.current.children = [];
+    const big = await write(w3, [{ op: "createFrame", name: "Big", width: 1100, height: 100 }]);
+    const bigId = String(big.applied[0]?.id);
+    const moved = await shownAt(w3, [{ op: "move", nodeId: bigId, parentId: "0:2" }, next], 1);
+    ok(`[PLACE-BATCH] after a move onto the page (shown ${moved.spot}, landed ${canvasAt(found(w3, moved.r, 1))})`,
+      moved.r.ok === true && canvasAt(found(w3, moved.r, 1)) === "1200,0" && moved.spot === "1200,0");
+    const w4 = await treeWorld();
+    w4.pages.current.children = [];
+    const big4 = await write(w4, [{ op: "createFrame", name: "Big", width: 1100, height: 100 }]);
+    const away = await shownAt(w4, [{ op: "move", nodeId: String(big4.applied[0]?.id), parentId: "0:2" }, { op: "createTree", tree: { name: "Here", box: { w: 100, h: 100 } } }], 1);
+    ok(`[PLACE-BATCH] after a move off the page: no longer counted there (shown ${away.spot}, landed ${canvasAt(found(w4, away.r, 1))})`,
+      away.r.ok === true && canvasAt(found(w4, away.r, 1)) === "0,0" && away.spot === "0,0");
+    // Moved into a section (Payments, 1200,0), it keeps its 0,0 there: the next frame in the section goes right of it.
+    const w7 = await flowsWorld();
+    w7.pages.current.children = [];
+    const big7 = await write(w7, [{ op: "createFrame", name: "Big", width: 1100, height: 100 }]);
+    const into = await shownAt(w7, [{ op: "move", nodeId: String(big7.applied[0]?.id), parentId: "6:2" }, { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Next", box: { w: 100, h: 100 } } }], 1);
+    ok(`[PLACE-BATCH] after a move into a section (shown ${into.spot}, landed ${canvasAt(found(w7, into.r, 1))})`,
+      into.r.ok === true && canvasAt(found(w7, into.r, 1)) === "2400,80" && into.spot === "2400,80");
+    // A patch that sets a frame's box (100 → 1100 wide, at 0,0 on 'Screens'): right of its new width.
+    const w6 = await treeWorld();
+    const small = await write(w6, [{ op: "createFrame", name: "Small", width: 100, height: 100, parentId: "0:2" }]);
+    const grown = await shownAt(w6, [{ op: "patch", nodeId: String(small.applied[0]?.id), set: { box: { w: 1100 } } }, next], 1);
+    ok(`[PLACE-BATCH] after a patch that resizes a frame on the page (shown ${grown.spot}, landed ${canvasAt(found(w6, grown.r, 1))})`,
+      grown.r.ok === true && canvasAt(found(w6, grown.r, 1)) === "1200,0" && grown.spot === "1200,0");
+    // A delete runs after every other op: what it deletes is still there when the tree lands.
+    const w5 = await treeWorld();
+    const big5 = await write(w5, [{ op: "createFrame", name: "Big", width: 1100, height: 100, parentId: "0:2" }]);
+    const gone = await shownAt(w5, [{ op: "delete", nodeId: String(big5.applied[0]?.id) }, next], 1);
+    ok(`[PLACE-BATCH] a delete earlier in the batch runs last: still counted (shown ${gone.spot}, landed ${canvasAt(found(w5, gone.r, 1))})`,
+      gone.r.ok === true && canvasAt(found(w5, gone.r, 1)) === "1200,0" && gone.spot === "1200,0");
+  },
+}, {
   name: "a component set without a size of its own is measured as the build lays out its variants",
   async run() {
     const canvasAt = (n: FakeNode | undefined): string => num(n, "x") + "," + num(n, "y");

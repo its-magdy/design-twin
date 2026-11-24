@@ -9425,6 +9425,11 @@
   var Canvas = class {
     constructor(skip = "") {
       this.holders = /* @__PURE__ */ new Map();
+      // What the other ops of a batch change on the canvas, so the review plans a later op beside it (the write reads the
+      // file each time, as the ops before it left it). A node's x/y are its parent's own: Figma keeps them when it moves.
+      /** Where layer `n` is on this canvas: the holder a plan moved it to (null: into neither a page nor a section), else
+       *  its parent's in the file (null when that is neither). */
+      this.moved = /* @__PURE__ */ new Map();
       this.skip = skip;
     }
     /** The holder of a page or section of the file. */
@@ -9442,7 +9447,7 @@
       if (h.items) return h.items;
       const items = [];
       if (h.node) {
-        for (const c of h.node.children) if (c.id !== this.skip) items.push({ name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
+        for (const c of h.node.children) if (c.id !== this.skip) items.push({ id: c.id, name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
       }
       h.items = items;
       return items;
@@ -9461,7 +9466,7 @@
       const at3 = this.sectionAt(page);
       const h = { node: null, section: true, name: s.name, box: { x: at3.x, y: at3.y, width: NEW_SECTION, height: NEW_SECTION }, parent: on, items: [] };
       this.holders.set(s, h);
-      this.itemsOf(on).push({ name: s.name, box: h.box });
+      this.itemsOf(on).push({ id: "", name: s.name, box: h.box });
       return h;
     }
     /** Where a section the batch makes goes on `page`: beside what the page holds, as a new frame does (it is made
@@ -9531,11 +9536,57 @@
     }
     /** Put a placed node on the canvas, and grow the sections it grows: what the next op is placed beside. */
     commit(p) {
-      this.itemsOf(p.holder).push({ name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
+      this.itemsOf(p.holder).push({ id: "", name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
       for (const g of p.grows) {
         g.holder.box.width = g.width;
         g.holder.box.height = g.height;
       }
+    }
+    holderOfNode(n) {
+      if (this.moved.has(n.id)) return this.moved.get(n.id) || null;
+      const p = n.parent;
+      return p && (p.type === "PAGE" || p.type === "SECTION") ? this.of(p) : null;
+    }
+    /** What `n` covers at `x`, `y` in its holder, `w`×`h` turned as it is (a section: its holder's box, at x/y). */
+    itemFor(n, x, y, w, h) {
+      if (n.type === "SECTION") {
+        const b = this.of(n).box;
+        b.x = x;
+        b.y = y;
+        return { id: n.id, name: n.name, box: b };
+      }
+      const fp = footprint(w, h, n);
+      return { id: n.id, name: n.name, box: { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height } };
+    }
+    /** Layer `n` of the file (a keyed re-send's root, a patched layer) now at `x`, `y` in its holder and `w`×`h`; nothing
+     *  when it is in neither a page nor a section (what it is in keeps its box). */
+    reshape(n, x, y, w, h) {
+      const holder = this.holderOfNode(n);
+      if (!holder) return;
+      const items = this.itemsOf(holder);
+      const i = items.findIndex((it) => it.id === n.id);
+      if (i >= 0) items[i] = this.itemFor(n, x, y, w, h);
+    }
+    /** Layer `n` of the file moved into `to` (at its own x/y and size, which a move keeps): off the page or section it was
+     *  in, onto `to` when that is a page or section. */
+    move(n, to) {
+      const from = this.holderOfNode(n);
+      let item = null;
+      if (from) {
+        const items = this.itemsOf(from);
+        const i = items.findIndex((it) => it.id === n.id);
+        if (i >= 0) item = items.splice(i, 1)[0] || null;
+      }
+      const into = to.type === "PAGE" || to.type === "SECTION" ? this.of(to) : null;
+      this.moved.set(n.id, into);
+      if (n.type === "SECTION") this.of(n).parent = into;
+      if (!into) return;
+      this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, n.x, n.y, n.width, n.height));
+    }
+    /** A layer the batch makes in `parent` (a legacy createFrame), covering `box` there; nothing unless `parent` is a page
+     *  or a section. */
+    add(parent, name, box) {
+      if (parent.type === "PAGE" || parent.type === "SECTION") this.itemsOf(this.of(parent)).push({ id: "", name, box });
     }
     /** Where the origin of `h` (a page or section) is on its page. */
     originOf(h) {
@@ -11449,6 +11500,17 @@
     };
     const ops = [];
     const canvas = new Canvas();
+    const treeAfter = (i) => list.slice(i + 1).some((o) => o.op === "createTree");
+    const loaded3 = async (n) => {
+      const pg = n.type === "PAGE" ? n : pageHolding(n);
+      if (pg) await pg.loadAsync();
+    };
+    const patched = async (i, n, set) => {
+      const b = set.box;
+      if (!b || typeof b !== "object" || !treeAfter(i)) return;
+      await loaded3(n);
+      canvas.reshape(n, n.x, n.y, typeof b.w === "number" ? b.w : n.width, typeof b.h === "number" ? b.h : n.height);
+    };
     for (const [i, op] of list.entries()) {
       const read = {};
       const ids = [];
@@ -11478,6 +11540,7 @@
               if (v !== void 0) old[k] = v;
             }
             read.old = old;
+            await patched(i, p.node, set);
             const main = mainComponentOf(p.node);
             if (main) {
               read.component = main.name;
@@ -11520,6 +11583,7 @@
             }
             read.old = old;
             if (mixed.length) read.mixed = mixed;
+            for (const p of r.matches) await patched(i, p.node, p.set);
             break;
           }
           case "setFill":
@@ -11582,6 +11646,14 @@
               for (const id of changed2) if (id !== root.id) ids.push(id);
               counted = changed2;
               if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
+              const size2 = givenSize(tt.spec);
+              if (treeAfter(i)) canvas.reshape(
+                root,
+                tt.spec.x !== void 0 ? tt.spec.x : root.x,
+                tt.spec.y !== void 0 ? tt.spec.y : root.y,
+                size2.w !== void 0 ? size2.w : root.width,
+                size2.h !== void 0 ? size2.h : root.height
+              );
               break;
             }
             const copied = tt.clones.get(tt.spec);
@@ -11597,6 +11669,12 @@
               read.parent = p.name;
               ids.push(p.id);
             }
+            const into = op.parentId ? p : figma.currentPage;
+            if (op.op === "createFrame" && into && treeAfter(i)) {
+              await loaded3(into);
+              const w = op.width, h = op.height;
+              canvas.add(into, op.name || "Frame", w && h ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 100, height: 100 });
+            }
             break;
           }
           case "move": {
@@ -11605,6 +11683,11 @@
               read.name = m.node.name;
               read.parent = m.parent.name;
               ids.push(m.node.id);
+              if (treeAfter(i)) {
+                await loaded3(m.node);
+                await loaded3(m.parent);
+                canvas.move(m.node, m.parent);
+              }
             }
             break;
           }

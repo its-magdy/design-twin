@@ -26,7 +26,9 @@
 // Every rule runs on a Canvas (what each page and section holds, each section's box), so the review card's Show me
 // (landing) places by the write's own code: the write reads a fresh one for each node it lands, without the node itself
 // (built hidden where Figma made it); the review plans the whole batch on one, op by op, so a later op is shown where it
-// will land beside the earlier ones.
+// will land beside the earlier ones — the trees they land, and what they resize (a keyed re-send, a patch's box), move or
+// make (a legacy createFrame) on a page or in a section. A legacy createText is not counted (its size is its font's,
+// known only once built), nor a delete (deletes run after every other op).
 //
 // Plugin API facts this leans on (@figma/plugin-typings):
 //   * figma.createPage appends a new page to the document; a file in a Starter-plan team stops at 3 pages (drafts
@@ -233,8 +235,9 @@ function stickingOut(name: string, section: string, start: XY): string | null {
   return "'" + name + "' sticks out past the " + edges + " of section '" + section + "': what it covers starts at " + start.x + ", " + start.y + " in it, and a section grows only right and down to hold its frames";
 }
 
-/** A layer as placing sees it: what it covers in its holder's coordinates. A section's is its holder's own box. */
-interface Item { name: string; box: Box }
+/** A layer as placing sees it: its id ("" for one the plan puts there that the file does not have yet), and what it
+ *  covers in its holder's coordinates. A section's is its holder's own box. */
+interface Item { id: string; name: string; box: Box }
 /** A page or section as placing sees it: its box in its parent's coordinates (a page's is unused), the layers it holds
  *  (read off the file when first needed, then what the plan put in it), and the holder it is in. `node` null: a section
  *  the batch is still to make (only a plan has one: the write makes the section before it places in it). */
@@ -270,7 +273,7 @@ export class Canvas {
   private itemsOf(h: Holder): Item[] {
     if (h.items) return h.items;
     const items: Item[] = [];
-    if (h.node) for (const c of h.node.children) if (c.id !== this.skip) items.push({ name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
+    if (h.node) for (const c of h.node.children) if (c.id !== this.skip) items.push({ id: c.id, name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
     h.items = items;
     return items;
   }
@@ -288,7 +291,7 @@ export class Canvas {
     const at = this.sectionAt(page);
     const h: Holder = { node: null, section: true, name: s.name, box: { x: at.x, y: at.y, width: NEW_SECTION, height: NEW_SECTION }, parent: on, items: [] };
     this.holders.set(s, h);
-    this.itemsOf(on).push({ name: s.name, box: h.box });
+    this.itemsOf(on).push({ id: "", name: s.name, box: h.box });
     return h;
   }
 
@@ -362,8 +365,56 @@ export class Canvas {
   }
   /** Put a placed node on the canvas, and grow the sections it grows: what the next op is placed beside. */
   commit(p: Placed): void {
-    this.itemsOf(p.holder).push({ name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
+    this.itemsOf(p.holder).push({ id: "", name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
     for (const g of p.grows) { g.holder.box.width = g.width; g.holder.box.height = g.height; }
+  }
+
+  // What the other ops of a batch change on the canvas, so the review plans a later op beside it (the write reads the
+  // file each time, as the ops before it left it). A node's x/y are its parent's own: Figma keeps them when it moves.
+  /** Where layer `n` is on this canvas: the holder a plan moved it to (null: into neither a page nor a section), else
+   *  its parent's in the file (null when that is neither). */
+  private readonly moved = new Map<string, Holder | null>();
+  private holderOfNode(n: SceneNode): Holder | null {
+    if (this.moved.has(n.id)) return this.moved.get(n.id) || null;
+    const p = n.parent;
+    return p && (p.type === "PAGE" || p.type === "SECTION") ? this.of(p) : null;
+  }
+  /** What `n` covers at `x`, `y` in its holder, `w`×`h` turned as it is (a section: its holder's box, at x/y). */
+  private itemFor(n: SceneNode, x: number, y: number, w: number, h: number): Item {
+    if (n.type === "SECTION") { const b = this.of(n).box; b.x = x; b.y = y; return { id: n.id, name: n.name, box: b }; }
+    const fp = footprint(w, h, n);
+    return { id: n.id, name: n.name, box: { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height } };
+  }
+  /** Layer `n` of the file (a keyed re-send's root, a patched layer) now at `x`, `y` in its holder and `w`×`h`; nothing
+   *  when it is in neither a page nor a section (what it is in keeps its box). */
+  reshape(n: SceneNode, x: number, y: number, w: number, h: number): void {
+    const holder = this.holderOfNode(n);
+    if (!holder) return;
+    const items = this.itemsOf(holder);
+    const i = items.findIndex((it) => it.id === n.id);
+    if (i >= 0) items[i] = this.itemFor(n, x, y, w, h);
+  }
+  /** Layer `n` of the file moved into `to` (at its own x/y and size, which a move keeps): off the page or section it was
+   *  in, onto `to` when that is a page or section. */
+  move(n: SceneNode, to: BaseNode): void {
+    const from = this.holderOfNode(n);
+    let item: Item | null = null;
+    if (from) {
+      const items = this.itemsOf(from);
+      const i = items.findIndex((it) => it.id === n.id);
+      if (i >= 0) item = items.splice(i, 1)[0] || null;
+    }
+    const into = to.type === "PAGE" || to.type === "SECTION" ? this.of(to) : null;
+    this.moved.set(n.id, into);
+    if (n.type === "SECTION") this.of(n).parent = into;
+    if (!into) return;
+    // What it covers keeps its place in its parent's coordinates (a section's box is its holder's).
+    this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, n.x, n.y, n.width, n.height));
+  }
+  /** A layer the batch makes in `parent` (a legacy createFrame), covering `box` there; nothing unless `parent` is a page
+   *  or a section. */
+  add(parent: BaseNode, name: string, box: Box): void {
+    if (parent.type === "PAGE" || parent.type === "SECTION") this.itemsOf(this.of(parent)).push({ id: "", name, box });
   }
   /** Where the origin of `h` (a page or section) is on its page. */
   originOf(h: Holder): XY {
