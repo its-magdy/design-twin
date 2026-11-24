@@ -661,6 +661,36 @@ export const cases: Case[] = [{
       same.r.ok === false && box(same.s) === "1200,0,600,600" && !/was resized/.test(same.r.error ?? ""));
   },
 }, {
+  name: "edits off after the designer deleted a frame that grew its section: the growth that stays is said, never 'none of it stays'",
+  async run() {
+    // The first op grows "Payments" (600×600) to 80+900+80 = 1060 wide. While the next op awaits its text style the
+    // designer deletes that frame and unticks "Allow edits": nothing is put back, so the section keeps the batch's size,
+    // and the reply says so. Control: with the section resized by the designer meanwhile, it is theirs, and not said.
+    const sent = async (resize?: (s: FakeNode) => void) => {
+      const w = await flowsWorld({ kit: true });
+      w.hooks.onStyle = async () => {
+        w.hooks.onStyle = undefined;
+        const g = kids(w.f.payments).find((n) => n.name === "Grower");
+        if (g && typeof g.remove === "function") (g.remove as () => void)();
+        if (resize) resize(w.f.payments);
+        await w.allowEdits(false);
+      };
+      const r = await write(w, [
+        { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Grower", x: 80, y: 80, box: { w: 900, h: 100 } } },
+        { op: "createTree", page: "Flows", tree: { name: "Await", children: [{ text: "Hi", styles: { text: "Body" } }] } },
+      ]);
+      return { r, s: w.f.payments };
+    };
+    const grown = await sent();
+    ok(`[PLACE-GONE-GREW] the section stays 1060 wide, and the reply says the deleted frame's growth stays (${grown.r.error})`,
+      grown.r.ok === false && grown.r.refused === "edits-off" && box(grown.s) === "1200,0,1060,600"
+      && /the tree 'Grower' \([^)]*\) was deleted from the file while the batch ran, but the section 'Payments' \(6:2\) it grew to 1060×600 keeps that size/.test(grown.r.error ?? "")
+      && !/Grower[^;]*none of it stays/.test(grown.r.error ?? ""));
+    const theirs = await sent((s) => { s.width = 700; });
+    ok(`[PLACE-GONE-GREW] control: resized by the designer since, the section is theirs: none of the frame stays (${theirs.r.error})`,
+      theirs.r.ok === false && box(theirs.s) === "1200,0,700,600" && /the tree 'Grower' \([^)]*\) was deleted from the file while the batch ran, so none of it stays/.test(theirs.r.error ?? ""));
+  },
+}, {
   name: "put back: a section two ops grew keeps a side the designer resized, even to the size the first op gave it",
   async run() {
     // Two trees at 80,80 grow "Payments" (600×600) twice: to 660×860, then 760×910. While a later op awaits its text

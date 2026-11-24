@@ -261,7 +261,9 @@ screens.
       does; the designer is told too, in the window and in Figma's toast, which side of which section was kept, at what
       size. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)
       is not removed: it stays with that layer, listed in `applied`, and the error says why (a layer the batch made,
-      even by another of its ops, is its own: moved into it, it goes with it, unless it holds the designer's). A page that is the
+      even by another of its ops, is its own: moved into it, it goes with it, unless it holds the designer's). A frame the
+      designer deleted while the batch ran, with nothing put back after ("Allow edits" off), is said to have gone, but the
+      section it grew stays the size it gave it, and that is said too (never "none of it stays"). A page that is the
       current one when it goes is left first (the current page is not undo history); after that wait, its layers and
       "Allow edits" are checked again before it is removed, and it stays (listed as kept) when either has changed. A file in a Starter-plan team
       holds at most 3 pages (Figma's limit for team files; drafts are not held to it): Figma refuses a fourth, which is

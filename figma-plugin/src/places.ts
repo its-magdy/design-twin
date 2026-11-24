@@ -540,7 +540,13 @@ export class Canvas {
  *  back each side a section grew that is still the size landing gave it; a side resized since (the designer's, while a
  *  preview was up or the batch awaited) is left as it is, and said: one sentence per section, for the batch's reply.
  *  It is recorded on `pass` (the batch's put-back), so an older growth of the same side leaves it too, unsaid. */
-export interface Landed { undo(pass?: RestorePass): string[]; warnings: string[] }
+export interface Landed {
+  undo(pass?: RestorePass): string[];
+  /** What of its growth is still in the file, said, for a node gone without its put-back (write-batch.ts Change.leaves):
+   *  each section side it grew that is still the size it gave it (one the designer resized since is theirs). */
+  left(): string[];
+  warnings: string[];
+}
 
 /**
  * Attach `root` (built to the side, sized) where `dest` says, placed (Canvas.place, on the file as it is now): on its
@@ -594,7 +600,20 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
     try { undo(); } catch { /* the growth that was made is what Figma refused */ }
     throw e;
   }
-  return { undo, warnings: placed.warnings };
+  const left = (): string[] => {
+    const out: string[] = [];
+    for (const g of grown) {
+      if (g.s.removed) continue;
+      const grewW = g.toW !== g.w, grewH = g.toH !== g.h;
+      const sameW = grewW && near(g.s.width, g.toW), sameH = grewH && near(g.s.height, g.toH);
+      if (!sameW && !sameH) continue;
+      const whole = (sameW || !grewW) && (sameH || !grewH);
+      out.push("the section " + label(g.s) + " it grew to " + g.toW + "×" + g.toH + " keeps " +
+        (whole ? "that size" : sameW ? "the width it grew to, " + g.toW : "the height it grew to, " + g.toH));
+    }
+    return out;
+  };
+  return { undo, left, warnings: placed.warnings };
 }
 
 /** Two sizes the same to within Figma's float noise. */

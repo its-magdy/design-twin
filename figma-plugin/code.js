@@ -7762,7 +7762,12 @@
   }
   var wentWithNode = (c) => !c.made && c.on !== void 0 && removedWith(c.on);
   var asBefore = (c) => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
-  var goneSentence = (c) => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+  var goneSentence = (c) => {
+    const left = c.made ? leftBehind(c) : null;
+    if (left) return c.what + " was deleted from the file while the batch ran, but " + left;
+    return c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+  };
+  var leftBehind = (c) => c.leaves ? c.leaves() : null;
   function staying(changes) {
     const gone = (c) => wentWithNode(c) || asBefore(c);
     return { stays: changes.filter((c) => !gone(c)), gone: changes.filter(gone) };
@@ -7849,8 +7854,9 @@
         stop.rest = untried.map(([c]) => c);
       }
     }
-    const gone = left.filter(wentWithNode);
-    const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+    const notBack = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+    const gone = left.filter((c) => wentWithNode(c) || notBack.indexOf(c) >= 0 && leftBehind(c) !== null);
+    const back = notBack.filter((c) => gone.indexOf(c) < 0);
     restored.push(...back);
     const settled = /* @__PURE__ */ new Set([...gone, ...back]);
     const isGone = new Set(gone);
@@ -9984,7 +9990,19 @@
       }
       throw e;
     }
-    return { undo, warnings: placed.warnings };
+    const left = () => {
+      const out = [];
+      for (const g of grown) {
+        if (g.s.removed) continue;
+        const grewW = g.toW !== g.w, grewH = g.toH !== g.h;
+        const sameW = grewW && near2(g.s.width, g.toW), sameH = grewH && near2(g.s.height, g.toH);
+        if (!sameW && !sameH) continue;
+        const whole = (sameW || !grewW) && (sameH || !grewH);
+        out.push("the section " + label3(g.s) + " it grew to " + g.toW + "\xD7" + g.toH + " keeps " + (whole ? "that size" : sameW ? "the width it grew to, " + g.toW : "the height it grew to, " + g.toH));
+      }
+      return out;
+    };
+    return { undo, left, warnings: placed.warnings };
   }
   var near2 = (a, b) => Math.abs(a - b) < 5e-3;
   var NEW_SECTION = SECTION_PAD * 2;
@@ -10239,6 +10257,8 @@
       on: root,
       made: true,
       owns,
+      // Deleted with no put-back run for it ("Allow edits" off): the sections it grew may still be the size it gave them.
+      leaves: () => leftOf(grew),
       // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
       // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
       // One of them holding a layer the batch did not make (the designer's, moved into it): all of it stays (node-lookup.ts
@@ -10250,6 +10270,10 @@
         return kept.length ? kept.join("; ") : void 0;
       }
     };
+  }
+  function leftOf(grew) {
+    const left = grew ? grew.left() : [];
+    return left.length ? left.join("; ") : null;
   }
   async function buildComponent(t, type, name, consent2, changes) {
     const made2 = newMade(t.refs, t.clones);
@@ -10307,6 +10331,7 @@
         on: root,
         made: true,
         owns,
+        leaves: () => leftOf(grew),
         restore(_allowed, ours, pass) {
           takeBack(owns, ours);
           const kept = grew.undo(pass);

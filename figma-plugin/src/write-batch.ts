@@ -72,6 +72,10 @@ export interface Change {
    *  never reads a node already gone (node-lookup.ts takeBack). */
   on?: BaseNode;
   made?: true;
+  /** A made change whose nodes are all gone with no put-back run for it: what it changed outside them that is still in
+   *  the file, said (a section it grew, still the size it gave it), or null. Such a change is not as before the batch:
+   *  it is said to have gone with what stays (goneSentence), never put back. */
+  leaves?: () => string | null;
 }
 
 /** The id of every node the batch made, by every change on `changes` that made any (`owns`): one build's layer moved
@@ -91,8 +95,14 @@ const wentWithNode = (c: Change): boolean => !c.made && c.on !== undefined && re
 const asBefore = (c: Change): boolean => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
 
 /** What a reply says of a change that went with its node (or of a made one deleted whole): what it was, and that none
- *  of it stays. */
-export const goneSentence = (c: Change): string => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+ *  of it stays — or, for a made one, what it left outside its nodes that does (Change.leaves: a section it grew). */
+export const goneSentence = (c: Change): string => {
+  const left = c.made ? leftBehind(c) : null;
+  if (left) return c.what + " was deleted from the file while the batch ran, but " + left;
+  return c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+};
+/** What `c` left outside its nodes that is still in the file (Change.leaves), or null. */
+const leftBehind = (c: Change): string | null => (c.leaves ? c.leaves() : null);
 
 /** `changes` that stay in the file when none is put back (the plugin changes nothing more once "Allow edits" is off):
  *  every one but those that went with their node, and the made ones deleted whole (asBefore). */
@@ -182,11 +192,13 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
   // Gone or not is decided once every put-back is done: a node can be deleted at any put-back's await, its own (after it
   // was put back, or one that threw) or a later one's. One removed by now took with it what was set on it, and what was
   // put back on it: it is gone, neither restored, nor "could not undo", nor applied.
-  const gone = left.filter(wentWithNode);
   // A made one not put back (refused, or not reached once "Allow edits" was off) whose every node is removed by now
   // (taken back with a layer of the batch that held it, or deleted) is as its put-back would have left it: put back,
-  // never "could not undo", never said to stay.
-  const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+  // never "could not undo", never said to stay — unless it changed something outside its nodes that is still there (a
+  // section it grew): then it went, and what it left is said with it (goneSentence).
+  const notBack = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+  const gone = left.filter((c) => wentWithNode(c) || (notBack.indexOf(c) >= 0 && leftBehind(c) !== null));
+  const back = notBack.filter((c) => gone.indexOf(c) < 0);
   restored.push(...back);
   const settled = new Set([...gone, ...back]);
   const isGone = new Set(gone);

@@ -42,7 +42,9 @@ list of merged PRs.
   will land, counting what the ops before it land, resize, move or make. A name that matches nothing or several things is refused before anything runs,
   and what the batch made is put back if a later op fails (a section you resized after the batch grew it keeps your
   size, however many of its ops grew it, and the reply says so; after a preview, the plugin window and Figma's toast
-  say it too; a page or section the batch made goes back even when you moved another of its frames into it).
+  say it too; a page or section the batch made goes back even when you moved another of its frames into it; if you
+  delete one of its frames and then turn "Allow edits" off, the reply says the frame went and the section it grew keeps
+  its new size).
   `figma_write`'s definition grew from 1,400 to 1,449 estimated tokens.
 - One `figma_write` op changes every layer that matches a rule: `patchWhere {where, scope?, set, token?}`. The rule is
   any of text equals, fill equals, uses a variable, is an instance of a component, and name matches (`*` for any run),

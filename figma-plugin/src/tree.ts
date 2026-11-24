@@ -231,6 +231,8 @@ export async function buildTree(t: TreeTarget, consent: () => void, changes: Cha
     kind: "created tree",
     what: "the tree '" + root.name + "' (" + root.id + ")",
     on: root, made: true, owns,
+    // Deleted with no put-back run for it ("Allow edits" off): the sections it grew may still be the size it gave them.
+    leaves: () => leftOf(grew),
     // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
     // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
     // One of them holding a layer the batch did not make (the designer's, moved into it): all of it stays (node-lookup.ts
@@ -243,6 +245,12 @@ export async function buildTree(t: TreeTarget, consent: () => void, changes: Cha
       return kept.length ? kept.join("; ") : undefined;
     },
   };
+}
+
+/** What of a build's section growth is still in the file (places.ts Landed.left), said, or null. */
+function leftOf(grew: Landed | null): string | null {
+  const left = grew ? grew.left() : [];
+  return left.length ? left.join("; ") : null;
 }
 
 /**
@@ -302,7 +310,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     const owns = [root, ...madeNodes(made)];
     const grew = landed;
     return {
-      applied, kind: "created component", what: "the component '" + name + "' (" + root.id + ")", on: root, made: true, owns,
+      applied, kind: "created component", what: "the component '" + name + "' (" + root.id + ")", on: root, made: true, owns, leaves: () => leftOf(grew),
       restore(_allowed, ours, pass) {
         takeBack(owns, ours);
         // The sections it grew, back to their size (a side the designer has resized since keeps theirs, and is said).
