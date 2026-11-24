@@ -160,7 +160,14 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       const away = on && on !== t.dest.page.node ? on : null;
       const where = inSection ? " is in section '" + inSection.name + "'" + (away ? " on page '" + away.name + "'" : "") : " is not in a section";
       const named = s.node ? ", not '" + s.name + "'" : ", but `section` '" + s.name + "' would be a new section on " + (t.dest.page.current ? "the current page '" : "page '") + t.dest.page.name + "'";
-      const page = !s.node && inSection && away && op.page === undefined ? ", or name its page: `page: '" + away.name + "'`" : "";
+      // The other way there, when the op asks for a section to make: the result's page, and its section unless the op
+      // names that already (naming the page alone would still ask for a section it does not have).
+      const same = !!inSection && s.name === inSection.name;
+      const page = !s.node && inSection && op.page === undefined
+        ? away
+          ? same ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`"
+          : same ? "" : ", or name its section: `section: '" + inSection.name + "'`"
+        : "";
       bad(what + ": its result " + label(root) + where + named + "; an update stays where the result is — leave `section` out" + page);
       continue;
     }

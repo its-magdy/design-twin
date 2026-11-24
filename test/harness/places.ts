@@ -620,6 +620,24 @@ export const cases: Case[] = [{
       made.ok === true && again.ok === false
       && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Pay' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` out, or name its page: `page: '" + home + "'`").test(again.error ?? "")
       && !/in section 'Pay', not 'Pay'/.test(again.error ?? ""));
+    // Another section's name to make: naming the result's page alone would still ask for a section it does not have —
+    // the hint names both its section and its page. Each hint, followed, updates the result.
+    const other = await write(k, [{ ...keyed, section: "Other" }]);
+    ok(`[PLACE-KEYED] another name, a new section here: the hint names the result's section and its page (${other.error})`,
+      other.ok === false
+      && new RegExp("is in section 'Pay' on page '" + home + "', but `section` 'Other' would be a new section on the current page 'Screens'; an update stays where the result is — leave `section` out, or name its section and its page: `section: 'Pay', page: '" + home + "'`").test(other.error ?? "")
+      && !/or name its page:/.test(other.error ?? ""));
+    const followed = await write(k, [{ ...keyed, section: "Pay", page: home }]);
+    const pageOnly = await write(k, [{ ...keyed, page: home }]);
+    ok(`[PLACE-KEYED] …followed, either hint updates the result (${followed.error}; ${pageOnly.error})`,
+      followed.ok === true && pageOnly.ok === true && found(k, followed)?.id === found(k, made)?.id && found(k, pageOnly)?.id === found(k, made)?.id);
+    // On the result's own page, another name to make: the hint names its section.
+    const here = await flowsWorld();
+    const mine = await write(here, [keyed]);
+    const elsewhere = await write(here, [{ ...keyed, section: "Other" }]);
+    ok(`[PLACE-KEYED] another name on the result's page: the hint names its section (${elsewhere.error})`,
+      mine.ok === true && elsewhere.ok === false
+      && /is in section 'Pay', but `section` 'Other' would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` out, or name its section: `section: 'Pay'`/.test(elsewhere.error ?? ""));
   },
 }, {
   name: "the review card says where it lands: a section, a new section, a new page",

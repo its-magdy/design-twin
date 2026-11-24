@@ -11172,7 +11172,8 @@
         const away = on && on !== t.dest.page.node ? on : null;
         const where = inSection ? " is in section '" + inSection.name + "'" + (away ? " on page '" + away.name + "'" : "") : " is not in a section";
         const named2 = s.node ? ", not '" + s.name + "'" : ", but `section` '" + s.name + "' would be a new section on " + (t.dest.page.current ? "the current page '" : "page '") + t.dest.page.name + "'";
-        const page = !s.node && inSection && away && op.page === void 0 ? ", or name its page: `page: '" + away.name + "'`" : "";
+        const same3 = !!inSection && s.name === inSection.name;
+        const page = !s.node && inSection && op.page === void 0 ? away ? same3 ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`" : same3 ? "" : ", or name its section: `section: '" + inSection.name + "'`" : "";
         bad(what + ": its result " + label4(root) + where + named2 + "; an update stays where the result is \u2014 leave `section` out" + page);
         continue;
       }
