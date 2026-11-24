@@ -130,8 +130,13 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
       : "; to make it, add `createPage: true`";
     bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
   }
-  // Every page an op lands on, loaded (dynamic-page) before its sections are read or anything is appended to it.
-  for (const d of pages.values()) if (d.node) await d.node.loadAsync();
+  // Every page an op lands on, loaded (dynamic-page) before its sections are read or anything is appended to it. One
+  // deleted while an earlier one loaded is not loaded (its fields throw), and one deleted as it loads is not asked to
+  // be: both are missing, below.
+  for (const d of pages.values()) {
+    if (!d.node || !inDocument(d.node)) continue;
+    try { await d.node.loadAsync(); } catch (e) { if (inDocument(d.node)) throw e; }
+  }
   // Held across those loads (node-lookup.ts): a page deleted meanwhile is missing, never read.
   for (const [index, page] of pageFor) {
     if (!page.node || inDocument(page.node)) continue;

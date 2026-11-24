@@ -9570,7 +9570,14 @@
       const make = newPages.size >= MAX_NEW_PAGES ? "; the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "): to make it, send it with `createPage: true` in another batch" : "; to make it, add `createPage: true`";
       bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
     }
-    for (const d of pages.values()) if (d.node) await d.node.loadAsync();
+    for (const d of pages.values()) {
+      if (!d.node || !inDocument(d.node)) continue;
+      try {
+        await d.node.loadAsync();
+      } catch (e) {
+        if (inDocument(d.node)) throw e;
+      }
+    }
     for (const [index, page] of pageFor) {
       if (!page.node || inDocument(page.node)) continue;
       problems.push({ index, op: "createTree", message: noNode(page.node.id, "page") });
@@ -12800,10 +12807,11 @@
       }
     }
     for (const p of pages) {
+      if (goneFrom(p, bad, "page")) continue;
       try {
         await loadPage(p);
       } catch (e) {
-        bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
+        if (!goneFrom(p, bad, "page")) bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
         continue;
       }
       if (goneFrom(p, bad, "page")) continue;

@@ -1669,6 +1669,28 @@ cases.push({
       hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (createTree): no page with id '" + String(dest.id) + "' (invalid or removed). Nothing was changed.");
   },
 }, {
+  name: "Two trees on two pages, the second page gone while the first loads: refused as missing for the op that lands on it, never loaded (#184)",
+  async run() {
+    for (const [how, out] of OUT) {
+      const w = await treeWorld();
+      const { current, screens } = w.pages;
+      const original = current.loadAsync as () => Promise<void>;
+      let hits = 0;
+      current.loadAsync = async () => { await original(); if (!hits++) out(screens); };
+      const toasts = w.notified.length;
+      const r = await w.api.applyWrites([
+        { op: "createTree", page: String(current.name), tree: { name: "First" } },
+        { op: "createTree", page: "Screens", tree: { name: "Second" } },
+      ]);
+      const said = w.notified.slice(toasts);
+      ok(`[ANNOUNCE] two pages, the second ${how} while the first loads: ops[1] refused as missing, no read error (got ${JSON.stringify(r)})`,
+        hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[1] (createTree): no page with id '" + String(screens.id) + "' (invalid or removed). Nothing was changed.");
+      ok(`[ANNOUNCE] …${how}: nothing is made, and the designer is told nothing changed, and why (got ${JSON.stringify(said)})`,
+        !w.alive().some((n) => n.name === "First" || n.name === "Second") && said.length === 1
+        && /nothing changed/.test(said[0] ?? "") && !/get_loadAsync/.test(said[0] ?? "") && (said[0] ?? "").includes(String(screens.id)));
+    }
+  },
+}, {
   name: "A keyed re-send whose result goes while its page loads builds afresh; one whose kept node goes while another resolves is refused (#206)",
   async run() {
     {
@@ -1786,6 +1808,22 @@ cases.push({
       const r = await w.api.applyWrites([{ op: "patchWhere", scope: [String(page.name)], where: { name: "*" }, set: { hidden: true } }]);
       ok(`[ANNOUNCE] patchWhere, its page ${how} while it loads: refused as missing (got ${JSON.stringify(r)})`,
         hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): no page with id '" + String(page.id) + "' (invalid or removed). Nothing was changed.");
+    }
+  },
+}, {
+  name: "A rule over two pages, the second gone while the first loads, is refused as missing, never loaded or read (#184)",
+  async run() {
+    for (const [how, out] of OUT) {
+      for (const scope of ["file", ["Page 1", "Screens"]] as const) {
+        const w = await treeWorld();
+        const { current, screens } = w.pages;
+        const original = current.loadAsync as () => Promise<void>;
+        let hits = 0;
+        current.loadAsync = async () => { await original(); if (!hits++) out(screens); };
+        const r = await w.api.applyWrites([{ op: "patchWhere", scope: typeof scope === "string" ? scope : [...scope], where: { name: "*" }, set: { hidden: true } }]);
+        ok(`[ANNOUNCE] patchWhere over ${JSON.stringify(scope)}, the second page ${how} while the first loads: refused as missing (got ${JSON.stringify(r)})`,
+          hits > 0 && r.ok === false && r.applied.length === 0 && r.error === "ops[0] (patchWhere): no page with id '" + String(screens.id) + "' (invalid or removed). Nothing was changed.");
+      }
     }
   },
 }, {
