@@ -266,5 +266,19 @@ export function landedResult(r: WriteResult, l: Landed): WriteResult {
     const untouched = !r.applied.length && !(r.restored && r.restored.length);
     error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
   }
-  return error === r.error ? r : { ...r, error };
+  return error === r.error ? r : carryKept(r, { ...r, error });
+}
+
+/** What the designer is told (writes.ts announce: the window and Figma's toast) of a failure that lists no change as
+ *  applied and none as put back, but did not leave the file as it was: a preview put back but for what the designer
+ *  changed since (a section side they resized), or a batch or a preview whose layer the designer deleted, with what it
+ *  left (a section its frame grew, still that size) — never "nothing changed". `lead` starts the sentence that says
+ *  what the batch landed too ("Its preview", "It"). Not a field of the reply. */
+export interface KeptLine { text: string; lead: string }
+export const keptLine = new WeakMap<WriteResult, KeptLine>();
+/** `to`, a copy of `from` with more said: still told to the designer as `from` is (keptLine). */
+export function carryKept(from: WriteResult, to: WriteResult): WriteResult {
+  const k = keptLine.get(from);
+  if (k && to !== from) keptLine.set(to, k);
+  return to;
 }

@@ -7892,7 +7892,13 @@
       const untouched = !r.applied.length && !(r.restored && r.restored.length);
       error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
     }
-    return error === r.error ? r : { ...r, error };
+    return error === r.error ? r : carryKept(r, { ...r, error });
+  }
+  var keptLine = /* @__PURE__ */ new WeakMap();
+  function carryKept(from, to) {
+    const k = keptLine.get(from);
+    if (k && to !== from) keptLine.set(to, k);
+    return to;
   }
 
   // src/patch.ts
@@ -12336,14 +12342,10 @@
   var bothBack = (a, b) => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
   function failedAfter(failed, earlier) {
     if (!earlier || !earlier.gone.length) return failed;
-    return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+    return carryKept(failed, { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" });
   }
-  var keptOnPutBack = /* @__PURE__ */ new WeakMap();
   function backFailed(failed, card) {
-    const f = landedResult(failedAfter(failed, card.back), card.landed);
-    const kept = keptOnPutBack.get(failed);
-    if (kept !== void 0) keptOnPutBack.set(f, kept);
-    return f;
+    return landedResult(failedAfter(failed, card.back), card.landed);
   }
   var current3 = null;
   var seq = 0;
@@ -12513,7 +12515,7 @@
         }
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
-          const r = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
+          const r = carryKept(p.result, { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") });
           card.input.announce(r, p.landed);
           finish2(card, r);
           return;
@@ -14345,13 +14347,14 @@
       say(WAITING, 0, false, false);
       return;
     }
-    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "") : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+    const kept = r.ok ? void 0 : keptLine.get(r);
+    if (kept) text = kept.text + (some ? " " + kept.lead + " had already " + landedText(some) + "; that stays." : "");
+    else if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "") : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
     else if (r.refused === "rejected") text = some ? "Design Twin did not apply the edit request \u2014 it was rejected. No layer changed, but its preview had already " + landedText(some) + "." : "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + " that could not be put back after one failed: " + (r.error || "unknown error");
     else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed" + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
-    else if (!r.ok && keptOnPutBack.has(r)) text = keptOnPutBack.get(r) + (some ? " Its preview had already " + landedText(some) + "; that stays." : "");
     else if (!r.ok) text = some ? "Design Twin refused an edit request \u2014 no layer changed, but it had already " + landedText(some) + ": " + refusalReason(r.error) : REFUSED + refusalReason(r.error);
     if (text === null) return;
     say(text, n, r.ok);
@@ -14503,7 +14506,7 @@
       const off = revoked || !editsAllowedNow();
       const { restored, failed, gone: gone2, stays } = off ? { restored: [], failed: [], ...staying(changes) } : await restoreChanges(changes, editsAllowedNow);
       const kept = !revoked && off && stays.length ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied" : "";
-      return {
+      const r = {
         ok: false,
         // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
         applied: [...stays.map((c) => c.applied), ...rows.filter((a) => a !== void 0 && a.deleted === true)],
@@ -14513,6 +14516,14 @@
         ...revoked ? { refused: "edits-off" } : {},
         ...restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}
       };
+      const left = gone2.filter(leftSomething).map(goneSentence);
+      if (left.length && !r.applied.length && !restored.length) {
+        keptLine.set(r, {
+          text: (revoked ? "Design Twin stopped \u2014 'Allow edits' was turned off" : "Design Twin could not apply an edit request (" + errMsg(e) + ")") + ", and not all of it could be put back: " + left.join("; ") + ".",
+          lead: "It"
+        });
+      }
+      return r;
     };
     const refuseLate = async (late) => {
       const firstLate = late[0];
@@ -14699,7 +14710,7 @@
     const left = gone.filter(leftSomething).map(goneSentence);
     if (!failed.length && !left.length) return { failed: null, gone: went, restored: restored.length };
     const r = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " \u2014 what stays is listed in `applied`." : ".") };
-    if (!stays.length) keptOnPutBack.set(r, left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".");
+    if (!stays.length) keptLine.set(r, { text: left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".", lead: "Its preview" });
     return { failed: r, gone: went, restored: restored.length };
   }
   function undoNote(steps2) {

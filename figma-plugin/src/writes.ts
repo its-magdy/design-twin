@@ -6,7 +6,7 @@ import { EDITS_OFF_MESSAGE, reviewLines, waitingMessage, writeOpError, type Appl
 import { cardLines } from "../../bridge/src/review-card.ts";
 import { previewOffered, reviewDecision } from "../../bridge/src/review-policy.ts";
 import { editsAllowed, editsAllowedNow } from "./edits";
-import { countUnreviewed, keptOnPutBack, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card, type PutBack } from "./review";
+import { countUnreviewed, layersSinceApproval, openCard, outcomeOf, rememberWrite, reviewWrites, waitingTicket, type Card, type PutBack } from "./review";
 import { readBatch, SHOW_CAP } from "./review-reads";
 import { queueWork } from "./state";
 import { toast } from "./toast";
@@ -23,7 +23,7 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, goneSentence, hasLanded, landedResult, landedText, leftSomething, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, goneSentence, hasLanded, keptLine, landedResult, landedText, leftSomething, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -397,7 +397,12 @@ function announce(r: WriteResult, landed?: Landed): void {
     say(WAITING, 0, false, false);
     return;
   }
-  if (r.refused === "edits-off") text = n
+  // No change listed as applied or put back, but the file is not as it was: a preview put back but for what the designer
+  // changed since (a section side they resized), or a batch or a preview that left what a layer they deleted had grown
+  // (a section its frame grew, "Allow edits" turned off before it could go back): said to them too (keptLine).
+  const kept = r.ok ? undefined : keptLine.get(r);
+  if (kept) text = kept.text + (some ? " " + kept.lead + " had already " + landedText(some) + "; that stays." : "");
+  else if (r.refused === "edits-off") text = n
     ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "")
     : "Design Twin refused an edit request — 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
   // Rejected after a preview that loaded an image (or imported an item) and was put back: that stays, and is said.
@@ -410,10 +415,6 @@ function announce(r: WriteResult, landed?: Landed): void {
   // Put back after an op failed: an image loaded (or an item imported) before it stays, and is said.
   else if (!r.ok && r.restored && r.restored.length) text = "Design Twin undid " + r.restored.length + " earlier change" + (r.restored.length === 1 ? "" : "s") + " after an edit failed"
     + (some ? ", but it had already " + landedText(some) + ": " + refusalReason(r.error) : ": " + (r.error || "unknown error"));
-  // A preview put back but for what the designer changed since (a section side they resized), or for what a layer they
-  // deleted left (a section its frame grew): said to them too (putBack).
-  else if (!r.ok && keptOnPutBack.has(r)) text = keptOnPutBack.get(r)
-    + (some ? " Its preview had already " + landedText(some) + "; that stays." : "");
   // Refused before anything changed (#206): a check before the first op (an image hash the file does not have, a name
   // that resolves to nothing, a bad op, Dev Mode, a file that changed while the batch waited for review), or an op
   // that failed and put itself back before anything else had landed. No layer changed then, but a library item imported
@@ -610,7 +611,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const kept = !revoked && off && stays.length
       ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied"
       : "";
-    return {
+    const r: WriteResult = {
       ok: false,
       // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
       applied: [...stays.map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
@@ -620,6 +621,16 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       ...(revoked ? { refused: "edits-off" as const } : {}),
       ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
+    // Nothing listed as applied or put back, but a layer the designer deleted left what it grew (a section, still that
+    // size): the designer is told so, never "nothing changed" (announce).
+    const left = gone.filter(leftSomething).map(goneSentence);
+    if (left.length && !r.applied.length && !restored.length) {
+      keptLine.set(r, {
+        text: (revoked ? "Design Twin stopped — 'Allow edits' was turned off" : "Design Twin could not apply an edit request (" + errMsg(e) + ")") + ", and not all of it could be put back: " + left.join("; ") + ".",
+        lead: "It",
+      });
+    }
+    return r;
   };
   // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole. One
   // that could not be put back stays (listed in `applied`), and the refusal says so — never that nothing was changed.
@@ -810,7 +821,7 @@ async function putBack(changes: readonly Change[]): Promise<PutBack> {
   // resized) or what a deleted layer left: then nothing is listed, and that is said to them as well (announce), not
   // only to the agent — never "nothing changed".
   const r: WriteResult = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
-  if (!stays.length) keptOnPutBack.set(r, left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".");
+  if (!stays.length) keptLine.set(r, { text: left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".", lead: "Its preview" });
   return { failed: r, gone: went, restored: restored.length };
 }
 

@@ -666,7 +666,8 @@ export const cases: Case[] = [{
     // The first op grows "Payments" (600×600) to 80+900+80 = 1060 wide. While the next op awaits its text style the
     // designer deletes that frame and unticks "Allow edits": nothing is put back, so the section keeps the batch's size,
     // and the reply says so. Control: with the section resized by the designer meanwhile, it is theirs, and not said.
-    const sent = async (resize?: (s: FakeNode) => void) => {
+    // `fails`: the op then fails for its own reason (its style, which rejects late), after the untick.
+    const sent = async (resize?: (s: FakeNode) => void, fails = false) => {
       const w = await flowsWorld({ kit: true });
       w.hooks.onStyle = async () => {
         w.hooks.onStyle = undefined;
@@ -674,21 +675,32 @@ export const cases: Case[] = [{
         if (g && typeof g.remove === "function") (g.remove as () => void)();
         if (resize) resize(w.f.payments);
         await w.allowEdits(false);
+        if (fails) throw new Error("the text style failed to load");
       };
+      const toasts = w.notified.length;
       const r = await write(w, [
         { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Grower", x: 80, y: 80, box: { w: 900, h: 100 } } },
         { op: "createTree", page: "Flows", tree: { name: "Await", children: [{ text: "Hi", styles: { text: "Body" } }] } },
       ]);
-      return { r, s: w.f.payments };
+      return { r, s: w.f.payments, toasts: w.notified.slice(toasts), line: [...w.posted].reverse().find((m) => m.type === "writes") };
     };
+    const keeps = /the tree 'Grower' \([^)]*\) was deleted from the file while the batch ran, but the section 'Payments' \(6:2\) it grew to 1060×600 keeps that size/;
     const grown = await sent();
     ok(`[PLACE-GONE-GREW] the section stays 1060 wide, and the reply says the deleted frame's growth stays (${grown.r.error})`,
       grown.r.ok === false && grown.r.refused === "edits-off" && box(grown.s) === "1200,0,1060,600"
-      && /the tree 'Grower' \([^)]*\) was deleted from the file while the batch ran, but the section 'Payments' \(6:2\) it grew to 1060×600 keeps that size/.test(grown.r.error ?? "")
-      && !/Grower[^;]*none of it stays/.test(grown.r.error ?? ""));
+      && keeps.test(grown.r.error ?? "") && !/Grower[^;]*none of it stays/.test(grown.r.error ?? ""));
+    const failed = await sent(undefined, true);
+    ok(`[PLACE-GONE-GREW] failed for its own reason after the untick: the section stays 1060 wide, and the reply says so (${failed.r.error})`,
+      failed.r.ok === false && failed.r.refused === undefined && box(failed.s) === "1200,0,1060,600" && keeps.test(failed.r.error ?? ""));
+    for (const [how, p] of [["stopped", grown], ["failed", failed]] as const) {
+      ok(`[PLACE-GONE-GREW] ${how}: Figma's toast and the window's status line say the growth stays, never that nothing changed (${JSON.stringify(p.toasts)})`,
+        p.toasts.length === 1 && keeps.test(p.toasts[0] ?? "") && /not all of it could be put back/.test(p.toasts[0] ?? "") && !/nothing changed/i.test(p.toasts[0] ?? "")
+        && p.line !== undefined && p.line.text === p.toasts[0]);
+    }
     const theirs = await sent((s) => { s.width = 700; });
     ok(`[PLACE-GONE-GREW] control: resized by the designer since, the section is theirs: none of the frame stays (${theirs.r.error})`,
-      theirs.r.ok === false && box(theirs.s) === "1200,0,700,600" && /the tree 'Grower' \([^)]*\) was deleted from the file while the batch ran, so none of it stays/.test(theirs.r.error ?? ""));
+      theirs.r.ok === false && box(theirs.s) === "1200,0,700,600" && /the tree 'Grower' \([^)]*\) was deleted from the file while the batch ran, so none of it stays/.test(theirs.r.error ?? "")
+      && theirs.toasts.length === 1 && !/not all of it could be put back/.test(theirs.toasts[0] ?? ""));
   },
 }, {
   name: "put back: a section two ops grew keeps a side the designer resized, even to the size the first op gave it",

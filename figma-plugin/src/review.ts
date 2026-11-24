@@ -41,7 +41,7 @@ import { editsAllowedNow } from "./edits";
 import { clearErrorToast, toast } from "./toast";
 import type { ReviewCardLine, ReviewEnd, ReviewEndMsg, ReviewMsg, ReviewState, ReviewStateMsg } from "./messages";
 import { errMsg } from "./util";
-import { landedResult, mergeLanded, type Landed } from "./write-batch";
+import { carryKept, landedResult, mergeLanded, type Landed } from "./write-batch";
 
 export type { ReviewEnd };
 
@@ -118,20 +118,13 @@ const bothBack = (a: PutBack, b: PutBack): PutBack => ({ failed: b.failed, gone:
  *  button) found layers deleted: it says those went too. */
 function failedAfter(failed: WriteResult, earlier: PutBack | null): WriteResult {
   if (!earlier || !earlier.gone.length) return failed;
-  return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+  return carryKept(failed, { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" });
 }
-/** A put-back's result (writes.ts putBack `failed`) that left no change applied, but not all of the file as it was:
- *  what the designer changed since (a section side they resized), or what a layer they deleted left (a section its
- *  frame grew, still that size). The sentence writes.ts announce says in the window and Figma's toast for it, never
- *  "nothing changed". Not a field of the reply. */
-export const keptOnPutBack = new WeakMap<WriteResult, string>();
 /** The result a card ends with when its preview could not all be put back (`back.failed`): with what an earlier Put back
- *  found deleted (failedAfter) and what its previews landed (landedResult), and still known as what the designer kept. */
+ *  found deleted (failedAfter) and what its previews landed (landedResult), and still told to the designer as what the
+ *  put-back kept (write-batch.ts keptLine). */
 function backFailed(failed: WriteResult, card: Card): WriteResult {
-  const f = landedResult(failedAfter(failed, card.back), card.landed);
-  const kept = keptOnPutBack.get(failed);
-  if (kept !== undefined) keptOnPutBack.set(f, kept);
-  return f;
+  return landedResult(failedAfter(failed, card.back), card.landed);
 }
 
 /** What writes.ts hands a card: the batch, what it shows, and how to run it. */
@@ -345,7 +338,7 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       if (!p.result.ok) {
         // It could not land whole (what it did was put back, as for any failed batch): the card ends with that result.
         post({ type: "review-end", id: card.ticket, end: "failed" });
-        const r: WriteResult = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
+        const r = carryKept(p.result, { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") });
         card.input.announce(r, p.landed);
         finish(card, r);
         return;
