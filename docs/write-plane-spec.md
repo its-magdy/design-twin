@@ -256,7 +256,8 @@ screens.
       holds at most 3 pages (Figma's limit for team files; drafts are not held to it): Figma refuses a fourth, which is
       only known when it is made, and the batch is then put back like any op Figma refuses.
     - **One undo step (decision 16).** Making a page or section and resizing a section are ordinary plugin edits
-      inside the batch's commitUndo pair; whether Figma folds a new page into that one step is checked live.
+      inside the batch's commitUndo pair (seen live: one Undo takes back a batch that made a page, a section on it and
+      a frame in that; the harness pins the one checkpoint pair).
     - **A keyed re-send stays where its result is.** `page` and `section` must be absent or the result's; an update
       neither moves its result nor makes a page or section for it (a re-send into a section its result is not in is
       refused, and nothing is made).

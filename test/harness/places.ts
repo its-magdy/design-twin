@@ -87,6 +87,13 @@ export const cases: Case[] = [{
       num(f.onboarding, "width") === 1040 && num(f.onboarding, "height") === 1948 && num(f.onboarding, "x") === 0 && num(f.onboarding, "y") === 0);
     ok("[PLACE] the reply is as before: no page or section was made", r.applied[0]?.pageCreated === undefined && r.applied[0]?.sectionCreated === undefined && r.warnings === undefined);
     ok("[PLACE] one batch, one Cmd-Z step", w.undo.commits === commits + 2);
+    // Making a page, a section on it and a frame in that is one step too: the batch's own checkpoint pair, and no step
+    // ended inside it (seen live: one native Undo takes all three back).
+    const made = { commits: w.undo.commits, implicit: w.undo.implicit };
+    const compound = await write(w, [{ op: "createTree", page: "Launch", createPage: true, section: "Hero", createSection: true, tree: screen("Splash") }]);
+    ok(`[PLACE] a batch making a page, a section and a frame is one Cmd-Z step (${w.undo.commits - made.commits} checkpoints, ${w.undo.implicit - made.implicit} ended inside)`,
+      compound.ok === true && !!compound.applied[0]?.pageCreated && !!compound.applied[0]?.sectionCreated
+      && w.undo.commits === made.commits + 2 && w.undo.implicit === made.implicit);
     // An empty section: at the margin, and it grows to hold the frame (80+844+80 tall; 80+390+80 = 550 fits its 600).
     const e = await write(w, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Card entry") }]);
     const en = found(w, e);
