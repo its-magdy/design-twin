@@ -659,6 +659,13 @@ export const cases: Case[] = [{
     ok(`[PLACE-KEYED] another name on the result's page: the hint names its section (${elsewhere.error})`,
       mine.ok === true && elsewhere.ok === false
       && /is in section 'Pay', but `section` 'Other' would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` out, or name its section: `section: 'Pay'`/.test(elsewhere.error ?? ""));
+    // …and the same with the result's page named: the page is right, so naming its section is the way.
+    const ownPage = here.figma.currentPage.name;
+    const named = await write(here, [{ ...keyed, section: "Other", page: ownPage }]);
+    ok(`[PLACE-KEYED] another name, the result's own page named: the hint names its section (${named.error})`,
+      named.ok === false && /would be a new section on the current page '[^']+'; an update stays where the result is — leave `section` out, or name its section: `section: 'Pay'`/.test(named.error ?? ""));
+    const namedFollowed = await write(here, [{ ...keyed, page: ownPage }]);
+    ok("[PLACE-KEYED] …followed, it updates the result", namedFollowed.ok === true && found(here, namedFollowed)?.id === found(here, mine)?.id);
   },
 }, {
   name: "the review card says where it lands: a section, a new section, a new page",
