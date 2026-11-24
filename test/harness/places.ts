@@ -190,6 +190,13 @@ export const cases: Case[] = [{
     const pinned = await inSection({ x: 80, y: 80 });
     ok(`[PLACE-TURNED] at x/y given in a section: kept, the section grown to the right edge of what it covers (80+400+80) (${num(pinned.n, "x")},${num(pinned.n, "y")}; ${box(pinned.sec)})`,
       pinned.r.ok === true && num(pinned.n, "x") === 80 && num(pinned.n, "y") === 80 && box(pinned.sec) === "3300,0,560,160");
+    // Turned a hair (sin 0.001), it covers from 0.04 above its own y: rounding its y to the whole pixel 80 would start
+    // what it covers at 79.96, inside the margin — so it is the next whole pixel instead.
+    const w = await flowsWorld();
+    const r = await write(w, [{ op: "createTree", page: "Flows", section: "Hair", createSection: true, tree: { clone: await turnedSource(w, 40, 400, (Math.asin(0.001) * 180) / Math.PI) } }]);
+    const c = covers(found(w, r));
+    ok(`[PLACE-TURNED] a computed spot never starts inside the margin once rounded (what it covers starts at ${c.x}, ${c.y}; its y ${num(found(w, r), "y")})`,
+      r.ok === true && c.x >= SECTION_PAD && c.y >= SECTION_PAD && Number.isInteger(num(found(w, r), "y")));
   },
 }, {
   name: "the review card's Show me pans to where the write puts the frame: its real size, the section the batch makes",

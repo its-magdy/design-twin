@@ -9424,16 +9424,18 @@
     const near3 = Math.round(v);
     return near3 === v ? [v] : [near3, near3 > v ? Math.floor(v) : Math.ceil(v), v];
   }
-  function anchored(spec, box, fp, held) {
-    const xs = spec.x !== void 0 ? [spec.x] : wholePixels(box.x - fp.dx);
-    const ys = spec.y !== void 0 ? [spec.y] : wholePixels(box.y - fp.dy);
+  function anchored(spec, box, fp, held, floor = -Infinity) {
+    const clear = (vs, d, at3) => vs.filter((v) => v + d >= Math.min(floor, at3) - 1e-6);
+    const xs = spec.x !== void 0 ? [spec.x] : clear(wholePixels(box.x - fp.dx), fp.dx, box.x);
+    const ys = spec.y !== void 0 ? [spec.y] : clear(wholePixels(box.y - fp.dy), fp.dy, box.y);
     for (const x of xs) {
       for (const y of ys) {
         const covers = { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height };
         if (!held.some((b) => overlaps(covers, b))) return { x, y };
       }
     }
-    return { x: spec.x !== void 0 ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== void 0 ? spec.y : Math.round(box.y - fp.dy) };
+    const first2 = (vs, none) => vs.length && vs[0] !== void 0 ? vs[0] : none;
+    return { x: first2(xs, Math.round(box.x - fp.dx)), y: first2(ys, Math.round(box.y - fp.dy)) };
   }
   function besideHeld(held, at3, w, h, pad, floor = -Infinity) {
     if (!held.length) return { x: at3.x !== void 0 ? at3.x : pad, y: at3.y !== void 0 ? at3.y : pad };
@@ -9525,11 +9527,11 @@
       if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
       const held = this.itemsOf(h).map((i) => i.box);
       const w = fp.width, ht = fp.height;
-      if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held);
+      if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held, SECTION_PAD);
       const beside = besideHeld(held, {}, w, ht, SECTION_PAD, SECTION_PAD);
-      if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held);
+      if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held, SECTION_PAD);
       const below = { x: Math.max(SECTION_PAD, Math.min(...held.map((b) => b.x))), y: Math.max(SECTION_PAD, Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
-      return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held);
+      return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held, SECTION_PAD);
     }
     /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */
     runsInto(h, at3, w, ht) {

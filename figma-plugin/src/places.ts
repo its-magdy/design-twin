@@ -221,17 +221,22 @@ function wholePixels(v: number): number[] {
 }
 /** The node's x/y for its footprint at `box` (a spot clear of every box in `held`): the spec's own where it gives them,
  *  as given; the rest a whole pixel — the nearer, unless that puts what it covers on one of `held` (rounding never
- *  moves it onto a layer the spot was chosen clear of), then the other, else unrounded. */
-function anchored(spec: At, box: XY, fp: Footprint, held: readonly Box[]): XY {
-  const xs = spec.x !== undefined ? [spec.x] : wholePixels(box.x - fp.dx);
-  const ys = spec.y !== undefined ? [spec.y] : wholePixels(box.y - fp.dy);
+ *  moves it onto a layer the spot was chosen clear of) or before `floor` (a section's margin: rounding never starts it
+ *  inside), then the other, else unrounded. */
+function anchored(spec: At, box: XY, fp: Footprint, held: readonly Box[], floor = -Infinity): XY {
+  // A choice whose cover starts before the floor (where the spot itself does not) is no choice; the unrounded one,
+  // last in the list, always starts where the spot does.
+  const clear = (vs: number[], d: number, at: number): number[] => vs.filter((v) => v + d >= Math.min(floor, at) - 1e-6);
+  const xs = spec.x !== undefined ? [spec.x] : clear(wholePixels(box.x - fp.dx), fp.dx, box.x);
+  const ys = spec.y !== undefined ? [spec.y] : clear(wholePixels(box.y - fp.dy), fp.dy, box.y);
   for (const x of xs) {
     for (const y of ys) {
       const covers = { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height };
       if (!held.some((b) => overlaps(covers, b))) return { x, y };
     }
   }
-  return { x: spec.x !== undefined ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== undefined ? spec.y : Math.round(box.y - fp.dy) };
+  const first = (vs: number[], none: number): number => (vs.length && vs[0] !== undefined ? vs[0] : none);
+  return { x: first(xs, Math.round(box.x - fp.dx)), y: first(ys, Math.round(box.y - fp.dy)) };
 }
 
 /**
@@ -349,11 +354,11 @@ export class Canvas {
     if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
     const held = this.itemsOf(h).map((i) => i.box);
     const w = fp.width, ht = fp.height;
-    if (!held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held);
+    if (!held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held, SECTION_PAD);
     const beside = besideHeld(held, {}, w, ht, SECTION_PAD, SECTION_PAD);
-    if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held);
+    if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held, SECTION_PAD);
     const below = { x: Math.max(SECTION_PAD, Math.min(...held.map((b) => b.x))), y: Math.max(SECTION_PAD, Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
-    return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held);
+    return anchored(spec, this.runsInto(h, below, w, ht) ? beside : below, fp, held, SECTION_PAD);
   }
   /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */
   private runsInto(h: Holder, at: XY, w: number, ht: number): boolean {

@@ -243,8 +243,8 @@ screens.
       it goes beside are measured: what it will cover on the canvas, its turn included (a copy of a rotated layer keeps
       the rotation). Its `x`/`y` are Figma's own (the turned corner), so a placed copy's box starts where the rules
       above say, its `x`/`y` wherever that puts them; given coordinates are kept as given. A computed `x`/`y` is a
-      whole pixel: the nearer one, unless rounding would put the frame on a layer the spot was chosen clear of — then
-      the other, else left unrounded.
+      whole pixel: the nearer one, unless rounding would put the frame on a layer the spot was chosen clear of, or
+      start what it covers inside a section's margin — then the other, else left unrounded.
     - **All or nothing (decision 14).** A made page and section are Changes on the batch's list, so a later failure
       removes them, newest first, after the frames in them; a section's growth goes back with the frame that caused
       it — each side only while it is still the size the batch gave it: a side the designer resized meanwhile (while a
