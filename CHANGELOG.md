@@ -312,7 +312,11 @@ list of merged PRs.
   refuses for that layer instead of deleting it. A tree the designer moved into a later tree of the same batch goes
   back with it, and a put-back refused for a layer it held is tried again once the rest went back, so the reply never
   gives a stale reason. A preview whose layers were all deleted says nothing of it was put back (on Reject and on the
-  card's Put back), and a Reject after a Put back still says which change went with a deleted layer.
+  card's Put back), and a Reject after a Put back still says which change went with a deleted layer, even when the
+  last put-back could not all go back. Once "Allow edits" is off, a failed build no longer takes an earlier tree of
+  the batch with it, and a created layer that is gone by the end of a put-back (taken back with another, or deleted)
+  is never listed as applied or said to stay. "Allow edits" turned off before a refused put-back is tried again is said,
+  instead of a reason that may no longer be true.
 
 ## [0.1.6] - 2026-11-02
 
