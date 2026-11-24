@@ -668,11 +668,11 @@ export const cases: Case[] = [{
     // cannot be made: the wire check refuses it).
     const frame = await write(w, [{ op: "createTree", section: "6:11", tree: screen("Into a frame") }]);
     ok(`[PLACE-ID] the id of a frame: said to be a frame's, no createSection hint (${frame.error})`, frame.ok === false
-      && /section '6:11' matches no section on the current page 'Page 1'; it is the id of 'Welcome', a FRAME, not a section/.test(frame.error ?? "")
+      && /section '6:11' matches no section on the current page 'Page 1'; it is the id of 'Welcome' \(FRAME\), not of a section/.test(frame.error ?? "")
       && !/createSection/.test(frame.error ?? ""));
     const none = await write(w, [{ op: "createTree", section: "77:7", tree: screen("Nowhere") }]);
     ok(`[PLACE-ID] an id no layer has: said so, no createSection hint (${none.error})`, none.ok === false
-      && /section '77:7' matches no section on the current page 'Page 1'; it reads as a node id, and no layer of this file has it/.test(none.error ?? "")
+      && /section '77:7' matches no section on the current page 'Page 1'; it looks like a node id, and no layer of this file has it/.test(none.error ?? "")
       && !/createSection/.test(none.error ?? ""));
     const dry = writeOpPreview({ op: "createTree", section: "6:2", tree: screen("By id") }, 0);
     ok(`[PLACE-ID] the dry run takes it, and says it lands on the section's own page (${JSON.stringify(dry.target)})`,

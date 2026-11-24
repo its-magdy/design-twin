@@ -168,8 +168,8 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
 async function idIs(ref: string): Promise<string> {
   let n: BaseNode | null = null;
   try { n = await figma.getNodeByIdAsync(ref); } catch { n = null; }
-  if (!n || n.removed) return "it reads as a node id, and no layer of this file has it";
-  if (n.type !== "SECTION") return "it is the id of '" + n.name + "', a " + n.type + ", not a section";
+  if (!n || n.removed) return "it looks like a node id, and no layer of this file has it";
+  if (n.type !== "SECTION") return "it is the id of '" + n.name + "' (" + n.type + "), not of a section";
   const on = pageHolding(n);
   return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " — leave `page` out, or name that page";
 }
