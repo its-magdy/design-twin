@@ -217,6 +217,31 @@ export const cases: Case[] = [{
       turned.r.ok === true && canvas(found(w3, turned.r)) === "3380,120" && turned.spot === "3380,120");
   },
 }, {
+  name: "a placed frame's x/y are whole pixels, never rounded onto a layer the spot was chosen clear of",
+  async run() {
+    /** A world whose current page holds only `boxes` (fixtures, not made by a batch). */
+    const scratch = async (boxes: Box[]): Promise<World> => {
+      const w = await treeWorld();
+      w.pages.current.children = [];
+      boxes.forEach((b, i) => (w.pages.current.appendChild as (c: FakeNode) => void)({ id: "9:" + (50 + i), type: "FRAME", name: "Held " + i, ...b }));
+      return w;
+    };
+    const hits = (w: World, n: FakeNode | undefined): string => !n ? "(not made)" : kids(w.pages.current).filter((k) => k !== n && overlaps(plain(k), plain(n))).map((k) => String(k.name)).join();
+    // x only: level with the topmost (y 0.6) clears the frame below at y 10.7, but rounded to 1 it would reach 10.7+.
+    const w = await scratch([{ x: 200, y: 0.6, width: 10, height: 10 }, { x: 0, y: 10.7, width: 10, height: 10 }]);
+    const r = await write(w, [{ op: "createTree", tree: { name: "Thin", x: 0, box: { w: 10, h: 10 } } }]);
+    const n = found(w, r);
+    ok(`[PLACE-ROUND] x only, level with the topmost: rounded away from the layer below, not onto it (${num(n, "x")},${num(n, "y")}; on '${hits(w, n)}')`,
+      r.ok === true && num(n, "x") === 0 && num(n, "y") === 0 && hits(w, n) === "");
+    // y only: right of everything (10.4+100 = 110.4), and the nearer whole pixel (110) is clear of everything held.
+    const w2 = await scratch([{ x: 0.4, y: 0, width: 10, height: 10 }]);
+    const r2 = await write(w2, [{ op: "createTree", tree: { name: "Row", y: 0, box: { w: 10, h: 10 } } }]);
+    ok(`[PLACE-ROUND] the nearer whole pixel when that is clear (${num(found(w2, r2), "x")})`, r2.ok === true && num(found(w2, r2), "x") === 110);
+    // Explicit coordinates stay exact.
+    const r3 = await write(w2, [{ op: "createTree", tree: { name: "Pinned", x: 500.125, box: { w: 10, h: 10 } } }]);
+    ok(`[PLACE-ROUND] a given coordinate is kept as given (${num(found(w2, r3), "x")})`, r3.ok === true && num(found(w2, r3), "x") === 500.125);
+  },
+}, {
   name: "the dry run and the write refuse the same placement fields (one table: test/place-refusals.ts)",
   async run() {
     const w = await flowsWorld();

@@ -9347,7 +9347,21 @@
     return { dx: hundredth(x0), dy: hundredth(y0), width: hundredth(Math.max(...xs) - x0), height: hundredth(Math.max(...ys) - y0) };
   }
   var wanted = (spec, fp) => ({ x: spec.x !== void 0 ? spec.x + fp.dx : void 0, y: spec.y !== void 0 ? spec.y + fp.dy : void 0 });
-  var anchored = (spec, box, fp) => ({ x: spec.x !== void 0 ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== void 0 ? spec.y : Math.round(box.y - fp.dy) });
+  function wholePixels(v) {
+    const near2 = Math.round(v);
+    return near2 === v ? [v] : [near2, near2 > v ? Math.floor(v) : Math.ceil(v), v];
+  }
+  function anchored(spec, box, fp, held) {
+    const xs = spec.x !== void 0 ? [spec.x] : wholePixels(box.x - fp.dx);
+    const ys = spec.y !== void 0 ? [spec.y] : wholePixels(box.y - fp.dy);
+    for (const x of xs) {
+      for (const y of ys) {
+        const covers = { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height };
+        if (!held.some((b) => overlaps(covers, b))) return { x, y };
+      }
+    }
+    return { x: spec.x !== void 0 ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== void 0 ? spec.y : Math.round(box.y - fp.dy) };
+  }
   function besideHeld(held, at3, w, h, pad) {
     if (!held.length) return { x: at3.x !== void 0 ? at3.x : pad, y: at3.y !== void 0 ? at3.y : pad };
     const top = Math.min(...held.map((b) => b.y));
@@ -9360,17 +9374,18 @@
   }
   function pagePlacement(page, skip, spec, fp) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    return anchored(spec, besideHeld(others(page, skip).map(occupied), wanted(spec, fp), fp.width, fp.height, 0), fp);
+    const held = others(page, skip).map(occupied);
+    return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
   }
   function sectionPlacement(section, skip, spec, fp) {
     if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
     const held = section ? others(section, skip).map(occupied) : [];
     const w = fp.width, h = fp.height;
-    if (!section || !held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
+    if (!section || !held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp, held);
     const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-    if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp);
+    if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp, held);
     const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
-    return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp);
+    return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp, held);
   }
   function runsInto(section, at3, w, h) {
     const grown = grownBox(section, at3.x + w + SECTION_PAD, at3.y + h + SECTION_PAD);

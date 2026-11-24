@@ -161,9 +161,25 @@ export function footprint(w: number, h: number, turned?: BaseNode | null): Footp
 type At = { x?: number | undefined; y?: number | undefined };
 /** The spec's own x/y as where the node's footprint will start. */
 const wanted = (spec: At, fp: Footprint): At => ({ x: spec.x !== undefined ? spec.x + fp.dx : undefined, y: spec.y !== undefined ? spec.y + fp.dy : undefined });
-/** The node's x/y for its footprint at `box`: the spec's own where it gives them, as given. */
-const anchored = (spec: At, box: { x: number; y: number }, fp: Footprint): { x: number; y: number } =>
-  ({ x: spec.x !== undefined ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== undefined ? spec.y : Math.round(box.y - fp.dy) });
+/** A computed coordinate's choices, best first: the nearer whole pixel, the other one, then itself. */
+function wholePixels(v: number): number[] {
+  const near = Math.round(v);
+  return near === v ? [v] : [near, near > v ? Math.floor(v) : Math.ceil(v), v];
+}
+/** The node's x/y for its footprint at `box` (a spot clear of every box in `held`): the spec's own where it gives them,
+ *  as given; the rest a whole pixel — the nearer, unless that puts what it covers on one of `held` (rounding never
+ *  moves it onto a layer the spot was chosen clear of), then the other, else unrounded. */
+function anchored(spec: At, box: { x: number; y: number }, fp: Footprint, held: readonly Box[]): { x: number; y: number } {
+  const xs = spec.x !== undefined ? [spec.x] : wholePixels(box.x - fp.dx);
+  const ys = spec.y !== undefined ? [spec.y] : wholePixels(box.y - fp.dy);
+  for (const x of xs) {
+    for (const y of ys) {
+      const covers = { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height };
+      if (!held.some((b) => overlaps(covers, b))) return { x, y };
+    }
+  }
+  return { x: spec.x !== undefined ? spec.x : Math.round(box.x - fp.dx), y: spec.y !== undefined ? spec.y : Math.round(box.y - fp.dy) };
+}
 
 /**
  * Where a box of `w`×`h` goes among `held` (boxes in the same coordinates), by `at` — `pad` in from the edges when
@@ -186,7 +202,8 @@ function besideHeld(held: readonly Box[], at: At, w: number, h: number, pad: num
  *  beside what is on the page (besideHeld). */
 export function pagePlacement(page: PageNode, skip: string, spec: At, fp: Footprint): { x: number; y: number } {
   if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
-  return anchored(spec, besideHeld(others(page, skip).map(occupied), wanted(spec, fp), fp.width, fp.height, 0), fp);
+  const held = others(page, skip).map(occupied);
+  return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
 }
 
 /** Where a node covering `fp` lands in `section` (its x/y, in the section's coordinates), by the spec's x/y and what
@@ -196,11 +213,11 @@ function sectionPlacement(section: SectionNode | null, skip: string, spec: At, f
   if (spec.x !== undefined && spec.y !== undefined) return { x: spec.x, y: spec.y };
   const held = section ? others(section, skip).map(occupied) : [];
   const w = fp.width, h = fp.height;
-  if (!section || !held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp);
+  if (!section || !held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp, held);
   const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-  if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp);
+  if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp, held);
   const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
-  return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp);
+  return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp, held);
 }
 /** Whether `section`, grown to hold a node of `w`×`h` at `at`, would run into one of its neighbours. */
 function runsInto(section: SectionNode, at: { x: number; y: number }, w: number, h: number): boolean {
