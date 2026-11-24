@@ -502,6 +502,34 @@ export const cases: Case[] = [{
       && r.applied.some((a) => a.sectionCreated === sec.id));
   },
 }, {
+  name: "put back: a section the designer resized after the batch grew it keeps the designer's size (each side), and is said",
+  async run() {
+    // The batch grows "Payments" (600×600) to 80+500+80 × 80+700+80 = 660×860 for its first frame; while the next op
+    // awaits its text style the designer resizes the section; then a later op fails and the batch is put back.
+    const sent = async (resize: (s: FakeNode) => void) => {
+      const w = await flowsWorld({ kit: true });
+      w.hooks.onStyle = async () => { w.hooks.onStyle = undefined; resize(w.f.payments); };
+      const r = await write(w, [
+        { op: "createTree", page: "Flows", section: "Payments", tree: { name: "Pay", box: { w: 500, h: 700 } } },
+        { op: "createTree", page: "Flows", tree: { name: "B", children: [{ text: "Hi", styles: { text: "Body" } }] } },
+        { op: "setFill", nodeId: "gone:1", color: "#fff" },
+      ]);
+      return { r, s: w.f.payments, w };
+    };
+    const both = await sent((s) => { s.width = 900; s.height = 920; });
+    ok(`[PLACE-BACK-RESIZED] resized both ways: the section keeps 900×920, the frames go, and the error says it kept the size (${both.r.error})`,
+      both.r.ok === false && box(both.s) === "1200,0,900,920" && both.w.alive().length === 0
+      && /the section 'Payments' \(6:2\) was resized after this batch grew it to 660×860, so it keeps its size, 900×920/.test(both.r.error ?? "")
+      && !/could not undo the tree/.test(both.r.error ?? ""));
+    ok("[PLACE-BACK-RESIZED] …the frame is still listed as put back (the tree did go)", (both.r.restored ?? []).some((x) => x.created !== undefined));
+    const wide = await sent((s) => { s.width = 900; });
+    ok(`[PLACE-BACK-RESIZED] only its width changed: the width stays 900, the height goes back to 600 (${box(wide.s)}; ${wide.r.error})`,
+      wide.r.ok === false && box(wide.s) === "1200,0,900,600" && /so it keeps its width, 900/.test(wide.r.error ?? ""));
+    const same = await sent(() => {});
+    ok(`[PLACE-BACK-RESIZED] control: left as the batch grew it, it goes back to 600×600 and nothing is said (${same.r.error})`,
+      same.r.ok === false && box(same.s) === "1200,0,600,600" && !/was resized/.test(same.r.error ?? ""));
+  },
+}, {
   name: "a keyed re-send stays where its result is: the page and the section it names must be the result's",
   async run() {
     const w = await flowsWorld();

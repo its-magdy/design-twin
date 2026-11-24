@@ -219,8 +219,10 @@ export async function buildTree(t: TreeTarget, consent: () => void): Promise<Cha
     what: "the tree '" + root.name + "' (" + root.id + ")",
     restore() {
       root.remove();
-      if (grew) grew.undo(); // the sections it grew, back to their size
+      // The sections it grew, back to their size (a side the designer has resized since keeps theirs, and is said).
+      const kept = grew ? grew.undo() : [];
       if (key !== undefined && readIndex(key) === root.id) writeIndex(key, indexWas);
+      return kept.length ? kept.join("; ") : undefined;
     },
   };
 }
@@ -281,7 +283,7 @@ async function buildComponent(t: TreeTarget, type: ComponentRootType, name: stri
     if (t.summary.unbound) applied.unbound = t.summary.unbound;
     const built = root;
     const grew = landed;
-    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); grew.undo(); } };
+    return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() { built.remove(); const kept = grew.undo(); return kept.length ? kept.join("; ") : undefined; } };
   } catch (e) {
     for (const p of parts.slice().reverse()) { try { if (!p.removed) p.remove(); } catch { /* already gone */ } }
     if (landed) { try { landed.undo(); } catch { /* the section's size is said by the restore of the batch */ } }

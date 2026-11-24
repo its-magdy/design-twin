@@ -668,7 +668,10 @@ async function putBack(changes: readonly Change[]): Promise<WriteResult | null> 
   commitUndo();
   if (!failed.length) return null;
   const back = new Set(restored);
-  return { ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " — what stays is listed in `applied`." };
+  // Every change may have gone back but for what the designer has changed since (a section they resized): then
+  // nothing is listed.
+  const stays = changes.filter((c) => !back.has(c)).map((c) => c.applied);
+  return { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
 }
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */

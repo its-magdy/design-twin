@@ -26,8 +26,10 @@ export interface Change {
   kind: string;
   /** What it is, for a sentence saying it could not be undone. */
   what: string;
-  /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. */
-  restore(allowed: () => boolean): void | Promise<void>;
+  /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped. A
+   *  sentence back: the change went back but for a part the designer has changed since, which it left as they made it
+   *  (a section they resized after the batch grew it); said with what could not be undone. */
+  restore(allowed: () => boolean): void | string | Promise<void | string>;
   /** One of the layers a patchWhere changed (the same object for every one of them): a reply that lists what was put
    *  back counts them in one row instead of a row each. */
   group?: object;
@@ -51,7 +53,8 @@ export function restoredRows(changes: readonly Change[]): AppliedWrite[] {
 /** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
 export class RestoreStopped extends Error {}
 
-/** Undo `changes`, newest first. Returns the ones undone and a sentence for each that could not be. `allowed` is asked
+/** Undo `changes`, newest first. Returns the ones undone and a sentence for each that could not be (or was, but for a
+ *  part it left as the designer has since made it: still undone, its sentence with the others). `allowed` is asked
  *  before each: once the designer has turned "Allow edits" off, the plugin changes nothing more, not even to undo its
  *  own work, and the rest are reported as kept. */
 export async function restoreChanges(changes: readonly Change[], allowed: () => boolean): Promise<{ restored: Change[]; failed: string[] }> {
@@ -63,7 +66,11 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
       failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied");
       break;
     }
-    try { await c.restore(allowed); restored.push(c); } catch (e) {
+    try {
+      const kept = await c.restore(allowed);
+      restored.push(c);
+      if (kept) failed.push(kept);
+    } catch (e) {
       if (e instanceof RestoreStopped) {
         failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
         break;

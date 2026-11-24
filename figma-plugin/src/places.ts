@@ -17,7 +17,8 @@
 // x/y are the section's own (as Figma reads a section child's): beside what it holds — right of it, top-aligned, or on
 // a new row below when growing right would run the section into one of its neighbours — at SECTION_PAD from its edges
 // when it is empty. The section then grows (never shrinks) to hold the frame with that margin, and so does each section
-// around it; the growth is put back with the frame. A section that still runs into a neighbour is said in a warning,
+// around it; the growth is put back with the frame (each side still the size it grew to: one the designer resized
+// since keeps theirs, and the reply says so). A section that still runs into a neighbour is said in a warning,
 // as is a frame whose given coordinates put it past its section's left or top edge (kept there; a section grows only
 // right and down). Every box here is what a layer covers on the canvas, rotation included: the layers there by their
 // absoluteBoundingBox (occupied), the frame placed by its footprint (its size through its relativeTransform; a copy
@@ -424,8 +425,10 @@ export class Canvas {
   }
 }
 
-/** What landing a node did: how to take back the growth of the sections around it, and what it ran into. */
-export interface Landed { undo(): void; warnings: string[] }
+/** What landing a node did: how to take back the growth of the sections around it, and what it ran into. `undo` puts
+ *  back each side a section grew that is still the size landing gave it; a side resized since (the designer's, while a
+ *  preview was up or the batch awaited) is left as it is, and said: one sentence per section, for the batch's reply. */
+export interface Landed { undo(): string[]; warnings: string[] }
 
 /**
  * Attach `root` (built to the side, sized) where `dest` says, placed (Canvas.place, on the file as it is now): on its
@@ -446,13 +449,27 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
   root.x = placed.x;
   root.y = placed.y;
   // Each section around the node grows to hold what is in it, with its margin: the one it is in, then outwards.
-  const grown: Array<{ s: SectionNode; w: number; h: number }> = [];
-  const undo = (): void => { for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h); };
+  const grown: Array<{ s: SectionNode; w: number; h: number; toW: number; toH: number }> = [];
+  const undo = (): string[] => {
+    const kept: string[] = [];
+    for (const g of grown.slice().reverse()) {
+      if (g.s.removed) continue;
+      // A side it grew goes back only while it is still the size landing gave it.
+      const keepW = g.toW !== g.w && !near(g.s.width, g.toW), keepH = g.toH !== g.h && !near(g.s.height, g.toH);
+      const w = keepW || g.toW === g.w ? g.s.width : g.w, h = keepH || g.toH === g.h ? g.s.height : g.h;
+      if (!near(w, g.s.width) || !near(h, g.s.height)) g.s.resizeWithoutConstraints(w, h);
+      if (keepW || keepH) {
+        kept.push("the section " + label(g.s) + " was resized after this batch grew it to " + g.toW + "×" + g.toH + ", so it keeps its " +
+          (keepW && keepH ? "size, " + g.s.width + "×" + g.s.height : keepW ? "width, " + g.s.width : "height, " + g.s.height));
+      }
+    }
+    return kept;
+  };
   try {
     for (const g of placed.grows) {
       const s = g.holder.node;
       if (!s || s.type !== "SECTION") continue;
-      grown.push({ s, w: s.width, h: s.height });
+      grown.push({ s, w: s.width, h: s.height, toW: g.width, toH: g.height });
       s.resizeWithoutConstraints(g.width, g.height);
     }
   } catch (e) {
@@ -461,6 +478,9 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
   }
   return { undo, warnings: placed.warnings };
 }
+
+/** Two sizes the same to within Figma's float noise. */
+const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.005;
 
 /** A section the batch makes is made this size a side, then grows to hold the frames placed in it (land). */
 const NEW_SECTION = SECTION_PAD * 2;

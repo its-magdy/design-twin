@@ -954,8 +954,8 @@
       }
       for (const k of Object.keys(d)) {
         if (d[k] === void 0 || DEF_FIELDS.indexOf(k) >= 0) continue;
-        const near2 = nearestNames(k, DEF_FIELDS);
-        out.push(p + "." + k + ": not a field of a property definition" + (near2.length ? "; closest: " + quoteList(near2) : "") + " (it takes type, default, preferredValues)");
+        const near3 = nearestNames(k, DEF_FIELDS);
+        out.push(p + "." + k + ": not a field of a property definition" + (near3.length ? "; closest: " + quoteList(near3) : "") + " (it takes type, default, preferredValues)");
       }
       const t = d.type;
       if (t === "VARIANT") {
@@ -990,8 +990,8 @@
       const x = v[k];
       if (x === void 0) continue;
       if (fields.indexOf(k) < 0) {
-        const near2 = nearestNames(k, fields);
-        return "." + k + ": not a field a property drives" + (near2.length ? "; closest: " + quoteList(near2) : "") + " (characters, visible, mainComponent)";
+        const near3 = nearestNames(k, fields);
+        return "." + k + ": not a field a property drives" + (near3.length ? "; closest: " + quoteList(near3) : "") + " (characters, visible, mainComponent)";
       }
       if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
     }
@@ -1137,8 +1137,8 @@
         return [];
       }
       if (!own(fragments, name)) {
-        const near2 = nearestNames(name, Object.keys(fragments));
-        say(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
+        const near3 = nearestNames(name, Object.keys(fragments));
+        say(path + ".use: no fragment '" + name + "'" + (near3.length ? "; closest: " + quoteList(near3) : "; define it under the root's `fragments`"));
         return [];
       }
       if (stack.indexOf(name) >= 0) {
@@ -1776,11 +1776,11 @@
       const at3 = path + "." + k;
       const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
       if (rule === void 0) {
-        const near2 = nearestNames(k, Object.keys(rules).filter((r) => {
+        const near3 = nearestNames(k, Object.keys(rules).filter((r) => {
           const x = rules[r];
           return x !== void 0 && !isRefuse(x);
         }));
-        out.push(at3 + ": not a field the write accepts" + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        out.push(at3 + ": not a field the write accepts" + (near3.length ? "; closest: " + quoteList(near3) : ""));
       } else if (isRefuse(rule)) {
         out.push(at3 + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
       } else {
@@ -2051,8 +2051,8 @@
             const want = PROP_REF_TYPES[f];
             const has2 = comp.defs.get(prop);
             if (has2 === void 0) {
-              const near2 = nearestNames(prop, [...comp.defs.keys()]);
-              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+              const near3 = nearestNames(prop, [...comp.defs.keys()]);
+              say(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near3.length ? "; closest: " + quoteList(near3) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
               continue;
             }
             comp.used.add(prop);
@@ -2333,8 +2333,8 @@
       if (why !== void 0) problems.push(at3 + ": a patch cannot set it \u2014 " + why);
       else if (tree !== void 0) problems.push(at3 + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
       else {
-        const near2 = nearestNames(k, PATCH_FIELD_NAMES);
-        problems.push(at3 + ": not a field a patch sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        const near3 = nearestNames(k, PATCH_FIELD_NAMES);
+        problems.push(at3 + ": not a field a patch sets" + (near3.length ? "; closest: " + quoteList(near3) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
@@ -2584,8 +2584,8 @@
     if (!keys.length) return "is empty";
     for (const k of keys) {
       if (fields.indexOf(k) < 0) {
-        const near2 = nearestNames(k, fields);
-        return "." + k + ": not a field a variable binds to here" + (near2.length ? "; closest: " + quoteList(near2) : "");
+        const near3 = nearestNames(k, fields);
+        return "." + k + ": not a field a variable binds to here" + (near3.length ? "; closest: " + quoteList(near3) : "");
       }
       if (typeof v[k] !== "string" || !String(v[k]).trim()) return "." + k + " must be a variable's name, key or id";
     }
@@ -2648,8 +2648,8 @@
         if (!keys.length) return "is empty";
         for (const k of keys) {
           if (TEXT_STYLE_TOKEN_FIELDS.indexOf(k) < 0) {
-            const near2 = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
-            return "." + k + ": not a text style field a variable binds to" + (near2.length ? "; closest: " + quoteList(near2) : "");
+            const near3 = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
+            return "." + k + ": not a text style field a variable binds to" + (near3.length ? "; closest: " + quoteList(near3) : "");
           }
           const x = v[k];
           if (x !== null && (typeof x !== "string" || !x.trim())) return "." + k + " must be a variable's name, key or id, or null to unbind";
@@ -2683,8 +2683,8 @@
       const why = Object.prototype.hasOwnProperty.call(NOT_STYLED, k) ? NOT_STYLED[k] : void 0;
       if (why !== void 0) problems.push(at3 + ": a style edit cannot set it \u2014 " + why);
       else {
-        const near2 = nearestNames(k, STYLE_FIELD_NAMES);
-        problems.push(at3 + ": not a field a style edit sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        const near3 = nearestNames(k, STYLE_FIELD_NAMES);
+        problems.push(at3 + ": not a field a style edit sets" + (near3.length ? "; closest: " + quoteList(near3) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
@@ -2840,8 +2840,8 @@
         continue;
       }
       if (!isTypeName(type)) {
-        const near2 = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
-        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        const near3 = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
+        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near3.length ? "; closest: " + quoteList(near3) : ""));
         continue;
       }
       const was = names.get(name);
@@ -2934,8 +2934,8 @@
       }
       const extra = Object.keys(s).filter((k) => k !== "name" && k !== "kind" && k !== "set" && s[k] !== void 0);
       for (const k of extra) {
-        const near2 = nearestNames(k, ["name", "kind", "set"]);
-        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near2.length ? "; closest: " + quoteList(near2) : "") + ")");
+        const near3 = nearestNames(k, ["name", "kind", "set"]);
+        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near3.length ? "; closest: " + quoteList(near3) : "") + ")");
       }
       if (!nonEmpty3(s.name)) {
         problems.push(sp + ".name: must be the style's name (a non-empty string)");
@@ -7369,8 +7369,8 @@
       const hits = keys.indexOf(name) >= 0 ? [name] : keys.filter((k) => bare(k) === name);
       const key = hits[0];
       if (key === void 0) {
-        const near2 = nearestNames(name, keys.map(bare));
-        errors.push("component '" + component + "' has no property '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : keys.length ? "" : " (it has none)"));
+        const near3 = nearestNames(name, keys.map(bare));
+        errors.push("component '" + component + "' has no property '" + name + "'" + (near3.length ? "; closest: " + quoteList(near3) : keys.length ? "" : " (it has none)"));
         continue;
       }
       if (hits.length > 1) {
@@ -7382,8 +7382,8 @@
       if (def.type === "VARIANT") {
         const options = def.variantOptions || [];
         if (typeof value !== "string" || options.indexOf(value) < 0) {
-          const near2 = typeof value === "string" ? nearestNames(value, options) : options.slice(0, 3);
-          errors.push("property '" + name + "' of '" + component + "' has no value " + JSON.stringify(value) + (near2.length ? "; closest: " + quoteList(near2) : ""));
+          const near3 = typeof value === "string" ? nearestNames(value, options) : options.slice(0, 3);
+          errors.push("property '" + name + "' of '" + component + "' has no value " + JSON.stringify(value) + (near3.length ? "; closest: " + quoteList(near3) : ""));
           continue;
         }
       } else if (def.type === "BOOLEAN") {
@@ -7529,8 +7529,8 @@
           return { later: () => figma.variables.importVariableByKeyAsync(one.key) };
         }
         if (lib.length > 1) return { error: "variable '" + ref2 + "' matches " + lib.length + " library variables \u2014 pass one's key: " + lib.slice(0, 3).map((v) => "'" + v.name + "' in '" + v.libraryName + "' (" + v.key + ")").join(", ") };
-        const near2 = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
-        return none("variable", ref2, near2, "in this file or an enabled library");
+        const near3 = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
+        return none("variable", ref2, near3, "in this file or an enabled library");
       },
       async textStyle(ref2) {
         if (!styles) styles = figma.getLocalTextStylesAsync();
@@ -7680,8 +7680,9 @@
         break;
       }
       try {
-        await c.restore(allowed2);
+        const kept = await c.restore(allowed2);
         restored.push(c);
+        if (kept) failed.push(kept);
       } catch (e) {
         if (e instanceof RestoreStopped) {
           failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(left.slice(i)).replace(/ earlier /g, " ") + " stay applied (in part, for " + c.what + ")");
@@ -8433,8 +8434,8 @@
     const first2 = hits[0];
     if (hits.length === 1 && first2) return { ok: first2 };
     if (hits.length > 1) return { error: "matches " + hits.length + " layers of " + label(source) + "; name one by its id: " + hits.slice(0, 3).map(label).join(", ") };
-    const near2 = nearestNames(ref2, all.map((n) => n.name));
-    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near2.length ? "; closest: " + quoteList(near2) : "") };
+    const near3 = nearestNames(ref2, all.map((n) => n.name));
+    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near3.length ? "; closest: " + quoteList(near3) : "") };
   }
   function pageOf2(n) {
     let p = n.parent;
@@ -9387,8 +9388,8 @@
   }
   var wanted = (spec, fp) => ({ x: spec.x !== void 0 ? spec.x + fp.dx : void 0, y: spec.y !== void 0 ? spec.y + fp.dy : void 0 });
   function wholePixels(v) {
-    const near2 = Math.round(v);
-    return near2 === v ? [v] : [near2, near2 > v ? Math.floor(v) : Math.ceil(v), v];
+    const near3 = Math.round(v);
+    return near3 === v ? [v] : [near3, near3 > v ? Math.floor(v) : Math.ceil(v), v];
   }
   function anchored(spec, box, fp, held) {
     const xs = spec.x !== void 0 ? [spec.x] : wholePixels(box.x - fp.dx);
@@ -9612,13 +9613,23 @@
     root.y = placed.y;
     const grown = [];
     const undo = () => {
-      for (const g of grown.slice().reverse()) if (!g.s.removed) g.s.resizeWithoutConstraints(g.w, g.h);
+      const kept = [];
+      for (const g of grown.slice().reverse()) {
+        if (g.s.removed) continue;
+        const keepW = g.toW !== g.w && !near2(g.s.width, g.toW), keepH = g.toH !== g.h && !near2(g.s.height, g.toH);
+        const w = keepW || g.toW === g.w ? g.s.width : g.w, h = keepH || g.toH === g.h ? g.s.height : g.h;
+        if (!near2(w, g.s.width) || !near2(h, g.s.height)) g.s.resizeWithoutConstraints(w, h);
+        if (keepW || keepH) {
+          kept.push("the section " + label3(g.s) + " was resized after this batch grew it to " + g.toW + "\xD7" + g.toH + ", so it keeps its " + (keepW && keepH ? "size, " + g.s.width + "\xD7" + g.s.height : keepW ? "width, " + g.s.width : "height, " + g.s.height));
+        }
+      }
+      return kept;
     };
     try {
       for (const g of placed.grows) {
         const s = g.holder.node;
         if (!s || s.type !== "SECTION") continue;
-        grown.push({ s, w: s.width, h: s.height });
+        grown.push({ s, w: s.width, h: s.height, toW: g.width, toH: g.height });
         s.resizeWithoutConstraints(g.width, g.height);
       }
     } catch (e) {
@@ -9630,6 +9641,7 @@
     }
     return { undo, warnings: placed.warnings };
   }
+  var near2 = (a, b) => Math.abs(a - b) < 5e-3;
   var NEW_SECTION = SECTION_PAD * 2;
   var NEW_FRAME = 100;
   function leftIn(n) {
@@ -9741,8 +9753,8 @@
       let p = loaded3.get(key);
       if (!p) {
         p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
-          const near2 = nearestNames(family + " " + weight, await availableNames());
-          return "font '" + family + " " + weight + "' is not available in this file" + (near2.length ? "; closest: " + quoteList(near2) : "");
+          const near3 = nearestNames(family + " " + weight, await availableNames());
+          return "font '" + family + " " + weight + "' is not available in this file" + (near3.length ? "; closest: " + quoteList(near3) : "");
         });
         loaded3.set(key, p);
       }
@@ -9862,8 +9874,9 @@
       what: "the tree '" + root.name + "' (" + root.id + ")",
       restore() {
         root.remove();
-        if (grew) grew.undo();
+        const kept = grew ? grew.undo() : [];
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
+        return kept.length ? kept.join("; ") : void 0;
       }
     };
   }
@@ -9918,7 +9931,8 @@
       const grew = landed;
       return { applied, kind: "created component", what: "the component '" + name + "' (" + built.id + ")", restore() {
         built.remove();
-        grew.undo();
+        const kept = grew.undo();
+        return kept.length ? kept.join("; ") : void 0;
       } };
     } catch (e) {
       for (const p of parts.slice().reverse()) {
@@ -10321,10 +10335,10 @@
         if (planned && m.kind === "none") return { error: "style '" + ref2 + "' is new in this batch (" + plannedWhere(planned) + "): give its fields in that row" };
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return { error: "style '" + ref2 + "' matches " + m.matches.length + " styles \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((st) => "'" + st.name + "' (" + st.type.toLowerCase() + ", " + st.id + ")").join(", ") };
-        const near2 = nearestNames(ref2, pool.map((st) => st.name));
+        const near3 = nearestNames(ref2, pool.map((st) => st.name));
         const elsewhere = kind ? all.filter((st) => st.name === ref2)[0] : void 0;
         if (elsewhere) return { error: "'" + ref2 + "' is a " + elsewhere.type.toLowerCase() + " style, and these fields are a " + kind + " style's" };
-        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near2.length ? "; closest: " + quoteList(near2) : "") };
+        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near3.length ? "; closest: " + quoteList(near3) : "") };
       }
     };
   }
@@ -14039,7 +14053,8 @@
     commitUndo();
     if (!failed.length) return null;
     const back = new Set(restored);
-    return { ok: false, applied: changes.filter((c) => !back.has(c)).map((c) => c.applied), error: "The preview of this write could not all be put back: " + failed.join("; ") + " \u2014 what stays is listed in `applied`." };
+    const stays = changes.filter((c) => !back.has(c)).map((c) => c.applied);
+    return { ok: false, applied: stays, error: "The preview of this write could not all be put back: " + failed.join("; ") + (stays.length ? " \u2014 what stays is listed in `applied`." : ".") };
   }
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
