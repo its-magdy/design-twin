@@ -6,6 +6,7 @@ import { check, report } from "./assert.ts";
 import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, placeError, SECTION_PAD } from "../bridge/src/place-spec.ts";
 import { writeOpError, writeOpPreview } from "../bridge/src/commands.ts";
 import { cardLines, lineText } from "../bridge/src/review-card.ts";
+import { builtSize, type TreeNodeSpec } from "../bridge/src/tree-spec.ts";
 import { PLACE_REFUSED, PLACE_TAKEN } from "./place-refusals.ts";
 
 const tree = { name: "Pay", box: { w: 390, h: 844 } };
@@ -26,8 +27,11 @@ check("a blank section is refused", /`ops\[0\]\.section` must be a non-empty nam
 check("a page or section to make needs a real name: not blank", /`ops\[0\]\.page`: a page to make needs a name/.test(err(op({ page: " ", createPage: true }))));
 check("…no spaces at its ends (a name is matched exactly)", /`ops\[0\]\.page`: 'Checkout ' has spaces at its start or end/.test(err(op({ page: "Checkout ", createPage: true })))
   && /`ops\[0\]\.section`: ' Pay' has spaces/.test(err(op({ section: " Pay", createSection: true }))));
-check("…and not one that reads as a node id (it would name a node, not make one)",
-  /`ops\[0\]\.page`: '12:4' reads as a node id/.test(err(op({ page: "12:4", createPage: true }))) && /`ops\[0\]\.section`: 'I1:2;3:4' reads as a node id/.test(err(op({ section: "I1:2;3:4", createSection: true }))));
+check("…and not one that looks like a node id (it would name a node, not make one)",
+  /`ops\[0\]\.page`: '12:4' looks like a node id, not a name/.test(err(op({ page: "12:4", createPage: true }))) && /`ops\[0\]\.section`: 'I1:2;3:4' looks like a node id/.test(err(op({ section: "I1:2;3:4", createSection: true }))));
+const dashed = err(op({ section: "6-2", createSection: true }));
+check(`…an id in its URL dash form too, said only to look like one (it is not looked up as a section; got ${JSON.stringify(dashed)})`,
+  /`ops\[0\]\.section`: '6-2' looks like a node id, not a name; a section to make needs a name/.test(dashed) && !/names an existing/.test(dashed));
 check("an id-like page without createPage is just a lookup (an id)", writeOpError(op({ page: "12:4" }), 0) === null);
 check("only a createTree lands in a section or makes a page", ["section", "createPage", "createSection"].every((k) =>
   new RegExp("`ops\\[0\\]\\." + k + "`: only a createTree").test(err({ op: "createFrame", name: "F", [k]: k === "section" ? "S" : true }))));
@@ -42,10 +46,10 @@ check("a new section on a new page", pv({ page: "Checkout", createPage: true, se
   === "new frame in section 'Pay' (made when the page has none) on page 'Checkout' (made when the file has none)");
 const ch = String(pv({ page: "Checkout", section: "Pay" }).change);
 check(`the change sentence: inside the section, beside its frames, the section grows (got ${JSON.stringify(ch)})`,
-  /^creates frame 'Pay' 390×844 with 1 node \(1 frame, 0 texts\) in section 'Pay' on page 'Checkout', placed beside the frames already in it \(the section grows to fit\) — /.test(ch)
+  /^creates frame 'Pay' 390×844 with 1 node \(1 frame, 0 texts\) in section 'Pay' on page 'Checkout', placed beside the frames already in it \(the section grows if needed\) — /.test(ch)
   && /the page, its section and fonts are checked against the file when applied/.test(ch));
 const at = String(writeOpPreview({ op: "createTree", tree: { ...tree, x: 40, y: 60 }, section: "Pay" }, 0).change);
-check(`explicit coordinates in a section are the section's own (got ${JSON.stringify(at)})`, /in section 'Pay' on the current page at 40,60 inside it \(the section grows to fit\)/.test(at));
+check(`explicit coordinates in a section are the section's own (got ${JSON.stringify(at)})`, /in section 'Pay' on the current page at 40,60 inside it \(the section grows if needed\)/.test(at));
 check("without a section the sentence is as before", /on page 'Screens' at 0,0/.test(String(writeOpPreview({ op: "createTree", page: "Screens", tree: { name: "A", x: 0, y: 0 } }, 0).change))
   && /on the current page, placed beside the existing frames — /.test(String(pv({}).change)) && /the page and fonts are checked/.test(String(pv({}).change)));
 // The dry run refuses what the write refuses (the real write's half of this table: test/harness/places.ts).
@@ -56,6 +60,16 @@ for (const { op: o, why } of PLACE_REFUSED) {
 }
 check("…and both take the ops the check takes", PLACE_TAKEN.every((o) => writeOpError(o, 0) === null && writeOpPreview(o, 0).invalid === undefined));
 check("an op the check refuses previews as invalid", writeOpPreview({ op: "createTree", tree, createPage: true }, 0).invalid === "`ops[0].createPage` needs `page`: the name of the page to make (it is made when the file has no page of that name)");
+
+console.log("\nthe size Show me measures a new set by (tree-spec.ts builtSize):");
+const variants = [{ name: "State=A", box: { w: 100, h: 40 } }, { name: "State=B", box: { w: 100, h: 40 } }];
+const column = builtSize({ type: "COMPONENT_SET", name: "Chip", children: variants }, 100);
+// The wire check takes a `box` with neither side (its type says both; the read writes only x/y sometimes).
+const xyOnly = { x: 10, y: 20 } as NonNullable<TreeNodeSpec["box"]>;
+check("the wire check takes a set's box with only x/y", writeOpError({ op: "createTree", tree: { type: "COMPONENT_SET", name: "Chip", box: xyOnly, children: variants.map((v) => ({ ...v, type: "COMPONENT" })) } }, 0) === null);
+const placedOnly = builtSize({ type: "COMPONENT_SET", name: "Chip", box: xyOnly, children: variants }, 100);
+check(`a set with no size of its own: the column its variants are laid out in (got ${JSON.stringify(column)})`, column.w === 140 && column.h === 140);
+check(`…but a box with only x/y counts as sized, as the build counts it, so it is not the column (got ${JSON.stringify(placedOnly)})`, placedOnly.w === undefined && placedOnly.h === undefined);
 
 console.log("\nthe review card:");
 const line = (o: Record<string, unknown>, lands: string): string => {

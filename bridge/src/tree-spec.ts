@@ -891,6 +891,8 @@ export function variantColumn(boxes: readonly VariantBox[], moves: (i: number) =
  *  does not give is `unknown`'s). A side it cannot say before the build (a hugging auto-layout) is undefined. */
 export function builtSize(spec: TreeNodeSpec, unknown: number): { w: number | undefined; h: number | undefined } {
   const given = givenSize(spec);
+  // A `box` with neither side (only the read's x/y) still counts as sized: the build then leaves the set's size be
+  // (component-build.ts arrangeVariants), so the column is not its size either.
   if (given.w !== undefined || given.h !== undefined || spec.box !== undefined || spec.type !== "COMPONENT_SET" || (spec.layout && spec.layout.display === "flex")) return given;
   const variants = spec.children || [];
   const col = variantColumn(variants.map((v) => {
@@ -924,7 +926,7 @@ export function describeTree(spec: TreeNodeSpec, place: Place | undefined, s: Tr
   const p: Place = place || {};
   const at = spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : "";
   const where = describePlace(p) + (p.section !== undefined
-    ? (at ? at + " inside it" : ", placed beside the frames already in it") + " (the section grows to fit)"
+    ? (at ? at + " inside it" : ", placed beside the frames already in it") + " (the section grows if needed)"
     : at || ", placed beside the existing frames");
   const edited = (n: TreeNodeSpec): string => {
     const e = n.edits ? Object.keys(n.edits).length : 0;

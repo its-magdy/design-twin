@@ -1396,7 +1396,7 @@
   function newNameError(name, what, at3) {
     if (!name.trim()) return "`" + at3 + "." + what + "`: a " + what + " to make needs a name";
     if (name !== name.trim()) return "`" + at3 + "." + what + "`: '" + name + "' has spaces at its start or end; a " + what + " is matched by its exact name, so make it without them";
-    if (ID_LIKE.test(name)) return "`" + at3 + "." + what + "`: '" + name + "' reads as a node id, which names an existing " + what + "; a " + what + " to make needs a name";
+    if (ID_LIKE.test(name)) return "`" + at3 + "." + what + "`: '" + name + "' looks like a node id, not a name; a " + what + " to make needs a name";
     return null;
   }
   function placeError(o, at3) {
@@ -2206,7 +2206,7 @@
     const plural3 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
     const p = place2 || {};
     const at3 = spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : "";
-    const where = describePlace(p) + (p.section !== void 0 ? (at3 ? at3 + " inside it" : ", placed beside the frames already in it") + " (the section grows to fit)" : at3 || ", placed beside the existing frames");
+    const where = describePlace(p) + (p.section !== void 0 ? (at3 ? at3 + " inside it" : ", placed beside the frames already in it") + " (the section grows if needed)" : at3 || ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
       return e ? " with " + plural3(e, "layer") + " changed" : "";

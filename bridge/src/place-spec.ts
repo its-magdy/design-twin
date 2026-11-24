@@ -33,7 +33,7 @@ const ID_LIKE = /^I?\d+[:-]\d+(;\d+[:-]\d+)*$/;
 function newNameError(name: string, what: "page" | "section", at: string): string | null {
   if (!name.trim()) return "`" + at + "." + what + "`: a " + what + " to make needs a name";
   if (name !== name.trim()) return "`" + at + "." + what + "`: '" + name + "' has spaces at its start or end; a " + what + " is matched by its exact name, so make it without them";
-  if (ID_LIKE.test(name)) return "`" + at + "." + what + "`: '" + name + "' reads as a node id, which names an existing " + what + "; a " + what + " to make needs a name";
+  if (ID_LIKE.test(name)) return "`" + at + "." + what + "`: '" + name + "' looks like a node id, not a name; a " + what + " to make needs a name";
   return null;
 }
 

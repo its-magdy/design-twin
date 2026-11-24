@@ -18,7 +18,7 @@ export const PLACE_REFUSED: ReadonlyArray<{ op: Record<string, unknown>; why: Re
   { op: { op: "createTree", tree, section: "  " }, why: /`ops\[0\]\.section` must be a non-empty name or id/ },
   { op: { op: "createTree", tree, page: " ", createPage: true }, why: /a page to make needs a name/ },
   { op: { op: "createTree", tree, page: "Checkout ", createPage: true }, why: /has spaces at its start or end/ },
-  { op: { op: "createTree", tree, section: "12:4", createSection: true }, why: /reads as a node id/ },
+  { op: { op: "createTree", tree, section: "12:4", createSection: true }, why: /looks like a node id/ },
   { op: { op: "createTree", tree, page: "A", createPage: "yes" }, why: /`ops\[0\]\.createPage`.*a boolean/ },
   { op: { op: "createTree", tree, section: 3 }, why: /`ops\[0\]\.section`.*a string/ },
 ];
