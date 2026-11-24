@@ -605,15 +605,24 @@ const NEW_SECTION = SECTION_PAD * 2;
 /** The size Figma's createFrame makes a frame (a tree root without a box keeps it unless its layout hugs). */
 const NEW_FRAME = 100;
 
-/** The first layer in `n` (a page or section the batch made) that is not gone: one the batch did not make. */
-function leftIn(n: BaseNode & ChildrenMixin): SceneNode | null {
-  for (const c of n.children) if (!c.removed) return c;
+/** The first layer in `n` (a page or section the batch made), or below one there, that is not gone and is not one of
+ *  `ours` (write-batch.ts batchMade: every node the batch made, whichever op made it): one the batch did not make. A
+ *  layer of the batch's own in it (one the designer moved there) goes with it, as its own put-back would take it back;
+ *  one holding the designer's layer keeps it, and `n` with it. Not into an instance (its layers are its main's). */
+function leftIn(n: BaseNode & ChildrenMixin, ours: ReadonlySet<string>): SceneNode | null {
+  for (const c of n.children) {
+    if (c.removed) continue;
+    if (!ours.has(c.id)) return c;
+    const below = c.type !== "INSTANCE" && "children" in c ? leftIn(c, ours) : null;
+    if (below) return below;
+  }
   return null;
 }
 
 /**
  * Make what `dest` lands in that the batch makes and is not made yet: its page, then its section — each a Change on
- * `changes`, whose undo removes it (refusing when it holds a layer the batch did not make). `consent` is checked before
+ * `changes`, whose undo removes it with what of the batch's is in it (refusing when it holds a layer the batch did
+ * not make). `consent` is checked before
  * each. Returns what this call made, for the op's reply.
  */
 export async function makeDest(dest: Dest, consent: () => void, changes: Change[]): Promise<{ page?: string; section?: string }> {
@@ -624,13 +633,13 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     const page = figma.createPage();
     p.node = page;
     const made: Change = {
-      applied: { pageCreated: page.id }, kind: "created page", what: "the new page " + label(page),
-      async restore(allowed) {
+      applied: { pageCreated: page.id }, kind: "created page", what: "the new page " + label(page), on: page, made: true,
+      async restore(allowed, ours) {
         if (page.removed) return;
         // Checked again after every await: the designer may have put a layer on it, or unticked "Allow edits", meanwhile.
         const check = (): void => {
           if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off");
-          const left = leftIn(page);
+          const left = leftIn(page, ours);
           if (left) throw new Error("the page " + label(page) + " holds " + label(left) + ", which this batch did not make; it stays");
         };
         check();
@@ -661,9 +670,10 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
     s.node = section;
     const made: Change = {
       applied: { sectionCreated: section.id }, kind: "created section", what: "the new section " + label(section),
-      restore() {
+      on: section, made: true, owns: [section],
+      restore(_allowed, ours) {
         if (section.removed) return;
-        const left = leftIn(section);
+        const left = leftIn(section, ours);
         if (left) throw new Error("the section " + label(section) + " holds " + label(left) + ", which this batch did not make; it stays");
         section.remove();
       },

@@ -589,6 +589,50 @@ export const cases: Case[] = [{
       && r.applied.some((a) => a.sectionCreated === sec.id));
   },
 }, {
+  name: "a made section or page that holds only what the batch made goes back with it, whichever op made what it holds",
+  async run() {
+    // An earlier op's frame, moved by the designer into the section (or onto the page) a later op made, while that op
+    // awaits its text style: the batch's own (write-batch.ts batchMade), so a later failure takes back the section or page
+    // too, and the reply never says it holds a layer the batch did not make.
+    const sent = async (into: "section" | "page", foreign?: FakeNode) => {
+      const w = await flowsWorld({ kit: true });
+      const dest: WriteOp = into === "section"
+        ? { op: "createTree", page: "Flows", section: "Fresh", createSection: true, tree: { name: "B", children: [{ text: "Hi", styles: { text: "Body" } }] } }
+        : { op: "createTree", page: "Checkout", createPage: true, tree: { name: "B", children: [{ text: "Hi", styles: { text: "Body" } }] } };
+      w.hooks.onStyle = async () => {
+        w.hooks.onStyle = undefined;
+        const a = kids(w.f.page).find((n) => n.name === "A");
+        const holder = into === "section" ? kids(w.f.page).find((n) => n.type === "SECTION" && n.name === "Fresh") : pageNamed(w, "Checkout")[0];
+        if (!a || !holder || typeof holder.appendChild !== "function") throw new Error("no A or no holder");
+        (holder.appendChild as (c: FakeNode) => void)(a);
+        if (foreign && typeof a.appendChild === "function") (a.appendChild as (c: FakeNode) => void)(foreign);
+      };
+      const r = await write(w, [
+        { op: "createTree", page: "Flows", tree: screen("A") },
+        dest,
+        { op: "setFill", nodeId: "gone:1", color: "#fff" },
+      ]);
+      const left = into === "section" ? kids(w.f.page).filter((n) => n.type === "SECTION" && n.name === "Fresh") : pageNamed(w, "Checkout");
+      return { r, w, left };
+    };
+    const sec = await sent("section");
+    ok(`[PLACE-BACK-OURS] a section holding an earlier op's frame: both go, and nothing is said to stay (${sec.r.error})`,
+      sec.r.ok === false && sec.left.length === 0 && sec.w.alive().length === 0 && sec.r.applied.length === 0
+      && !/did not make|could not undo/.test(sec.r.error ?? "") && (sec.r.restored ?? []).some((x) => x.sectionCreated !== undefined));
+    const page = await sent("page");
+    ok(`[PLACE-BACK-OURS] a page holding an earlier op's frame: both go, and nothing is said to stay (${page.r.error})`,
+      page.r.ok === false && page.left.length === 0 && page.w.alive().length === 0 && page.r.applied.length === 0
+      && !/did not make|could not undo/.test(page.r.error ?? "") && (page.r.restored ?? []).some((x) => x.pageCreated !== undefined));
+    // Control: the designer's own layer inside that frame — the frame and the section holding it stay, and are said.
+    const note: FakeNode = { id: "9:9", type: "FRAME", name: "Designer note", x: 0, y: 0, width: 10, height: 10 };
+    const theirs = await sent("section", note);
+    const held = theirs.left[0];
+    ok(`[PLACE-BACK-OURS] control: the designer's layer in that frame keeps the frame and the section, said (${theirs.r.error})`,
+      theirs.r.ok === false && !!held && !held.removed && kids(held).some((n) => n.name === "A" && kids(n).includes(note))
+      && /section 'Fresh' .* holds 'Designer note' \(9:9\), which this batch did not make/.test(theirs.r.error ?? "")
+      && theirs.r.applied.some((a) => a.sectionCreated === held.id));
+  },
+}, {
   name: "put back: a section the designer resized after the batch grew it keeps the designer's size (each side), and is said",
   async run() {
     // The batch grows "Payments" (600×600) to 80+500+80 × 80+700+80 = 660×860 for its first frame; while the next op

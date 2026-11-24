@@ -9989,8 +9989,13 @@
   var near2 = (a, b) => Math.abs(a - b) < 5e-3;
   var NEW_SECTION = SECTION_PAD * 2;
   var NEW_FRAME = 100;
-  function leftIn(n) {
-    for (const c of n.children) if (!c.removed) return c;
+  function leftIn(n, ours) {
+    for (const c of n.children) {
+      if (c.removed) continue;
+      if (!ours.has(c.id)) return c;
+      const below2 = c.type !== "INSTANCE" && "children" in c ? leftIn(c, ours) : null;
+      if (below2) return below2;
+    }
     return null;
   }
   async function makeDest(dest, consent2, changes) {
@@ -10004,11 +10009,13 @@
         applied: { pageCreated: page.id },
         kind: "created page",
         what: "the new page " + label3(page),
-        async restore(allowed2) {
+        on: page,
+        made: true,
+        async restore(allowed2, ours) {
           if (page.removed) return;
           const check = () => {
             if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
-            const left = leftIn(page);
+            const left = leftIn(page, ours);
             if (left) throw new Error("the page " + label3(page) + " holds " + label3(left) + ", which this batch did not make; it stays");
           };
           check();
@@ -10039,9 +10046,12 @@
         applied: { sectionCreated: section.id },
         kind: "created section",
         what: "the new section " + label3(section),
-        restore() {
+        on: section,
+        made: true,
+        owns: [section],
+        restore(_allowed, ours) {
           if (section.removed) return;
-          const left = leftIn(section);
+          const left = leftIn(section, ours);
           if (left) throw new Error("the section " + label3(section) + " holds " + label3(left) + ", which this batch did not make; it stays");
           section.remove();
         }
