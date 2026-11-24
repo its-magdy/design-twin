@@ -396,6 +396,27 @@ export const cases: Case[] = [{
     // The limit on pages a batch makes.
     const many = await write(w, Array.from({ length: MAX_NEW_PAGES + 1 }, (_, i): WriteOp => ({ op: "createTree", page: "New " + i, createPage: true, tree: screen("S" + i) })));
     ok("[PLACE-REFUSE] more than 10 new pages in one batch", many.ok === false && /makes 11 pages; one batch makes at most 10/.test(many.error ?? "") && w.figma.root.children.length === pagesBefore);
+    // Two pages past the limit, and a later op naming one of them without `createPage`: each counted in turn, and the
+    // later op is not told to add `createPage: true` (that would be past the limit too).
+    const over = await write(w, [
+      ...Array.from({ length: MAX_NEW_PAGES + 2 }, (_, i): WriteOp => ({ op: "createTree", page: "New " + i, createPage: true, tree: screen("S" + i) })),
+      { op: "createTree", page: "New " + MAX_NEW_PAGES, tree: screen("Late") },
+    ]);
+    const oe = over.error ?? "";
+    ok(`[PLACE-REFUSE] past the page limit: the 11th and 12th counted as such, and the late op told the batch already makes the most (${oe.split("\n").slice(-3).join(" | ")})`,
+      over.ok === false && /ops\[10\][^\n]*makes 11 pages/.test(oe) && /ops\[11\][^\n]*makes 12 pages/.test(oe)
+      && /ops\[12\] \(createTree\): page 'New 10' matches no page in this file, and the batch already makes the most pages one batch may \(10\); send the ops for it in another batch/.test(oe)
+      && !/ops\[12\][^\n]*createPage: true/.test(oe));
+    // The same for sections (25 a batch).
+    const sections = await write(w, [
+      ...Array.from({ length: 26 }, (_, i): WriteOp => ({ op: "createTree", page: "Flows", section: "Area " + i, createSection: true, tree: screen("A" + i) })),
+      { op: "createTree", page: "Flows", section: "Area 25", tree: screen("Late") },
+    ]);
+    const se = sections.error ?? "";
+    ok(`[PLACE-REFUSE] past the section limit: the late op is not told to add \`createSection: true\` (${se.split("\n").slice(-2).join(" | ")})`,
+      sections.ok === false && /ops\[25\][^\n]*makes 26 sections/.test(se)
+      && /ops\[26\] \(createTree\): section 'Area 25' matches no section on page 'Flows', and the batch already makes the most sections one batch may \(25\); send the ops for it in another batch/.test(se)
+      && !/ops\[26\][^\n]*createSection: true/.test(se));
     // A section the batch makes is not on another page.
     const elsewhere = await write(w, [
       { op: "createTree", page: "Flows", section: "Fresh", createSection: true, tree: screen("F") },
@@ -626,7 +647,19 @@ export const cases: Case[] = [{
     const named = await write(w, [{ op: "createTree", section: "Payments", tree: spec }]);
     ok("[PLACE-ID] by name, a section is still looked for on the current page only", named.ok === false && /section 'Payments' matches no section on the current page 'Page 1'/.test(named.error ?? ""));
     const other = await write(w, [{ op: "createTree", page: "Screens", section: "6:2", tree: screen("Elsewhere") }]);
-    ok("[PLACE-ID] a page named that does not hold the section: refused", other.ok === false && /section '6:2' matches no section on page 'Screens'/.test(other.error ?? ""));
+    ok(`[PLACE-ID] a page named that does not hold the section: refused, saying where it is (${other.error})`, other.ok === false
+      && /section '6:2' matches no section on page 'Screens'; it is the id of section 'Payments' on page 'Flows' — leave `page` out, or name that page/.test(other.error ?? "")
+      && !/createSection/.test(other.error ?? ""));
+    // An id that is not a section's, or no layer's: said as that, never "add `createSection: true`" (an id-like name
+    // cannot be made: the wire check refuses it).
+    const frame = await write(w, [{ op: "createTree", section: "6:11", tree: screen("Into a frame") }]);
+    ok(`[PLACE-ID] the id of a frame: said to be a frame's, no createSection hint (${frame.error})`, frame.ok === false
+      && /section '6:11' matches no section on the current page 'Page 1'; it is the id of 'Welcome', a FRAME, not a section/.test(frame.error ?? "")
+      && !/createSection/.test(frame.error ?? ""));
+    const none = await write(w, [{ op: "createTree", section: "77:7", tree: screen("Nowhere") }]);
+    ok(`[PLACE-ID] an id no layer has: said so, no createSection hint (${none.error})`, none.ok === false
+      && /section '77:7' matches no section on the current page 'Page 1'; it reads as a node id, and no layer of this file has it/.test(none.error ?? "")
+      && !/createSection/.test(none.error ?? ""));
     const dry = writeOpPreview({ op: "createTree", section: "6:2", tree: screen("By id") }, 0);
     ok(`[PLACE-ID] the dry run takes it, and says it lands on the section's own page (${JSON.stringify(dry.target)})`,
       dry.invalid === undefined && dry.target === "new frame in section '6:2' on the page that holds it");

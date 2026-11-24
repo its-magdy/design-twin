@@ -9257,11 +9257,13 @@
       return d;
     };
     const trees = [...ops.entries()].filter(([, op]) => op.op === "createTree");
+    const overPages = /* @__PURE__ */ new Map();
     for (const [index, op] of trees) {
-      if (op.createPage !== true || op.page === void 0 || newPages.has(op.page)) continue;
+      if (op.createPage !== true || op.page === void 0 || newPages.has(op.page) || overPages.has(op.page)) continue;
       if (matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]).kind !== "none") continue;
       if (newPages.size >= MAX_NEW_PAGES) {
-        problems.push({ index, op: op.op, message: "the batch makes " + (newPages.size + 1) + " pages; one batch makes at most " + MAX_NEW_PAGES + " (send the rest in another)" });
+        overPages.set(op.page, index);
+        problems.push({ index, op: op.op, message: "the batch makes " + (newPages.size + overPages.size) + " pages; one batch makes at most " + MAX_NEW_PAGES + " (send the rest in another)" });
         continue;
       }
       newPages.set(op.page, { name: op.page, node: null, make: true, current: false });
@@ -9291,7 +9293,11 @@
         pageFor.set(index, planned);
         continue;
       }
-      if (op.createPage === true) continue;
+      const over = overPages.get(op.page);
+      if (over !== void 0) {
+        if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch");
+        continue;
+      }
       bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createPage: true`");
     }
     for (const d of pages.values()) if (d.node) await d.node.loadAsync();
@@ -9314,15 +9320,20 @@
       return d;
     };
     const newSections = /* @__PURE__ */ new Map();
-    let madeSections = 0;
+    const overSections = /* @__PURE__ */ new Map();
+    let madeSections = 0, overCount = 0;
     for (const [index, op] of trees) {
       const page = pageFor.get(index);
       if (!page || op.createSection !== true || op.section === void 0) continue;
       const planned = newSections.get(page) || /* @__PURE__ */ new Map();
-      if (planned.has(op.section)) continue;
+      const over = overSections.get(page) || /* @__PURE__ */ new Map();
+      if (planned.has(op.section) || over.has(op.section)) continue;
       if (matchByName(op.section, sectionsOf(page), (s) => s.name, (s) => [s.id]).kind !== "none") continue;
       if (madeSections >= MAX_NEW_SECTIONS) {
-        problems.push({ index, op: op.op, message: "the batch makes " + (madeSections + 1) + " sections; one batch makes at most " + MAX_NEW_SECTIONS + " (send the rest in another)" });
+        over.set(op.section, index);
+        overSections.set(page, over);
+        overCount++;
+        problems.push({ index, op: op.op, message: "the batch makes " + (madeSections + overCount) + " sections; one batch makes at most " + MAX_NEW_SECTIONS + " (send the rest in another)" });
         continue;
       }
       planned.set(op.section, { name: op.section, node: null, make: true, page });
@@ -9354,10 +9365,32 @@
         dests.set(index, { page, section: made2 });
         continue;
       }
-      if (op.createSection === true) continue;
-      bad("section '" + op.section + "' matches no section on " + pageWords(page) + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
+      const miss = "section '" + op.section + "' matches no section on " + pageWords(page);
+      const pastLimit = overSections.get(page);
+      const over = pastLimit ? pastLimit.get(op.section) : void 0;
+      if (over !== void 0) {
+        if (over !== index) bad(miss + ", and the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "); send the ops for it in another batch");
+        continue;
+      }
+      if (nodeIdLike(op.section)) {
+        bad(miss + "; " + await idIs(op.section));
+        continue;
+      }
+      bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
     }
     return { dests, problems };
+  }
+  async function idIs(ref2) {
+    let n = null;
+    try {
+      n = await figma.getNodeByIdAsync(ref2);
+    } catch {
+      n = null;
+    }
+    if (!n || n.removed) return "it reads as a node id, and no layer of this file has it";
+    if (n.type !== "SECTION") return "it is the id of '" + n.name + "', a " + n.type + ", not a section";
+    const on = pageHolding(n);
+    return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " \u2014 leave `page` out, or name that page";
   }
   async function sectionById(ref2) {
     if (!nodeIdLike(ref2)) return null;

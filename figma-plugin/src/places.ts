@@ -72,10 +72,16 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
   };
   const trees = [...ops.entries()].filter(([, op]) => op.op === "createTree");
   // The pages to make: a name an op asks to make that the file has none of (one it has several of is refused below).
+  // Past the limit, each name is said once, counted in turn; `overPages` holds them, and the op that said it.
+  const overPages = new Map<string, number>();
   for (const [index, op] of trees) {
-    if (op.createPage !== true || op.page === undefined || newPages.has(op.page)) continue;
+    if (op.createPage !== true || op.page === undefined || newPages.has(op.page) || overPages.has(op.page)) continue;
     if (matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]).kind !== "none") continue;
-    if (newPages.size >= MAX_NEW_PAGES) { problems.push({ index, op: op.op, message: "the batch makes " + (newPages.size + 1) + " pages; one batch makes at most " + MAX_NEW_PAGES + " (send the rest in another)" }); continue; }
+    if (newPages.size >= MAX_NEW_PAGES) {
+      overPages.set(op.page, index);
+      problems.push({ index, op: op.op, message: "the batch makes " + (newPages.size + overPages.size) + " pages; one batch makes at most " + MAX_NEW_PAGES + " (send the rest in another)" });
+      continue;
+    }
     newPages.set(op.page, { name: op.page, node: null, make: true, current: false });
   }
   const pageFor = new Map<number, PageDest>();
@@ -93,7 +99,9 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     if (m.kind === "many") { bad("page '" + op.page + "' matches " + m.matches.length + " pages — pass one's id: " + m.matches.slice(0, 3).map(label).join(", ")); continue; }
     const planned = newPages.get(op.page);
     if (planned) { pageFor.set(index, planned); continue; }
-    if (op.createPage === true) continue; // over the limit: said above
+    // Past the limit: said above for the op that asked; another op naming it is not told to ask too.
+    const over = overPages.get(op.page);
+    if (over !== undefined) { if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch"); continue; }
     bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createPage: true`");
   }
   // Every page an op lands on, loaded (dynamic-page) before its sections are read or anything is appended to it.
@@ -113,14 +121,23 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
   };
   // The sections to make, per page: a name an op asks to make that its page has none of.
   const newSections = new Map<PageDest, Map<string, SectionDest>>();
-  let madeSections = 0;
+  // Past the limit, per page as above: each name said once, counted in turn, by the op that said it.
+  const overSections = new Map<PageDest, Map<string, number>>();
+  let madeSections = 0, overCount = 0;
   for (const [index, op] of trees) {
     const page = pageFor.get(index);
     if (!page || op.createSection !== true || op.section === undefined) continue;
     const planned = newSections.get(page) || new Map<string, SectionDest>();
-    if (planned.has(op.section)) continue;
+    const over = overSections.get(page) || new Map<string, number>();
+    if (planned.has(op.section) || over.has(op.section)) continue;
     if (matchByName(op.section, sectionsOf(page), (s) => s.name, (s) => [s.id]).kind !== "none") continue;
-    if (madeSections >= MAX_NEW_SECTIONS) { problems.push({ index, op: op.op, message: "the batch makes " + (madeSections + 1) + " sections; one batch makes at most " + MAX_NEW_SECTIONS + " (send the rest in another)" }); continue; }
+    if (madeSections >= MAX_NEW_SECTIONS) {
+      over.set(op.section, index);
+      overSections.set(page, over);
+      overCount++;
+      problems.push({ index, op: op.op, message: "the batch makes " + (madeSections + overCount) + " sections; one batch makes at most " + MAX_NEW_SECTIONS + " (send the rest in another)" });
+      continue;
+    }
     planned.set(op.section, { name: op.section, node: null, make: true, page });
     newSections.set(page, planned);
     madeSections++;
@@ -136,10 +153,25 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     const planned = newSections.get(page);
     const made = planned ? planned.get(op.section) : undefined;
     if (made) { dests.set(index, { page, section: made }); continue; }
-    if (op.createSection === true) continue; // over the limit: said above
-    bad("section '" + op.section + "' matches no section on " + pageWords(page) + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
+    const miss = "section '" + op.section + "' matches no section on " + pageWords(page);
+    const pastLimit = overSections.get(page);
+    const over = pastLimit ? pastLimit.get(op.section) : undefined;
+    if (over !== undefined) { if (over !== index) bad(miss + ", and the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "); send the ops for it in another batch"); continue; }
+    // An id is never made (the wire check refuses one to make): what it is the id of instead.
+    if (nodeIdLike(op.section)) { bad(miss + "; " + await idIs(op.section)); continue; }
+    bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
   }
   return { dests, problems };
+}
+
+/** What `ref` (an id-like section that is not on the op's page) is the id of, as the refusal says it. */
+async function idIs(ref: string): Promise<string> {
+  let n: BaseNode | null = null;
+  try { n = await figma.getNodeByIdAsync(ref); } catch { n = null; }
+  if (!n || n.removed) return "it reads as a node id, and no layer of this file has it";
+  if (n.type !== "SECTION") return "it is the id of '" + n.name + "', a " + n.type + ", not a section";
+  const on = pageHolding(n);
+  return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " — leave `page` out, or name that page";
 }
 
 /** The section whose id is `ref` (on any page), or null: `ref` is no id, or not a section's. */
