@@ -307,7 +307,12 @@ list of merged PRs.
   stays, theirs in it, and the reply says why. A rule by `instanceOf` matches a deleted main component that an instance
   still has by its exact id or key again (not by its name), and a variant moved out of its set while the rule resolves
   is no longer counted as the set's. A layer deleted during a put-back, its own or a later one, takes its change with
-  it (never "put back" nor "could not undo"), and rejecting a preview after one of its layers was deleted says so.
+  it (never "put back" nor "could not undo"), and rejecting a preview after one of its layers was deleted says so. A
+  keyed copy no longer marks a layer the designer moved into it as the key's, so a later re-send that drops the copy
+  refuses for that layer instead of deleting it. A tree the designer moved into a later tree of the same batch goes
+  back with it, and a put-back refused for a layer it held is tried again once the rest went back, so the reply never
+  gives a stale reason. A preview whose layers were all deleted says nothing of it was put back (on Reject and on the
+  card's Put back), and a Reject after a Put back still says which change went with a deleted layer.
 
 ## [0.1.6] - 2026-11-02
 

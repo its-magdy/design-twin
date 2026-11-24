@@ -236,10 +236,16 @@ screens.
     made, not only its root: a child Figma would not append, or one the designer moved out meanwhile (a layer of a copy
     included), is not below the root. It never takes back a layer it did not make: a layer it made that now holds one
     of the designer's (moved into it meanwhile) stays, with theirs in it as they left it, listed in `applied` and said
-    not to be put back. A change to a layer the designer deleted while the batch ran, before its put-back or at any
+    not to be put back. What the batch made is decided for the whole batch: a layer one op made, moved into another's
+    meanwhile, goes back with it. A put-back refused for what a layer held is tried again once the older changes went
+    back (one may have moved the designer's layer out), so what the reply says stays, and why, is the file as the
+    put-back left it. A keyed copy marks as the key's only the layers it made, never one of the designer's moved into
+    it: a re-send that drops the copy refuses for that layer rather than removing it. A change to a layer the designer deleted while the batch ran, before its put-back or at any
     put-back's await (its own, or a later one's: decided once all are done), went with that layer: nothing of it is in
     the file, so it is neither listed in `applied`, nor said to be put back, nor said not to be, and the reply (a
-    rejected preview's too) says it went with the layer. A layer the batch made
+    rejected preview's too) says it went with the layer. A preview whose layers all went says nothing of it was put
+    back, never that it was; the card's Put back says so too, and a refusal after it still says what went with a
+    deleted layer. A layer the batch made
     is gone as it was before the batch, and what else its build made or set (a layer moved out of it, a key's index
     entry) is still put back. A node a keyed re-send removes that has left the document by then is neither removed nor counted.
     A rule's `instanceOf` names a soft-deleted main component an instance still has only by its exact id or key, never
