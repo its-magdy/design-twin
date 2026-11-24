@@ -590,4 +590,18 @@ export const cases: Case[] = [{
     ok(`[PLACE-ID] the dry run takes it, and says it lands on the section's own page (${JSON.stringify(dry.target)})`,
       dry.invalid === undefined && dry.target === "new frame in section '6:2' on the page that holds it");
   },
+}, {
+  name: "a component set without a size of its own is measured as the build lays out its variants",
+  async run() {
+    const canvasAt = (n: FakeNode | undefined): string => num(n, "x") + "," + num(n, "y");
+    // Two 1100×100 variants in one column, 20 around and between: the set is 1140×260 at 0,0 on the empty 'Screens'.
+    const w = await treeWorld();
+    const s = await shownAt(w, [
+      { op: "createTree", page: "Screens", tree: { type: "COMPONENT_SET", name: "Sizes", variant: { box: { w: 1100, h: 100 } }, columns: ["Size"], rows: [["sm"], ["lg"]] } },
+      { op: "createTree", page: "Screens", tree: { name: "Next", box: { w: 100, h: 100 } } },
+    ], 1);
+    const set = found(w, s.r, 0);
+    ok(`[PLACE-SET] the set is laid out as the review measured it, and the next frame shown where it lands (set ${box(set)}; shown ${s.spot}, landed ${canvasAt(found(w, s.r, 1))})`,
+      s.r.ok === true && box(set) === "0,0,1140,260" && canvasAt(found(w, s.r, 1)) === "1240,0" && s.spot === "1240,0");
+  },
 }];

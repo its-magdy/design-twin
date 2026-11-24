@@ -34,7 +34,7 @@
 //   * figma.createSection makes a SECTION on the current page; appendChild moves it. A section is sized with
 //     resizeWithoutConstraints (≥ 0.01 a side), and does not grow by itself when a plugin appends to it.
 //   * Under documentAccess "dynamic-page" a page is loaded (loadAsync) before its children are read.
-import { givenSize, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
+import { builtSize, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
 import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, nodeIdLike, SECTION_PAD } from "../../bridge/src/place-spec.ts";
@@ -497,14 +497,15 @@ export async function makeDest(dest: Dest, consent: () => void, changes: Change[
  *  write's own rules (Canvas.place; a section still to make where makeDest will make it) and then put on it, so the
  *  batch's next op is placed beside it (the review plans the ops in order on one canvas). Measured as land measures the
  *  built frame where that is known before it is built: each side the spec gives (its box, else its layout's width and
- *  height: givenSize, as the build sizes it), else a copy's source's, turned as the source is; else a new frame's 100
- *  (Figma's createFrame; a hugging auto-layout side is known only once built). */
+ *  height; a set without either and without auto-layout, the column its variants are laid out in: builtSize, as the
+ *  build sizes it), else a copy's source's, turned as the source is; else a new frame's 100 (Figma's createFrame; a
+ *  hugging auto-layout side is known only once built). */
 export function landing(canvas: Canvas, dest: Dest, spec: TreeNodeSpec, source?: SceneNode | null): { lands: string; spot: { pageId: string; x: number; y: number } | null } {
   const p = dest.page;
   const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
   const page = p.node;
   const s = dest.section;
-  const size = givenSize(spec);
+  const size = builtSize(spec, NEW_FRAME);
   const fp = footprint(size.w !== undefined ? size.w : source ? source.width : NEW_FRAME, size.h !== undefined ? size.h : source ? source.height : NEW_FRAME, source);
   const placed = canvas.place(dest, spec, fp, spec.name || "");
   if (!page || !placed) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };

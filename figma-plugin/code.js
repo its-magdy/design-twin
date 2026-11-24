@@ -2161,6 +2161,35 @@
   function givenSize(spec) {
     return { w: spec.box ? spec.box.w : spec.layout && spec.layout.width, h: spec.box ? spec.box.h : spec.layout && spec.layout.height };
   }
+  var VARIANT_GAP = 20;
+  function variantColumn(boxes, moves) {
+    const at3 = [];
+    let y = VARIANT_GAP;
+    let width = 0;
+    let height = 0;
+    boxes.forEach((b, i) => {
+      const to = moves(i) ? { x: VARIANT_GAP, y } : null;
+      at3.push(to);
+      const bx = to ? to.x : b.x, by = to ? to.y : b.y;
+      y = Math.max(y, by + b.height + VARIANT_GAP);
+      width = Math.max(width, bx + b.width + VARIANT_GAP);
+      height = Math.max(height, by + b.height + VARIANT_GAP);
+    });
+    return { at: at3, width, height };
+  }
+  function builtSize(spec, unknown) {
+    const given = givenSize(spec);
+    if (given.w !== void 0 || given.h !== void 0 || spec.box !== void 0 || spec.type !== "COMPONENT_SET" || spec.layout && spec.layout.display === "flex") return given;
+    const variants = spec.children || [];
+    const col = variantColumn(variants.map((v) => {
+      const g = givenSize(v);
+      return { x: v.x !== void 0 ? v.x : 0, y: v.y !== void 0 ? v.y : 0, width: g.w !== void 0 ? g.w : unknown, height: g.h !== void 0 ? g.h : unknown };
+    }), (i) => {
+      const v = variants[i];
+      return !v || v.x === void 0 && v.y === void 0;
+    });
+    return col.width > 0 && col.height > 0 ? { w: col.width, h: col.height } : given;
+  }
   function sizePhrase(spec) {
     const { w, h } = givenSize(spec);
     const other = (mode, side) => side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
@@ -8860,7 +8889,6 @@
     }
     return out;
   }
-  var VARIANT_GAP = 20;
   function arrangeVariants(set, spec, only) {
     const sized = spec.box !== void 0 || spec.layout !== void 0 && (spec.layout.width !== void 0 || spec.layout.height !== void 0);
     if (set.layoutMode !== "NONE") {
@@ -8873,24 +8901,23 @@
       const n = set.children.filter((k) => k.name === c.name)[0];
       if (n) byNode.set(n, c);
     });
-    let y = VARIANT_GAP;
-    for (const c of set.children) {
+    const kids = set.children.slice();
+    const col = variantColumn(kids.map((c) => ({ x: c.x, y: c.y, width: c.width, height: c.height })), (i) => {
+      const c = kids[i];
+      if (!c) return false;
       const s = byNode.get(c);
       const placed = s !== void 0 && (s.x !== void 0 || s.y !== void 0);
-      if ((only === null || only.indexOf(c) >= 0) && !placed) {
-        c.x = VARIANT_GAP;
-        c.y = y;
+      return (only === null || only.indexOf(c) >= 0) && !placed;
+    });
+    kids.forEach((c, i) => {
+      const to = col.at[i];
+      if (to) {
+        c.x = to.x;
+        c.y = to.y;
       }
-      y = Math.max(y, c.y + c.height + VARIANT_GAP);
-    }
+    });
     if (sized) return;
-    let w = 0;
-    let h = 0;
-    for (const c of set.children) {
-      w = Math.max(w, c.x + c.width + VARIANT_GAP);
-      h = Math.max(h, c.y + c.height + VARIANT_GAP);
-    }
-    if (w > 0 && h > 0) set.resize(w, h);
+    if (col.width > 0 && col.height > 0) set.resize(col.width, col.height);
   }
   function componentReply(applied, name, props, rewired) {
     delete applied.key;
@@ -9626,7 +9653,7 @@
     const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
     const page = p.node;
     const s = dest.section;
-    const size2 = givenSize(spec);
+    const size2 = builtSize(spec, NEW_FRAME);
     const fp = footprint(size2.w !== void 0 ? size2.w : source ? source.width : NEW_FRAME, size2.h !== void 0 ? size2.h : source ? source.height : NEW_FRAME, source);
     const placed = canvas.place(dest, spec, fp, spec.name || "");
     if (!page || !placed) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
