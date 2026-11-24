@@ -1419,8 +1419,9 @@
     }
     return null;
   }
+  var nodeIdLike = (ref2) => /^\d+:\d+$/.test(ref2);
   function describePlace(p) {
-    const page = p.page !== void 0 ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "") : "on the current page";
+    const page = p.page !== void 0 ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "") : p.section !== void 0 && nodeIdLike(p.section) ? "on the page that holds it" : "on the current page";
     return p.section !== void 0 ? "in section '" + p.section + "'" + (p.createSection === true ? " (made when the page has none)" : "") + " " + page : page;
   }
 
@@ -9243,7 +9244,9 @@
         problems.push({ index, op: op.op, message });
       };
       if (op.page === void 0) {
-        pageFor.set(index, pageOf4(figma.currentPage));
+        const s = op.section !== void 0 ? await sectionById(op.section) : null;
+        const on = s ? pageHolding(s) : null;
+        pageFor.set(index, pageOf4(on || figma.currentPage));
         continue;
       }
       const m = matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]);
@@ -9327,6 +9330,16 @@
       bad("section '" + op.section + "' matches no section on " + pageWords(page) + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
     }
     return { dests, problems };
+  }
+  async function sectionById(ref2) {
+    if (!nodeIdLike(ref2)) return null;
+    let n = null;
+    try {
+      n = await figma.getNodeByIdAsync(ref2);
+    } catch {
+      n = null;
+    }
+    return n && n.type === "SECTION" && !n.removed ? n : null;
   }
   function occupied(c) {
     const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;

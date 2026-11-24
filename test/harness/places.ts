@@ -569,4 +569,25 @@ export const cases: Case[] = [{
     const pin = await write(w3, [{ op: "createTree", page: "Flows", section: "Payments", tree: screen("Pinned", { x: -90, y: 600 }) }]);
     ok("[PLACE-LEFT] given coordinates are kept as given", pin.ok === true && num(found(w3, pin), "x") === -90 && num(found(w3, pin), "y") === 600);
   },
+}, {
+  name: "a section given by id is found on whatever page holds it, the current one or not",
+  async run() {
+    // Payments (6:2) is on 'Flows'; the current page is 'Page 1'.
+    const w = await flowsWorld();
+    const fresh = await write(w, [{ op: "createTree", section: "6:2", tree: screen("By id") }]);
+    ok(`[PLACE-ID] a section id, no page: it lands in that section on its own page (${fresh.error ?? "ok"})`,
+      fresh.ok === true && parentOf(found(w, fresh)) === w.f.payments && num(found(w, fresh), "x") === 80);
+    const spec = screen("Keyed", { key: "flows:by-id" });
+    const first = await write(w, [{ op: "createTree", page: "Flows", section: "Payments", tree: spec }]);
+    const again = await write(w, [{ op: "createTree", section: "6:2", tree: { ...spec, name: "Keyed 2" } }]);
+    ok(`[PLACE-ID] a keyed re-send naming its own section by id, no page, another page open: updated in place (${again.error ?? "ok"})`,
+      first.ok === true && again.ok === true && found(w, again)?.id === found(w, first)?.id && found(w, again)?.name === "Keyed 2");
+    const named = await write(w, [{ op: "createTree", section: "Payments", tree: spec }]);
+    ok("[PLACE-ID] by name, a section is still looked for on the current page only", named.ok === false && /section 'Payments' matches no section on the current page 'Page 1'/.test(named.error ?? ""));
+    const other = await write(w, [{ op: "createTree", page: "Screens", section: "6:2", tree: screen("Elsewhere") }]);
+    ok("[PLACE-ID] a page named that does not hold the section: refused", other.ok === false && /section '6:2' matches no section on page 'Screens'/.test(other.error ?? ""));
+    const dry = writeOpPreview({ op: "createTree", section: "6:2", tree: screen("By id") }, 0);
+    ok(`[PLACE-ID] the dry run takes it, and says it lands on the section's own page (${JSON.stringify(dry.target)})`,
+      dry.invalid === undefined && dry.target === "new frame in section '6:2' on the page that holds it");
+  },
 }];

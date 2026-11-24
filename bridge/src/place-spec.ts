@@ -53,8 +53,14 @@ export function placeError(o: Readonly<Record<string, unknown>>, at: string): st
   return null;
 }
 
-/** Where the op lands, in words: "in section 'Pay' (made when the page has none) on page 'Checkout'", "on the current page". */
+/** Whether `ref` reads as a Figma node id ("12:34"): a section given so, with no page, is the one of that id on any page
+ *  (the plugin looks it up across the file; places.ts resolveDests). */
+export const nodeIdLike = (ref: string): boolean => /^\d+:\d+$/.test(ref);
+
+/** Where the op lands, in words: "in section 'Pay' (made when the page has none) on page 'Checkout'", "on the current page",
+ *  "in section '6:2' on the page that holds it" (a section id with no page). */
 export function describePlace(p: Place): string {
-  const page = p.page !== undefined ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "") : "on the current page";
+  const page = p.page !== undefined ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "")
+    : p.section !== undefined && nodeIdLike(p.section) ? "on the page that holds it" : "on the current page";
   return p.section !== undefined ? "in section '" + p.section + "'" + (p.createSection === true ? " (made when the page has none)" : "") + " " + page : page;
 }

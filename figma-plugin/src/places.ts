@@ -2,7 +2,8 @@
 // make (bridge/src/place-spec.ts is the pure half: the fields, their check, the words).
 //
 // Resolved with the rest of the batch, before anything runs (resolveDests): a page by exact name or id (the current one
-// by default), a section on that page (nested ones too) the same way. A name that matches several is refused with their
+// by default), a section on that page (nested ones too) the same way — and a section given by id with no page is found
+// wherever it is, its page then the op's (as every other id of a write is found on any page). A name that matches several is refused with their
 // ids; one that matches nothing is refused with the closest names — unless the batch asks to make it (`createPage`,
 // `createSection`), and then it is made once for the whole batch: every op of the batch naming that page (or that
 // section on that page) lands in the one made, whether or not it asked. A batch makes at most MAX_NEW_PAGES pages and
@@ -36,7 +37,7 @@
 import { givenSize, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import type { WriteOp } from "../../bridge/src/commands.ts";
 import { matchByName, quoteList } from "../../bridge/src/name-match.ts";
-import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, SECTION_PAD } from "../../bridge/src/place-spec.ts";
+import { MAX_NEW_PAGES, MAX_NEW_SECTIONS, nodeIdLike, SECTION_PAD } from "../../bridge/src/place-spec.ts";
 import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 
 /** How far right of the rightmost existing frame a placed tree lands (Figma's usual gap between screens). */
@@ -77,7 +78,13 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
   const pageFor = new Map<number, PageDest>();
   for (const [index, op] of trees) {
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
-    if (op.page === undefined) { pageFor.set(index, pageOf(figma.currentPage)); continue; }
+    if (op.page === undefined) {
+      // A section by id needs no page: the one that holds it (an id names one node of the whole file).
+      const s = op.section !== undefined ? await sectionById(op.section) : null;
+      const on = s ? pageHolding(s) : null;
+      pageFor.set(index, pageOf(on || figma.currentPage));
+      continue;
+    }
     const m = matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]);
     if (m.kind === "one") { pageFor.set(index, pageOf(m.item)); continue; }
     if (m.kind === "many") { bad("page '" + op.page + "' matches " + m.matches.length + " pages — pass one's id: " + m.matches.slice(0, 3).map(label).join(", ")); continue; }
@@ -130,6 +137,14 @@ export async function resolveDests(ops: readonly WriteOp[]): Promise<{ dests: Ma
     bad("section '" + op.section + "' matches no section on " + pageWords(page) + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + "; to make it, add `createSection: true`");
   }
   return { dests, problems };
+}
+
+/** The section whose id is `ref` (on any page), or null: `ref` is no id, or not a section's. */
+async function sectionById(ref: string): Promise<SectionNode | null> {
+  if (!nodeIdLike(ref)) return null;
+  let n: BaseNode | null = null;
+  try { n = await figma.getNodeByIdAsync(ref); } catch { n = null; }
+  return n && n.type === "SECTION" && !n.removed ? n : null;
 }
 
 /** What a node covers in its parent's coordinates, rotation included: its canvas box (absoluteBoundingBox, page
