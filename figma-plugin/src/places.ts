@@ -215,14 +215,15 @@ function sectionPlacement(section: SectionNode | null, skip: string, spec: At, f
   const w = fp.width, h = fp.height;
   if (!section || !held.length || spec.x !== undefined || spec.y !== undefined) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp, held);
   const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-  if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp, held);
+  if (!runsInto(section, skip, beside, w, h)) return anchored(spec, beside, fp, held);
   const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
-  return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp, held);
+  return anchored(spec, runsInto(section, skip, below, w, h) ? beside : below, fp, held);
 }
-/** Whether `section`, grown to hold a node of `w`×`h` at `at`, would run into one of its neighbours. */
-function runsInto(section: SectionNode, at: { x: number; y: number }, w: number, h: number): boolean {
+/** Whether `section`, grown to hold a node of `w`×`h` at `at`, would run into one of its neighbours (`skip`, the node
+ *  being placed — hidden where Figma made it until it lands — is none). */
+function runsInto(section: SectionNode, skip: string, at: { x: number; y: number }, w: number, h: number): boolean {
   const grown = grownBox(section, at.x + w + SECTION_PAD, at.y + h + SECTION_PAD);
-  return !!grown && neighbourHit(section, grown) !== null;
+  return !!grown && neighbourHit(section, grown, skip) !== null;
 }
 /** The section's box grown to `needW`×`needH` (never shrunk); null when it already holds that. */
 function grownBox(section: SectionNode, needW: number, needH: number): Box | null {
@@ -230,13 +231,14 @@ function grownBox(section: SectionNode, needW: number, needH: number): Box | nul
   const h = Math.max(section.height, Math.ceil(needH));
   return w === section.width && h === section.height ? null : { x: section.x, y: section.y, width: w, height: h };
 }
-/** The first of `section`'s neighbours (its parent's other children) that `box` runs into and its own box did not. */
-function neighbourHit(section: SectionNode, box: Box): SceneNode | null {
+/** The first of `section`'s neighbours (its parent's other children but `skip`) that `box` runs into and its own box
+ *  did not. */
+function neighbourHit(section: SectionNode, box: Box, skip: string): SceneNode | null {
   const p = section.parent;
   if (!p || !("children" in p)) return null;
   const was: Box = { x: section.x, y: section.y, width: section.width, height: section.height };
   for (const c of p.children) {
-    if (c.id === section.id) continue;
+    if (c.id === section.id || c.id === skip) continue;
     const b = occupied(c);
     if (overlaps(box, b) && !overlaps(was, b)) return c;
   }
@@ -282,7 +284,7 @@ export function land(root: SceneNode, dest: Dest, spec: Pick<TreeNodeSpec, "x" |
     while (s && s.type === "SECTION") {
       const box = grownBox(s, right + SECTION_PAD, bottom + SECTION_PAD);
       if (box) {
-        const hit = neighbourHit(s, box);
+        const hit = neighbourHit(s, box, root.id);
         grown.push({ s, w: s.width, h: s.height });
         s.resizeWithoutConstraints(box.width, box.height);
         if (hit) warnings.push("section '" + s.name + "' grew to " + box.width + "×" + box.height + " to hold '" + root.name + "' and now overlaps '" + hit.name + "'");

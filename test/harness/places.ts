@@ -215,6 +215,17 @@ export const cases: Case[] = [{
     const turned = await shownAt(w3, { op: "createTree", page: "Flows", section: "Turned", createSection: true, tree: { clone: await turnedSource(w3, 40, 400, 90) } });
     ok(`[PLACE-SHOW] a turned copy in a new section: Show me where its x/y land (shown ${turned.spot}, landed ${canvas(found(w3, turned.r))})`,
       turned.r.ok === true && canvas(found(w3, turned.r)) === "3380,120" && turned.spot === "3380,120");
+    // The frame being built (hidden, on the current page at 0,0 until it lands) is no neighbour of the section: a
+    // section at -300,0 holding one 100×100 frame grows right to 160 for the next, over where the build sits — and the
+    // frame still goes beside the first (section 280,80), where Show me points.
+    const w4 = await treeWorld();
+    w4.pages.current.children = [];
+    const seed = await write(w4, [{ op: "createTree", section: "Existing", createSection: true, tree: { name: "Held", box: { w: 100, h: 100 } } }]);
+    const sec = parentOf(found(w4, seed));
+    if (sec) sec.x = -300;
+    const next = await shownAt(w4, { op: "createTree", section: "Existing", tree: { name: "Incoming", box: { w: 100, h: 100 } } });
+    ok(`[PLACE-SHOW] the frame being built is not a neighbour its section grows into: beside the first, where Show me points (shown ${next.spot}, landed ${canvas(found(w4, next.r))})`,
+      next.r.ok === true && num(found(w4, next.r), "x") === 280 && num(found(w4, next.r), "y") === 80 && next.spot === "-20,80" && next.r.warnings === undefined);
   },
 }, {
   name: "a placed frame's x/y are whole pixels, never rounded onto a layer the spot was chosen clear of",

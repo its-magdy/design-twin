@@ -9383,25 +9383,25 @@
     const w = fp.width, h = fp.height;
     if (!section || !held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, h, SECTION_PAD), fp, held);
     const beside = besideHeld(held, {}, w, h, SECTION_PAD);
-    if (!runsInto(section, beside, w, h)) return anchored(spec, beside, fp, held);
+    if (!runsInto(section, skip, beside, w, h)) return anchored(spec, beside, fp, held);
     const below = { x: Math.min(...held.map((b) => b.x)), y: Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP };
-    return anchored(spec, runsInto(section, below, w, h) ? beside : below, fp, held);
+    return anchored(spec, runsInto(section, skip, below, w, h) ? beside : below, fp, held);
   }
-  function runsInto(section, at3, w, h) {
+  function runsInto(section, skip, at3, w, h) {
     const grown = grownBox(section, at3.x + w + SECTION_PAD, at3.y + h + SECTION_PAD);
-    return !!grown && neighbourHit(section, grown) !== null;
+    return !!grown && neighbourHit(section, grown, skip) !== null;
   }
   function grownBox(section, needW, needH) {
     const w = Math.max(section.width, Math.ceil(needW));
     const h = Math.max(section.height, Math.ceil(needH));
     return w === section.width && h === section.height ? null : { x: section.x, y: section.y, width: w, height: h };
   }
-  function neighbourHit(section, box) {
+  function neighbourHit(section, box, skip) {
     const p = section.parent;
     if (!p || !("children" in p)) return null;
     const was = { x: section.x, y: section.y, width: section.width, height: section.height };
     for (const c of p.children) {
-      if (c.id === section.id) continue;
+      if (c.id === section.id || c.id === skip) continue;
       const b = occupied(c);
       if (overlaps(box, b) && !overlaps(was, b)) return c;
     }
@@ -9437,7 +9437,7 @@
       while (s && s.type === "SECTION") {
         const box = grownBox(s, right + SECTION_PAD, bottom + SECTION_PAD);
         if (box) {
-          const hit = neighbourHit(s, box);
+          const hit = neighbourHit(s, box, root.id);
           grown.push({ s, w: s.width, h: s.height });
           s.resizeWithoutConstraints(box.width, box.height);
           if (hit) warnings.push("section '" + s.name + "' grew to " + box.width + "\xD7" + box.height + " to hold '" + root.name + "' and now overlaps '" + hit.name + "'");
