@@ -112,7 +112,9 @@ async function scopeLayers(rule: CheckedRule, bad: (m: string) => void, selected
     }
   }
   for (const p of pages) {
-    try { await loadPage(p); } catch (e) { bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")"); continue; }
+    // Deleted while an earlier page loaded, or as it loads: missing, never loaded or read (its fields throw).
+    if (goneFrom(p, bad, "page")) continue;
+    try { await loadPage(p); } catch (e) { if (!goneFrom(p, bad, "page")) bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")"); continue; }
     if (goneFrom(p, bad, "page")) continue;
     for (const k of p.children) walk(k, p);
   }

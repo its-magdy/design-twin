@@ -23,7 +23,7 @@
 //     properties are read from its name ("Size=md, State=default").
 import { componentKey, componentRootOf, propDefsOf, PROP_REF_FIELDS, type ComponentRootType, type PropDefType, type PropRefField } from "../../bridge/src/component-spec.ts";
 import type { AppliedWrite, WriteImpactStep, WriteOp } from "../../bridge/src/commands.ts";
-import type { TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
+import { variantColumn, type TreeNodeSpec } from "../../bridge/src/tree-spec.ts";
 import { checkTree } from "../../bridge/src/tree-check.ts";
 import { KEY_DATA, readOld } from "./keyed-store";
 import { planUpdate } from "../../bridge/src/tree-diff.ts";
@@ -360,11 +360,9 @@ export async function orphanWarnings(removed: readonly SceneNode[]): Promise<str
   return out;
 }
 
-/** The space around and between the variants of a set without auto-layout, laid out in one column. */
-const VARIANT_GAP = 20;
 /** Lay out the variants of a set without auto-layout that the spec gives no place (`only`: just these, below the
- *  others), and size the set to hold them all when the spec gives it no size; a set with auto-layout hugs them unless the
- *  spec sizes it. */
+ *  others) in one column (variantColumn, which the review's landing measures a new set by too), and size the set to hold
+ *  them all when the spec gives it no size; a set with auto-layout hugs them unless the spec sizes it. */
 export function arrangeVariants(set: ComponentSetNode, spec: TreeNodeSpec, only: readonly ComponentNode[] | null): void {
   const sized = spec.box !== undefined || (spec.layout !== undefined && (spec.layout.width !== undefined || spec.layout.height !== undefined));
   if (set.layoutMode !== "NONE") {
@@ -374,18 +372,17 @@ export function arrangeVariants(set: ComponentSetNode, spec: TreeNodeSpec, only:
   }
   const byNode = new Map<SceneNode, TreeNodeSpec>();
   (spec.children || []).forEach((c) => { const n = set.children.filter((k) => k.name === c.name)[0]; if (n) byNode.set(n, c); });
-  let y = VARIANT_GAP;
-  for (const c of set.children) {
+  const kids = set.children.slice();
+  const col = variantColumn(kids.map((c) => ({ x: c.x, y: c.y, width: c.width, height: c.height })), (i) => {
+    const c = kids[i];
+    if (!c) return false;
     const s = byNode.get(c);
     const placed = s !== undefined && (s.x !== undefined || s.y !== undefined);
-    if ((only === null || only.indexOf(c as ComponentNode) >= 0) && !placed) { c.x = VARIANT_GAP; c.y = y; }
-    y = Math.max(y, c.y + c.height + VARIANT_GAP);
-  }
+    return (only === null || only.indexOf(c as ComponentNode) >= 0) && !placed;
+  });
+  kids.forEach((c, i) => { const to = col.at[i]; if (to) { c.x = to.x; c.y = to.y; } });
   if (sized) return;
-  let w = 0;
-  let h = 0;
-  for (const c of set.children) { w = Math.max(w, c.x + c.width + VARIANT_GAP); h = Math.max(h, c.y + c.height + VARIANT_GAP); }
-  if (w > 0 && h > 0) set.resize(w, h);
+  if (col.width > 0 && col.height > 0) set.resize(col.width, col.height);
 }
 
 /** The reply of a re-send's component work, merged into the keyed update's reply. */

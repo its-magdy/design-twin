@@ -41,7 +41,7 @@ import { editsAllowedNow } from "./edits";
 import { clearErrorToast, toast } from "./toast";
 import type { ReviewCardLine, ReviewEnd, ReviewEndMsg, ReviewMsg, ReviewState, ReviewStateMsg } from "./messages";
 import { errMsg } from "./util";
-import { landedResult, mergeLanded, type Landed } from "./write-batch";
+import { carryKept, landedResult, mergeLanded, type Landed } from "./write-batch";
 
 export type { ReviewEnd };
 
@@ -118,7 +118,13 @@ const bothBack = (a: PutBack, b: PutBack): PutBack => ({ failed: b.failed, gone:
  *  button) found layers deleted: it says those went too. */
 function failedAfter(failed: WriteResult, earlier: PutBack | null): WriteResult {
   if (!earlier || !earlier.gone.length) return failed;
-  return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+  return carryKept(failed, { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" });
+}
+/** The result a card ends with when its preview could not all be put back (`back.failed`): with what an earlier Put back
+ *  found deleted (failedAfter) and what its previews landed (landedResult), and still told to the designer as what the
+ *  put-back kept (write-batch.ts keptLine). */
+function backFailed(failed: WriteResult, card: Card): WriteResult {
+  return landedResult(failedAfter(failed, card.back), card.landed);
 }
 
 /** What writes.ts hands a card: the batch, what it shows, and how to run it. */
@@ -278,7 +284,7 @@ async function end(card: Card, e: Ending): Promise<void> {
     const back = await p.putBack();
     card.previewed = null;
     post(msg);
-    if (back.failed) { const f = landedResult(failedAfter(back.failed, card.back), card.landed); card.input.announce(f, card.landed); finish(card, f); return; }
+    if (back.failed) { const f = backFailed(back.failed, card); card.input.announce(f, card.landed); finish(card, f); return; }
     // A change whose layer the designer deleted meanwhile was not put back: it went with that layer, and is said so (an
     // earlier Put back's too); when every one did, nothing of it was put back, and it says that.
     const r = landedResult({ ...refusal, error: (refusal.error || "") + " (A preview of it was on the canvas; " + backNote(card.back ? bothBack(card.back, back) : back) + ".)" }, card.landed);
@@ -332,7 +338,7 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
       if (!p.result.ok) {
         // It could not land whole (what it did was put back, as for any failed batch): the card ends with that result.
         post({ type: "review-end", id: card.ticket, end: "failed" });
-        const r: WriteResult = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
+        const r = carryKept(p.result, { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") });
         card.input.announce(r, p.landed);
         finish(card, r);
         return;
@@ -356,7 +362,7 @@ export function answerReview(id: string, action: CardAction, reason?: unknown): 
     card.previewed = null;
     if (back.failed) {
       post({ type: "review-end", id: card.ticket, end: "failed" });
-      const f = landedResult(failedAfter(back.failed, card.back), card.landed);
+      const f = backFailed(back.failed, card);
       card.input.announce(f, card.landed);
       finish(card, f);
       return;

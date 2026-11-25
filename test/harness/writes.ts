@@ -114,8 +114,14 @@ const kids = (n: FakeNode | undefined): readonly FakeNode[] => n?.children ?? []
  * records the properties set on it. `imports` lists every import the plugin ran; `onStyle` runs inside each
  * setTextStyleIdAsync (to untick "Allow edits" there). `fonts`: families + styles the file has besides AVAILABLE_FONTS (a
  * captured page's own).
+ *
+ * Pages and sections (#184): figma.createPage appends a new page to the document (past `pageLimit` pages it throws
+ * Figma's Starter-plan error), figma.createSection makes a SECTION on the current page (resizeWithoutConstraints sizes
+ * it; its children's x/y are its own), a page's remove() takes it out of the document (the current page cannot be
+ * removed), and setCurrentPageAsync switches page (`onSwitch` runs inside it, once it has: what the designer does
+ * while it is awaited). With `flows`, the file has a "Flows" page (0:6) of sections (FLOWS below).
  */
-export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: ReadonlyArray<readonly [string, string]> } = {}) {
+export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: ReadonlyArray<readonly [string, string]>; flows?: boolean; pageLimit?: number } = {}) {
   const fonts: ReadonlyArray<readonly [string, string]> = [...AVAILABLE_FONTS, ...(opts.fonts ?? [])];
   let seq = 0;
   // getNodeByIdAsync's live table (the world's own): every node made here is found by id until it is removed.
@@ -127,7 +133,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   const cloned: FakeNode[] = [];
   const raw = new WeakMap<FakeNode, FakeNode>(); // a node's own fields, behind the proxy that checks what Figma refuses
   const imports: string[] = [];
-  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined } = {};
+  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined; onSwitch?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
   const trap = new Set<string>();
   const pageLoads: string[] = [];
@@ -155,11 +161,21 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   // Every level of a page, as findAllWithCriteria walks it (an instance's layers are its component's: not walked).
   const findAll = (root: FakeNode, types: readonly string[]): FakeNode[] =>
     kids(root).flatMap((k) => [...(types.includes(String(k.type)) ? [k] : []), ...(k.type === "INSTANCE" ? [] : findAll(k, types))]);
+  // The document (figma.root), once the world exists: a page's remove() takes it out of its children.
+  const doc: { figma: { root: { children: FakeNode[] }; currentPage: FakeNode } | null } = { figma: null };
   const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
-    const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], loadAsync: async () => { pageLoads.push(id); } };
+    const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], removed: false, loadAsync: async () => { pageLoads.push(id); } };
     pg.findAllWithCriteria = (c: { types: string[] }) => findAll(pg, c.types);
     pg.appendChild = appendTo(pg);
     pg.insertChild = insertInto(pg);
+    pg.remove = () => {
+      const f = doc.figma;
+      if (!f) return;
+      if (f.currentPage === pg) throw new Error("in Figma: cannot remove the current page");
+      f.root.children = f.root.children.filter((p) => p !== pg);
+      pg.removed = true;
+      unregister(pg);
+    };
     for (const k of existing) appendTo(pg)(k);
     return pg;
   };
@@ -172,7 +188,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   ]);
   const screens = page("0:2", "Screens");
   let propSeq = 0;
-  const node = (type: "FRAME" | "TEXT" | "INSTANCE" | "COMPONENT" | "COMPONENT_SET", main?: FakeNode): FakeNode => {
+  const node = (type: "FRAME" | "TEXT" | "INSTANCE" | "COMPONENT" | "COMPONENT_SET" | "SECTION", main?: FakeNode): FakeNode => {
     // What each kind has (a text has no auto-layout or corner radius, as in Figma), so a write that names a field
     // the node lacks is caught as it would be there.
     const box: FakeNode = type === "TEXT"
@@ -185,7 +201,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
           cornerRadius: 0, topLeftRadius: 0, topRightRadius: 0, bottomRightRadius: 0, bottomLeftRadius: 0,
           strokeTopWeight: 1, strokeRightWeight: 1, strokeBottomWeight: 1, strokeLeftWeight: 1 };
     const fields: FakeNode = {
-      id: "n:" + ++seq, type, name: type === "FRAME" ? "Frame" : type === "COMPONENT" ? "Component" : type === "COMPONENT_SET" ? "Component set" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
+      id: "n:" + ++seq, type, name: type === "FRAME" ? "Frame" : type === "COMPONENT" ? "Component" : type === "COMPONENT_SET" ? "Component set" : type === "SECTION" ? "Section" : main ? String(main.name) : "", visible: true, parent: null, removed: false,
       x: 0, y: 0, width: 100, height: 100, layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
       layoutPositioning: "AUTO", layoutGrow: 0, layoutAlign: "INHERIT", opacity: 1, strokes: [], strokeWeight: 1, strokeAlign: "INSIDE", ...box,
       fills: type === "FRAME" || type === "COMPONENT" ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : type === "TEXT" ? [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }] : [],
@@ -308,6 +324,12 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       fields.width = w; fields.height = h;
       if (isNode(fields.boundVariables)) { const b = { ...fields.boundVariables }; delete b.width; delete b.height; fields.boundVariables = b; }
     };
+    // A section is sized only without constraints (it has no resize of its own in older typings), at least 0.01 a side.
+    if (type === "SECTION") fields.resizeWithoutConstraints = (w: number, h: number) => {
+      if (trap.has("resizeWithoutConstraints")) throw new Error("in Figma: cannot resize the section to " + w + "×" + h);
+      if (!(w >= 0.01 && h >= 0.01)) throw new Error("in Figma: a section must be at least 0.01 a side");
+      fields.width = w; fields.height = h;
+    };
     // Removed, the node's fields throw when read, as Figma's do (markRemoved); calling remove() again throws so too.
     fields.remove = () => {
       const parent = parentOf(fields);
@@ -358,11 +380,57 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   // ---- the design system (opts.kit)
   const imported: FakeNode[] = [];
   const kit = opts.kit ? designKit((m) => node("INSTANCE", m)) : null;
-  const pages = [current, screens, page("0:3", "Archive"), page("0:4", "Archive"), ...(kit ? [kit.page] : [])];
+  // FLOWS: a "Flows" page of sections, plain fixtures (not made by a batch): "Onboarding" (0,0, 1040×1004) holding two
+  // screens side by side, so the next one right of them would reach "Payments" (1200,0, 600×600, empty); a "Library"
+  // section (0,4000) holding an empty "Cards" section; two sections both named "Drafts".
+  const section = (id: string, name: string, x: number, y: number, width: number, height: number, inside: FakeNode[] = []): FakeNode => {
+    const sec: FakeNode = { id, type: "SECTION", name, x, y, width, height, visible: true, children: [], removed: false };
+    sec.appendChild = appendTo(sec);
+    sec.insertChild = insertInto(sec);
+    sec.resizeWithoutConstraints = (w: number, h: number) => {
+      if (trap.has("resizeWithoutConstraints")) throw new Error("in Figma: cannot resize the section to " + w + "×" + h);
+      sec.width = w; sec.height = h;
+    };
+    sec.remove = () => { const pr = parentOf(sec); if (pr) pr.children = kids(pr).filter((k) => k !== sec); sec.parent = null; sec.removed = true; unregister(sec); };
+    // Figma's absoluteBoundingBox: on the page, through the sections around it (a section does not rotate).
+    Object.defineProperty(sec, "absoluteBoundingBox", { enumerable: false, get: () => {
+      let ax = num(sec, "x"), ay = num(sec, "y");
+      for (let pr = parentOf(sec); pr && pr.type !== "PAGE"; pr = parentOf(pr)) { ax += num(pr, "x"); ay += num(pr, "y"); }
+      return { x: ax, y: ay, width: num(sec, "width"), height: num(sec, "height") };
+    } });
+    for (const k of inside) appendTo(sec)(k);
+    return sec;
+  };
+  const flows = opts.flows ? (() => {
+    const onboarding = section("6:1", "Onboarding", 0, 0, 1040, 1004, [
+      { id: "6:11", type: "FRAME", name: "Welcome", x: 80, y: 80, width: 390, height: 844 },
+      { id: "6:12", type: "FRAME", name: "Sign up", x: 570, y: 80, width: 390, height: 844 },
+    ]);
+    const payments = section("6:2", "Payments", 1200, 0, 600, 600);
+    const cards = section("6:31", "Cards", 80, 80, 300, 300);
+    const library = section("6:3", "Library", 0, 4000, 500, 500, [cards]);
+    const drafts = [section("6:4", "Drafts", 3000, 0, 200, 200), section("6:5", "Drafts", 3000, 1000, 200, 200)];
+    const pg = page("0:6", "Flows", [onboarding, payments, library, ...drafts]);
+    return { page: pg, onboarding, payments, library, cards, drafts };
+  })() : null;
+  const pages = [current, screens, page("0:3", "Archive"), page("0:4", "Archive"), ...(kit ? [kit.page] : []), ...(flows ? [flows.page] : [])];
+  let pageSeq = 0;
   const w = world({ ...opts.extra, pages, currentPage: current, ...(kit ? kit.scene : {}), ...(opts.extra?.nodes ? { nodes: opts.extra.nodes } : {}) }, {
     createFrame: () => node("FRAME"),
     createText: () => node("TEXT"),
     createComponent: () => node("COMPONENT"),
+    createSection: () => node("SECTION"),
+    // Figma's createPage: a new empty page at the end of the document (a Starter file stops at `pageLimit` pages).
+    createPage: () => {
+      const f = doc.figma;
+      if (!f) throw new Error("fake: no document yet");
+      if (trap.has("createPage") || (opts.pageLimit !== undefined && f.root.children.length >= opts.pageLimit)) throw new Error("The Starter plan only comes with 3 pages. Upgrade to Professional for unlimited pages.");
+      const pg = page("0:" + (100 + ++pageSeq), "Page " + (f.root.children.length + 1));
+      f.root.children = [...f.root.children, pg];
+      register(pg);
+      return pg;
+    },
+    setCurrentPageAsync: async (pg: FakeNode & { selection: FakeNode[] }) => { const f = doc.figma; if (f) f.currentPage = pg; if (hooks.onSwitch) await hooks.onSwitch(); },
     // Figma's combineAsVariants: a set in `parent` holding the components, each variant's values read from its name.
     combineAsVariants: (list: FakeNode[], parent: FakeNode) => {
       if (trap.has("combineAsVariants")) throw new Error("in Figma: cannot combine these components");
@@ -392,13 +460,15 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   live = w;
   reg.nodes = w.scene.nodes;
   reg.styles = w.scene.styles;
-  for (const pg of pages) { register(pg); for (const k of kids(pg)) register(k); }
+  doc.figma = w.figma;
+  const registerAll = (n: FakeNode): void => { register(n); for (const k of kids(n)) registerAll(k); };
+  for (const pg of pages) registerAll(pg);
   await w.allowEdits();
   /** the nodes any batch made that are still in the file: their parent chain reaches a page (a removed node's
    *  parent is null, so everything below it is gone with it, as in Figma) */
   const onPage = (n: FakeNode | null): boolean => (n === null || n.removed === true ? false : n.type === "PAGE" ? true : onPage(parentOf(n)));
   const alive = (): FakeNode[] => made.filter((n) => onPage(n));
-  return { ...w, made, alive, cloned, trap, pageLoads, imports, hooks, pages: { current, screens }, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
+  return { ...w, made, alive, cloned, trap, pageLoads, imports, hooks, pages: { current, screens }, flows, fontLoaded: (f: unknown) => loadedFonts.has(fontKey(f)) };
 }
 /** The fields a copy does not take from its source: its identity and its place. */
 const COPY_SKIP = new Set(["id", "parent", "removed", "children", "mainComponent", "componentProperties"]);
@@ -951,7 +1021,7 @@ export const cases: Case[] = [{
     ok("[TREE] page by id, with explicit x/y", byId.ok === true && parentOf(third) === pages.screens && num(third, "x") === -400 && num(third, "y") === 1200);
     const xOnly = await api.applyWrites([{ op: "createTree", page: "Screens", tree: { name: "X only", x: 5 } }]);
     const fourth = alive().find((n) => n.id === xOnly.applied[0]?.id);
-    ok("[TREE] only x given: y still comes from placement (the topmost frame on 'Screens' is at 0)", xOnly.ok === true && num(fourth, "x") === 5 && num(fourth, "y") === 0);
+    ok("[TREE] only x given: y still comes from placement — level with the topmost frame would sit on 'Empty state', so below it (100+100)", xOnly.ok === true && num(fourth, "x") === 5 && num(fourth, "y") === 200);
 
     // ---- warnings: accepted, no effect
     const warned = await api.applyWrites([{ op: "createTree", tree: { layout: { display: "flex" }, children: [{ name: "Pinned", x: 10, y: 10 }] } }]);

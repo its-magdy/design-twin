@@ -12,6 +12,7 @@ import { queueWork } from "./state";
 import { toast } from "./toast";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
 import { buildTree, resolveTreeOps, treeGone, type TreeTarget } from "./tree";
+import { destGone, makeDest } from "./places";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
 import { countPropertySteps, fileChanged, orphanWarnings, propertyUndoSteps, removeDefs } from "./component-build";
 import { applyPatch, changesBefore, keepText, resolvePatchOps, type PatchTarget } from "./patch";
@@ -22,7 +23,7 @@ import { applyCreates, CreateFailed, isCreateOp, resolveCreateOps } from "./crea
 import { setBatchPlan } from "./batch-plan";
 import { bindTreeOps } from "./bind";
 import { applyDelete, applyMove, checkDelete, idsDeletedWith, resolveStructureOps, type DeleteTarget, type MoveTarget } from "./structure";
-import { batchRefusal, countChanges, goneSentence, hasLanded, landedResult, landedText, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
+import { batchRefusal, countChanges, goneSentence, hasLanded, keptLine, landedResult, landedText, leftSomething, mergeLanded, refusalReason, restoreChanges, restoredRows, RestoreStopped, staying, type Change, type Landed, type OpProblem } from "./write-batch";
 import type { WritesMsg } from "./messages";
 import { checkImages, makeImages, setBatchImages, type MadeImage } from "./images";
 import { imageTableError, type ImageTable } from "../../bridge/src/image-spec.ts";
@@ -89,7 +90,7 @@ function consent(): void {
 }
 
 // What an op resolved to before the batch ran: a variable-mode op's node/collection/mode (variable-modes.ts
-// resolveModeOps), a createTree op's page and fonts (tree.ts resolveTreeOps), a patch's node and names (patch.ts
+// resolveModeOps), a createTree op's page, section and fonts (tree.ts resolveTreeOps, places.ts), a patch's node and names (patch.ts
 // resolvePatchOps), a move's node and new parent (structure.ts).
 interface Resolved {
   mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined;
@@ -233,9 +234,16 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       // A key the file already has a result for: that result is updated in place (keyed.ts); its changes go on the list
       // one by one, as they land.
       if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
+      // The page and section it lands in that the batch makes, when this is the first op landing there (places.ts):
+      // each a change of its own, so a later failure removes it after the frames in it. A page it made is held across
+      // its load: deleted meanwhile, the op fails as missing.
+      const made = await makeDest(tree.dest, consent, changes);
+      const lost = destGone(tree.dest);
+      if (lost !== null) throw new Error(lost);
+      consent();
       const change = await buildTree(tree, consent, changes);
       changes.push(change);
-      return change.applied;
+      return made.page || made.section ? { ...change.applied, ...(made.page ? { pageCreated: made.page } : {}), ...(made.section ? { sectionCreated: made.section } : {}) } : change.applied;
     }
     // Resolved up front: the node exists and has every field, the names resolved and the fonts loaded. The values it
     // replaces are kept; it puts itself back if it throws partway (patch.ts).
@@ -389,7 +397,12 @@ function announce(r: WriteResult, landed?: Landed): void {
     say(WAITING, 0, false, false);
     return;
   }
-  if (r.refused === "edits-off") text = n
+  // No change listed as applied or put back, but the file is not as it was: a preview put back but for what the designer
+  // changed since (a section side they resized), or a batch or a preview that left what a layer they deleted had grown
+  // (a section its frame grew, "Allow edits" turned off before it could go back): said to them too (keptLine).
+  const kept = r.ok ? undefined : keptLine.get(r);
+  if (kept) text = kept.text + (some ? " " + kept.lead + " had already " + landedText(some) + "; that stays." : "");
+  else if (r.refused === "edits-off") text = n
     ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "")
     : "Design Twin refused an edit request — 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
   // Rejected after a preview that loaded an image (or imported an item) and was put back: that stays, and is said.
@@ -598,7 +611,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const kept = !revoked && off && stays.length
       ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied"
       : "";
-    return {
+    const r: WriteResult = {
       ok: false,
       // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
       applied: [...stays.map((c) => c.applied), ...rows.filter((a): a is AppliedWrite => a !== undefined && a.deleted === true)],
@@ -608,6 +621,16 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
       ...(revoked ? { refused: "edits-off" as const } : {}),
       ...(restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}),
     };
+    // Nothing listed as applied or put back, but a layer the designer deleted left what it grew (a section, still that
+    // size): the designer is told so, never "nothing changed" (announce).
+    const left = gone.filter(leftSomething).map(goneSentence);
+    if (left.length && !r.applied.length && !restored.length) {
+      keptLine.set(r, {
+        text: (revoked ? "Design Twin stopped — 'Allow edits' was turned off" : "Design Twin could not apply an edit request (" + errMsg(e) + ")") + ", and not all of it could be put back: " + left.join("; ") + ".",
+        lead: "It",
+      });
+    }
+    return r;
   };
   // A problem the imports reveal once the create tables have run: those are put back, and the batch is refused whole. One
   // that could not be put back stays (listed in `applied`), and the refusal says so — never that nothing was changed.
@@ -675,6 +698,8 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const bound = trees.targets.get(i);
     const row = rows[i];
     if (bound && bound.bind && row) { row.bind = bound.bind; delete row.unbound; }
+    // What landing it said: a section it grew now runs into a neighbour.
+    if (bound) for (const m of bound.landed) warnings.push("ops[" + i + "]: " + m);
   }
   // Every delete is checked before the first one runs: a deleted node cannot be brought back, so a check that fails
   // must fail while the batch can still be put back whole.
@@ -788,8 +813,16 @@ async function putBack(changes: readonly Change[]): Promise<PutBack> {
   const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
   commitUndo();
   const went = gone.map(goneSentence);
-  if (!failed.length) return { failed: null, gone: went, restored: restored.length };
-  return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " — what stays is listed in `applied`." }, gone: went, restored: restored.length };
+  // A change that went with its layers but left something of it (a section its frame grew, still that size: "Allow
+  // edits" went off before its put-back ran) is not all put back either: the file is not as it was.
+  const left = gone.filter(leftSomething).map(goneSentence);
+  if (!failed.length && !left.length) return { failed: null, gone: went, restored: restored.length };
+  // Every change may have gone back, or with its layers, but for what the designer has changed since (a section they
+  // resized) or what a deleted layer left: then nothing is listed, and that is said to them as well (announce), not
+  // only to the agent — never "nothing changed".
+  const r: WriteResult = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " — what stays is listed in `applied`." : ".") };
+  if (!stays.length) keptLine.set(r, { text: left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".", lead: "Its preview" });
+  return { failed: r, gone: went, restored: restored.length };
 }
 
 /** What the reply says of a batch Figma split into `steps` Undos (component-build.ts countPropertySteps). */

@@ -954,8 +954,8 @@
       }
       for (const k of Object.keys(d)) {
         if (d[k] === void 0 || DEF_FIELDS.indexOf(k) >= 0) continue;
-        const near2 = nearestNames(k, DEF_FIELDS);
-        out.push(p + "." + k + ": not a field of a property definition" + (near2.length ? "; closest: " + quoteList(near2) : "") + " (it takes type, default, preferredValues)");
+        const near3 = nearestNames(k, DEF_FIELDS);
+        out.push(p + "." + k + ": not a field of a property definition" + (near3.length ? "; closest: " + quoteList(near3) : "") + " (it takes type, default, preferredValues)");
       }
       const t = d.type;
       if (t === "VARIANT") {
@@ -990,8 +990,8 @@
       const x = v[k];
       if (x === void 0) continue;
       if (fields.indexOf(k) < 0) {
-        const near2 = nearestNames(k, fields);
-        return "." + k + ": not a field a property drives" + (near2.length ? "; closest: " + quoteList(near2) : "") + " (characters, visible, mainComponent)";
+        const near3 = nearestNames(k, fields);
+        return "." + k + ": not a field a property drives" + (near3.length ? "; closest: " + quoteList(near3) : "") + " (characters, visible, mainComponent)";
       }
       if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
     }
@@ -1137,8 +1137,8 @@
         return [];
       }
       if (!own(fragments, name)) {
-        const near2 = nearestNames(name, Object.keys(fragments));
-        say2(path + ".use: no fragment '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : "; define it under the root's `fragments`"));
+        const near3 = nearestNames(name, Object.keys(fragments));
+        say2(path + ".use: no fragment '" + name + "'" + (near3.length ? "; closest: " + quoteList(near3) : "; define it under the root's `fragments`"));
         return [];
       }
       if (stack.indexOf(name) >= 0) {
@@ -1385,6 +1385,45 @@
       if (typeof b !== "string" || !b.length || !/^[A-Za-z0-9+/]*={0,2}$/.test(b)) return "`images." + k + "` is not base64 text";
     }
     return null;
+  }
+
+  // ../bridge/src/place-spec.ts
+  var MAX_NEW_PAGES = 10;
+  var MAX_NEW_SECTIONS = 25;
+  var SECTION_PAD = 80;
+  var CREATE_TREE_ONLY = ["section", "createPage", "createSection"];
+  var ID_LIKE = /^I?\d+[:-]\d+(;\d+[:-]\d+)*$/;
+  function newNameError(name, what, at3) {
+    if (!name.trim()) return "`" + at3 + "." + what + "`: a " + what + " to make needs a name";
+    if (name !== name.trim()) return "`" + at3 + "." + what + "`: '" + name + "' has spaces at its start or end; a " + what + " is matched by its exact name, so make it without them";
+    if (ID_LIKE.test(name)) return "`" + at3 + "." + what + "`: '" + name + "' looks like a node id, not a name; a " + what + " to make needs a name";
+    return null;
+  }
+  function placeError(o, at3) {
+    for (const k of CREATE_TREE_ONLY) {
+      if (o[k] !== void 0 && o.op !== "createTree") return "`" + at3 + "." + k + "`: only a createTree lands in a section or makes a page or section (`section`, `createPage`, `createSection`)";
+    }
+    if (o.op !== "createTree") return null;
+    const page = typeof o.page === "string" ? o.page : void 0;
+    const section = typeof o.section === "string" ? o.section : void 0;
+    if (o.createPage === true && page === void 0) return "`" + at3 + ".createPage` needs `page`: the name of the page to make (it is made when the file has no page of that name)";
+    if (o.createSection === true && section === void 0) return "`" + at3 + ".createSection` needs `section`: the name of the section to make (it is made when the page has no section of that name)";
+    if (section !== void 0 && !section.trim()) return "`" + at3 + ".section` must be a non-empty name or id";
+    if (o.createPage === true && page !== void 0) {
+      const e = newNameError(page, "page", at3);
+      if (e) return e;
+    }
+    if (o.createSection === true && section !== void 0) {
+      const e = newNameError(section, "section", at3);
+      if (e) return e;
+    }
+    return null;
+  }
+  var nodeIdLike = (ref2) => /^\d+:\d+$/.test(ref2);
+  var idLike = (ref2) => ID_LIKE.test(ref2);
+  function describePlace(p) {
+    const page = p.page !== void 0 ? "on page '" + p.page + "'" + (p.createPage === true ? " (made when the file has none)" : "") : p.section !== void 0 && nodeIdLike(p.section) ? "on the page that holds it" : "on the current page";
+    return p.section !== void 0 ? "in section '" + p.section + "'" + (p.createSection === true ? " (made when the page has none)" : "") + " " + page : page;
   }
 
   // ../bridge/src/tree-spec.ts
@@ -1738,11 +1777,11 @@
       const at3 = path + "." + k;
       const rule = Object.prototype.hasOwnProperty.call(rules, k) ? rules[k] : void 0;
       if (rule === void 0) {
-        const near2 = nearestNames(k, Object.keys(rules).filter((r) => {
+        const near3 = nearestNames(k, Object.keys(rules).filter((r) => {
           const x = rules[r];
           return x !== void 0 && !isRefuse(x);
         }));
-        out.push(at3 + ": not a field the write accepts" + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        out.push(at3 + ": not a field the write accepts" + (near3.length ? "; closest: " + quoteList(near3) : ""));
       } else if (isRefuse(rule)) {
         out.push(at3 + ": a read field a write cannot set yet" + (rule.refuse ? " \u2014 " + rule.refuse : ""));
       } else {
@@ -1962,8 +2001,8 @@
         tooMany = true;
         return;
       }
-      const label5 = isObj4(n) ? ex.labels.get(n) : void 0;
-      const path = label5 !== void 0 ? label5 : at3;
+      const label6 = isObj4(n) ? ex.labels.get(n) : void 0;
+      const path = label6 !== void 0 ? label6 : at3;
       if (!isObj4(n)) {
         problems.push(path + ": must be a node object");
         return;
@@ -2013,8 +2052,8 @@
             const want = PROP_REF_TYPES[f];
             const has2 = comp.defs.get(prop);
             if (has2 === void 0) {
-              const near2 = nearestNames(prop, [...comp.defs.keys()]);
-              say2(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near2.length ? "; closest: " + quoteList(near2) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
+              const near3 = nearestNames(prop, [...comp.defs.keys()]);
+              say2(at4 + " names '" + prop + "', which the component does not declare in its root's `props`" + (near3.length ? "; closest: " + quoteList(near3) : comp.defs.size ? "; it declares " + quoteList([...comp.defs.keys()]) : " (it declares none)"));
               continue;
             }
             comp.used.add(prop);
@@ -2120,22 +2159,55 @@
     if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
     return problems.length + " problems in the tree spec \u2014 nothing was changed:\n" + problems.join("\n");
   }
+  function givenSize(spec) {
+    return { w: spec.box ? spec.box.w : spec.layout && spec.layout.width, h: spec.box ? spec.box.h : spec.layout && spec.layout.height };
+  }
+  var VARIANT_GAP = 20;
+  function variantColumn(boxes, moves) {
+    const at3 = [];
+    let y = VARIANT_GAP;
+    let width = 0;
+    let height = 0;
+    boxes.forEach((b, i) => {
+      const to = moves(i) ? { x: VARIANT_GAP, y } : null;
+      at3.push(to);
+      const bx = to ? to.x : b.x, by = to ? to.y : b.y;
+      y = Math.max(y, by + b.height + VARIANT_GAP);
+      width = Math.max(width, bx + b.width + VARIANT_GAP);
+      height = Math.max(height, by + b.height + VARIANT_GAP);
+    });
+    return { at: at3, width, height };
+  }
+  function builtSize(spec, unknown) {
+    const given = givenSize(spec);
+    if (given.w !== void 0 || given.h !== void 0 || spec.box !== void 0 || spec.type !== "COMPONENT_SET" || spec.layout && spec.layout.display === "flex") return given;
+    const variants = spec.children || [];
+    const col = variantColumn(variants.map((v) => {
+      const g = givenSize(v);
+      return { x: v.x !== void 0 ? v.x : 0, y: v.y !== void 0 ? v.y : 0, width: g.w !== void 0 ? g.w : unknown, height: g.h !== void 0 ? g.h : unknown };
+    }), (i) => {
+      const v = variants[i];
+      return !v || v.x === void 0 && v.y === void 0;
+    });
+    return col.width > 0 && col.height > 0 ? { w: col.width, h: col.height } : given;
+  }
   function sizePhrase(spec) {
-    const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
-    const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
+    const { w, h } = givenSize(spec);
     const other = (mode, side) => side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
     if (typeof w === "number" && typeof h === "number") return w + "\xD7" + h;
     if (typeof w === "number") return w + " wide, " + other(spec.heightMode, "height");
     if (typeof h === "number") return h + " tall, " + other(spec.widthMode, "width");
     return "";
   }
-  function describeTree(spec, page, s) {
+  function describeTree(spec, place2, s) {
     const sized = sizePhrase(spec);
     const size2 = sized ? " " + sized : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
     const nodes = s.frames + s.texts + s.instances + s.clones;
     const plural4 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
-    const where = (page ? "on page '" + page + "'" : "on the current page") + (spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : ", placed beside the existing frames");
+    const p = place2 || {};
+    const at3 = spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : "";
+    const where = describePlace(p) + (p.section !== void 0 ? (at3 ? at3 + " inside it" : ", placed beside the frames already in it") + " (the section grows if needed)" : at3 || ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
       return e ? " with " + plural4(e, "layer") + " changed" : "";
@@ -2156,7 +2228,7 @@
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
     if (s.unbound) parts.push(plural4(s.unbound, "raw value") + " left unbound");
-    const checked = (components2.length + variables.length + textStyles.length ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)" : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
+    const checked = (components2.length + variables.length + textStyles.length ? (p.section !== void 0 ? "the page, its section, fonts and names" : "the page, fonts and names") + " are checked against the file when applied (a library item is imported only then)" : (p.section !== void 0 ? "the page, its section and fonts" : "the page and fonts") + " are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
 
@@ -2262,8 +2334,8 @@
       if (why !== void 0) problems.push(at3 + ": a patch cannot set it \u2014 " + why);
       else if (tree !== void 0) problems.push(at3 + ": a read field a patch cannot set yet" + (isRefuse(tree) && tree.refuse ? " \u2014 " + tree.refuse : ""));
       else {
-        const near2 = nearestNames(k, PATCH_FIELD_NAMES);
-        problems.push(at3 + ": not a field a patch sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        const near3 = nearestNames(k, PATCH_FIELD_NAMES);
+        problems.push(at3 + ": not a field a patch sets" + (near3.length ? "; closest: " + quoteList(near3) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
@@ -2513,8 +2585,8 @@
     if (!keys.length) return "is empty";
     for (const k of keys) {
       if (fields.indexOf(k) < 0) {
-        const near2 = nearestNames(k, fields);
-        return "." + k + ": not a field a variable binds to here" + (near2.length ? "; closest: " + quoteList(near2) : "");
+        const near3 = nearestNames(k, fields);
+        return "." + k + ": not a field a variable binds to here" + (near3.length ? "; closest: " + quoteList(near3) : "");
       }
       if (typeof v[k] !== "string" || !String(v[k]).trim()) return "." + k + " must be a variable's name, key or id";
     }
@@ -2577,8 +2649,8 @@
         if (!keys.length) return "is empty";
         for (const k of keys) {
           if (TEXT_STYLE_TOKEN_FIELDS.indexOf(k) < 0) {
-            const near2 = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
-            return "." + k + ": not a text style field a variable binds to" + (near2.length ? "; closest: " + quoteList(near2) : "");
+            const near3 = nearestNames(k, TEXT_STYLE_TOKEN_FIELDS);
+            return "." + k + ": not a text style field a variable binds to" + (near3.length ? "; closest: " + quoteList(near3) : "");
           }
           const x = v[k];
           if (x !== null && (typeof x !== "string" || !x.trim())) return "." + k + " must be a variable's name, key or id, or null to unbind";
@@ -2612,8 +2684,8 @@
       const why = Object.prototype.hasOwnProperty.call(NOT_STYLED, k) ? NOT_STYLED[k] : void 0;
       if (why !== void 0) problems.push(at3 + ": a style edit cannot set it \u2014 " + why);
       else {
-        const near2 = nearestNames(k, STYLE_FIELD_NAMES);
-        problems.push(at3 + ": not a field a style edit sets" + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        const near3 = nearestNames(k, STYLE_FIELD_NAMES);
+        problems.push(at3 + ": not a field a style edit sets" + (near3.length ? "; closest: " + quoteList(near3) : ""));
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
@@ -2769,8 +2841,8 @@
         continue;
       }
       if (!isTypeName(type)) {
-        const near2 = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
-        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near2.length ? "; closest: " + quoteList(near2) : ""));
+        const near3 = typeof type === "string" ? nearestNames(type, VARIABLE_TYPE_NAMES) : [];
+        problems.push(rp + "[1]: the type of '" + name + "' must be one of " + VARIABLE_TYPE_NAMES.join(" | ") + (near3.length ? "; closest: " + quoteList(near3) : ""));
         continue;
       }
       const was = names.get(name);
@@ -2863,8 +2935,8 @@
       }
       const extra = Object.keys(s).filter((k) => k !== "name" && k !== "kind" && k !== "set" && s[k] !== void 0);
       for (const k of extra) {
-        const near2 = nearestNames(k, ["name", "kind", "set"]);
-        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near2.length ? "; closest: " + quoteList(near2) : "") + ")");
+        const near3 = nearestNames(k, ["name", "kind", "set"]);
+        problems.push(sp + "." + k + ": not a field of a style row (it is {name, kind, set}" + (near3.length ? "; closest: " + quoteList(near3) : "") + ")");
       }
       if (!nonEmpty3(s.name)) {
         problems.push(sp + ".name: must be the style's name (a non-empty string)");
@@ -2956,6 +3028,12 @@
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
   }
   function writeOpPreview(o, index) {
+    const step = opPreview(o, index);
+    if (step.invalid !== void 0) return step;
+    const refused = writeOpError(o, index);
+    return refused === null ? step : { ...step, invalid: refused };
+  }
+  function opPreview(o, index) {
     const row = WRITE_OPS[o.op];
     const creates = row.effect === "creates";
     const missing = missingWriteFields(o.op, o);
@@ -2980,12 +3058,14 @@
   function treePreview(o, index, missing) {
     const comp = componentRootOf(o.tree);
     const what = comp ? comp.type === "COMPONENT_SET" ? "component set" : "component" : "frame";
-    const base = { index, op: o.op, effect: "creates", target: o.page ? `new ${what} on page '${o.page}'` : `new ${what} on the current page` };
+    const base = { index, op: o.op, effect: "creates", target: `new ${what} ${describePlace(o)}` };
     if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    const badPlace = placeError({ ...o }, `ops[${index}]`);
+    if (badPlace !== null) return { ...base, invalid: badPlace };
     const { problems, summary, expanded } = checkTree(o.tree);
     if (problems.length || !expanded) return { ...base, invalid: problems.join("\n") };
     const bind = o.bind === true ? "; `bind`: its raw colours, spacing, radii and text fonts are bound to the file's variables and text styles where exactly one equals them \u2014 decided by the file when it is applied (a dry run a plugin answers counts them)" : "";
-    return { ...base, change: describeTree(expanded, o.page, summary) + bind, ...summary.warnings.length ? { warnings: summary.warnings } : {} };
+    return { ...base, change: describeTree(expanded, o, summary) + bind, ...summary.warnings.length ? { warnings: summary.warnings } : {} };
   }
   function patchPreview(o, index, missing) {
     const base = { index, op: o.op, effect: "overwrites", target: o.nodeId || null };
@@ -3118,9 +3198,9 @@
   var isBool = (v) => typeof v === "boolean";
   var isStr2 = (v) => typeof v === "string";
   var isNum4 = (v) => typeof v === "number";
-  function opt(a, key, ok, what, label5 = key) {
+  function opt(a, key, ok, what, label6 = key) {
     const v = a[key];
-    return v === void 0 || ok(v) ? null : `\`${label5}\` is not ${what}`;
+    return v === void 0 || ok(v) ? null : `\`${label6}\` is not ${what}`;
   }
   function first(errs) {
     for (const e of errs) if (e !== null) return e;
@@ -3133,7 +3213,7 @@
   var isPageSel = (v) => isStr2(v) || Array.isArray(v) && v.every(isStr2);
   var isWriteOpName = (v) => isStr2(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
   var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum4);
-  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "variable", "style"];
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "section", "variable", "style"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   var isIndex = (v) => isNum4(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
@@ -3147,12 +3227,16 @@
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at3}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at3}.padding`),
       opt(o, "index", isIndex, "a whole number \u2265 0", `${at3}.index`),
-      opt(o, "bind", isBool, "a boolean", `${at3}.bind`)
+      opt(o, "bind", isBool, "a boolean", `${at3}.bind`),
+      opt(o, "createPage", isBool, "a boolean", `${at3}.createPage`),
+      opt(o, "createSection", isBool, "a boolean", `${at3}.createSection`)
     ]);
     if (typeErr !== null) return typeErr;
     if (o.treeFile !== void 0) return `\`${at3}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
     if (o.bind !== void 0 && op !== "createTree") return `\`${at3}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
     for (const k of ["where", "scope", "token"]) if (o[k] !== void 0 && op !== "patchWhere") return `\`${at3}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
+    const badPlace = placeError(o, at3);
+    if (badPlace !== null) return badPlace;
     const missing = missingWriteFields(op, o);
     if (missing.length) return `\`${at3}\` (${op}): missing ${missing.join(", ")}`;
     if (op === "createTree") {
@@ -5910,7 +5994,7 @@
     if (!node) throw new Error("Node " + nodeId + " is not in the open file \u2014 open the Figma file this link points to, then retry.");
     return node;
   }
-  function resolvePages(wanted, all) {
+  function resolvePages(wanted2, all) {
     const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
     const pick = (sel, matches, how) => {
       if (matches.length > 1) {
@@ -5931,7 +6015,7 @@
   ${avail()}`);
     };
     const picked = [];
-    for (const sel of wanted) {
+    for (const sel of wanted2) {
       const p = resolveOne(sel);
       if (!picked.some((x) => x.id === p.id)) picked.push(p);
     }
@@ -6210,15 +6294,15 @@
     if (rawWanted.length && rawWanted.every((s) => !s)) {
       r.warn("page selector was empty after trimming \u2014 ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
     }
-    const wanted = rawWanted.filter(Boolean);
-    if (allPages && wanted.length) {
+    const wanted2 = rawWanted.filter(Boolean);
+    if (allPages && wanted2.length) {
       throw new Error("allPages and page select different scopes \u2014 pass only one (page:[ids] for a bounded pull, allPages for the whole file).");
     }
     let pages;
     if (allPages) {
       pages = figma.root.children;
-    } else if (wanted.length) {
-      const picked = resolvePages(wanted, figma.root.children);
+    } else if (wanted2.length) {
+      const picked = resolvePages(wanted2, figma.root.children);
       await Promise.all(picked.map((p) => loadPageSafely(p, r.warn, "")));
       pages = picked;
     } else {
@@ -6273,7 +6357,7 @@
       // to tell whether it got the page it asked for, next to a `page` field naming a page that was
       // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
       // whatever the user happens to be looking at).
-      scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
+      scope: allPages ? "all-pages" : wanted2.length ? "page" : "current-page",
       // `pages.map(...)[0]` rather than `pages[0]?.name`: the plugin bundle is ES2019, which has no `?.`.
       ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : pages.map((p) => p.name)[0]),
       ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0),
@@ -7380,8 +7464,8 @@
       const hits = keys.indexOf(name) >= 0 ? [name] : keys.filter((k) => bare(k) === name);
       const key = hits[0];
       if (key === void 0) {
-        const near2 = nearestNames(name, keys.map(bare));
-        errors.push("component '" + component + "' has no property '" + name + "'" + (near2.length ? "; closest: " + quoteList(near2) : keys.length ? "" : " (it has none)"));
+        const near3 = nearestNames(name, keys.map(bare));
+        errors.push("component '" + component + "' has no property '" + name + "'" + (near3.length ? "; closest: " + quoteList(near3) : keys.length ? "" : " (it has none)"));
         continue;
       }
       if (hits.length > 1) {
@@ -7393,8 +7477,8 @@
       if (def.type === "VARIANT") {
         const options = def.variantOptions || [];
         if (typeof value !== "string" || options.indexOf(value) < 0) {
-          const near2 = typeof value === "string" ? nearestNames(value, options) : options.slice(0, 3);
-          errors.push("property '" + name + "' of '" + component + "' has no value " + JSON.stringify(value) + (near2.length ? "; closest: " + quoteList(near2) : ""));
+          const near3 = typeof value === "string" ? nearestNames(value, options) : options.slice(0, 3);
+          errors.push("property '" + name + "' of '" + component + "' has no value " + JSON.stringify(value) + (near3.length ? "; closest: " + quoteList(near3) : ""));
           continue;
         }
       } else if (def.type === "BOOLEAN") {
@@ -7540,8 +7624,8 @@
           return { later: () => figma.variables.importVariableByKeyAsync(one.key) };
         }
         if (lib.length > 1) return { error: "variable '" + ref2 + "' matches " + lib.length + " library variables \u2014 pass one's key: " + lib.slice(0, 3).map((v) => "'" + v.name + "' in '" + v.libraryName + "' (" + v.key + ")").join(", ") };
-        const near2 = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
-        return none("variable", ref2, near2, "in this file or an enabled library");
+        const near3 = nearestNames(ref2, [...locals.map((v) => v.name), ...(await libraryVariables()).map((v) => v.name)]);
+        return none("variable", ref2, near3, "in this file or an enabled library");
       },
       async textStyle(ref2) {
         if (!styles) styles = figma.getLocalTextStylesAsync();
@@ -7678,7 +7762,13 @@
   }
   var wentWithNode = (c) => !c.made && c.on !== void 0 && removedWith(c.on);
   var asBefore = (c) => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
-  var goneSentence = (c) => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+  var goneSentence = (c) => {
+    const left = c.made ? leftBehind(c) : null;
+    if (left) return c.what + " was deleted from the file while the batch ran, but " + left;
+    return c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+  };
+  var leftBehind = (c) => c.leaves ? c.leaves() : null;
+  var leftSomething = (c) => c.made === true && leftBehind(c) !== null;
   function staying(changes) {
     const gone = (c) => wentWithNode(c) || asBefore(c);
     return { stays: changes.filter((c) => !gone(c)), gone: changes.filter(gone) };
@@ -7702,6 +7792,7 @@
     }
     return out;
   }
+  var newRestorePass = () => ({ kept: /* @__PURE__ */ new Map() });
   var RestoreStopped = class extends Error {
   };
   async function restoreChanges(changes, allowed2) {
@@ -7710,6 +7801,13 @@
     let stop = null;
     const left = [...changes].reverse();
     const ours = batchMade(changes);
+    const pass = newRestorePass();
+    const notes = [];
+    const put2 = async (c) => {
+      const note = await c.restore(allowed2, ours, pass);
+      restored.push(c);
+      if (note) notes.push([c, note]);
+    };
     const undo = (c, e) => "could not undo " + c.what + " (" + errMsg(e) + ")";
     for (const [i, c] of left.entries()) {
       if (!allowed2()) {
@@ -7718,8 +7816,7 @@
       }
       if (wentWithNode(c)) continue;
       try {
-        await c.restore(allowed2, ours);
-        restored.push(c);
+        await put2(c);
       } catch (e) {
         if (e instanceof RestoreStopped) {
           stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" };
@@ -7739,8 +7836,7 @@
           break;
         }
         try {
-          await c.restore(allowed2, ours);
-          restored.push(c);
+          await put2(c);
           failures.splice(failures.indexOf(f), 1);
           more = true;
           break;
@@ -7759,14 +7855,15 @@
         stop.rest = untried.map(([c]) => c);
       }
     }
-    const gone = left.filter(wentWithNode);
-    const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+    const notBack = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+    const gone = left.filter((c) => wentWithNode(c) || notBack.indexOf(c) >= 0 && leftBehind(c) !== null);
+    const back = notBack.filter((c) => gone.indexOf(c) < 0);
     restored.push(...back);
     const settled = /* @__PURE__ */ new Set([...gone, ...back]);
-    const failed = failures.filter(([c]) => !settled.has(c)).map(([, s]) => s);
+    const isGone = new Set(gone);
+    const failed = failures.filter(([c]) => !settled.has(c)).concat(notes.filter(([c]) => !isGone.has(c))).sort((a, b) => left.indexOf(a[0]) - left.indexOf(b[0])).map(([, s]) => s);
     const kept = stop ? stop.rest.filter((c) => !settled.has(c)) : [];
     if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
-    const isGone = new Set(gone);
     const done = /* @__PURE__ */ new Set([...restored, ...gone]);
     return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
   }
@@ -7795,7 +7892,13 @@
       const untouched = !r.applied.length && !(r.restored && r.restored.length);
       error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
     }
-    return error === r.error ? r : { ...r, error };
+    return error === r.error ? r : carryKept(r, { ...r, error });
+  }
+  var keptLine = /* @__PURE__ */ new WeakMap();
+  function carryKept(from, to) {
+    const k = keptLine.get(from);
+    if (k && to !== from) keptLine.set(to, k);
+    return to;
   }
 
   // src/patch.ts
@@ -8563,8 +8666,8 @@
     const first2 = hits[0];
     if (hits.length === 1 && first2) return { ok: first2 };
     if (hits.length > 1) return { error: "matches " + hits.length + " layers of " + label(source) + "; name one by its id: " + hits.slice(0, 3).map(label).join(", ") };
-    const near2 = nearestNames(ref2, all.map((n) => n.name));
-    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near2.length ? "; closest: " + quoteList(near2) : "") };
+    const near3 = nearestNames(ref2, all.map((n) => n.name));
+    return { error: "no layer of " + label(source) + " is named '" + ref2 + "'" + (near3.length ? "; closest: " + quoteList(near3) : "") };
   }
   function pageOf2(n) {
     let p = n.parent;
@@ -8844,10 +8947,10 @@
       if (!have.has(name)) have.set(name, { key, type: d.type, defaultValue: d.defaultValue, ...d.preferredValues ? { preferredValues: d.preferredValues } : {} });
     }
     const plan = { owner, defs, keys: /* @__PURE__ */ new Map(), add: [], edit: [], remove: [], wiring: [] };
-    const wanted = /* @__PURE__ */ new Set();
+    const wanted2 = /* @__PURE__ */ new Set();
     let ok = true;
     for (const d of defs) {
-      wanted.add(d.name);
+      wanted2.add(d.name);
       const h = have.get(d.name);
       if (!h) {
         plan.add.push(d);
@@ -8863,7 +8966,7 @@
       const hadPrefs = d.type === "INSTANCE_SWAP" ? h.preferredValues || [] : void 0;
       if (h.defaultValue !== d.defaultValue || !sameJson(prefs, hadPrefs)) plan.edit.push({ key: h.key, def: d, was: { defaultValue: h.defaultValue, ...h.preferredValues ? { preferredValues: h.preferredValues } : {} } });
     }
-    for (const [name, h] of have) if (!wanted.has(name)) plan.remove.push({ key: h.key, name });
+    for (const [name, h] of have) if (!wanted2.has(name)) plan.remove.push({ key: h.key, name });
     return ok ? plan : null;
   }
   var own2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -9033,7 +9136,6 @@
     }
     return out;
   }
-  var VARIANT_GAP = 20;
   function arrangeVariants(set, spec, only) {
     const sized = spec.box !== void 0 || spec.layout !== void 0 && (spec.layout.width !== void 0 || spec.layout.height !== void 0);
     if (set.layoutMode !== "NONE") {
@@ -9046,24 +9148,23 @@
       const n = set.children.filter((k) => k.name === c.name)[0];
       if (n) byNode.set(n, c);
     });
-    let y = VARIANT_GAP;
-    for (const c of set.children) {
+    const kids = set.children.slice();
+    const col = variantColumn(kids.map((c) => ({ x: c.x, y: c.y, width: c.width, height: c.height })), (i) => {
+      const c = kids[i];
+      if (!c) return false;
       const s = byNode.get(c);
       const placed = s !== void 0 && (s.x !== void 0 || s.y !== void 0);
-      if ((only === null || only.indexOf(c) >= 0) && !placed) {
-        c.x = VARIANT_GAP;
-        c.y = y;
+      return (only === null || only.indexOf(c) >= 0) && !placed;
+    });
+    kids.forEach((c, i) => {
+      const to = col.at[i];
+      if (to) {
+        c.x = to.x;
+        c.y = to.y;
       }
-      y = Math.max(y, c.y + c.height + VARIANT_GAP);
-    }
+    });
     if (sized) return;
-    let w = 0;
-    let h = 0;
-    for (const c of set.children) {
-      w = Math.max(w, c.x + c.width + VARIANT_GAP);
-      h = Math.max(h, c.y + c.height + VARIANT_GAP);
-    }
-    if (w > 0 && h > 0) set.resize(w, h);
+    if (col.width > 0 && col.height > 0) set.resize(col.width, col.height);
   }
   function componentReply(applied, name, props, rewired) {
     delete applied.key;
@@ -9390,8 +9491,638 @@
     return out;
   }
 
-  // src/tree.ts
+  // src/places.ts
   var PLACE_GAP = 100;
+  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var pageWords = (p) => p.current ? "the current page '" + p.name + "'" : "page '" + p.name + "'";
+  function destGone(dest) {
+    const p = dest.page.node, s = dest.section ? dest.section.node : null;
+    if (p && !inDocument(p)) return noNode(p.id, "page");
+    if (s && !inDocument(s)) return noNode(s.id, "section");
+    return null;
+  }
+  function holdingDest(dest, consent2) {
+    return () => {
+      const gone = destGone(dest);
+      if (gone !== null) throw new Error(gone);
+      consent2();
+    };
+  }
+  async function resolveDests(ops) {
+    const problems = [];
+    const dests = /* @__PURE__ */ new Map();
+    const pages = /* @__PURE__ */ new Map();
+    const newPages = /* @__PURE__ */ new Map();
+    const pageOf4 = (p) => {
+      let d = pages.get(p);
+      if (!d) {
+        d = { name: p.name, node: p, make: false, current: p === figma.currentPage };
+        pages.set(p, d);
+      }
+      return d;
+    };
+    const trees = [...ops.entries()].filter(([, op]) => op.op === "createTree");
+    const overPages = /* @__PURE__ */ new Map();
+    for (const [index, op] of trees) {
+      if (op.createPage !== true || op.page === void 0 || newPages.has(op.page) || overPages.has(op.page)) continue;
+      if (matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]).kind !== "none") continue;
+      if (newPages.size >= MAX_NEW_PAGES) {
+        overPages.set(op.page, index);
+        problems.push({ index, op: op.op, message: "the batch makes " + (newPages.size + overPages.size) + " pages; one batch makes at most " + MAX_NEW_PAGES + " (send the rest in another)" });
+        continue;
+      }
+      newPages.set(op.page, { name: op.page, node: null, make: true, current: false });
+    }
+    const pageFor = /* @__PURE__ */ new Map();
+    for (const [index, op] of trees) {
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      if (op.page === void 0) {
+        const s = op.section !== void 0 ? await sectionById(op.section) : null;
+        const on = s ? pageHolding(s) : null;
+        pageFor.set(index, pageOf4(on || figma.currentPage));
+        continue;
+      }
+      const m = matchByName(op.page, figma.root.children, (p) => p.name, (p) => [p.id]);
+      if (m.kind === "one") {
+        pageFor.set(index, pageOf4(m.item));
+        continue;
+      }
+      if (m.kind === "many") {
+        bad("page '" + op.page + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map(label3).join(", "));
+        continue;
+      }
+      const planned = newPages.get(op.page);
+      if (planned) {
+        pageFor.set(index, planned);
+        continue;
+      }
+      const over = overPages.get(op.page);
+      if (over !== void 0) {
+        if (over !== index) bad("page '" + op.page + "' matches no page in this file, and the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "); send the ops for it in another batch");
+        continue;
+      }
+      if (idLike(op.page)) {
+        bad("page '" + op.page + "' matches no page in this file; " + await pageIdIs(op.page));
+        continue;
+      }
+      const make = newPages.size >= MAX_NEW_PAGES ? "; the batch already makes the most pages one batch may (" + MAX_NEW_PAGES + "): to make it, send it with `createPage: true` in another batch" : "; to make it, add `createPage: true`";
+      bad("page '" + op.page + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
+    }
+    for (const d of pages.values()) {
+      if (!d.node || !inDocument(d.node)) continue;
+      try {
+        await d.node.loadAsync();
+      } catch (e) {
+        if (inDocument(d.node)) throw e;
+      }
+    }
+    for (const [index, page] of pageFor) {
+      if (!page.node || inDocument(page.node)) continue;
+      problems.push({ index, op: "createTree", message: noNode(page.node.id, "page") });
+      pageFor.delete(index);
+    }
+    const sectionsOn = /* @__PURE__ */ new Map();
+    const sectionsOf = (p) => {
+      let list = sectionsOn.get(p);
+      if (!list) {
+        list = p.node ? p.node.findAllWithCriteria({ types: ["SECTION"] }) : [];
+        sectionsOn.set(p, list);
+      }
+      return list;
+    };
+    const existing = /* @__PURE__ */ new Map();
+    const sectionOf = (s, page) => {
+      let d = existing.get(s);
+      if (!d) {
+        d = { name: s.name, node: s, make: false, page };
+        existing.set(s, d);
+      }
+      return d;
+    };
+    const newSections = /* @__PURE__ */ new Map();
+    const overSections = /* @__PURE__ */ new Map();
+    let madeSections = 0, overCount = 0;
+    for (const [index, op] of trees) {
+      const page = pageFor.get(index);
+      if (!page || op.createSection !== true || op.section === void 0) continue;
+      const planned = newSections.get(page) || /* @__PURE__ */ new Map();
+      const over = overSections.get(page) || /* @__PURE__ */ new Map();
+      if (planned.has(op.section) || over.has(op.section)) continue;
+      if (matchByName(op.section, sectionsOf(page), (s) => s.name, (s) => [s.id]).kind !== "none") continue;
+      if (madeSections >= MAX_NEW_SECTIONS) {
+        over.set(op.section, index);
+        overSections.set(page, over);
+        overCount++;
+        problems.push({ index, op: op.op, message: "the batch makes " + (madeSections + overCount) + " sections; one batch makes at most " + MAX_NEW_SECTIONS + " (send the rest in another)" });
+        continue;
+      }
+      planned.set(op.section, { name: op.section, node: null, make: true, page });
+      newSections.set(page, planned);
+      madeSections++;
+    }
+    for (const [index, op] of trees) {
+      const page = pageFor.get(index);
+      if (!page) continue;
+      if (op.section === void 0) {
+        dests.set(index, { page, section: null });
+        continue;
+      }
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const m = matchByName(op.section, sectionsOf(page), (s) => s.name, (s) => [s.id]);
+      if (m.kind === "one") {
+        dests.set(index, { page, section: sectionOf(m.item, page) });
+        continue;
+      }
+      if (m.kind === "many") {
+        bad("section '" + op.section + "' matches " + m.matches.length + " sections on " + pageWords(page) + " \u2014 pass one's id: " + m.matches.slice(0, 3).map(label3).join(", "));
+        continue;
+      }
+      const planned = newSections.get(page);
+      const made2 = planned ? planned.get(op.section) : void 0;
+      if (made2) {
+        dests.set(index, { page, section: made2 });
+        continue;
+      }
+      const miss = "section '" + op.section + "' matches no section on " + pageWords(page);
+      const pastLimit = overSections.get(page);
+      const over = pastLimit ? pastLimit.get(op.section) : void 0;
+      if (over !== void 0) {
+        if (over !== index) bad(miss + ", and the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "); send the ops for it in another batch");
+        continue;
+      }
+      if (nodeIdLike(op.section)) {
+        bad(miss + "; " + await idIs(op.section));
+        continue;
+      }
+      if (idLike(op.section)) {
+        bad(miss + "; " + await linkIdIs(op.section, page, op.page !== void 0));
+        continue;
+      }
+      const make = madeSections >= MAX_NEW_SECTIONS ? "; the batch already makes the most sections one batch may (" + MAX_NEW_SECTIONS + "): to make it, send it with `createSection: true` in another batch" : "; to make it, add `createSection: true`";
+      bad(miss + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") + make);
+    }
+    return { dests, problems };
+  }
+  async function pageIdIs(ref2) {
+    const colon = ref2.replace(/-/g, ":");
+    const looks = colon === ref2 ? "it looks like a node id" : "it looks like a node id as a link writes it";
+    let n = null;
+    try {
+      n = await nodeById(colon);
+    } catch {
+      n = null;
+    }
+    if (!n) return looks + ", and no layer of this file has " + (colon === ref2 ? "it" : "the id '" + colon + "'");
+    if (n.type === "PAGE") return looks + ": page '" + n.name + "' is '" + colon + "' \u2014 send `page: '" + colon + "'`";
+    return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a page";
+  }
+  async function idIs(ref2) {
+    let n = null;
+    try {
+      n = await nodeById(ref2);
+    } catch {
+      n = null;
+    }
+    if (!n) return "it looks like a node id, and no layer of this file has it";
+    if (n.type !== "SECTION") return "it is the id of '" + n.name + "' (" + n.type + "), not of a section";
+    const on = pageHolding(n);
+    return "it is the id of section '" + n.name + "'" + (on ? " on page '" + on.name + "'" : "") + " \u2014 leave `page` out, or name that page";
+  }
+  async function linkIdIs(ref2, page, pageNamed) {
+    const colon = ref2.replace(/-/g, ":");
+    if (colon === ref2) return idIs(ref2);
+    const looks = "it looks like a node id as a link writes it";
+    let n = null;
+    try {
+      n = await nodeById(colon);
+    } catch {
+      n = null;
+    }
+    if (!n) return looks + ", and no layer of this file has the id '" + colon + "'";
+    if (n.type !== "SECTION") return looks + ": '" + colon + "' is the id of '" + n.name + "' (" + n.type + "), not of a section";
+    const on = pageHolding(n);
+    const away = pageNamed && on && on !== page.node ? on : null;
+    return looks + ": section '" + n.name + "' is '" + colon + "' \u2014 send `section: '" + colon + "'`" + (away ? " and leave `page` out, or name page '" + away.name + "'" : "");
+  }
+  async function sectionById(ref2) {
+    if (!nodeIdLike(ref2)) return null;
+    let n = null;
+    try {
+      n = await nodeById(ref2);
+    } catch {
+      n = null;
+    }
+    return n && n.type === "SECTION" ? n : null;
+  }
+  function occupied(c) {
+    const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
+    const p = c.parent;
+    const origin = !p ? null : p.type === "PAGE" ? { x: 0, y: 0 } : "absoluteBoundingBox" in p ? p.absoluteBoundingBox : null;
+    return b && origin ? { x: b.x - origin.x, y: b.y - origin.y, width: b.width, height: b.height } : { x: c.x, y: c.y, width: c.width, height: c.height };
+  }
+  var overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  function footprint(w, h, turned) {
+    const t = turned && "relativeTransform" in turned ? turned.relativeTransform : null;
+    if (!Array.isArray(t)) return { dx: 0, dy: 0, width: w, height: h };
+    const [[a, c], [b, d]] = t;
+    const xs = [0, a * w, c * h, a * w + c * h];
+    const ys = [0, b * w, d * h, b * w + d * h];
+    const hundredth = (v) => Math.round(v * 100) / 100;
+    const x0 = Math.min(...xs), y0 = Math.min(...ys);
+    return { dx: hundredth(x0), dy: hundredth(y0), width: hundredth(Math.max(...xs) - x0), height: hundredth(Math.max(...ys) - y0) };
+  }
+  var wanted = (spec, fp) => ({ x: spec.x !== void 0 ? spec.x + fp.dx : void 0, y: spec.y !== void 0 ? spec.y + fp.dy : void 0 });
+  function wholePixels(v) {
+    const near3 = Math.round(v);
+    return near3 === v ? [v] : [near3, near3 > v ? Math.floor(v) : Math.ceil(v), v];
+  }
+  function anchored(spec, box, fp, held, floor = -Infinity) {
+    const clear = (vs, d, at3) => vs.filter((v) => v + d >= Math.min(floor, at3) - 1e-6);
+    const xs = spec.x !== void 0 ? [spec.x] : clear(wholePixels(box.x - fp.dx), fp.dx, box.x);
+    const ys = spec.y !== void 0 ? [spec.y] : clear(wholePixels(box.y - fp.dy), fp.dy, box.y);
+    for (const x of xs) {
+      for (const y of ys) {
+        const covers = { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height };
+        if (!held.some((b) => overlaps(covers, b))) return { x, y };
+      }
+    }
+    const first2 = (vs, none) => vs.length && vs[0] !== void 0 ? vs[0] : none;
+    return { x: first2(xs, Math.round(box.x - fp.dx)), y: first2(ys, Math.round(box.y - fp.dy)) };
+  }
+  function besideHeld(held, at3, w, h, pad, floor = -Infinity) {
+    if (!held.length) return { x: at3.x !== void 0 ? at3.x : pad, y: at3.y !== void 0 ? at3.y : pad };
+    const top = Math.max(floor, Math.min(...held.map((b) => b.y)));
+    if (at3.x === void 0) return { x: Math.max(floor, Math.max(...held.map((b) => b.x + b.width)) + PLACE_GAP), y: at3.y !== void 0 ? at3.y : top };
+    const x = at3.x;
+    if (at3.y !== void 0) return { x, y: at3.y };
+    if (!held.some((b) => overlaps({ x, y: top, width: w, height: h }, b))) return { x, y: top };
+    const column = held.filter((b) => b.x < x + w && x < b.x + b.width);
+    return { x, y: Math.max(floor, Math.max(...column.map((b) => b.y + b.height)) + PLACE_GAP) };
+  }
+  function grownBox(box, needW, needH) {
+    const w = Math.max(box.width, Math.ceil(needW));
+    const h = Math.max(box.height, Math.ceil(needH));
+    return w === box.width && h === box.height ? null : { x: box.x, y: box.y, width: w, height: h };
+  }
+  function stickingOut(name, section, start) {
+    const left = start.x < 0, top = start.y < 0;
+    if (!left && !top) return null;
+    const edges = left && top ? "left and top edges" : left ? "left edge" : "top edge";
+    return "'" + name + "' sticks out past the " + edges + " of section '" + section + "': what it covers starts at " + start.x + ", " + start.y + " in it, and a section grows only right and down to hold its frames";
+  }
+  var Canvas = class {
+    constructor(skip = "") {
+      this.holders = /* @__PURE__ */ new Map();
+      // What the other ops of a batch change on the canvas, so the review plans a later op beside it (the write reads the
+      // file each time, as the ops before it left it). A node's x/y are its parent's own: Figma keeps them when it moves.
+      /** Where layer `n` is on this canvas: the holder a plan moved it to (null: into neither a page nor a section), else
+       *  its parent's in the file (null when that is neither). */
+      this.moved = /* @__PURE__ */ new Map();
+      /** Each layer's x/y and size as the plan last set them (reshape), by id. */
+      this.shaped = /* @__PURE__ */ new Map();
+      this.skip = skip;
+    }
+    /** The holder of a page or section of the file. */
+    of(n) {
+      let h = this.holders.get(n);
+      if (h) return h;
+      h = { node: n, section: n.type === "SECTION", name: n.name, box: n.type === "SECTION" ? occupied(n) : { x: 0, y: 0, width: 0, height: 0 }, parent: null, items: null };
+      this.holders.set(n, h);
+      const p = n.type === "SECTION" ? n.parent : null;
+      if (p && (p.type === "PAGE" || p.type === "SECTION")) h.parent = this.of(p);
+      return h;
+    }
+    /** What `h` holds: its node's children but `skip`, read once (a section by its holder's box, so its growth shows). */
+    itemsOf(h) {
+      if (h.items) return h.items;
+      const items = [];
+      if (h.node) {
+        for (const c of h.node.children) if (c.id !== this.skip) items.push({ id: c.id, name: c.name, box: c.type === "SECTION" ? this.of(c).box : occupied(c) });
+      }
+      h.items = items;
+      return items;
+    }
+    /** Where `dest` lands: its section, else its page; a section still to make is put where makeDest will make it, and
+     *  holds nothing. Null on a page still to make. */
+    holderFor(dest) {
+      const page = dest.page.node;
+      if (!page) return null;
+      const s = dest.section;
+      if (!s) return this.of(page);
+      if (s.node) return this.of(s.node);
+      const planned = this.holders.get(s);
+      if (planned) return planned;
+      const on = this.of(page);
+      const at3 = this.sectionAt(page);
+      const h = { node: null, section: true, name: s.name, box: { x: at3.x, y: at3.y, width: NEW_SECTION, height: NEW_SECTION }, parent: on, items: [] };
+      this.holders.set(s, h);
+      this.itemsOf(on).push({ id: "", name: s.name, box: h.box });
+      return h;
+    }
+    /** Where a section the batch makes goes on `page`: beside what the page holds, as a new frame does (it is made
+     *  NEW_SECTION a side and grows to hold the frames placed in it). */
+    sectionAt(page) {
+      return this.onPage(this.of(page), {}, footprint(NEW_SECTION, NEW_SECTION));
+    }
+    /** Where a top-level node covering `fp` lands on a page (its x/y): the spec's own x/y, the rest so what it covers is
+     *  beside what is on the page (besideHeld). */
+    onPage(h, spec, fp) {
+      if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
+      const held = this.itemsOf(h).map((i) => i.box);
+      return anchored(spec, besideHeld(held, wanted(spec, fp), fp.width, fp.height, 0), fp, held);
+    }
+    /** Where a node covering `fp` lands in a section (its x/y, in the section's coordinates), by the spec's x/y and what
+     *  the section holds: with neither, beside what it holds, or on a new row below when that would run the section into
+     *  a neighbour; with one, as besideHeld says. What it covers starts at the section's margin at least, on each side the
+     *  spec does not give (a row starts at the leftmost layer's edge, or at the margin when that is further left). */
+    inSection(h, spec, fp) {
+      if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
+      const held = this.itemsOf(h).map((i) => i.box);
+      const w = fp.width, ht = fp.height;
+      if (!held.length || spec.x !== void 0 || spec.y !== void 0) return anchored(spec, besideHeld(held, wanted(spec, fp), w, ht, SECTION_PAD, SECTION_PAD), fp, held, SECTION_PAD);
+      const beside = besideHeld(held, {}, w, ht, SECTION_PAD, SECTION_PAD);
+      if (!this.runsInto(h, beside, w, ht)) return anchored(spec, beside, fp, held, SECTION_PAD);
+      const below2 = { x: Math.max(SECTION_PAD, Math.min(...held.map((b) => b.x))), y: Math.max(SECTION_PAD, Math.max(...held.map((b) => b.y + b.height)) + PLACE_GAP) };
+      return anchored(spec, this.runsInto(h, below2, w, ht) ? beside : below2, fp, held, SECTION_PAD);
+    }
+    /** Whether section `h`, grown to hold a box of `w`×`ht` at `at`, would run into one of its neighbours. */
+    runsInto(h, at3, w, ht) {
+      const grown = grownBox(h.box, at3.x + w + SECTION_PAD, at3.y + ht + SECTION_PAD);
+      return !!grown && this.neighbourHit(h, grown) !== null;
+    }
+    /** The first of section `h`'s neighbours (what its holder holds besides it) that `box` runs into and its own box did
+     *  not. */
+    neighbourHit(h, box) {
+      if (!h.parent) return null;
+      for (const c of this.itemsOf(h.parent)) if (c.box !== h.box && overlaps(box, c.box) && !overlaps(h.box, c.box)) return c;
+      return null;
+    }
+    /** Where a node named `name`, covering `fp`, lands by `spec`'s x/y in what `dest` names (null on a page still to
+     *  make), and what that does: in a section, the section and each one around it grow to hold it with their margin
+     *  (innermost first); one that then runs into a neighbour, and what it covers starting past the section's left or top
+     *  edge, are warnings. Nothing changes (but a section still to make, put on the canvas where makeDest will make it). */
+    place(dest, spec, fp, name) {
+      const h = this.holderFor(dest);
+      if (!h) return null;
+      const at3 = h.section ? this.inSection(h, spec, fp) : this.onPage(h, spec, fp);
+      const placed = { holder: h, x: at3.x, y: at3.y, fp, name, grows: [], warnings: [] };
+      if (!h.section) return placed;
+      const out = stickingOut(name, h.name, { x: at3.x + fp.dx, y: at3.y + fp.dy });
+      if (out) placed.warnings.push(out);
+      let right = at3.x + fp.dx + fp.width;
+      let bottom = at3.y + fp.dy + fp.height;
+      for (let s = h; s && s.section; s = s.parent) {
+        const box = grownBox(s.box, right + SECTION_PAD, bottom + SECTION_PAD);
+        if (box) {
+          const hit = this.neighbourHit(s, box);
+          placed.grows.push({ holder: s, width: box.width, height: box.height });
+          if (hit) placed.warnings.push("section '" + s.name + "' grew to " + box.width + "\xD7" + box.height + " to hold '" + name + "' and now overlaps '" + hit.name + "'");
+        }
+        const b = box || s.box;
+        right = b.x + b.width;
+        bottom = b.y + b.height;
+      }
+      return placed;
+    }
+    /** Put a placed node on the canvas, and grow the sections it grows: what the next op is placed beside. */
+    commit(p) {
+      this.itemsOf(p.holder).push({ id: "", name: p.name, box: { x: p.x + p.fp.dx, y: p.y + p.fp.dy, width: p.fp.width, height: p.fp.height } });
+      for (const g of p.grows) {
+        g.holder.box.width = g.width;
+        g.holder.box.height = g.height;
+      }
+    }
+    holderOfNode(n) {
+      if (this.moved.has(n.id)) return this.moved.get(n.id) || null;
+      const p = n.parent;
+      return p && (p.type === "PAGE" || p.type === "SECTION") ? this.of(p) : null;
+    }
+    /** What `n` covers at `x`, `y` in its holder, `w`×`h` turned as it is (a section: its holder's box, at x/y). */
+    itemFor(n, x, y, w, h) {
+      if (n.type === "SECTION") {
+        const b = this.of(n).box;
+        b.x = x;
+        b.y = y;
+        b.width = w;
+        b.height = h;
+        return { id: n.id, name: n.name, box: b };
+      }
+      const fp = footprint(w, h, n);
+      return { id: n.id, name: n.name, box: { x: x + fp.dx, y: y + fp.dy, width: fp.width, height: fp.height } };
+    }
+    /** Layer `n`'s x/y and size on this canvas: as an earlier op of the plan set them (reshape), else the file's — so a
+     *  later op that sets only one side (a patch's `box: {h}`) keeps the other as the earlier op left it. */
+    geometry(n) {
+      return this.shaped.get(n.id) || { x: n.x, y: n.y, w: n.width, h: n.height };
+    }
+    /** Layer `n` of the file (a keyed re-send's root, a patched layer) now at `x`, `y` in its holder and `w`×`h`; nothing
+     *  more when it is in neither a page nor a section (what it is in keeps its box). */
+    reshape(n, x, y, w, h) {
+      this.shaped.set(n.id, { x, y, w, h });
+      const holder = this.holderOfNode(n);
+      if (!holder) return;
+      const items = this.itemsOf(holder);
+      const i = items.findIndex((it) => it.id === n.id);
+      if (i >= 0) items[i] = this.itemFor(n, x, y, w, h);
+    }
+    /** Layer `n` of the file moved into `to` (at its own x/y and size, which a move keeps): off the page or section it was
+     *  in, onto `to` when that is a page or section. */
+    move(n, to) {
+      const from = this.holderOfNode(n);
+      let item = null;
+      if (from) {
+        const items = this.itemsOf(from);
+        const i = items.findIndex((it) => it.id === n.id);
+        if (i >= 0) item = items.splice(i, 1)[0] || null;
+      }
+      const into = to.type === "PAGE" || to.type === "SECTION" ? this.of(to) : null;
+      this.moved.set(n.id, into);
+      if (n.type === "SECTION") this.of(n).parent = into;
+      if (!into) return;
+      const g = this.geometry(n);
+      this.itemsOf(into).push(item ? { id: n.id, name: n.name, box: item.box } : this.itemFor(n, g.x, g.y, g.w, g.h));
+    }
+    /** A layer the batch makes in `parent` (a legacy createFrame), covering `box` there; nothing unless `parent` is a page
+     *  or a section. */
+    add(parent, name, box) {
+      if (parent.type === "PAGE" || parent.type === "SECTION") this.itemsOf(this.of(parent)).push({ id: "", name, box });
+    }
+    /** Where the origin of `h` (a page or section) is on its page. */
+    originOf(h) {
+      let x = 0, y = 0;
+      for (let s = h; s && s.section; s = s.parent) {
+        x += s.box.x;
+        y += s.box.y;
+      }
+      return { x, y };
+    }
+  };
+  function land(root, dest, spec) {
+    const page = dest.page.node;
+    if (!page) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+    const section = dest.section ? dest.section.node : null;
+    if (dest.section && !section) throw new Error("the section '" + dest.section.name + "' was not made before the batch built in it");
+    const placed = new Canvas(root.id).place(dest, spec, footprint(root.width, root.height, root), root.name);
+    if (!placed) throw new Error("the page '" + dest.page.name + "' was not made before the batch built on it");
+    (section || page).appendChild(root);
+    root.x = placed.x;
+    root.y = placed.y;
+    const grown = [];
+    const undo = (pass = newRestorePass()) => {
+      const kept = [];
+      for (const g of grown.slice().reverse()) {
+        if (g.s.removed) continue;
+        const held = pass.kept.get(g.s) || /* @__PURE__ */ new Set();
+        const heldW = held.has("width"), heldH = held.has("height");
+        const keepW = g.toW !== g.w && !heldW && !near2(g.s.width, g.toW), keepH = g.toH !== g.h && !heldH && !near2(g.s.height, g.toH);
+        const w = keepW || heldW || g.toW === g.w ? g.s.width : g.w, h = keepH || heldH || g.toH === g.h ? g.s.height : g.h;
+        if (!near2(w, g.s.width) || !near2(h, g.s.height)) g.s.resizeWithoutConstraints(w, h);
+        if (keepW) held.add("width");
+        if (keepH) held.add("height");
+        if (held.size) pass.kept.set(g.s, held);
+        if (keepW || keepH) {
+          kept.push("the section " + label3(g.s) + " was resized after this batch grew it to " + g.toW + "\xD7" + g.toH + ", so it keeps its " + (keepW && keepH ? "size, " + g.s.width + "\xD7" + g.s.height : keepW ? "width, " + g.s.width : "height, " + g.s.height));
+        }
+      }
+      return kept;
+    };
+    try {
+      for (const g of placed.grows) {
+        const s = g.holder.node;
+        if (!s || s.type !== "SECTION") continue;
+        grown.push({ s, w: s.width, h: s.height, toW: g.width, toH: g.height });
+        s.resizeWithoutConstraints(g.width, g.height);
+      }
+    } catch (e) {
+      try {
+        undo();
+      } catch {
+      }
+      throw e;
+    }
+    const left = () => {
+      const out = [];
+      for (const g of grown) {
+        if (g.s.removed) continue;
+        const grewW = g.toW !== g.w, grewH = g.toH !== g.h;
+        const sameW = grewW && near2(g.s.width, g.toW), sameH = grewH && near2(g.s.height, g.toH);
+        if (!sameW && !sameH) continue;
+        const whole = (sameW || !grewW) && (sameH || !grewH);
+        out.push("the section " + label3(g.s) + " it grew to " + g.toW + "\xD7" + g.toH + " keeps " + (whole ? "that size" : sameW ? "the width it grew to, " + g.toW : "the height it grew to, " + g.toH));
+      }
+      return out;
+    };
+    return { undo, left, warnings: placed.warnings };
+  }
+  var near2 = (a, b) => Math.abs(a - b) < 5e-3;
+  var NEW_SECTION = SECTION_PAD * 2;
+  var NEW_FRAME = 100;
+  function leftIn(n, ours) {
+    for (const c of n.children) {
+      if (c.removed) continue;
+      if (!ours.has(c.id)) return c;
+      const below2 = c.type !== "INSTANCE" && "children" in c ? leftIn(c, ours) : null;
+      if (below2) return below2;
+    }
+    return null;
+  }
+  async function makeDest(dest, consent2, changes) {
+    const out = {};
+    const p = dest.page;
+    if (!p.node) {
+      consent2();
+      const page = figma.createPage();
+      p.node = page;
+      const made2 = {
+        applied: { pageCreated: page.id },
+        kind: "created page",
+        what: "the new page " + label3(page),
+        on: page,
+        made: true,
+        async restore(allowed2, ours) {
+          if (page.removed) return;
+          const check = () => {
+            if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+            const left = leftIn(page, ours);
+            if (left) throw new Error("the page " + label3(page) + " holds " + label3(left) + ", which this batch did not make; it stays");
+          };
+          check();
+          if (figma.currentPage === page) {
+            const other = figma.root.children.filter((x) => x !== page)[0];
+            if (other) await figma.setCurrentPageAsync(other);
+            if (page.removed) return;
+            check();
+            if (figma.currentPage === page) throw new Error("the page " + label3(page) + " is open again in Figma; it stays");
+          }
+          page.remove();
+        }
+      };
+      changes.push(made2);
+      page.name = p.name;
+      made2.what = "the new page " + label3(page);
+      await page.loadAsync();
+      consent2();
+      out.page = page.id;
+    }
+    const s = dest.section;
+    if (s && !s.node) {
+      const page = p.node;
+      consent2();
+      const section = figma.createSection();
+      s.node = section;
+      const made2 = {
+        applied: { sectionCreated: section.id },
+        kind: "created section",
+        what: "the new section " + label3(section),
+        on: section,
+        made: true,
+        owns: [section],
+        restore(_allowed, ours) {
+          if (section.removed) return;
+          const left = leftIn(section, ours);
+          if (left) throw new Error("the section " + label3(section) + " holds " + label3(left) + ", which this batch did not make; it stays");
+          section.remove();
+        }
+      };
+      changes.push(made2);
+      section.name = s.name;
+      made2.what = "the new section " + label3(section);
+      const at3 = new Canvas(section.id).sectionAt(page);
+      page.appendChild(section);
+      section.x = at3.x;
+      section.y = at3.y;
+      section.resizeWithoutConstraints(NEW_SECTION, NEW_SECTION);
+      out.section = section.id;
+    }
+    return out;
+  }
+  function landing(canvas, dest, spec, source) {
+    const p = dest.page;
+    const pageText = p.make ? " on a new page '" + p.name + "'" : p.current ? "" : " on page '" + p.name + "'";
+    const page = p.node;
+    const s = dest.section;
+    const size2 = builtSize(spec, NEW_FRAME);
+    const fp = footprint(size2.w !== void 0 ? size2.w : source ? source.width : NEW_FRAME, size2.h !== void 0 ? size2.h : source ? source.height : NEW_FRAME, source);
+    const placed = canvas.place(dest, spec, fp, spec.name || "");
+    if (!page || !placed) return { lands: s ? "in a new section '" + s.name + "'" + pageText : pageText.slice(1), spot: null };
+    canvas.commit(placed);
+    const origin = canvas.originOf(placed.holder);
+    const spot = { pageId: page.id, x: origin.x + placed.x, y: origin.y + placed.y };
+    if (s) return { lands: "in " + (s.node ? "" : "a new ") + "section '" + s.name + "'" + pageText, spot };
+    const beside = spec.x === void 0 && spec.y === void 0 && page.children.length > 0;
+    return { lands: (beside ? "right of the existing frames" : "at " + placed.x + ", " + placed.y) + pageText, spot };
+  }
+  function pageHolding(n) {
+    let p = n.parent;
+    while (p && p.type !== "PAGE") p = p.parent;
+    return p && p.type === "PAGE" ? p : null;
+  }
+
+  // src/tree.ts
   async function resolveTreeOps(ops, bound = /* @__PURE__ */ new Map()) {
     const targets = /* @__PURE__ */ new Map();
     const specs = /* @__PURE__ */ new Map();
@@ -9409,8 +10140,8 @@
       let p = loaded3.get(key);
       if (!p) {
         p = figma.loadFontAsync({ family, style: weight }).then(() => null, async () => {
-          const near2 = nearestNames(family + " " + weight, await availableNames());
-          return "font '" + family + " " + weight + "' is not available in this file" + (near2.length ? "; closest: " + quoteList(near2) : "");
+          const near3 = nearestNames(family + " " + weight, await availableNames());
+          return "font '" + family + " " + weight + "' is not available in this file" + (near3.length ? "; closest: " + quoteList(near3) : "");
         });
         loaded3.set(key, p);
       }
@@ -9422,6 +10153,8 @@
       if (c && !planned.has(c.name)) planned.set(c.name, index);
     }
     setPlannedComponents(planned);
+    const places = await resolveDests(ops);
+    problems.push(...places.problems);
     for (const [index, op] of ops.entries()) {
       if (op.op !== "createTree") continue;
       const bad = (message) => {
@@ -9433,8 +10166,7 @@
         bad("the tree spec did not pass its check");
         continue;
       }
-      const page = resolvePage(op.page);
-      if ("error" in page) bad(page.error);
+      const dest = places.dests.get(index);
       const fontErrors = (await Promise.all(summary.fonts.map((f) => load(f.family, f.weight)))).filter((e) => e !== null);
       for (const e of fontErrors) bad(e);
       const axisErrors = fontErrors.length ? [] : variationProblems(spec, labels);
@@ -9445,10 +10177,13 @@
       const clones = copies.length ? await resolveClones(copies, (f) => load(f.family, f.style), bad, fontsLater) : /* @__PURE__ */ new Map();
       for (const c of copies) cloneRefs.push(...cloneUses(index, c.s, c.path));
       for (const c of clones.values()) cloneTargets.push(c);
-      if ("error" in page || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
-      if (goneFrom(page.ok, bad, "page")) continue;
-      await page.ok.loadAsync();
-      targets.set(index, { spec, labels, clones, page: page.ok, summary, refs: noRefs(), ...b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {} });
+      if (!dest || fontErrors.length || axisErrors.length || clones.size !== copies.length) continue;
+      const gone = destGone(dest);
+      if (gone !== null) {
+        bad(gone);
+        continue;
+      }
+      targets.set(index, { spec, labels, clones, dest, summary, refs: noRefs(), landed: [], ...b ? { bind: bindCounts(b.outcome, summary.instances, summary.unbound) } : {} });
     }
     const r = await resolveRefs(treeUses(specs).concat(cloneRefs), (f) => load(f.family, f.style));
     problems.push(...r.problems);
@@ -9484,13 +10219,6 @@
     }
     return out;
   }
-  function resolvePage(ref2) {
-    if (ref2 === void 0) return { ok: figma.currentPage };
-    const m = matchByName(ref2, figma.root.children, (p) => p.name, (p) => [p.id]);
-    if (m.kind === "one") return { ok: m.item };
-    if (m.kind === "many") return { error: "page '" + ref2 + "' matches " + m.matches.length + " pages \u2014 pass one's id: " + m.matches.slice(0, 3).map((p) => "'" + p.name + "' (" + p.id + ")").join(", ") };
-    return { error: "page '" + ref2 + "' matches no page in this file" + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
-  }
   async function buildTree(t, consent2, changes) {
     const comp = componentRootOf(t.spec);
     if (comp) return buildComponent(t, comp.type, comp.name, consent2, changes);
@@ -9506,15 +10234,14 @@
     const key = t.spec.key;
     const indexWas = key !== void 0 ? readIndex(key) : "";
     let shown4 = true;
+    let landed = null;
     try {
       shown4 = rootCopy ? root.visible : t.spec.hidden !== true;
       root.visible = false;
       if (!rootCopy && root.type === "FRAME") applyFrame(root, t.spec, null, made2);
-      await finish(made2, START, holding(t.page, consent2, "page"));
-      const { x, y } = placement(t.page, root.id, t.spec);
-      t.page.appendChild(root);
-      root.x = x;
-      root.y = y;
+      await finish(made2, START, holdingDest(t.dest, consent2));
+      landed = land(root, t.dest, t.spec);
+      t.landed.push(...landed.warnings);
       root.visible = shown4;
       if (key !== void 0) {
         stampAll(made2, key);
@@ -9523,8 +10250,15 @@
       markCreated(root);
     } catch (e) {
       discard([[root, "the unfinished tree"]], made2, START, "created tree", changes);
+      if (landed) {
+        try {
+          landed.undo();
+        } catch {
+        }
+      }
       throw e;
     }
+    const grew = landed;
     const applied = { id: root.id, created: createdCount(made2) };
     if (key !== void 0) applied.key = key;
     if (made2.handles.size) applied.handles = handleRecord(made2.handles);
@@ -9537,21 +10271,30 @@
       on: root,
       made: true,
       owns,
+      // Deleted with no put-back run for it ("Allow edits" off): the sections it grew may still be the size it gave them.
+      leaves: () => leftOf(grew),
       // Every node the build made, not only the root: a layer the designer moved out of the tree since is the batch's too.
       // Run even when the root is gone (write-batch.ts restoreChanges): the key's earlier result goes back in the index.
       // One of them holding a layer the batch did not make (the designer's, moved into it): all of it stays (node-lookup.ts
       // takeBack throws first). One another op of the batch made is the batch's: it goes with it (`ours`).
-      restore(_allowed, ours) {
+      restore(_allowed, ours, pass) {
         takeBack(owns, ours);
         if (key !== void 0 && readIndex(key) === root.id) writeIndex(key, indexWas);
+        const kept = grew ? grew.undo(pass) : [];
+        return kept.length ? kept.join("; ") : void 0;
       }
     };
+  }
+  function leftOf(grew) {
+    const left = grew ? grew.left() : [];
+    return left.length ? left.join("; ") : null;
   }
   async function buildComponent(t, type, name, consent2, changes) {
     const made2 = newMade(t.refs, t.clones);
     const key = componentKey(name);
     const parts = [];
     let root = null;
+    let landed = null;
     try {
       if (type === "COMPONENT") {
         const c = figma.createComponent();
@@ -9580,13 +10323,11 @@
         }
         arrangeVariants(set, t.spec, null);
       }
-      await finish(made2, START, holding(t.page, consent2, "page"));
+      await finish(made2, START, holdingDest(t.dest, consent2));
       const keys = addDefs(root, fileDefs(t.spec, t.refs));
       wireAll(made2.pairs, keys);
-      const { x, y } = placement(t.page, root.id, t.spec);
-      t.page.appendChild(root);
-      root.x = x;
-      root.y = y;
+      landed = land(root, t.dest, t.spec);
+      t.landed.push(...landed.warnings);
       root.visible = t.spec.hidden !== true;
       stampAll(made2, key);
       markCreated(root);
@@ -9596,11 +10337,29 @@
       if (made2.handles.size) applied.handles = handleRecord(made2.handles);
       if (t.summary.unbound) applied.unbound = t.summary.unbound;
       const owns = [root, ...madeNodes(made2)];
-      return { applied, kind: "created component", what: "the component '" + name + "' (" + root.id + ")", on: root, made: true, owns, restore(_allowed, ours) {
-        takeBack(owns, ours);
-      } };
+      const grew = landed;
+      return {
+        applied,
+        kind: "created component",
+        what: "the component '" + name + "' (" + root.id + ")",
+        on: root,
+        made: true,
+        owns,
+        leaves: () => leftOf(grew),
+        restore(_allowed, ours, pass) {
+          takeBack(owns, ours);
+          const kept = grew.undo(pass);
+          return kept.length ? kept.join("; ") : void 0;
+        }
+      };
     } catch (e) {
       discard(parts.slice().reverse().map((p) => [p, p === root ? "the unfinished component" : "the unfinished variant"]), made2, START, "created component", changes);
+      if (landed) {
+        try {
+          landed.undo();
+        } catch {
+        }
+      }
       throw e;
     }
   }
@@ -9729,38 +10488,15 @@
     for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
     return out;
   }
-  function occupied(c) {
-    const b = "absoluteBoundingBox" in c ? c.absoluteBoundingBox : null;
-    return b ? b : { x: c.x, y: c.y, width: c.width, height: c.height };
-  }
   function treeGone(t) {
-    if (!inDocument(t.page)) return noNode(t.page.id, "page");
+    const dest = destGone(t.dest);
+    if (dest !== null) return dest;
     if (t.update && !inDocument(t.update.root)) return noNode(t.update.root.id);
     for (const c of t.clones.values()) {
       if (!inDocument(c.source)) return noNode(c.source.id);
       for (const e of c.edits) if (!inDocument(e.node)) return noNode(e.node.id);
     }
     return null;
-  }
-  function landingSpot(t) {
-    const at3 = placement(t.page, "", t.spec);
-    const beside = !(t.spec.x !== void 0 && t.spec.y !== void 0) && t.page.children.length > 0;
-    return { page: t.page, x: at3.x, y: at3.y, beside };
-  }
-  function placement(page, rootId, spec) {
-    if (spec.x !== void 0 && spec.y !== void 0) return { x: spec.x, y: spec.y };
-    let right = null;
-    let top = null;
-    for (const c of page.children) {
-      if (c.id === rootId) continue;
-      const b = occupied(c);
-      right = right === null ? b.x + b.width : Math.max(right, b.x + b.width);
-      top = top === null ? b.y : Math.min(top, b.y);
-    }
-    return {
-      x: spec.x !== void 0 ? spec.x : right === null ? 0 : Math.round(right + PLACE_GAP),
-      y: spec.y !== void 0 ? spec.y : top === null ? 0 : Math.round(top)
-    };
   }
   var ALIGN_MAIN2 = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", "space-between": "SPACE_BETWEEN", "space-evenly": "SPACE_EVENLY", "space-around": "SPACE_AROUND" };
   var ALIGN_CROSS2 = { "flex-start": "MIN", center: "CENTER", "flex-end": "MAX", baseline: "BASELINE" };
@@ -9868,8 +10604,7 @@
       if (l.reverseZ) f.itemReverseZIndex = true;
       if (s.strokesInLayout) f.strokesIncludedInLayout = true;
     }
-    const w = s.box ? s.box.w : l && l.width;
-    const h = s.box ? s.box.h : l && l.height;
+    const { w, h } = givenSize(s);
     if (w !== void 0 && h !== void 0) f.resize(w, h);
     else if (w !== void 0 || h !== void 0) f.resize(w !== void 0 ? w : f.width, h !== void 0 ? h : f.height);
     if (l && l.display === "flex" || parent && parent.layoutMode !== "NONE") {
@@ -10058,10 +10793,10 @@
         if (planned && m.kind === "none") return { error: "style '" + ref2 + "' is new in this batch (" + plannedWhere(planned) + "): give its fields in that row" };
         if (m.kind === "one") return { ok: m.item };
         if (m.kind === "many") return { error: "style '" + ref2 + "' matches " + m.matches.length + " styles \u2014 pass one's key or id: " + m.matches.slice(0, 3).map((st) => "'" + st.name + "' (" + st.type.toLowerCase() + ", " + st.id + ")").join(", ") };
-        const near2 = nearestNames(ref2, pool.map((st) => st.name));
+        const near3 = nearestNames(ref2, pool.map((st) => st.name));
         const elsewhere = kind ? all.filter((st) => st.name === ref2)[0] : void 0;
         if (elsewhere) return { error: "'" + ref2 + "' is a " + elsewhere.type.toLowerCase() + " style, and these fields are a " + kind + " style's" };
-        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near2.length ? "; closest: " + quoteList(near2) : "") };
+        return { error: (kind ? kind + " " : "") + "style '" + ref2 + "' matches no style of this file (a library style is changed in its library)" + (near3.length ? "; closest: " + quoteList(near3) : "") };
       }
     };
   }
@@ -10745,7 +11480,7 @@
 
   // src/keyed.ts
   var isObj11 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  var label3 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var label4 = (n) => "'" + n.name + "' (" + n.id + ")";
   async function findResult(key) {
     const id = readIndex(key);
     if (!id) return null;
@@ -10788,6 +11523,14 @@
       if (f) return f;
     }
     return null;
+  }
+  function leaveOut(op, fields) {
+    const has2 = fields.filter((f) => op[f] !== void 0).map((f) => "`" + f + "`");
+    return "leave " + (has2.length > 1 ? has2.slice(0, -1).join(", ") + " and " + has2[has2.length - 1] : has2.join("")) + " out";
+  }
+  function onlyOne(ref2, items, item) {
+    const m = matchByName(ref2, items, (n) => n.name, (n) => [n.id]);
+    return m.kind === "one" && m.item === item;
   }
   async function resolveKeyed(ops, targets) {
     const problems = [];
@@ -10833,14 +11576,29 @@
         if ("ours" in found && await loadPageOf(found.ours) && inDocument(found.ours)) root = found.ours;
       } else root = await findResult(key);
       if (!root) continue;
-      if (op.page !== void 0 && goneFrom(t.page, bad, "page")) continue;
-      if (op.page !== void 0 && root.parent && root.parent.id !== t.page.id) {
-        bad(what + ": its result " + label3(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is \u2014 leave `page` out");
+      const namedPage = op.page !== void 0 ? t.dest.page.node : null;
+      if (namedPage && goneFrom(namedPage, bad, "page")) continue;
+      const namedSection = op.section !== void 0 && t.dest.section ? t.dest.section.node : null;
+      if (namedSection && goneFrom(namedSection, bad, "section")) continue;
+      const on = pageHolding(root);
+      if (op.page !== void 0 && on && on !== t.dest.page.node) {
+        bad(what + ": its result " + label4(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is \u2014 " + leaveOut(op, ["page", "createPage", "section", "createSection"]));
+        continue;
+      }
+      const inSection = root.parent && root.parent.type === "SECTION" ? root.parent : null;
+      const s = t.dest.section;
+      if (op.section !== void 0 && s && (!s.node || inSection !== s.node)) {
+        const away = on && on !== t.dest.page.node ? on : null;
+        const where = inSection ? " is in section '" + inSection.name + "'" + (away ? " on page '" + away.name + "'" : "") : " is not in a section";
+        const named2 = s.node ? ", not '" + s.name + "'" : ", but `section` '" + s.name + "' would be a new section on " + (t.dest.page.current ? "the current page '" : "page '") + t.dest.page.name + "'";
+        const same3 = !!inSection && s.name === inSection.name;
+        const page = !s.node && inSection ? idLike(inSection.name) || !(on && onlyOne(inSection.name, on.findAllWithCriteria({ types: ["SECTION"] }), inSection) && (!away || onlyOne(away.name, figma.root.children, away))) ? ", or name its section by its id: `section: '" + inSection.id + "'`" + (op.createSection === true ? " with no `createSection`" : "") : away ? same3 ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`" : same3 ? "" : ", or name its section: `section: '" + inSection.name + "'`" : "";
+        bad(what + ": its result " + label4(root) + where + named2 + "; an update stays where the result is \u2014 " + leaveOut(op, ["section", "createSection"]) + page);
         continue;
       }
       const old = readOld(root, key);
       if (!old) {
-        bad(what + ": the spec stored on its result " + label3(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
+        bad(what + ": the spec stored on its result " + label4(root) + " cannot be read; " + (comp ? "give the component another name to build it again" : "give the spec another key to build it again"));
         continue;
       }
       const plan = planUpdate(old, t.spec);
@@ -10848,11 +11606,11 @@
       for (const b of plan.builds) {
         if (!b.replaces) continue;
         const f = foreignIn(b.replaces, key);
-        if (f) bad(b.path + ": " + label3(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label3(f) + ", which this key did not build; move that layer out first");
+        if (f) bad(b.path + ": " + label4(b.replaces) + " is built anew (its type, component, font or a dropped property changed), but it holds " + label4(f) + ", which this key did not build; move that layer out first");
       }
       for (const r of plan.removals) {
         const f = foreignIn(r, key);
-        if (f) bad(what + ": " + label3(r) + " is no longer in the spec, but it holds " + label3(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
+        if (f) bad(what + ": " + label4(r) + " is no longer in the spec, but it holds " + label4(f) + ", which this " + (comp ? "component's spec" : "key") + " did not build; move that layer out, or keep the node in the spec");
       }
       const owner = root;
       const defs = comp && owner.type !== "FRAME" ? planDefs(owner, t.spec, t.refs, bad) : null;
@@ -10872,7 +11630,7 @@
           for (const f of fonts) {
             const m = await loadFont(f);
             if (goneFrom(n, bad, "node", what + ": ")) break;
-            if (m) bad(what + ": " + label3(n) + " follows a property whose default changes, and its " + m);
+            if (m) bad(what + ": " + label4(n) + " follows a property whose default changes, and its " + m);
           }
         }
       }
@@ -10880,7 +11638,7 @@
       for (const [i, u] of plan.updates.entries()) {
         if (!u.set) continue;
         if (goneFrom(u.ref, bad, "node", u.path + ": ")) continue;
-        const say2 = (m) => bad(u.path + " (" + label3(u.ref) + "): " + m);
+        const say2 = (m) => bad(u.path + " (" + label4(u.ref) + "): " + m);
         const checked = checkPatch(u.set);
         if (checked.problems.length) {
           for (const m of checked.problems) say2(m);
@@ -10898,7 +11656,7 @@
   function checkRemoval(u, n) {
     if (!inDocument(n)) return;
     const f = foreignIn(n, u.key);
-    if (f) throw new Error(label3(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label3(f) + ", which that key did not build; nothing was removed");
+    if (f) throw new Error(label4(n) + " is to be removed (the spec with key '" + u.key + "' no longer has it), but it now holds " + label4(f) + ", which that key did not build; nothing was removed");
   }
   function touchedBy(u) {
     const out = /* @__PURE__ */ new Set([u.root.id]);
@@ -10989,9 +11747,9 @@
     changes.push({
       applied: { id: n.id },
       kind: "updated node",
-      what: "the place, clipping or size limits of " + label3(n),
+      what: "the place, clipping or size limits of " + label4(n),
       on: n,
-      async restore() {
+      async restore(allowed2) {
         for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
         if (size2) {
           if ((n.width !== size2.w || n.height !== size2.h) && "resize" in n) n.resize(size2.w, size2.h);
@@ -11001,6 +11759,7 @@
           if (boundTo(n, k) === id) continue;
           const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
           stillToRestore(n);
+          if (id && !allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
           n.setBoundVariable(k, v);
         }
       }
@@ -11062,7 +11821,7 @@
     const change = {
       applied: { id: parent.id },
       kind: "reordered frame",
-      what: "the order of the layers in " + label3(parent),
+      what: "the order of the layers in " + label4(parent),
       on: parent,
       restore: putBack4
     };
@@ -11123,7 +11882,7 @@
       const n = await buildSubtree(b.spec, b.parent, made2, consent2, changes);
       const mine = madeNodes(made2, from);
       const owns = [n, ...mine];
-      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label3(n), on: n, made: true, owns, restore(_allowed, ours) {
+      changes.push({ applied: { id: n.id }, kind: "created node", what: "the new node " + label4(n), on: n, made: true, owns, restore(_allowed, ours) {
         takeBack(owns, ours);
       } });
       stampAll(made2, key, from.pairs);
@@ -11149,7 +11908,7 @@
         const size2 = { w: root.width, h: root.height };
         const at3 = root.children.map((c) => [c, c.x, c.y]);
         const sizing2 = root.layoutMode !== "NONE" ? { h: root.layoutSizingHorizontal, v: root.layoutSizingVertical } : null;
-        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label3(root), on: root, restore() {
+        changes.push({ applied: { id: root.id }, kind: "arranged set", what: "the variants' places in " + label4(root), on: root, restore() {
           for (const [c, x, y] of at3) if (!c.removed) {
             c.x = x;
             c.y = y;
@@ -11259,6 +12018,19 @@
       if (warnings.indexOf(m) < 0) warnings.push(m);
     };
     const ops = [];
+    const canvas = new Canvas();
+    const treeAfter = (i) => list.slice(i + 1).some((o) => o.op === "createTree");
+    const loaded3 = async (n) => {
+      const pg = n.type === "PAGE" ? n : pageHolding(n);
+      if (pg) await pg.loadAsync();
+    };
+    const patched = async (i, n, set) => {
+      const b = set.box;
+      if (!b || typeof b !== "object" || !treeAfter(i)) return;
+      await loaded3(n);
+      const g = canvas.geometry(n);
+      canvas.reshape(n, g.x, g.y, typeof b.w === "number" ? b.w : g.w, typeof b.h === "number" ? b.h : g.h);
+    };
     for (const [i, op] of list.entries()) {
       const read = {};
       const ids = [];
@@ -11288,6 +12060,7 @@
               if (v !== void 0) old[k] = v;
             }
             read.old = old;
+            await patched(i, p.node, set);
             const main = mainComponentOf(p.node);
             if (main) {
               read.component = main.name;
@@ -11330,6 +12103,7 @@
             }
             read.old = old;
             if (mixed.length) read.mixed = mixed;
+            for (const p of r.matches) await patched(i, p.node, p.set);
             break;
           }
           case "setFill":
@@ -11392,12 +12166,26 @@
               for (const id of changed2) if (id !== root.id) ids.push(id);
               counted = changed2;
               if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
+              const u = tt.update.plan.updates.filter((x) => x.ref === root)[0];
+              if (u && treeAfter(i)) {
+                const box = u.set && u.set.box;
+                const moved = (f) => u.extras.indexOf(f) >= 0;
+                const sx = tt.spec.x, sy = tt.spec.y;
+                const g = canvas.geometry(root);
+                canvas.reshape(
+                  root,
+                  moved("x") && sx !== void 0 ? sx : g.x,
+                  moved("y") && sy !== void 0 ? sy : g.y,
+                  box && box.w !== void 0 ? box.w : g.w,
+                  box && box.h !== void 0 ? box.h : g.h
+                );
+              }
               break;
             }
-            const s = landingSpot(tt);
-            const page = s.page !== figma.currentPage ? " on page '" + s.page.name + "'" : "";
-            read.lands = (s.beside ? "right of the existing frames" : "at " + s.x + ", " + s.y) + page;
-            spot = { pageId: s.page.id, x: s.x, y: s.y };
+            const copied = tt.clones.get(tt.spec);
+            const l = landing(canvas, tt.dest, tt.spec, copied ? copied.source : null);
+            read.lands = l.lands;
+            if (l.spot) spot = l.spot;
             break;
           }
           case "createFrame":
@@ -11407,6 +12195,12 @@
               read.parent = p.name;
               ids.push(p.id);
             }
+            const into = op.parentId ? p : figma.currentPage;
+            if (op.op === "createFrame" && into && treeAfter(i)) {
+              await loaded3(into);
+              const w = op.width, h = op.height;
+              canvas.add(into, op.name || "Frame", w && h ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 100, height: 100 });
+            }
             break;
           }
           case "move": {
@@ -11415,6 +12209,11 @@
               read.name = m.node.name;
               read.parent = m.parent.name;
               ids.push(m.node.id);
+              if (treeAfter(i)) {
+                await loaded3(m.node);
+                await loaded3(m.parent);
+                canvas.move(m.node, m.parent);
+              }
             }
             break;
           }
@@ -11550,7 +12349,10 @@
   var bothBack = (a, b) => ({ failed: b.failed, gone: [...a.gone, ...b.gone], restored: b.restored });
   function failedAfter(failed, earlier) {
     if (!earlier || !earlier.gone.length) return failed;
-    return { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" };
+    return carryKept(failed, { ...failed, error: (failed.error || "") + " (When a preview of it was put back earlier, " + earlier.gone.join("; ") + ".)" });
+  }
+  function backFailed(failed, card) {
+    return landedResult(failedAfter(failed, card.back), card.landed);
   }
   var current3 = null;
   var seq = 0;
@@ -11668,7 +12470,7 @@
       card.previewed = null;
       post2(msg);
       if (back.failed) {
-        const f = landedResult(failedAfter(back.failed, card.back), card.landed);
+        const f = backFailed(back.failed, card);
         card.input.announce(f, card.landed);
         finish2(card, f);
         return;
@@ -11720,7 +12522,7 @@
         }
         if (!p.result.ok) {
           post2({ type: "review-end", id: card.ticket, end: "failed" });
-          const r = { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") };
+          const r = carryKept(p.result, { ...p.result, error: "The designer asked to preview this write on the canvas, and it failed: " + (p.result.error || "unknown error") });
           card.input.announce(r, p.landed);
           finish2(card, r);
           return;
@@ -11747,7 +12549,7 @@
       card.previewed = null;
       if (back.failed) {
         post2({ type: "review-end", id: card.ticket, end: "failed" });
-        const f = landedResult(failedAfter(back.failed, card.back), card.landed);
+        const f = backFailed(back.failed, card);
         card.input.announce(f, card.landed);
         finish2(card, f);
         return;
@@ -12005,10 +12807,11 @@
       }
     }
     for (const p of pages) {
+      if (goneFrom(p, bad, "page")) continue;
       try {
         await loadPage(p);
       } catch (e) {
-        bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
+        if (!goneFrom(p, bad, "page")) bad("page '" + p.name + "' could not be read (" + errMsg(e) + ")");
         continue;
       }
       if (goneFrom(p, bad, "page")) continue;
@@ -12791,7 +13594,7 @@
       if (found === null) continue;
       const chain = [from];
       for (let k = found; k !== void 0 && k !== from; k = back.get(k)) chain.splice(1, 0, k);
-      const label5 = async (k) => {
+      const label6 = async (k) => {
         const r = byKey.get(k);
         if (r) return "'" + r.name + "'";
         let v = null;
@@ -12803,7 +13606,7 @@
         return v ? "'" + v.name + "'" : k.slice(3);
       };
       const names = [];
-      for (const k of chain.concat([from])) names.push(await label5(k));
+      for (const k of chain.concat([from])) names.push(await label6(k));
       out.push({ index: start.op, op: "createVariables", message: "variables[" + start.index + "]: the aliases " + names.join(" \u2192 ") + " make a loop" });
       break;
     }
@@ -13112,9 +13915,9 @@
   }
 
   // src/structure.ts
-  var label4 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var label5 = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
-  var holds2 = (node, foreign) => "node " + label4(node) + " holds " + label4(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
+  var holds2 = (node, foreign) => "node " + label5(node) + " holds " + label5(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
   function instanceAround(n) {
     for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
     return null;
@@ -13125,10 +13928,10 @@
   }
   function placeProblem(node, parent, index) {
     const inst = instanceAround(parent);
-    if (inst) return "parent " + label4(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label4(inst)) + ", which cannot take new children";
-    if (within(parent, node)) return "parent " + label4(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+    if (inst) return "parent " + label5(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label5(inst)) + ", which cannot take new children";
+    if (within(parent, node)) return "parent " + label5(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
     const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
-    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label4(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label5(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
     return null;
   }
   async function resolveStructureOps(ops, changesBefore2) {
@@ -13147,12 +13950,12 @@
         continue;
       }
       if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad(label4(nd) + " is a " + nd.type + "; " + NOT_OURS);
+        bad(label5(nd) + " is a " + nd.type + "; " + NOT_OURS);
         continue;
       }
       const node = nd;
       if (!createdThisSession(node.id)) {
-        bad("node " + label4(node) + ": " + NOT_OURS);
+        bad("node " + label5(node) + ": " + NOT_OURS);
         continue;
       }
       if (op.op === "delete") {
@@ -13170,7 +13973,7 @@
         continue;
       }
       if (pd.type === "DOCUMENT" || !("insertChild" in pd)) {
-        bad("parent " + label4(pd) + " is a " + pd.type + ", which cannot have children");
+        bad("parent " + label5(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
@@ -13198,7 +14001,7 @@
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
-    if (!from || !("insertChild" in from)) throw new Error("node " + label4(node) + " has no parent to move it from");
+    if (!from || !("insertChild" in from)) throw new Error("node " + label5(node) + " has no parent to move it from");
     const at3 = from.children.indexOf(node);
     const x = node.x, y = node.y, w = node.width, h = node.height;
     const sizing2 = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
@@ -13208,7 +14011,7 @@
     return {
       applied,
       kind: "moved node",
-      what: "the move of " + label4(node),
+      what: "the move of " + label5(node),
       on: node,
       restore() {
         from.insertChild(Math.min(at3, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
@@ -13429,9 +14232,13 @@
         if (gone !== null) throw new Error(gone);
         consent();
         if (tree.update) return applyUpdate(tree, tree.update, consent, editsAllowedNow, changes);
+        const made2 = await makeDest(tree.dest, consent, changes);
+        const lost = destGone(tree.dest);
+        if (lost !== null) throw new Error(lost);
+        consent();
         const change = await buildTree(tree, consent, changes);
         changes.push(change);
-        return change.applied;
+        return made2.page || made2.section ? { ...change.applied, ...made2.page ? { pageCreated: made2.page } : {}, ...made2.section ? { sectionCreated: made2.section } : {} } : change.applied;
       }
       // Resolved up front: the node exists and has every field, the names resolved and the fonts loaded. The values it
       // replaces are kept; it puts itself back if it throws partway (patch.ts).
@@ -13548,7 +14355,9 @@
       say(WAITING, 0, false, false);
       return;
     }
-    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "") : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
+    const kept = r.ok ? void 0 : keptLine.get(r);
+    if (kept) text = kept.text + (some ? " " + kept.lead + " had already " + landedText(some) + "; that stays." : "");
+    else if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." + (some ? " It had already " + landedText(some) + "." : "") : "Design Twin refused an edit request \u2014 'Allow edits' is off." + (some ? " No layer changed, but it had already " + landedText(some) + "." : "");
     else if (r.refused === "rejected") text = some ? "Design Twin did not apply the edit request \u2014 it was rejected. No layer changed, but its preview had already " + landedText(some) + "." : "Design Twin did not apply the edit request \u2014 it was rejected. Nothing changed.";
     else if (r.refused === "unreviewed") text = "Design Twin did not apply an edit request: " + (r.error || "nobody reviewed it.");
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
@@ -13705,7 +14514,7 @@
       const off = revoked || !editsAllowedNow();
       const { restored, failed, gone: gone2, stays } = off ? { restored: [], failed: [], ...staying(changes) } : await restoreChanges(changes, editsAllowedNow);
       const kept = !revoked && off && stays.length ? "; 'Allow edits' was turned off before the batch could put back its " + countChanges(stays) + ", so they stay applied" : "";
-      return {
+      const r = {
         ok: false,
         // What stays: every change not put back (a patch stopped partway included), and the deletes already run.
         applied: [...stays.map((c) => c.applied), ...rows.filter((a) => a !== void 0 && a.deleted === true)],
@@ -13715,6 +14524,14 @@
         ...revoked ? { refused: "edits-off" } : {},
         ...restored.length ? { restored: restoredRows(restored.slice().reverse()) } : {}
       };
+      const left = gone2.filter(leftSomething).map(goneSentence);
+      if (left.length && !r.applied.length && !restored.length) {
+        keptLine.set(r, {
+          text: (revoked ? "Design Twin stopped \u2014 'Allow edits' was turned off" : "Design Twin could not apply an edit request (" + errMsg(e) + ")") + ", and not all of it could be put back: " + left.join("; ") + ".",
+          lead: "It"
+        });
+      }
+      return r;
     };
     const refuseLate = async (late) => {
       const firstLate = late[0];
@@ -13781,6 +14598,7 @@
         row.bind = bound.bind;
         delete row.unbound;
       }
+      if (bound) for (const m of bound.landed) warnings.push("ops[" + i + "]: " + m);
     }
     for (const [i, t] of structure.deletes) {
       const op = list[i];
@@ -13897,8 +14715,11 @@
     const { restored, failed, stays, gone } = await restoreChanges(changes, editsAllowedNow);
     commitUndo();
     const went = gone.map(goneSentence);
-    if (!failed.length) return { failed: null, gone: went, restored: restored.length };
-    return { failed: { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + " \u2014 what stays is listed in `applied`." }, gone: went, restored: restored.length };
+    const left = gone.filter(leftSomething).map(goneSentence);
+    if (!failed.length && !left.length) return { failed: null, gone: went, restored: restored.length };
+    const r = { ok: false, applied: stays.map((c) => c.applied), error: "The preview of this write could not all be put back: " + [...failed, ...went].join("; ") + (stays.length ? " \u2014 what stays is listed in `applied`." : ".") };
+    if (!stays.length) keptLine.set(r, { text: left.length ? "Design Twin could not put all of the preview back: " + [...left, ...failed].join("; ") + "." : "Design Twin put the preview back, but kept what you changed since: " + failed.join("; ") + ".", lead: "Its preview" });
+    return { failed: r, gone: went, restored: restored.length };
   }
   function undoNote(steps2) {
     return "Figma records each component property a write declares, edits or deletes as its own undo step, so this write takes " + steps2 + " Undos (Cmd-Z) to take back fully; each Undo takes back the part of the write after the previous property call (a new component still being built when a step ended is left hidden).";
@@ -14157,10 +14978,10 @@
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post3 = (m) => figma.ui.postMessage(m);
-  async function runExport(label5, collect, toFiles) {
+  async function runExport(label6, collect, toFiles) {
     let r;
     try {
-      r = await serializeRun(collect, { source: "ui", label: label5 });
+      r = await serializeRun(collect, { source: "ui", label: label6 });
     } catch (e) {
       post3({ type: "error", message: errMsg(e) });
       return;

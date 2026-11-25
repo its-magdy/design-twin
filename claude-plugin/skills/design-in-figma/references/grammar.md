@@ -37,7 +37,7 @@ at most 45 s; if they have not answered by then it returns `{pending: true, tick
 
 | `op` | Required | Optional |
 |---|---|---|
-| `createTree` | `tree` (a spec, below) or `treeFile` (a path to the same spec as JSON) | `page` (a page's exact name or id; the current page by default), `bind` (`true`: bind raw values to the file's variables and text styles, [below](#binding-to-the-file)) |
+| `createTree` | `tree` (a spec, below) or `treeFile` (a path to the same spec as JSON) | `page` (a page's exact name or id; the current page by default), `section` (a section's exact name or id on that page), `createPage` / `createSection` (`true`: make the page or section when the file has none of that name, [below](#pages-and-sections)), `bind` (`true`: bind raw values to the file's variables and text styles, [below](#binding-to-the-file)) |
 | `patch` | `nodeId`, `set` (the fields to change) | — |
 | `patchWhere` | `where` (the rule: any of `text`, `fill`, `variable`, `instanceOf`, `name`), `set` (as a patch's) | `scope` (`"selection"`, `"page"` (the default), `"file"`, or page names), `token` (from its dry run; needed over 25 matches) |
 | `setVariable` | `variable` (a local variable's exact name, key or id), and `values` (mode name or modeId → value) or `value` (a one-mode collection) | — |
@@ -61,9 +61,10 @@ calls and can bind variables. A create with no `parentId` lands on the current p
 
 - A batch that landed: `{ok: true, applied: [...], warnings?, undoSteps?, undoNote?}`, one entry per op; `undoSteps`
   and `undoNote` only when Figma split it into several undo steps ([Components](#components), Undo).
-  - `createTree`: `{id, created: {frames, texts, instances?, clones?}, handles?, unbound?}`; `handles` maps each
-    `handle` to its node's id, and `unbound` counts raw colours, spacing, radii and stroke weights where a variable
-    could stand, and texts with no text style.
+  - `createTree`: `{id, created: {frames, texts, instances?, clones?}, handles?, unbound?, pageCreated?, sectionCreated?}`;
+    `handles` maps each `handle` to its node's id, `unbound` counts raw colours, spacing, radii and stroke weights where
+    a variable could stand, and texts with no text style, and `pageCreated` / `sectionCreated` are the ids of a page or
+    section this op made ([Pages and sections](#pages-and-sections)).
   - a keyed re-send: `{id, key, changed?: [{id, handle?, fields}], created?, removed?, reordered?, handles?}`, or
     `{id, key, unchanged: true}`.
   - with `bind: true`, either one also carries `bind: {bound, instanced, unbound, ambiguous?}` (and no `unbound` of its
@@ -127,7 +128,8 @@ a `component`, a `TEXT` when it has `text`, else a `FRAME`; the root is a frame 
 | `children` | the child nodes, in order (not on a TEXT, an INSTANCE or a copy) |
 
 Placement: the root lands on `page`, 100 px right of the rightmost frame there and level with the topmost, unless it
-has `x`/`y`. It is built hidden and shown only once every node is in place.
+has `x`/`y`. With only one, it is kept and the other avoids overlap: only `y` goes right of everything; only `x` stays
+level with the topmost unless that lands on a layer, else 100 px below what is in its column (in a section too). It is built hidden and shown only once every node is in place.
 
 ```json
 {"op": "createTree", "tree": {
@@ -140,6 +142,32 @@ has `x`/`y`. It is built hidden and shown only once every node is in place.
      "rows": [["Account", true], ["Notifications", true], ["Sign out", false]]},
     {"component": "Button", "props": {"Variant": "Primary", "Label": "Save"}, "handle": "save", "widthMode": "fill"}
   ]}}
+```
+
+### Pages and sections
+
+`section` puts the root inside a section on `page` (nested sections too); a section given by id with no `page` is
+found on whichever page holds it (by name, it is looked for on `page`, the current page by default): 100 px right of what the section holds and
+level with its top, or on a new row 100 px below it when growing right would run the section into a neighbour; at
+80 px from its edges when it is empty. In a section the root's `x`/`y` are the section's own. The section grows (never
+shrinks) to hold the root with that 80 px margin, and so does each section around it; one that then overlaps a
+neighbour is a warning, not a refusal.
+
+`createPage: true` makes `page` when the file has no page of that name, `createSection: true` makes `section` on the
+page when it has none (beside what the page holds). A name the file has once is used as it is, so the same batch sent
+again lands where the first send did. Making is never guessed: a page or section that matches nothing is refused with
+its closest names unless the op asks to make it, and one whose name matches several is refused with their ids (make or
+not). A page or section the batch makes is made once, at the first op landing there; every op of the batch naming it
+lands in that one. At most 10 new pages and 25 new sections a batch. `createPage` needs `page`, `createSection` needs
+`section`; a name to make is not blank, has no spaces at its ends and does not look like a node id. The reply names what
+was made on the op that made it (`pageCreated`, `sectionCreated`: ids). If a later op fails, the batch removes them again
+(after the frames in them) and shrinks any section it grew — but never a page or section holding a layer the batch did
+not make: that one stays, and the error says so. A file in a Starter-plan team holds at most 3 pages (drafts are not
+held to it): there Figma refuses a fourth, and the batch is put back.
+
+```json
+{"op": "createTree", "page": "Checkout", "createPage": true, "section": "Payment", "createSection": true,
+ "tree": {"name": "Card entry", "box": {"w": 390, "h": 844}}}
 ```
 
 ## Design-system references
@@ -269,7 +297,7 @@ instead of building a second one:
   edit stays unless the new spec changes that field; a field the spec drops goes back to a fresh build's value;
 - a node the spec adds is built, one it drops is removed, one whose type or component changed (or whose change cannot
   be made in place) is built anew in its place;
-- `page` must be absent or the result's page; a key appears once per batch; if the result was deleted, a new one is
+- `page` and `section` must be absent or the result's (an update never moves it, nor makes a page or section for it); a key appears once per batch; if the result was deleted, a new one is
   built. Removing a node that holds a layer the key did not build refuses the batch.
 
 ## Spec from disk

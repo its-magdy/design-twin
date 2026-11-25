@@ -415,9 +415,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    The op table (`bridge/src/commands.ts` `WRITE_OPS`, 14 ops) is read by all three places a write is checked —
    the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
    bundle imports too: `createTree`'s tree spec (`tree-spec.ts`, with `tree-check.ts`; rows and fragments expanded
-   first by `tree-expand.ts`), `patch` (`patch-spec.ts`), `setVariable` / `setStyle` (`source-spec.ts`),
-   `createVariables` / `createStyles` (`create-spec.ts`). What only the file can answer (names, fonts, pages, a node's
-   kind) is resolved by the plugin before the first op runs (`tree-refs.ts`, `patch.ts`, `sources.ts`, `creates.ts`).
+   first by `tree-expand.ts`; where it lands, `place-spec.ts`), `patch` (`patch-spec.ts`), `setVariable` / `setStyle` (`source-spec.ts`),
+   `createVariables` / `createStyles` (`create-spec.ts`). What only the file can answer (names, fonts, pages and
+   sections, a node's kind) is resolved by the plugin before the first op runs (`tree-refs.ts`, `places.ts`, `patch.ts`,
+   `sources.ts`, `creates.ts`); a page or section a `createTree` asks to make is planned then, once for the batch, and
+   made by the first op landing there, as a change the batch puts back on a failure.
    The create tables come first in a batch and run first: what they will make is the batch's plan
    (`figma-plugin/src/batch-plan.ts`), so a later op's name for a new variable or text style resolves, like an import,
    once they have run. A `createTree` root of type COMPONENT or COMPONENT_SET makes a local component

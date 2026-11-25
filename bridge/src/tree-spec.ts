@@ -28,6 +28,7 @@ import { nearestNames, quoteList } from "./name-match.ts";
 import { expandTree, type TreeRow } from "./tree-expand.ts";
 import { IMAGE_HASH, IMAGE_ID, IMAGE_BYTES_REASON, inlineImageProblem } from "./image-spec.ts";
 import { componentRootOf, PROP_REF_FIELDS, PROP_REF_TYPES, propDefComponents, propDefsOf, propDefsProblems, propRefsShape, RESERVED_KEY_PREFIX, variantColumns, type ComponentRootType, type PropDefType, type TreePropDef } from "./component-spec.ts";
+import { describePlace, type Place } from "./place-spec.ts";
 
 /** A solid paint as the read export writes it (paint.ts): `#rrggbb[aa]`, an optional paint opacity, and the colour
  *  variable it is bound to (`tokens.color`: a variable's name, key or id; the colour may then be left out). */
@@ -143,7 +144,8 @@ export interface TreeNodeSpec {
   key?: string;
   /** `true` on a built node; a copy's patch also takes `false` */
   hidden?: boolean;
-  /** The root: page coordinates (placed beside the existing frames when absent). A child: relative to its parent,
+  /** The root: page coordinates (placed beside the existing frames when absent; one given alone is kept, and the
+   *  other is chosen so the root overlaps nothing). A child: relative to its parent,
    *  for a child of a frame without auto-layout or an `absolute` one. */
   x?: number;
   y?: number;
@@ -853,12 +855,58 @@ export function treeRefusal(problems: readonly string[]): string {
   return problems.length + " problems in the tree spec — nothing was changed:\n" + problems.join("\n");
 }
 
+/** The size a frame spec gives itself, each side or undefined: its `box`, else its `layout`'s width and height (the
+ *  build resizes a frame to these; a side not given keeps Figma's new-frame size or hugs, by its widthMode/heightMode). */
+export function givenSize(spec: Pick<TreeNodeSpec, "box" | "layout">): { w: number | undefined; h: number | undefined } {
+  return { w: spec.box ? spec.box.w : spec.layout && spec.layout.width, h: spec.box ? spec.box.h : spec.layout && spec.layout.height };
+}
+
+/** The space around and between the variants of a set without auto-layout, laid out in one column. */
+export const VARIANT_GAP = 20;
+/** A variant as its set's column sees it: its place in the set and its size. */
+export interface VariantBox { x: number; y: number; width: number; height: number }
+/**
+ * The one column a set without auto-layout lays its variants out in, in order (component-build.ts arrangeVariants): each
+ * one `moves` says at VARIANT_GAP from the left, VARIANT_GAP below the lowest before it; the others where they are.
+ * `at`: where each goes (null: it stays). `width`×`height`: what holds them all with VARIANT_GAP around (0×0: none).
+ */
+export function variantColumn(boxes: readonly VariantBox[], moves: (i: number) => boolean): { at: Array<{ x: number; y: number } | null>; width: number; height: number } {
+  const at: Array<{ x: number; y: number } | null> = [];
+  let y = VARIANT_GAP;
+  let width = 0;
+  let height = 0;
+  boxes.forEach((b, i) => {
+    const to = moves(i) ? { x: VARIANT_GAP, y } : null;
+    at.push(to);
+    const bx = to ? to.x : b.x, by = to ? to.y : b.y;
+    y = Math.max(y, by + b.height + VARIANT_GAP);
+    width = Math.max(width, bx + b.width + VARIANT_GAP);
+    height = Math.max(height, by + b.height + VARIANT_GAP);
+  });
+  return { at, width, height };
+}
+
+/** A new root's size, as the build sizes it, where the spec says it: the sides givenSize gives; for a set without
+ *  auto-layout and no size of its own, the column its variants are laid out in (variantColumn; a variant's side the spec
+ *  does not give is `unknown`'s). A side it cannot say before the build (a hugging auto-layout) is undefined. */
+export function builtSize(spec: TreeNodeSpec, unknown: number): { w: number | undefined; h: number | undefined } {
+  const given = givenSize(spec);
+  // A `box` with neither side (only the read's x/y) still counts as sized: the build then leaves the set's size be
+  // (component-build.ts arrangeVariants), so the column is not its size either.
+  if (given.w !== undefined || given.h !== undefined || spec.box !== undefined || spec.type !== "COMPONENT_SET" || (spec.layout && spec.layout.display === "flex")) return given;
+  const variants = spec.children || [];
+  const col = variantColumn(variants.map((v) => {
+    const g = givenSize(v);
+    return { x: v.x !== undefined ? v.x : 0, y: v.y !== undefined ? v.y : 0, width: g.w !== undefined ? g.w : unknown, height: g.h !== undefined ? g.h : unknown };
+  }), (i) => { const v = variants[i]; return !v || (v.x === undefined && v.y === undefined); });
+  return col.width > 0 && col.height > 0 ? { w: col.width, h: col.height } : given;
+}
+
 /** A spec root's size in words: "320×200", or "320 wide, height hugs content" when only one side is given (the other
  *  is said by its `heightMode` / `widthMode`; without one it keeps the size Figma gives a new frame); "" when neither is
  *  given. The dry run's sentence and the review card both say it this way. */
 export function sizePhrase(spec: TreeNodeSpec): string {
-  const w = spec.box ? spec.box.w : spec.layout && spec.layout.width;
-  const h = spec.box ? spec.box.h : spec.layout && spec.layout.height;
+  const { w, h } = givenSize(spec);
   const other = (mode: "fill" | "hug" | undefined, side: string): string =>
     side + (mode === "hug" ? " hugs content" : mode === "fill" ? " fills its parent" : " left at Figma's default");
   if (typeof w === "number" && typeof h === "number") return w + "×" + h;
@@ -867,15 +915,19 @@ export function sizePhrase(spec: TreeNodeSpec): string {
   return "";
 }
 
-/** One sentence of what a valid spec creates: the dry run's `change`. `page` is the op's page, if it named one. */
-export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: TreeSummary): string {
+/** One sentence of what a valid spec creates: the dry run's `change`. `place` is where the op lands (its page and
+ *  section, and whether it makes them: place-spec.ts); the current page when it names none. */
+export function describeTree(spec: TreeNodeSpec, place: Place | undefined, s: TreeSummary): string {
   const sized = sizePhrase(spec);
   const size = sized ? " " + sized : "";
   const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
   const nodes = s.frames + s.texts + s.instances + s.clones;
   const plural = (n: number, one: string): string => n + " " + one + (n === 1 ? "" : "s");
-  const where = (page ? "on page '" + page + "'" : "on the current page") +
-    (spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : ", placed beside the existing frames");
+  const p: Place = place || {};
+  const at = spec.x !== undefined || spec.y !== undefined ? " at " + (spec.x !== undefined ? spec.x : "auto") + "," + (spec.y !== undefined ? spec.y : "auto") : "";
+  const where = describePlace(p) + (p.section !== undefined
+    ? (at ? at + " inside it" : ", placed beside the frames already in it") + " (the section grows if needed)"
+    : at || ", placed beside the existing frames");
   const edited = (n: TreeNodeSpec): string => {
     const e = n.edits ? Object.keys(n.edits).length : 0;
     return e ? " with " + plural(e, "layer") + " changed" : "";
@@ -900,8 +952,8 @@ export function describeTree(spec: TreeNodeSpec, page: string | undefined, s: Tr
   if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
   if (s.unbound) parts.push(plural(s.unbound, "raw value") + " left unbound");
   const checked = (components.length + variables.length + textStyles.length
-    ? "the page, fonts and names are checked against the file when applied (a library item is imported only then)"
-    : "the page and fonts are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
+    ? (p.section !== undefined ? "the page, its section, fonts and names" : "the page, fonts and names") + " are checked against the file when applied (a library item is imported only then)"
+    : (p.section !== undefined ? "the page, its section and fonts" : "the page and fonts") + " are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
   return parts.join("; ") + " — " + checked + ", and nothing lands unless all of it does";
 }
 

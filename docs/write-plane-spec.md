@@ -24,7 +24,8 @@ paint `{type: "image", file}` or `{type: "image", hash}` — are built; capturin
 the capture to the file — a `createTree` op's `bind: true`, which binds raw values to the file's variables and text
 styles, and instances of the components the component map names, read in the write direction — is built; bulk patch
 by rule — `patchWhere`, a patch of every layer a rule matches within a scope, its dry run counting per page with a token
-the real run carries — is built)
+the real run carries — is built; placement in a section, and a page or section a `createTree` makes (`section`,
+`createPage`, `createSection`) — is built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -200,9 +201,105 @@ screens.
     refused or rejected first loads no image; one refused after an image loaded says so to the designer and the agent,
     as does an op that failed and put its layers back, and a card's later refusal after a preview it put back.
     The reply lists each made image's Figma hash for reuse. A crop, rotation and filters are not written yet.
-13. **Placement.** The spec names a target page (the current one by default) and optionally a section; the
-    plugin places a new top-level frame beside the existing ones without overlap. Explicit coordinates are
-    optional. As built, the target is a page only (`page`); a section cannot be named yet.
+13. **Placement.** The spec names a target page (the current one by default) and optionally a section on it, either
+    of which it may ask to make; the plugin places a new frame beside what is there without overlap. Explicit
+    coordinates are optional.
+
+    As built (#184): a `createTree` op's `page`, `section`, `createPage` and `createSection` (the pure check and the
+    dry run's words in `bridge/src/place-spec.ts`; the file side in `figma-plugin/src/places.ts`).
+    - **Names, never guesses (decision 15).** `page` and `section` are an exact name or id; a section is looked for on
+      the target page, nested ones included. A section given by id with no `page` is the one of that id wherever it is
+      in the file, its page then the op's (as every other id a write takes names a node on any page); the dry run says
+      it lands "on the page that holds it". A name that matches several is refused with their ids; one that matches
+      nothing is refused with its closest names and the field that would make it (a page or section given as an id is
+      not made: the refusal says what that id is instead — a section on another page, another kind of layer, or no layer;
+      a link's dash form, `6-2`, is still looked up as a name, and missing, is said the same way with its colon form to
+      send; a name past the batch's limit is not told to add the field either, nor one missing without it once the batch
+      makes the most it may — both are told to send it in another batch). Making is asked for, never inferred
+      from a miss: `createPage: true` makes the page when the file has no page of that name, `createSection: true` the
+      section when the page has none. A name the file has exactly once is used as it is — so the same batch sent again
+      lands where the first send did, and making stays all-or-nothing safe to repeat — and a name it has several of is
+      refused even with `create…` (which one is meant is not ours to pick).
+    - **Checked on the wire** (writeOpError, the dry run and the plugin alike): only a createTree carries `section`,
+      `createPage`, `createSection`; `createPage` needs `page`, `createSection` needs `section`; a name to make is not
+      blank, has no spaces at its ends (names match exactly) and does not read as a node id. A section name is never
+      blank. The dry run runs the wire check on every op, so an op the write refuses here is `invalid` in it too.
+    - **Once per batch.** A page or section to make is planned when the batch resolves, before anything runs: one per
+      page name, one per section name on its page. Every op of the batch that names it lands in that one, whether or
+      not that op asked to make it. A batch makes at most 10 pages and 25 sections (refused above that). It is made
+      when the first op landing there runs, so a batch that is refused or waits for review makes nothing.
+    - **Placing in a section.** The frame's `x`/`y` are the section's own (as Figma reads a section child's). Without
+      them it goes 100 px right of what the section holds (what each layer covers on the canvas, rotation included),
+      level with its top; when growing right would run the section into one of its neighbours, on a new row 100 px
+      below instead; in an empty section at 80 px from its edges. The section then grows — never shrinks, keeping its top-left — to hold the frame with that 80 px margin,
+      and so does each section around it. A section that still runs into a neighbour (explicit coordinates, or no row
+      that avoids it) is a `warning`, never a refusal: no existing layer is moved to make room. A new section is placed
+      on its page as a new frame is (right of everything, level with the topmost), then grows to hold its frames.
+      A computed `x` or `y` in a section is never less than the 80 px margin: a layer that covers past the section's
+      left or top edge (a turned one) does not pull the next frame, or the start of a new row, out with it.
+      Coordinates given left of or above the section's edge are kept as given (and the section's top-left stays), so
+      the frame sticks out; that is a `warning` too. The frame being built (hidden where Figma makes a new node until
+      it lands) is no neighbour of its section.
+    - **One coordinate given.** On a page or in a section, the one given is kept and the other is chosen so the frame
+      lands on no layer: only `y`, right of everything there; only `x`, level with the topmost when that overlaps
+      nothing, else 100 px below what is in its column (the band from `x` to `x` + its width). Neither refused nor
+      warned: the coordinate given is honoured and the promise of no overlap kept (both given: exactly there).
+    - **What the new frame covers counts too.** Placing it and growing its section measure the new frame as the layers
+      it goes beside are measured: what it will cover on the canvas, its turn included (a copy of a rotated layer keeps
+      the rotation). Its `x`/`y` are Figma's own (the turned corner), so a placed copy's box starts where the rules
+      above say, its `x`/`y` wherever that puts them; given coordinates are kept as given. A computed `x`/`y` is a
+      whole pixel: the nearer one, unless rounding would put the frame on a layer the spot was chosen clear of, or
+      start what it covers inside a section's margin — then the other, else left unrounded.
+    - **All or nothing (decision 14).** A made page and section are Changes on the batch's list, so a later failure
+      removes them, newest first, after the frames in them; a section's growth goes back with the frame that caused
+      it — each side only while it is still the size the batch gave it: a side the designer resized meanwhile (while a
+      preview was up, or while the batch awaited a font or an import) keeps their size, and the error says so (the
+      frame still counts as put back). It keeps it through every growth of that side the put-back takes back after: two
+      ops that grew the same section are undone newest first, and once the newer finds a side resized, the older leaves
+      it too (even when the designer set it to the size the older gave it), the side said once. A preview put back
+      that way (Put back, or a card that ends while previewing) ends its review, as any put-back that leaves something
+      does; the designer is told too, in the window and in Figma's toast, which side of which section was kept, at what
+      size. A page or section that holds a layer the batch did not make (the designer put one in while a preview was up)
+      is not removed: it stays with that layer, listed in `applied`, and the error says why (a layer the batch made,
+      even by another of its ops, is its own: moved into it, it goes with it, unless it holds the designer's). A frame the
+      designer deleted while the batch ran, with nothing put back after ("Allow edits" off), is said to have gone, but the
+      section it grew stays the size it gave it, and that is said too (never "none of it stays"), to the agent and, in
+      the window and Figma's toast, to the designer (never "nothing changed"); a preview put back so (Put back, or a
+      Reject) could not all go back, and ends its review as above. With "Allow edits" left on, the growth goes back
+      with the frame. A page that is the
+      current one when it goes is left first (the current page is not undo history); after that wait, its layers and
+      "Allow edits" are checked again before it is removed, and it stays (listed as kept) when either has changed. A file in a Starter-plan team
+      holds at most 3 pages (Figma's limit for team files; drafts are not held to it): Figma refuses a fourth, which is
+      only known when it is made, and the batch is then put back like any op Figma refuses.
+    - **One undo step (decision 16).** Making a page or section and resizing a section are ordinary plugin edits
+      inside the batch's commitUndo pair (seen live: one Undo takes back a batch that made a page, a section on it and
+      a frame in that; the harness pins the one checkpoint pair).
+    - **A keyed re-send stays where its result is.** `page` and `section` must be absent or the result's; an update
+      neither moves its result nor makes a page or section for it (a re-send into a section its result is not in is
+      refused, and nothing is made; the refusal says how to reach the result: leave `section` out (`createSection` with
+      it), or name the result's section and, when it is on another page, that page — only the page when the op already
+      names its section; its section's id instead when either name would match more than one, or its section's name
+      looks like an id, sent with no `createSection`. One naming another page is told to leave out `page` and every other placement field it has).
+    - **Reply, dry run, card.** The op that made a page or section names it (`pageCreated`, `sectionCreated`: ids);
+      a page or section the file had is not named. The dry run says where the frame lands ("in section 'Payment' (made
+      when the page has none) on page 'Checkout' (made when the file has none)", "the section grows if needed"); it reads
+      no file, so whether the page and section exist is answered when applied. The review card says "lands in section
+      'Payment' on page 'Checkout'", "in a new section …", "on a new page …"; Show me pans to where it lands, except on a
+      page still to make — worked out by the write's own placing code, over the whole batch in order: each op is placed
+      beside what the ops before it will land, in the sections they make (where the write will put them) or grow, and
+      beside what they resize, move or make on a page or in a section: a keyed re-send's new `x`/`y` and sides, a
+      patch's `box` (a side either leaves out stays as the ops before it left it), a `move` (the node keeps its `x`/`y` in its new parent, as Figma keeps them), a legacy
+      `createFrame` (at 0,0, its size or Figma's 100). A legacy `createText` is not counted (its size is its font's,
+      known only once built), nor a `delete` (deletes run after every other op); a keyed re-send of a component set
+      without a size of its own is counted at its size now. It uses the size the write will measure where that is
+      known before the build: each side the spec gives (`box`, else `layout.width` / `layout.height`; a component set
+      with neither and no auto-layout, the one column its variants are laid out in, 20 px around and between), else a
+      copy's source's size and turn, else a new frame's 100 (a hugging side's
+      size is known only once built, so a hugging frame's Show me can be off). A section's growth is said in the card only as "the section grows if needed" in Details; it is
+      not counted toward the review's layer limit (a container growing to hold the new frame, not a change to a layer).
+    - Not built: moving or resizing an existing section beyond growing it, a section's fills or other fields, page
+      dividers, ordering the new page among the others (it is appended), and re-placing a keyed result when the spec
+      grows it inside a section (the section is grown only for a new frame).
 
 ### Safety
 
@@ -351,7 +448,8 @@ screens.
     four-op route (a page list, an outline per screen, then the setText ops), and the op does not grow with the matches. The
     way a run over 25 matches goes (`rule-patch-token`: the dry run, then the run carrying its token) is recorded on the
     same job at 2 calls, 1 op, about 519 tokens (78 out, 441 in: the dry run's preview and `match`).
-    Adding `patchWhere` to the schema and description took `toolDefinition` from 1,287 to 1,400.
+    Adding `patchWhere` to the schema and description took `toolDefinition` from 1,287 to 1,400; adding `section`,
+    `createPage` and `createSection` (#184) took it to 1,449.
 
 ## Build order
 

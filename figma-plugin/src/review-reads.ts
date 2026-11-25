@@ -9,7 +9,8 @@ import type { WriteOp } from "../../bridge/src/commands.ts";
 import type { OpRead } from "../../bridge/src/review-card.ts";
 import { countLayers } from "../../bridge/src/review-policy.ts";
 import { followersOf, mainComponentOf, type StyleTarget, type VariableTarget } from "./sources";
-import { landingSpot, type TreeTarget } from "./tree";
+import type { TreeTarget } from "./tree";
+import { Canvas, landing, pageHolding } from "./places";
 import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { RuleTarget } from "./rules";
@@ -120,6 +121,21 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
   const warnings: string[] = [];
   const warn = (m: string): void => { if (warnings.indexOf(m) < 0) warnings.push(m); };
   const ops: OpLayers[] = [];
+  // Where each new tree lands is planned on one canvas, in batch order, so a later op lands beside the earlier ones (places.ts):
+  // the trees they land, and what they move, make or resize on a page or in a section (deletes run last: not counted).
+  const canvas = new Canvas();
+  /** Whether a new tree comes after op `i`: only then is what op `i` changes on the canvas read (nothing is placed after it). */
+  const treeAfter = (i: number): boolean => list.slice(i + 1).some((o) => o.op === "createTree");
+  /** `n`'s page, loaded (dynamic-page: before the canvas reads what is on it). */
+  const loaded = async (n: BaseNode): Promise<void> => { const pg = n.type === "PAGE" ? n : pageHolding(n); if (pg) await pg.loadAsync(); };
+  /** A layer a patch sets `box` on, at its size then (a side the box leaves out stays as the ops before it left it). */
+  const patched = async (i: number, n: SceneNode, set: Record<string, unknown>): Promise<void> => {
+    const b = set.box as { w?: number; h?: number } | undefined;
+    if (!b || typeof b !== "object" || !treeAfter(i)) return;
+    await loaded(n);
+    const g = canvas.geometry(n);
+    canvas.reshape(n, g.x, g.y, typeof b.w === "number" ? b.w : g.w, typeof b.h === "number" ? b.h : g.h);
+  };
   for (const [i, op] of list.entries()) {
     const read: OpRead = {};
     const ids: string[] = [];
@@ -143,6 +159,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           const old: Record<string, unknown> = {};
           for (const k of Object.keys(set)) { const v = oldOf(p.node, k, set[k]); if (v !== undefined) old[k] = v; }
           read.old = old;
+          await patched(i, p.node, set);
           const main = mainComponentOf(p.node);
           if (main) { read.component = main.name; await follow({ component: main }); }
           break;
@@ -172,6 +189,7 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
           }
           read.old = old;
           if (mixed.length) read.mixed = mixed;
+          for (const p of r.matches) await patched(i, p.node, p.set as Record<string, unknown>);
           break;
         }
         case "setFill":
@@ -229,23 +247,51 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
             for (const id of changed) if (id !== root.id) ids.push(id);
             counted = changed;
             if (tt.update.component && (root.type === "COMPONENT" || root.type === "COMPONENT_SET")) await follow({ component: root });
+            // Where it is after the update, so a later op is placed beside it: the x/y and size its plan sets on the root
+            // (keyed.ts sets them as planned; a set that only gains variants is counted at its size now).
+            const u = tt.update.plan.updates.filter((x) => x.ref === root)[0];
+            if (u && treeAfter(i)) {
+              const box = u.set && u.set.box;
+              const moved = (f: "x" | "y"): boolean => u.extras.indexOf(f) >= 0;
+              const sx = tt.spec.x, sy = tt.spec.y;
+              const g = canvas.geometry(root);
+              canvas.reshape(root, moved("x") && sx !== undefined ? sx : g.x, moved("y") && sy !== undefined ? sy : g.y,
+                box && box.w !== undefined ? box.w : g.w, box && box.h !== undefined ? box.h : g.h);
+            }
             break;
           }
-          const s = landingSpot(tt);
-          const page = s.page !== figma.currentPage ? " on page '" + s.page.name + "'" : "";
-          read.lands = (s.beside ? "right of the existing frames" : "at " + s.x + ", " + s.y) + page;
-          spot = { pageId: s.page.id, x: s.x, y: s.y };
+          // Where it lands (places.ts): a page or section still to make is said as new, and has no spot to pan to.
+          // A copy as the root is measured by its source (its size and turn), as the write measures the copy.
+          const copied = tt.clones.get(tt.spec);
+          const l = landing(canvas, tt.dest, tt.spec, copied ? copied.source : null);
+          read.lands = l.lands;
+          if (l.spot) spot = l.spot;
           break;
         }
         case "createFrame":
         case "createText": {
           const p = op.parentId ? await nodeById(op.parentId) : null;
           if (p && p.type !== "PAGE" && p.type !== "DOCUMENT") { read.parent = p.name; ids.push(p.id); }
+          // A frame lands at 0,0 in its parent, its size given or Figma's 100 (writes.ts). A text's size is its font's:
+          // known only once built, so it is not counted.
+          const into = op.parentId ? p : figma.currentPage;
+          if (op.op === "createFrame" && into && treeAfter(i)) {
+            await loaded(into);
+            const w = op.width, h = op.height;
+            canvas.add(into, op.name || "Frame", w && h ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 100, height: 100 });
+          }
           break;
         }
         case "move": {
           const m = t.moves.get(i);
-          if (m) { read.name = m.node.name; read.parent = m.parent.name; ids.push(m.node.id); }
+          if (m) {
+            read.name = m.node.name; read.parent = m.parent.name; ids.push(m.node.id);
+            if (treeAfter(i)) {
+              await loaded(m.node);
+              await loaded(m.parent);
+              canvas.move(m.node, m.parent);
+            }
+          }
           break;
         }
         case "delete": {

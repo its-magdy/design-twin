@@ -55,8 +55,10 @@ export interface Change {
   what: string;
   /** Put the change back. `allowed` is asked after every await: once "Allow edits" is off it throws RestoreStopped.
    *  `ours` is the id of every node the batch made (batchMade): a made layer that holds only those is the batch's to take
-   *  back whole, whichever op of it made each one (node-lookup.ts takeBack). */
-  restore(allowed: () => boolean, ours: ReadonlySet<string>): void | Promise<void>;
+   *  back whole, whichever op of it made each one (node-lookup.ts takeBack). `pass` is the put-back it is part of. A
+   *  sentence back: the change went back but for a part the designer has changed since, which it left as they made it
+   *  (a section they resized after the batch grew it); said with what could not be undone. */
+  restore(allowed: () => boolean, ours: ReadonlySet<string>, pass?: RestorePass): void | string | Promise<void | string>;
   /** Every node it made (a change that made nodes): with every other change's, what the batch made (batchMade). */
   owns?: readonly SceneNode[];
   /** One of the layers a patchWhere changed (the same object for every one of them): a reply that lists what was put
@@ -70,6 +72,10 @@ export interface Change {
    *  never reads a node already gone (node-lookup.ts takeBack). */
   on?: BaseNode;
   made?: true;
+  /** A made change whose nodes are all gone with no put-back run for it: what it changed outside them that is still in
+   *  the file, said (a section it grew, still the size it gave it), or null. Such a change is not as before the batch:
+   *  it is said to have gone with what stays (goneSentence), never put back. */
+  leaves?: () => string | null;
 }
 
 /** The id of every node the batch made, by every change on `changes` that made any (`owns`): one build's layer moved
@@ -89,8 +95,17 @@ const wentWithNode = (c: Change): boolean => !c.made && c.on !== undefined && re
 const asBefore = (c: Change): boolean => c.made === true && !!c.owns && c.owns.length > 0 && c.owns.every(removedWith);
 
 /** What a reply says of a change that went with its node (or of a made one deleted whole): what it was, and that none
- *  of it stays. */
-export const goneSentence = (c: Change): string => c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+ *  of it stays — or, for a made one, what it left outside its nodes that does (Change.leaves: a section it grew). */
+export const goneSentence = (c: Change): string => {
+  const left = c.made ? leftBehind(c) : null;
+  if (left) return c.what + " was deleted from the file while the batch ran, but " + left;
+  return c.what + (c.made ? " was deleted from the file while the batch ran, so none of it stays" : " went with that layer: it was deleted from the file while the batch ran, so none of it stays");
+};
+/** What `c` left outside its nodes that is still in the file (Change.leaves), or null. */
+const leftBehind = (c: Change): string | null => (c.leaves ? c.leaves() : null);
+/** `c` went with its nodes but left something of it in the file (a section it grew, still that size): the put-back
+ *  that found it so did not leave the file as it was before the batch, and says so (writes.ts putBack). */
+export const leftSomething = (c: Change): boolean => c.made === true && leftBehind(c) !== null;
 
 /** `changes` that stay in the file when none is put back (the plugin changes nothing more once "Allow edits" is off):
  *  every one but those that went with their node, and the made ones deleted whole (asBefore). */
@@ -114,26 +129,41 @@ export function restoredRows(changes: readonly Change[]): AppliedWrite[] {
   }
   return out;
 }
+/** One put-back of a batch, shared by the restores it runs (newest first): the parts of a layer a newer change found
+ *  the designer has changed since, by layer (a section's "width", "height"). An older change of the same part leaves
+ *  it as the designer made it too, and does not say it again — the one sentence is the newer change's. */
+export interface RestorePass { kept: Map<object, Set<string>> }
+export const newRestorePass = (): RestorePass => ({ kept: new Map() });
+
 /** A restore stopped because the designer turned "Allow edits" off while it ran: what it had not put back stays. */
 export class RestoreStopped extends Error {}
 
 /** Undo `changes`, newest first. Returns the ones undone, a sentence for each that could not be, the ones that went with
  *  their node (`gone`: its layer was deleted while the batch ran, before its turn or at any put-back's await, its own
  *  or a later one's, so decided once all are done; nothing of it stays, and it is neither called undone nor "could not
- *  be undone"), and what stays: every change neither undone nor
- *  gone, which a reply lists as applied. `allowed` is asked before each: once the designer has turned "Allow edits" off,
- *  the plugin changes nothing more, not even to undo its own work, and the rest are reported as kept. */
+ *  be undone"), and what stays: every change neither undone nor gone, which a reply lists as applied. One undone but for
+ *  a part it left as the designer has since made it (a section side they resized) is undone, its sentence with the
+ *  others. `allowed` is asked before each: once the designer has turned "Allow edits" off, the plugin changes nothing
+ *  more, not even to undo its own work, and the rest are reported as kept. */
 export async function restoreChanges(changes: readonly Change[], allowed: () => boolean): Promise<{ restored: Change[]; failed: string[]; gone: Change[]; stays: Change[] }> {
   const restored: Change[] = [];
   const failures: Array<[Change, string]> = [];
   let stop: { rest: Change[]; tail: string } | null = null;
   const left = [...changes].reverse();
   const ours = batchMade(changes);
+  const pass = newRestorePass();
+  // Undone, but for a part the designer has changed since (a restore's sentence back): said with what could not be.
+  const notes: Array<[Change, string]> = [];
+  const put = async (c: Change): Promise<void> => {
+    const note = await c.restore(allowed, ours, pass);
+    restored.push(c);
+    if (note) notes.push([c, note]);
+  };
   const undo = (c: Change, e: unknown): string => "could not undo " + c.what + " (" + errMsg(e) + ")";
   for (const [i, c] of left.entries()) {
     if (!allowed()) { stop = { rest: left.slice(i), tail: "" }; break; }
     if (wentWithNode(c)) continue; // gone already: classified below
-    try { await c.restore(allowed, ours); restored.push(c); } catch (e) {
+    try { await put(c); } catch (e) {
       if (e instanceof RestoreStopped) { stop = { rest: left.slice(i), tail: " (in part, for " + c.what + ")" }; break; }
       failures.push([c, undo(c, e)]);
     }
@@ -150,7 +180,7 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
       const c = f[0];
       if (!c.made || wentWithNode(c)) continue;
       if (!allowed()) { stop = { rest: [], tail: "" }; break; }
-      try { await c.restore(allowed, ours); restored.push(c); failures.splice(failures.indexOf(f), 1); more = true; break; } catch (e) {
+      try { await put(c); failures.splice(failures.indexOf(f), 1); more = true; break; } catch (e) {
         if (e instanceof RestoreStopped) { stop = { rest: [], tail: "" }; break; }
         tried.add(c);
         f[1] = undo(c, e);
@@ -165,18 +195,23 @@ export async function restoreChanges(changes: readonly Change[], allowed: () => 
   // Gone or not is decided once every put-back is done: a node can be deleted at any put-back's await, its own (after it
   // was put back, or one that threw) or a later one's. One removed by now took with it what was set on it, and what was
   // put back on it: it is gone, neither restored, nor "could not undo", nor applied.
-  const gone = left.filter(wentWithNode);
   // A made one not put back (refused, or not reached once "Allow edits" was off) whose every node is removed by now
   // (taken back with a layer of the batch that held it, or deleted) is as its put-back would have left it: put back,
-  // never "could not undo", never said to stay.
-  const back = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+  // never "could not undo", never said to stay — unless it changed something outside its nodes that is still there (a
+  // section it grew): then it went, and what it left is said with it (goneSentence).
+  const notBack = left.filter((c) => restored.indexOf(c) < 0 && asBefore(c));
+  const gone = left.filter((c) => wentWithNode(c) || (notBack.indexOf(c) >= 0 && leftBehind(c) !== null));
+  const back = notBack.filter((c) => gone.indexOf(c) < 0);
   restored.push(...back);
   const settled = new Set([...gone, ...back]);
-  const failed = failures.filter(([c]) => !settled.has(c)).map(([, s]) => s);
+  const isGone = new Set(gone);
+  // What could not be undone and what was undone but for the designer's part, newest first as the put-back ran them; a
+  // note of one that went with its node since is not said (nothing of it is left).
+  const failed = failures.filter(([c]) => !settled.has(c)).concat(notes.filter(([c]) => !isGone.has(c)))
+    .sort((a, b) => left.indexOf(a[0]) - left.indexOf(b[0])).map(([, s]) => s);
   // Not put back ("Allow edits" turned off): the ones that did not go with their node stay applied, and are counted.
   const kept = stop ? stop.rest.filter((c) => !settled.has(c)) : [];
   if (stop && kept.length) failed.push("'Allow edits' was turned off while the batch was being put back, so " + countChanges(kept).replace(/ earlier /g, " ") + " stay applied" + stop.tail);
-  const isGone = new Set(gone);
   const done = new Set([...restored, ...gone]);
   return { restored: restored.filter((c) => !isGone.has(c)), failed, gone, stays: changes.filter((c) => !done.has(c)) };
 }
@@ -231,5 +266,19 @@ export function landedResult(r: WriteResult, l: Landed): WriteResult {
     const untouched = !r.applied.length && !(r.restored && r.restored.length);
     error = r.error + (/\.$/.test(r.error) ? " " : ". ") + (untouched ? landedNote(l) : landedStays(l));
   }
-  return error === r.error ? r : { ...r, error };
+  return error === r.error ? r : carryKept(r, { ...r, error });
+}
+
+/** What the designer is told (writes.ts announce: the window and Figma's toast) of a failure that lists no change as
+ *  applied and none as put back, but did not leave the file as it was: a preview put back but for what the designer
+ *  changed since (a section side they resized), or a batch or a preview whose layer the designer deleted, with what it
+ *  left (a section its frame grew, still that size) — never "nothing changed". `lead` starts the sentence that says
+ *  what the batch landed too ("Its preview", "It"). Not a field of the reply. */
+export interface KeptLine { text: string; lead: string }
+export const keptLine = new WeakMap<WriteResult, KeptLine>();
+/** `to`, a copy of `from` with more said: still told to the designer as `from` is (keptLine). */
+export function carryKept(from: WriteResult, to: WriteResult): WriteResult {
+  const k = keptLine.get(from);
+  if (k && to !== from) keptLine.set(to, k);
+  return to;
 }

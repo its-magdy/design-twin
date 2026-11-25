@@ -38,8 +38,11 @@ import { applyPatch, resolvePatchNode, type PatchTarget } from "./patch";
 import { buildSubtree, checkMade, createdCount, madeFrom, madeNodes, newMade, stampAll, type TreeTarget } from "./tree";
 import { componentKey, componentRootOf } from "../../bridge/src/component-spec.ts";
 import { arrangeVariants, componentReply, existingComponent, planDefs, planWiring, syncComponent, textsFollowing, unwireGoing, type DefsPlan } from "./component-build";
-import type { Change, OpProblem } from "./write-batch";
+import { RestoreStopped, type Change, type OpProblem } from "./write-batch";
 import { goneFrom, inDocument, nodeById, stillInDocument, stillToRestore, takeBack } from "./node-lookup";
+import { pageHolding } from "./places";
+import { matchByName } from "../../bridge/src/name-match.ts";
+import { idLike } from "../../bridge/src/place-spec.ts";
 
 /** A createTree op that updates the result its key names. */
 export interface KeyedUpdate {
@@ -106,6 +109,19 @@ function foreignIn(n: SceneNode, key: string): SceneNode | null {
   return null;
 }
 
+/** "leave `page` out", "leave `section` and `createSection` out": the placement fields of `fields` that `op` carries, to
+ *  leave out (a create flag left in without its name is refused). */
+function leaveOut(op: WriteOp, fields: readonly ("page" | "createPage" | "section" | "createSection")[]): string {
+  const has = fields.filter((f) => op[f] !== undefined).map((f) => "`" + f + "`");
+  return "leave " + (has.length > 1 ? has.slice(0, -1).join(", ") + " and " + has[has.length - 1] : has.join("")) + " out";
+}
+
+/** Whether name `ref` matches `item` alone among `items` (by id or by name, as a page or section is looked up). */
+function onlyOne<T extends BaseNode>(ref: string, items: readonly T[], item: T): boolean {
+  const m = matchByName(ref, items, (n) => n.name, (n) => [n.id]);
+  return m.kind === "one" && m.item === item;
+}
+
 /**
  * For every createTree op of a batch whose spec carries a key the file already has a result for: plan the update and
  * resolve its patches, setting the op's target `update`. A key used by two ops of one batch, a `page` other than the
@@ -146,10 +162,44 @@ export async function resolveKeyed(ops: readonly WriteOp[], targets: ReadonlyMap
       if ("ours" in found && (await loadPageOf(found.ours)) && inDocument(found.ours)) root = found.ours;
     } else root = await findResult(key);
     if (!root) continue; // built fresh, and stamped
-    // The page the op names, held across the result's page load (node-lookup.ts): gone, it is missing, never read.
-    if (op.page !== undefined && goneFrom(t.page, bad, "page")) continue;
-    if (op.page !== undefined && root.parent && root.parent.id !== t.page.id) {
-      bad(what + ": its result " + label(root) + " is on page '" + root.parent.name + "', not '" + t.page.name + "'; an update stays where the result is — leave `page` out");
+    // The page and section the op names, held across the result's page load (node-lookup.ts): gone, it is missing, never
+    // read.
+    const namedPage = op.page !== undefined ? t.dest.page.node : null;
+    if (namedPage && goneFrom(namedPage, bad, "page")) continue;
+    const namedSection = op.section !== undefined && t.dest.section ? t.dest.section.node : null;
+    if (namedSection && goneFrom(namedSection, bad, "section")) continue;
+    // An update stays where its result is: a page or section the op names must be the result's (one the batch would
+    // make is not: nothing is made for an update).
+    const on = pageHolding(root);
+    if (op.page !== undefined && on && on !== t.dest.page.node) {
+      // Its section too: left in, it would be looked for on the page the op then lands on.
+      bad(what + ": its result " + label(root) + " is on page '" + on.name + "', not '" + t.dest.page.name + "'; an update stays where the result is — " + leaveOut(op, ["page", "createPage", "section", "createSection"]));
+      continue;
+    }
+    const inSection = root.parent && root.parent.type === "SECTION" ? root.parent : null;
+    const s = t.dest.section;
+    if (op.section !== undefined && s && (!s.node || inSection !== s.node)) {
+      // A section the batch would make shares no node with the result's, even when it has the same name (the result's
+      // is on another page): said as a new one, where it would be, and the result's page to name instead.
+      const away = on && on !== t.dest.page.node ? on : null;
+      const where = inSection ? " is in section '" + inSection.name + "'" + (away ? " on page '" + away.name + "'" : "") : " is not in a section";
+      const named = s.node ? ", not '" + s.name + "'" : ", but `section` '" + s.name + "' would be a new section on " + (t.dest.page.current ? "the current page '" : "page '") + t.dest.page.name + "'";
+      // The other way there, when the op asks for a section to make: the result's page, and its section unless the op
+      // names that already (naming the page alone would still ask for a section it does not have). The result on another
+      // page means `page` was left out (one naming another page than the result's is refused above).
+      // By name only when each name it would send matches the result's alone (on its page, and in the file), and its
+      // section's name is not one that looks like an id (a link's 77-7: the wire refuses it with `createSection`, as a
+      // name to make); else by its section's id, which names its page too (and is never a name to make: sent with no
+      // `createSection`).
+      const same = !!inSection && s.name === inSection.name;
+      const page = !s.node && inSection
+        ? idLike(inSection.name) || !(on && onlyOne(inSection.name, on.findAllWithCriteria({ types: ["SECTION"] }), inSection) && (!away || onlyOne(away.name, figma.root.children, away)))
+          ? ", or name its section by its id: `section: '" + inSection.id + "'`" + (op.createSection === true ? " with no `createSection`" : "")
+          : away
+            ? same ? ", or name its page: `page: '" + away.name + "'`" : ", or name its section and its page: `section: '" + inSection.name + "', page: '" + away.name + "'`"
+            : same ? "" : ", or name its section: `section: '" + inSection.name + "'`"
+        : "";
+      bad(what + ": its result " + label(root) + where + named + "; an update stays where the result is — " + leaveOut(op, ["section", "createSection"]) + page);
       continue;
     }
     const old = readOld(root, key);
@@ -339,7 +389,7 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
     kind: "updated node",
     what: "the place, clipping or size limits of " + label(n),
     on: n,
-    async restore() {
+    async restore(allowed) {
       for (const [k, v] of kept.slice().reverse()) Reflect.set(n, k, v);
       if (size) {
         if ((n.width !== size.w || n.height !== size.h) && "resize" in n) n.resize(size.w, size.h);
@@ -351,6 +401,7 @@ function applyExtras(n: SceneNode, s: TreeNodeSpec, fields: readonly ExtraField[
         if (boundTo(n, k) === id) continue;
         const v = id ? await figma.variables.getVariableByIdAsync(id) : null;
         stillToRestore(n);
+        if (id && !allowed()) throw new RestoreStopped("'Allow edits' was turned off");
         n.setBoundVariable(k, v);
       }
     },

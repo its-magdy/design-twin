@@ -32,6 +32,21 @@ list of merged PRs.
 
 ### Added
 
+- A `createTree` can give a new feature its own page or section in one call: `section` lands the frame inside a section
+  of its page (a section id with no `page` finds it on whatever page holds it), and `createPage: true` /
+  `createSection: true` make the page or section when the file has none of that name (one it has is used, so the same
+  batch sent again lands in the same place). In a section the frame goes beside what it holds without overlap, or on a
+  new row when the section would run into a neighbour, never closer to its edge than its margin, and the section grows
+  to fit. Coordinates you give are kept; when they put the frame past the section's left or top edge, the reply warns
+  that it sticks out (a section grows only right and down). In review, Show me pans to where each frame of the batch
+  will land, counting what the ops before it land, resize, move or make. A name that matches nothing or several things is refused before anything runs,
+  and what the batch made is put back if a later op fails (a section you resized after the batch grew it keeps your
+  size, however many of its ops grew it, and the reply says so; after a preview, the plugin window and Figma's toast
+  say it too; a page or section the batch made goes back even when you moved another of its frames into it; if you
+  delete one of its frames and then turn "Allow edits" off, while it runs or while its preview is put back, the reply,
+  the plugin window and Figma's toast say the frame went and the section it grew keeps its new size, never that nothing
+  changed).
+  `figma_write`'s definition grew from 1,400 to 1,449 estimated tokens.
 - One `figma_write` op changes every layer that matches a rule: `patchWhere {where, scope?, set, token?}`. The rule is
   any of text equals, fill equals, uses a variable, is an instance of a component, and name matches (`*` for any run),
   all of which must hold; the scope is the selection, the current page, listed pages or the whole file. Its dry run
