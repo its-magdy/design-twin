@@ -513,10 +513,10 @@ var DesignTwinRelay = (() => {
       if (el) { el.className = kind; el.textContent = text; }
       if (p) { p.className = kind; p.textContent = pill; }
     }
-    // Application close code the bridge uses for "the handshake was fine but the TOKEN is wrong"
-    // (bridge/server-core.js). A browser WebSocket can never read an HTTP 401 — a refused handshake is
-    // an opaque 1006, identical to "nothing is listening" — so the bridge admits a plugin with a bad
-    // token just long enough to say so with a code we CAN read.
+    // Application close code the bridge uses for "the TOKEN is wrong" (bridge/src/server-core.ts). The token is
+    // not in the URL: Figma's console logs every failed dial's URL (each miss of the port walk), so the token goes
+    // in the socket's FIRST frame, {type:"auth", token}, the moment it opens. The bridge reads nothing else and
+    // routes nothing here until it checks out, and closes a wrong one with this code.
     var CLOSE_BAD_TOKEN = 4401;
     var everOpened = false;   // has ANY socket opened since the token was last saved?
     var failsSinceOpen = 0;   // consecutive failed attempts; >= ports.length means "tried them all"
@@ -565,12 +565,13 @@ var DesignTwinRelay = (() => {
       portIdx++;
       var s;
       try {
-        s = new WebSocket("ws://localhost:" + port + "/?token=" + encodeURIComponent(bridgeToken));
+        s = new WebSocket("ws://localhost:" + port + "/"); // no token here: it goes in the first frame (onopen)
       } catch (e) { failsSinceOpen++; showOffline(); scheduleReconnect(); return; }
       ws = s;
       if (!tokenRejected && !everOpened && failsSinceOpen < BRIDGE_PORTS.length) setBridge("", "connecting…", "Looking for the bridge on this computer…");
       s.onopen = function () {
         if (s !== ws) return;
+        try { s.send(JSON.stringify({ type: "auth", token: bridgeToken })); } catch (e) {} // first, before the hello
         // Stick to whatever answered: the next reconnect should retry the LIVE bridge's port first,
         // not resume walking the ladder past it.
         portIdx = BRIDGE_PORTS.indexOf(port);

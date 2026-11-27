@@ -126,14 +126,16 @@ function verifyClientWith(token: string): VerifyClient {
   return (info, done) => verifyClientAgainst(token, info, done);
 }
 
-function verifyClientAgainst(expected: string, info: HandshakeInfo, done: VerifyClientCallback): void {
+/** Why the upgrade's Origin or Host is refused (403), or null when both pass. Checked on EVERY upgrade, whichever way
+ *  the token arrives: before any frame can be read. */
+function originHostRefusal(info: HandshakeInfo): string | null {
   const req = info.req;
   // Origin: the plugin iframe sends "null" (sandboxed). Block real websites as cheap
   // defense-in-depth — but a sandboxed attacker iframe ALSO sends "null", so the token
   // is what actually authenticates.
   const origin = info.origin;
   const originOk = !origin || origin === "null" || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-  if (!originOk) return done(false, 403, "forbidden origin");
+  if (!originOk) return "forbidden origin";
   // Host header must be loopback (mitigates DNS-rebinding, where Origin looks fine). Parsed by URL, not
   // split on ":" — splitting "[::1]:8787" yielded "[", stripped to "", and an empty host SKIPPED the
   // check, so any bracketed IPv6 Host passed. URL strips the port and lowercases; its hostname keeps
@@ -143,14 +145,33 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
   try {
     host = new URL("http://" + (req.headers.host || "")).hostname.replace(/^\[|\]$/g, "");
   } catch { /* unparseable: stays "", refused below */ }
-  if (!host || !LOOPBACK_HOSTS.has(host)) return done(false, 403, "forbidden host");
-  // Token — the actual authentication.
-  let token = "";
+  if (!host || !LOOPBACK_HOSTS.has(host)) return "forbidden host";
+  return null;
+}
+
+/** The `?token=` the upgrade URL carries — the handshake of plugins before #189 — or null when it has none (the
+ *  current plugin, whose token arrives in its first frame). An empty `?token=` is a token presented, and wrong. */
+function urlToken(url: string | undefined): string | null {
   try {
-    token = new URL(String(req.url), "http://127.0.0.1").searchParams.get("token") || "";
-  } catch { /* unparseable URL: no token presented */ }
-  if (!safeEqual(token, expected)) return done(false, 401, rejectBadToken(token, expected));
-  authFailures = 0; // a success clears the backoff — a mis-paste then a fix shouldn't stay penalised
+    return new URL(String(url), "http://127.0.0.1").searchParams.get("token");
+  } catch { return null; /* unparseable URL: no token presented in it */ }
+}
+
+/** One token check, wherever the token arrived (URL or first frame): true on a match, which clears the backoff — a
+ *  mis-paste then a fix shouldn't stay penalised; a mismatch is recorded (rejectBadToken). */
+function tokenMatches(presented: string, expected: string): boolean {
+  if (!safeEqual(presented, expected)) { rejectBadToken(presented, expected); return false; }
+  authFailures = 0;
+  return true;
+}
+
+// The LEGACY handshake check: Origin, Host, and the token in the URL. Kept for one release, for plugins that still
+// put the token there (#189); the bridge's admission (admitWith) runs it only for an upgrade that carries `?token=`.
+function verifyClientAgainst(expected: string, info: HandshakeInfo, done: VerifyClientCallback): void {
+  const refusal = originHostRefusal(info);
+  if (refusal) return done(false, 403, refusal);
+  const token = urlToken(info.req.url) || "";
+  if (!tokenMatches(token, expected)) return done(false, 401, "bad or missing token");
   done(true);
 }
 
@@ -166,8 +187,22 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
 // Origin/Host failures are still refused outright at the HTTP layer.
 const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
 
+// THE FIRST-FRAME HANDSHAKE (#189). A browser logs a failed WebSocket dial's URL in its console (Figma's dev console
+// showed every miss of the 8787-8789 port walk), and a browser WebSocket cannot set a header, so the token no longer
+// rides in the URL: the plugin dials a bare URL and sends `{type:"auth", token}` (plugin-frames.ts AuthFrame) as its
+// FIRST frame. An upgrade with no `?token=` that passes Origin + Host is admitted UNAUTHENTICATED: not registered, so
+// nothing is routed to it and it is not listed, and nothing it sends is read until that first frame checks out. A
+// wrong token, or any other first frame, is closed with CLOSE_BAD_TOKEN, like a bad URL token; a socket that sends
+// nothing is closed with CLOSE_AUTH_TIMEOUT once AUTH_TIMEOUT_MS passes, so a silent peer cannot hold a socket open.
+const CLOSE_AUTH_TIMEOUT = 4408;
+/** How long an admitted socket has to send its auth frame. The plugin sends it the moment the socket opens. */
+const AUTH_TIMEOUT_MS = 5000;
+/** The largest first frame read as an auth frame: a token is 48 characters; nothing a plugin authenticates with is
+ *  anywhere near this, and a bigger first frame is refused without being parsed. */
+const MAX_AUTH_FRAME = 4096;
+
 // ---- the plugin <-> bridge protocol on the wire: plugin-frames.ts, the one module both sides type against.
-export type { BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame, ReplyFrame } from "./plugin-frames.ts";
+export type { AuthFrame, BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame, ReplyFrame } from "./plugin-frames.ts";
 import type { BridgeFrame } from "./plugin-frames.ts";
 
 // ---- the plugin <-> bridge protocol, as this module sees it.
@@ -229,12 +264,18 @@ interface RegistrySocket {
  *  number on a ServerWebSocket and on the registry's test doubles. */
 const WS_OPEN = 1;
 
-/** What each server socket carries (Bun.serve's per-socket `data`, set at upgrade): `badToken` marks a
- *  plugin admitted only to be closed with CLOSE_BAD_TOKEN (see `admit`); `entry` is its registry entry
- *  once open() has registered it — never for a bad-token socket. */
+/** How a socket stands with the token (Bun.serve's per-socket `data.auth`, set at upgrade): "ok" — authenticated
+ *  (a valid legacy `?token=`, or a valid auth frame since); "bad" — refused, being closed with CLOSE_BAD_TOKEN (see
+ *  `admit`); "pending" — admitted with no token in the URL, its first frame not read yet (the FIRST-FRAME HANDSHAKE). */
+type SocketAuth = "ok" | "bad" | "pending";
+
+/** What each server socket carries (Bun.serve's per-socket `data`, set at upgrade): its `auth` state; `entry`, its
+ *  registry entry once it is authenticated and registered — never for a bad-token or pending socket; `authTimer`, the
+ *  pending socket's CLOSE_AUTH_TIMEOUT. */
 interface SocketData {
-  badToken: boolean;
+  auth: SocketAuth;
   entry: ClientEntry | null;
+  authTimer: ReturnType<typeof setTimeout> | null;
 }
 type BridgeSocket = ServerWebSocket<SocketData>;
 
@@ -289,22 +330,39 @@ export interface RequestOutcome<C extends Cmd> {
   client: ClientRow;
 }
 
-/** The admission decision for one upgrade request: let it through (`badToken`: only to be closed with
- *  CLOSE_BAD_TOKEN), or refuse it with an HTTP status and body. */
-type Admission = { admit: true; badToken: boolean } | { admit: false; code: number; message: string };
+/** The admission decision for one upgrade request: let it through in auth state `auth` (see SocketAuth), or refuse
+ *  it with an HTTP status and body. `legacy`: it presented a valid token in its URL (the deprecated handshake). */
+type Admission = { admit: true; auth: SocketAuth; legacy: boolean } | { admit: false; code: number; message: string };
 
 function admitWith(token: string): (info: HandshakeInfo) => Admission {
   const verify = verifyClientWith(token);
   return (info) => {
-    // verify answers synchronously, through the callback shape it keeps (see VerifyClientCallback).
+    // No token in the URL: the first-frame handshake. Origin and Host are still checked here, before any frame.
+    if (urlToken(info.req.url) === null) {
+      const refusal = originHostRefusal(info);
+      return refusal ? { admit: false, code: 403, message: refusal } : { admit: true, auth: "pending", legacy: false };
+    }
+    // `?token=` in the URL: the legacy handshake, unchanged. verify answers synchronously, through the callback
+    // shape it keeps (see VerifyClientCallback).
     let out: Admission = { admit: false, code: 401, message: "" };
     verify(info, (ok, code, msg) => {
-      if (ok) out = { admit: true, badToken: false };
-      else if (code === 401 && info.origin === "null") out = { admit: true, badToken: true };
+      if (ok) out = { admit: true, auth: "ok", legacy: true };
+      else if (code === 401 && info.origin === "null") out = { admit: true, auth: "bad", legacy: true };
       else out = { admit: false, code: code || 401, message: msg || "" };
     });
     return out;
   };
+}
+
+/** The token an auth frame presents, or null when `data` is not an auth frame at all (then "" is what is recorded
+ *  as presented: rejectBadToken's "no token presented"). Read defensively: it is the first thing an unauthenticated
+ *  peer says. */
+function authFrameToken(data: string | Buffer): string | null {
+  if (typeof data !== "string" || data.length > MAX_AUTH_FRAME) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(data) as unknown; } catch { return null; }
+  if (!isRecord(parsed) || parsed.type !== "auth" || typeof parsed.token !== "string") return null;
+  return parsed.token;
 }
 
 // The status texts the bridge answers with. A refusal's body is its message, or this text without one —
@@ -596,6 +654,8 @@ interface BridgeOptions {
   settleMs?: number;
   /** the clock the pending requests' budgets and stall checks run on (clock.ts; systemClock when absent) */
   clock?: Clock;
+  /** how long an admitted socket has to send its auth frame (AUTH_TIMEOUT_MS); the test suite shortens it */
+  authTimeoutMs?: number;
 }
 
 function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
@@ -644,26 +704,63 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   let lastTakeoverAt = 0;
 
   // The socket handlers Bun.serve calls (its `websocket` option, below). A socket's registry entry rides
-  // on its own `data`, set by open(); a bad-token socket never gets one, so every handler after open()
-  // ignores it — it can neither receive a command nor send a result.
-  function onOpen(ws: BridgeSocket): void {
-    // Admitted only to be told why it is refused (see `admit`). Before anything else: no registry
-    // entry. terminate() backs the close up in case the peer never completes it.
-    if (ws.data.badToken) {
-      ws.close(CLOSE_BAD_TOKEN, "bad token");
-      setTimeout(() => { try { ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
-      return;
-    }
-    // Every connection is kept. The previous single-socket rule terminated the incumbent here, which
-    // made two open Figma files fight: the displaced plugin's auto-reconnect immediately stole the
-    // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
-    // contention rather than arbitrating it.
+  // on its own `data`, set once it is authenticated; a bad-token or pending socket has none, so every handler
+  // ignores what it sends (bar a pending socket's first frame) — it can neither receive a command nor send a result.
+  const authTimeoutMs = opts.authTimeoutMs ?? AUTH_TIMEOUT_MS;
+  // Sockets admitted with no token in the URL and not yet authenticated: close() must end them too.
+  const unauthed = new Set<BridgeSocket>();
+  // The legacy `?token=` handshake is said once per bridge, not on every reconnect of the same old plugin.
+  let legacyNoted = false;
+
+  // Close a socket whose token was refused, and back the close up with terminate() in case the peer never
+  // completes it. No registry entry, ever.
+  function refuse(ws: BridgeSocket, code: number, reason: string): void {
+    ws.data.auth = "bad";
+    try { ws.close(code, reason); } catch { /* already gone */ }
+    setTimeout(() => { try { ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
+  }
+
+  // Every connection is kept. The previous single-socket rule terminated the incumbent here, which
+  // made two open Figma files fight: the displaced plugin's auto-reconnect immediately stole the
+  // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
+  // contention rather than arbitrating it.
+  function register(ws: BridgeSocket): void {
+    ws.data.auth = "ok";
     const entry = registry.add(ws);
     ws.data.entry = entry;
     console.error(`[bridge] plugin connected: ${entry.connId} (${clients.size} connected).`);
   }
 
+  function onOpen(ws: BridgeSocket): void {
+    // Admitted only to be told why it is refused (see `admit`). Before anything else: no registry entry.
+    if (ws.data.auth === "bad") return refuse(ws, CLOSE_BAD_TOKEN, "bad token");
+    // No token yet: held unregistered until its first frame (onMessage), for authTimeoutMs at most.
+    if (ws.data.auth === "pending") {
+      unauthed.add(ws);
+      ws.data.authTimer = setTimeout(() => {
+        unauthed.delete(ws);
+        ws.data.authTimer = null;
+        if (ws.data.auth === "pending") refuse(ws, CLOSE_AUTH_TIMEOUT, "no auth frame");
+      }, authTimeoutMs);
+      ws.data.authTimer.unref();
+      return;
+    }
+    register(ws);
+  }
+
+  // A pending socket's first frame decides it: a matching auth frame registers it; anything else — a wrong token,
+  // a non-auth frame (a forged reply, a hello), a binary frame — closes it with CLOSE_BAD_TOKEN, unread.
+  function authenticate(ws: BridgeSocket, data: string | Buffer): void {
+    if (ws.data.authTimer) { clearTimeout(ws.data.authTimer); ws.data.authTimer = null; }
+    unauthed.delete(ws);
+    const presented = authFrameToken(data);
+    if (presented !== null && tokenMatches(presented, token)) return register(ws);
+    if (presented === null) rejectBadToken("", token);
+    refuse(ws, CLOSE_BAD_TOKEN, "bad token");
+  }
+
   function onMessage(ws: BridgeSocket, data: string | Buffer): void {
+    if (ws.data.auth === "pending") return authenticate(ws, data);
     const entry = ws.data.entry;
     if (!entry) return;
     const connId = entry.connId;
@@ -718,8 +815,10 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   // A frame over maxPayloadLength closes the socket with 1009, or — what Bun 1.4 actually reports to
   // this handler — 1006 "Received too big message"; a peer that closes with 1009 itself says the same.
   function onClose(ws: BridgeSocket, code: number, reason: string): void {
+    if (ws.data.authTimer) { clearTimeout(ws.data.authTimer); ws.data.authTimer = null; }
+    unauthed.delete(ws);
     const entry = ws.data.entry;
-    if (!entry) return; // a bad-token socket: never registered, nothing in flight
+    if (!entry) return; // a bad-token or never-authenticated socket: never registered, nothing in flight
     const connId = entry.connId;
     // Only forget THIS connection. A single-socket guard (`socket === ws`)
     // would do the same job by accident; with a registry it has to be explicit, or one file closing
@@ -810,8 +909,13 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
         const host = req.headers.get("host");
         const a = admit({ ...(origin !== null ? { origin } : {}), req: { url: req.url, headers: { host: host ?? undefined } } });
         if (!a.admit) return refuseUpgrade(a.code, a.message);
+        if (a.legacy && a.auth === "ok" && !legacyNoted) {
+          legacyNoted = true;
+          console.error("[bridge] a plugin connected with the bridge token in its URL — an older Design Twin plugin. This still works for now, " +
+            "but the next release refuses it: re-import the plugin from the current dtwin package (dtwin plugin import).");
+        }
         // false: not a valid WebSocket handshake after all (no Sec-WebSocket-Key, a version other than 13).
-        return srv.upgrade(req, { data: { badToken: a.badToken, entry: null } }) ? undefined : refuseUpgrade(400);
+        return srv.upgrade(req, { data: { auth: a.auth, entry: null, authTimer: null } }) ? undefined : refuseUpgrade(400);
       },
       websocket: {
         maxPayloadLength: maxPayloadBytes,
@@ -1044,6 +1148,12 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
       try { e.ws.close(); } catch { /* already gone */ }
       setTimeout(() => { try { e.ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
     }
+    // A socket still waiting to authenticate holds the loop open just the same.
+    for (const ws of unauthed) {
+      if (ws.data.authTimer) { clearTimeout(ws.data.authTimer); ws.data.authTimer = null; }
+      refuse(ws, 1001, "bridge closed");
+    }
+    unauthed.clear();
     registry.clear(); // and every wait for a client ends now
     // Stop listening. stop(false) leaves the sockets just closed above to finish their handshake (or be
     // terminated); its promise settles when they have, which nothing here needs to wait for.
@@ -1073,4 +1183,4 @@ export type { BridgeOptions };
 // a live WebSocket handshake.
 // isConnId and connectionFor live in route.ts (which takes only types from this module); re-exported for the suites
 // that test them here.
-export { createBridge, createRegistry, connectionFor, isConnId, verifyClientWith, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
+export { createBridge, createRegistry, connectionFor, isConnId, verifyClientWith, CLOSE_BAD_TOKEN, CLOSE_AUTH_TIMEOUT, AUTH_TIMEOUT_MS, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };

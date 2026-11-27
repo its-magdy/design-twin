@@ -53,6 +53,9 @@ export class WsClient extends EventEmitter {
 
   get readyState(): number { return this.#impl.readyState(); }
   send(data: string): void { this.#impl.send(data); }
+  /** Send a ping; the server's pong arrives as a "pong" event. A server reads a socket's frames in order, so a pong
+   *  means every frame sent before the ping has been handled. */
+  ping(): void { this.#impl.ping(); }
   close(code?: number, reason?: string): void { this.#impl.close(code, reason); }
   /** Drop the connection at once, with no closing handshake. */
   terminate(): void { this.#impl.terminate(); }
@@ -61,6 +64,7 @@ export class WsClient extends EventEmitter {
 interface Impl {
   readyState(): number;
   send(data: string): void;
+  ping(): void;
   close(code?: number, reason?: string): void;
   terminate(): void;
 }
@@ -74,11 +78,13 @@ function bunClient(ev: EventEmitter, url: string, headers: Record<string, string
   ws.addEventListener("message", (e: MessageEvent) => ev.emit("message", e.data as RawData, typeof e.data !== "string"));
   // Bun's client answers every ping itself and also reports it as an event.
   ws.addEventListener("ping" as "message", (e: MessageEvent) => ev.emit("ping", e.data));
+  ws.addEventListener("pong" as "message", (e: MessageEvent) => ev.emit("pong", e.data));
   ws.addEventListener("error", (e: Event) => ev.emit("error", new Error((e as ErrorEvent).message || "WebSocket error")));
   ws.addEventListener("close", (e: CloseEvent) => ev.emit("close", e.code, e.reason));
   return {
     readyState: () => ws.readyState,
     send: (d) => ws.send(d),
+    ping: () => ws.ping(),
     close: (code, reason) => ws.close(code, reason),
     terminate: () => ws.terminate(),
   };
@@ -232,6 +238,7 @@ function rawClient(ev: EventEmitter, url: string, headers: Record<string, string
   return {
     readyState: () => state,
     send: (d) => { if (state === OPEN) sock.write(frame(1, Buffer.from(d, "utf8"))); },
+    ping: () => { if (state === OPEN) sock.write(frame(9, Buffer.alloc(0))); },
     close: (code, reason = "") => {
       if (state !== OPEN) return;
       state = CLOSING;

@@ -6,7 +6,7 @@
 //     on: { ping: () => ({ pong: true, page: "Home", file: "Sample App" }),
 //           exportNode: (args, ctx) => (hang ? HANG : screenReply({ … })) },
 //   });
-//   await p.opened;                       // dialled, and the hello sent
+//   await p.opened;                       // dialled, authenticated (the first-frame token), and the hello sent
 //   p.commands("exportNode"); p.cancels; // what the bridge sent it
 //
 // Between its socket and its handlers sits the plugin's REAL relay (figma-plugin/src/relay.ts, what ui.html runs):
@@ -21,7 +21,7 @@
 // included), `raw: true` is the dead peer that never pongs (ws-client.ts), `redial` keeps dialling until the bridge
 // listens and after it drops the socket. It adds no waits of its own: a suite's timing is its own.
 import type { Cmd, Commands, WhoamiReply } from "../bridge/src/commands.ts";
-import type { BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame } from "../bridge/src/server-core.ts";
+import type { AuthFrame, BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame } from "../bridge/src/server-core.ts";
 import { createRelay, type Relay } from "../figma-plugin/src/relay.ts";
 import type { UIToMain } from "../figma-plugin/src/messages.ts";
 import { WsClient, type HandshakeRefusal, type RawData } from "./ws-client.ts";
@@ -45,7 +45,10 @@ export type Handler<C extends Cmd> = (args: Commands[C]["args"], ctx: CommandCtx
 export type Handlers = { [C in Cmd]?: Handler<C> };
 
 export interface FakePluginOptions {
+  /** sent as the socket's first frame, `{type:"auth", token}`, as ui.html does (#189) */
   token: string;
+  /** the handshake of plugins before #189: the token in the URL's `?token=` (the bridge still takes it, deprecated) */
+  legacyUrlToken?: boolean;
   /** the Origin header; the plugin's iframe sends "null" (the default). `null`: no Origin header. */
   origin?: string | null;
   /** extra request headers (a `host` replaces the Host header) */
@@ -63,8 +66,12 @@ export interface FakePluginOptions {
 }
 
 export interface FakePlugin {
-  /** settles when the first socket opens (and its hello is sent); rejects on a dial error when not redialling */
+  /** settles once the first socket is open AND the bridge has read its auth frame (and its hello, when one is sent):
+   *  a ping sent after them is answered only once the bridge has handled every frame before it. Rejects on a dial
+   *  error, or a close before that (a refused token), when not redialling */
   readonly opened: Promise<void>;
+  /** the URL it dials (no token in it, unless legacyUrlToken) */
+  readonly url: string;
   /** the current socket */
   readonly ws: WsClient;
   /** every frame the bridge sent, in order, with when it arrived */
@@ -99,7 +106,7 @@ const identityOf = (h: Omit<HelloFrame, "type">): WhoamiReply => ({
 });
 
 export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
-  const url = `ws://127.0.0.1:${port}/?token=${opts.token}`;
+  const url = opts.legacyUrlToken ? `ws://127.0.0.1:${port}/?token=${opts.token}` : `ws://127.0.0.1:${port}/`;
   const origin = opts.origin === undefined ? "null" : opts.origin;
   const handlers: Handlers = opts.on ?? {};
   const frames: Array<{ frame: BridgeFrame; at: number }> = [];
@@ -156,14 +163,16 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
     relays.set(c, relay);
     // Without redial, a socket that never opens settles `opened`: a dial error, a refused handshake (the raw client
     // reports it as `unexpected-response`, then closes, with no `error`), or any close before open.
-    let wasOpen = false;
+    let authed = false;
     c.on("error", (e: unknown) => { if (!opts.redial) rejectOpened(e); });
     c.on("unexpected-response", (r: HandshakeRefusal) => { if (!opts.redial) rejectOpened(new Error(`handshake refused: HTTP ${r.statusCode} ${r.body}`)); });
-    c.on("close", (code: number) => { if (!opts.redial && !wasOpen) rejectOpened(new Error(`closed before it opened (code ${code})`)); });
+    c.on("close", (code: number) => { if (!opts.redial && !authed) rejectOpened(new Error(`closed before it authenticated (code ${code})`)); });
+    // The ping fence: the bridge reads a socket's frames in order, so its pong says the auth frame and the hello were handled.
+    c.on("pong", () => { if (!authed) { authed = true; resolveOpened(); } });
     c.on("open", () => {
-      wasOpen = true;
+      if (!opts.legacyUrlToken) sendOn(c, { type: "auth", token: opts.token } satisfies AuthFrame); // first, as ui.html sends it
       relay.socketOpened(); // the main thread answers get-identity: the hello
-      resolveOpened();
+      c.ping();
     });
     c.on("close", () => relay.socketClosed());
     c.on("message", (raw: RawData) => {
@@ -192,6 +201,7 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
 
   return {
     opened,
+    url,
     get ws() { return current(); },
     frames,
     commands: (cmd) => frames.map((f) => f.frame).filter((f): f is CommandFrame => !isCancel(f) && (cmd === undefined || f.cmd === cmd)),

@@ -132,6 +132,16 @@ propagate to every child process and leak into logs, and it has to be re-exporte
 When both are present `--token-status` says so explicitly — a saved token silently shadowed by an
 env var is otherwise a genuinely confusing state to debug.
 
+**How the plugin presents it.** Not in the connection URL: Figma's dev console logs the URL of every
+failed WebSocket dial, and the plugin dials ports 8787–8789 in turn. The plugin dials a bare
+`ws://localhost:<port>/` and sends the token as the socket's first frame, `{"type":"auth","token":"…"}`.
+Until that frame checks out the bridge does not list the socket, routes nothing to it and reads nothing
+else from it. A wrong token, or any other first frame, is closed with code `4401`; a socket that sends no
+auth frame within 5 seconds is closed with `4408`. The token in the URL (`?token=…`), which plugins
+before this change send, is still accepted for one release and logs a deprecation line on the bridge;
+the release after refuses it. Update the plugin together with `dtwin`: a new plugin against an older
+bridge is reported as "token rejected".
+
 **What this protects against, and what it doesn't.** The `0600` file stops *other users* on the
 machine. It does not stop another process running as *you* — only an OS keychain would, and this
 bridge deliberately doesn't use one: `keytar` is archived, its live replacements are native binaries

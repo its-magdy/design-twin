@@ -171,8 +171,11 @@ Design decisions worth not re-litigating:
 - **Iframe has `null` origin** → the local CLI/MCP server must send `Access-Control-Allow-Origin: *`
   for any HTTP; for WebSocket, origin **cannot** authenticate — the plugin sends `null`, but so does a
   sandboxed attacker iframe (`<iframe sandbox="allow-scripts">`) on any site the user visits. The bridge
-  therefore requires a **shared token** (`?token=…`) validated at the handshake, keeping the Origin/Host
-  checks only as defense-in-depth. Compared as SHA-256 digests through `timingSafeEqual`: hashing first
+  therefore requires a **shared token**, keeping the Origin/Host checks (at the HTTP upgrade) only as
+  defense-in-depth. The token is the socket's **first frame** (`{type:"auth", token}`), not part of the URL:
+  Figma's console logs every failed dial's URL. Until it checks out the socket is unregistered (nothing routed
+  to it, nothing it sends read); a wrong token or any other first frame closes it with 4401, silence for 5 s
+  with 4408. The legacy `?token=…` URL is still accepted for one release (deprecated). Compared as SHA-256 digests through `timingSafeEqual`: hashing first
   makes both sides a fixed 32 bytes, so unlike a raw compare guarded by a length check, neither the
   token's content nor its **length** leaks through timing.
 - **No documented payload-size cap** on `postMessage`. Nothing is chunked: each response reaches the bridge

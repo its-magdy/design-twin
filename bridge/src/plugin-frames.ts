@@ -12,6 +12,10 @@ export interface CommandFrame<C extends Cmd = Cmd> { id: string; cmd: C; args: C
 /** bridge -> plugin: the bridge gave up on request `id` (timed out, stalled out, or its caller left). */
 export interface CancelFrame { type: "cancel"; id: string }
 export type BridgeFrame = CommandFrame | CancelFrame;
+/** plugin -> bridge: the bridge token, the FIRST frame on every socket (#189). The URL carries no token, because a
+ *  browser logs a failed WebSocket dial's URL in its console. The bridge reads nothing else from a socket, and routes
+ *  nothing to it, until this frame checks out; a wrong token (or any other first frame) is closed with 4401. */
+export interface AuthFrame { type: "auth"; token: string }
 /** plugin -> bridge: who this plugin is, sent on every socket open. The relay sends null for what it does not
  *  know; a plugin older than version reporting omits pluginVersion. */
 export interface HelloFrame {
@@ -29,4 +33,4 @@ export type ReplyFrame = { [C in Cmd]: { id: string; ok: true; result: Commands[
 /** A ReplyFrame as the relay sends it: the main thread's result, whose shape server-core checks on arrival
  *  (commands.ts replyShapeError) — the relay forwards it, it cannot know it. */
 export type RelayedReplyFrame = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: string };
-export type PluginWireFrame = HelloFrame | ProgressFrame | ReplyFrame;
+export type PluginWireFrame = AuthFrame | HelloFrame | ProgressFrame | ReplyFrame;

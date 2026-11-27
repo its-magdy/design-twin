@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 // The plugin stand-in: Bun's WebSocket (or the raw RFC 6455 client) behind ws's event API — see ws-client.ts.
 import { WsClient } from "./ws-client.ts";
-import type { ClientOptions, HandshakeRefusal } from "./ws-client.ts";
+import type { ClientOptions, HandshakeRefusal, RawData } from "./ws-client.ts";
 import { fakePlugin, HANG, type FakePlugin, type Handler, type Handlers } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
 import { addressAt, settingsAt } from "./bridge-settings.ts";
@@ -526,6 +526,107 @@ void (async () => {
     ok("[bad-token] the right token still connects normally afterwards", bridge.listClients().length === 1);
     good.close();
     bridge.close();
+  }
+
+  // ------------------------------------------------- server-core: the token in the FIRST FRAME (#189)
+  // The plugin dials a URL with no token in it (a failed dial is logged in Figma's console, URL and all) and
+  // sends `{type:"auth", token}` as its first frame. Until that frame checks out the socket is held unregistered:
+  // nothing is routed to it and nothing it sends is read. A bad token, or any other first frame, closes it with 4401;
+  // a socket that never says anything is closed with 4408 once the auth window passes.
+  {
+    console.log("\nserver-core — first-frame auth:");
+    const port = nextPort++;
+    const bridge = core.createBridge(settingsAt(port), { settleMs: 0, authTimeoutMs: 400 });
+    await bridge.listening;
+    const url = `ws://127.0.0.1:${port}/`;
+    type Seen = { opened: boolean; http?: number; code?: number; reason?: string; frames: string[] };
+    // A socket that dials `url`, runs `onOpen` once open, and reports how it ended.
+    const dialRaw = (onOpen: (c: WsClient) => void, opts: ClientOptions = { origin: "null" }) => {
+      const c = new WsClient(url, opts);
+      const seen: Seen = { opened: false, frames: [] };
+      const ended = new Promise<Seen>((res) => {
+        c.on("open", () => { seen.opened = true; onOpen(c); });
+        c.on("message", (raw: RawData) => { seen.frames.push(String(raw)); });
+        c.on("unexpected-response", (r: HandshakeRefusal) => { seen.http = r.statusCode; res(seen); });
+        c.on("close", (code: number, reason: string) => { seen.code = code; seen.reason = String(reason); res(seen); });
+        c.on("error", () => {});
+      });
+      return { c, ended };
+    };
+
+    // A valid first-frame token: the fake plugin's default handshake (no `?token=` in its URL).
+    const plugin = fakePlugin(port, { token: TOKEN, hello: { file: "Design" }, on: { ping: (): PingReply => ({ pong: true, page: "P", file: "Design" }) } });
+    await plugin.opened;
+    ok("[auth-frame] the fake plugin's URL carries no token", !/token/.test(plugin.url));
+    ok("[auth-frame] a valid token in the first frame registers the client", await until(() => bridge.listClients().some((r) => r.file === "Design"), 2000));
+    const pong = await bridge.request("ping", {}, { timeoutMs: 5000 }).catch(() => null);
+    ok("[auth-frame] and commands reach it", !!pong && pong.reply.pong === true);
+
+    // A wrong token in the first frame: 4401, never registered, its hello never read.
+    const wrong = dialRaw((c) => { c.send(JSON.stringify({ type: "auth", token: "wrong" })); c.send(JSON.stringify({ type: "hello", file: "intruder" })); });
+    const w = await wrong.ended;
+    ok("[auth-frame] a wrong token in the first frame is closed with 4401", w.opened && w.code === core.CLOSE_BAD_TOKEN);
+    ok("[auth-frame] …and was never registered (its hello was not read)", bridge.listClients().length === 1 && !bridge.listClients().some((r) => r.file === "intruder"));
+    // An auth frame whose token is not a string, and one with no token, are bad tokens too.
+    const notString = await dialRaw((c) => c.send(JSON.stringify({ type: "auth", token: 12345 }))).ended;
+    const missing = await dialRaw((c) => c.send(JSON.stringify({ type: "auth" }))).ended;
+    ok("[auth-frame] a non-string or missing token in the auth frame is closed with 4401", notString.code === 4401 && missing.code === 4401);
+
+    // A command frame's reply sent BEFORE auth is refused, not run: the request it names stays pending, the socket is
+    // closed 4401, and the real client's answer is the one that settles it.
+    let settle: (v: PingReply) => void = () => {};
+    const held = fakePlugin(port, { token: TOKEN, hello: { file: "Held" }, on: { ping: () => new Promise<PingReply>((res) => { settle = res; }) } });
+    await held.opened;
+    await until(() => bridge.listClients().some((r) => r.file === "Held"), 2000);
+    const heldConn = must(bridge.listClients().find((r) => r.file === "Held"), "Held client").connId;
+    const inflight = bridge.request("ping", {}, { timeoutMs: 5000, target: heldConn });
+    await until(() => held.commands("ping").length === 1, 2000);
+    const id = must(held.commands("ping")[0], "ping frame").id;
+    const forged = await dialRaw((c) => {
+      c.send(JSON.stringify({ id, ok: true, result: { pong: true, page: "FORGED", file: "FORGED" } }));
+      c.send(JSON.stringify({ type: "auth", token: TOKEN })); // too late: the first frame decides
+    }).ended;
+    ok("[auth-frame] a frame sent before auth (a forged reply) closes the socket with 4401", forged.code === 4401);
+    settle({ pong: true, page: "P", file: "Held" });
+    const real = await inflight.catch(() => null);
+    ok("[auth-frame] …and was not run: the request it named settled with the real client's reply", !!real && real.reply.page === "P");
+    ok("[auth-frame] …and the refused socket was never registered", bridge.listClients().length === 2);
+
+    // A socket that is open but has not authenticated is not a client: nothing is routed to it, no command is sent.
+    const silent = dialRaw(() => {});
+    await sleep(150);
+    ok("[auth-frame] an open socket that has not authenticated is not listed and is sent nothing",
+      bridge.listClients().length === 2 && silent.c.readyState === WsClient.OPEN);
+    const s = await silent.ended;
+    ok("[auth-frame] …and is closed with 4408 once the auth window passes", s.code === core.CLOSE_AUTH_TIMEOUT && core.CLOSE_AUTH_TIMEOUT === 4408 && s.frames.length === 0);
+
+    // A no-Origin client (a script, not the iframe) goes through the same first-frame check.
+    const noOrigin = await dialRaw((c) => c.send(JSON.stringify({ type: "auth", token: "wrong" })), {}).ended;
+    ok("[auth-frame] a client with no Origin header and a wrong first-frame token is closed 4401", noOrigin.opened && noOrigin.code === 4401);
+    // Origin and Host are still checked at the HTTP layer, token or no token.
+    const site = await dialRaw(() => {}, { origin: "https://evil.example", raw: true }).ended;
+    const host = await dialRaw(() => {}, { origin: "null", headers: { host: "evil.example" }, raw: true }).ended;
+    ok("[auth-frame] a real website Origin, or a non-loopback Host, is still refused 403 before any frame", !site.opened && site.http === 403 && !host.opened && host.http === 403);
+
+    // The legacy handshake (`?token=` in the URL, plugins before #189) still connects, for one release.
+    const legacy = fakePlugin(port, { token: TOKEN, hello: { file: "Legacy" }, legacyUrlToken: true });
+    await legacy.opened;
+    ok("[auth-frame] the legacy ?token= handshake still connects (deprecated)", /token=/.test(legacy.url) && await until(() => bridge.listClients().some((r) => r.file === "Legacy"), 2000));
+    plugin.stop(); held.stop(); legacy.stop();
+    bridge.close();
+  }
+  // bridge.close() also ends a socket still waiting to authenticate, so the process can exit.
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(settingsAt(port), { settleMs: 0 });
+    await bridge.listening;
+    const c = new WsClient(`ws://127.0.0.1:${port}/`, { origin: "null" });
+    let closedCode = -1;
+    c.on("close", (code: number) => { closedCode = code; });
+    c.on("error", () => {});
+    await new Promise<void>((res) => c.on("open", () => res()));
+    bridge.close();
+    ok("[auth-frame] bridge.close() closes a socket that is still waiting to authenticate", await until(() => closedCode !== -1, 3000));
   }
 
   // ------------------------------------------------- server-core: the HTTP side of Bun.serve
