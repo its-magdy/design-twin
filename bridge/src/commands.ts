@@ -616,6 +616,8 @@ export interface AppliedWrite {
   /** setReactions: how many reactions the layer has now, and how many it had before */
   reactions?: number;
   replaced?: number;
+  /** setReactions: the flow Figma started on its own, the page having none, when the layer got its first connection */
+  flowAdded?: string;
   /** setFlowStart: the flow the frame starts now (`from`: its old name, when it started one already); clearFlowStart:
    *  `from` is the flow it no longer starts */
   flow?: string;

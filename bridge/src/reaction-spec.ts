@@ -30,7 +30,7 @@ export const MAX_DURATION = 10;
 /** A transition's easing when the spec gives none (Figma's own default). */
 export const DEFAULT_EASING = "ease_out";
 
-export const TRIGGERS = ["on_click", "on_hover", "on_press", "on_drag", "after_timeout", "mouse_enter", "mouse_leave", "mouse_up", "mouse_down", "on_key_down"] as const;
+export const TRIGGERS = ["on_click", "on_hover", "on_press", "after_timeout", "mouse_enter", "mouse_leave", "mouse_up", "mouse_down", "on_key_down"] as const;
 export type WriteTrigger = (typeof TRIGGERS)[number];
 export const NAVIGATIONS = ["navigate", "swap", "overlay", "scroll_to", "change_to"] as const;
 export type WriteNavigation = (typeof NAVIGATIONS)[number];
@@ -77,8 +77,9 @@ export interface WriteReaction {
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const bool: Check = (v) => (typeof v === "boolean" ? null : "must be true or false");
-// A trigger's timeout and delay are Figma's milliseconds, as the read export writes them (a transition's duration is seconds).
-const millis: Check = (v) => (isNum(v) && v >= 0 ? null : "must be a number of milliseconds ≥ 0 (Figma's unit for a trigger; 2000 is 2 s)");
+// A trigger's timeout and delay are seconds in Figma's plugin API, as the read export writes them (seen live: a timeout
+// of 2000 showed as 2,000,000 ms in Figma's Prototype panel; 2 shows as 2000 ms).
+const seconds: Check = (v) => (isNum(v) && v >= 0 ? null : "must be a number of seconds ≥ 0 (2 is 2000 ms in Figma's Prototype panel)");
 const nonEmpty: Check = (v) => (typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string");
 const xy: Check = (v) => (isObj(v) && isNum(v.x) && isNum(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}, two numbers");
 const unitNum: Check = (v) => (isNum(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1");
@@ -118,9 +119,9 @@ const ACTION_RULES: Readonly<Record<string, Rule>> = {
   conditionalBlocks: refuse(VARIABLE_ACTION), mediaAction: refuse(MEDIA), amountToSkip: refuse(MEDIA), newTimestamp: refuse(MEDIA),
 };
 const REACTION_RULES: Readonly<Record<string, Rule>> = {
-  trigger: (v) => (v === "on_media_hit" || v === "on_media_end" ? MEDIA : v === "unknown" ? "a trigger the read could not name cannot be written; give one of " + TRIGGERS.join(" | ") : oneOf(...TRIGGERS)(v)),
-  timeout: millis,
-  delay: millis,
+  trigger: (v) => (v === "on_drag" ? "an on_drag trigger cannot be written yet (Figma refuses it from a plugin: seen live, with a close or a navigate action)" : v === "on_media_hit" || v === "on_media_end" ? MEDIA : v === "unknown" ? "a trigger the read could not name cannot be written; give one of " + TRIGGERS.join(" | ") : oneOf(...TRIGGERS)(v)),
+  timeout: seconds,
+  delay: seconds,
   keyCodes: (v) => (Array.isArray(v) && v.length > 0 && v.every((k) => isNum(k) && Number.isInteger(k) && k >= 0) ? null : "must be a non-empty list of key codes (whole numbers ≥ 0)"),
   device: oneOf(...DEVICES),
   actions: (v) => (Array.isArray(v) ? null : "must be a list of actions"),
@@ -159,7 +160,7 @@ export function checkReactions(list: unknown, path = "reactions"): { problems: s
       const allowed = TRIGGER_FIELDS[k] || [];
       if (r[k] !== undefined && allowed.indexOf(trigger as WriteTrigger) < 0) problems.push(at + "." + k + ": only with trigger " + allowed.join(" | ") + " (this one is " + trigger + ")");
     }
-    if (trigger === "after_timeout" && r.timeout === undefined) problems.push(at + ": trigger after_timeout needs `timeout` (milliseconds)");
+    if (trigger === "after_timeout" && r.timeout === undefined) problems.push(at + ": trigger after_timeout needs `timeout` (seconds)");
     if (trigger === "on_key_down" && r.keyCodes === undefined) problems.push(at + ": trigger on_key_down needs `keyCodes`");
     const acts = Array.isArray(r.actions) ? r.actions : null;
     if (!acts) { if (r.actions === undefined) problems.push(at + ": needs `actions`, a list of what the trigger does"); return; }
@@ -239,9 +240,9 @@ const secs = (n: number): string => (Math.round(n * 1000) / 1000) + " s";
 /** A trigger in a few words: "on click", "after 2 s", "mouse enter after 0.3 s", "key down 13, 27". */
 export function triggerText(r: WriteReaction): string {
   const t = r.trigger || "on_click";
-  if (t === "after_timeout") return "after " + secs((r.timeout || 0) / 1000);
+  if (t === "after_timeout") return "after " + secs(r.timeout || 0);
   if (t === "on_key_down") return "key " + (r.keyCodes || []).join(", ") + (r.device && r.device !== "keyboard" ? " (" + words(r.device) + ")" : "");
-  if (r.delay) return words(t) + " after " + secs(r.delay / 1000);
+  if (r.delay) return words(t) + " after " + secs(r.delay);
   return words(t);
 }
 

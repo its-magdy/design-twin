@@ -82,8 +82,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?, partly?}`
     (`created` / `updated` list `[name, id]`, `unchanged` counts the rest; the styles table is `{styles: true, …}`).
   - `patch` `{id, unbound?}` · `patchWhere` `{matched, pages, unbound?}` (how many layers, on how many pages; no ids) · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
-    the mode `from` → `to` (`inherited` when none is set) · `setReactions` `{id, reactions, replaced}` (how many it has
-    now, and had) · `setFlowStart` `{id, flow, from?}` · `clearFlowStart` `{id, from}` (`from`: the flow's old name) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
+    the mode `from` → `to` (`inherited` when none is set) · `setReactions` `{id, reactions, replaced, flowAdded?}` (how many it has
+    now, and had; `flowAdded`: the flow Figma started on its own, the page having none) · `setFlowStart` `{id, flow, from?}` · `clearFlowStart` `{id, from}` (`from`: the flow's old name) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
 - Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
   edits off, rejected with the designer's reason, withdrawn or not reviewed in time, another write still waiting, Dev Mode, or every problem of the batch with its
   path and up to three candidates).
@@ -488,12 +488,12 @@ second call. `setReactions {nodeId, reactions}` sets what a layer does in a prot
 ```json
 {"op": "setReactions", "nodeId": "12:4", "reactions": [
   {"trigger": "on_click", "actions": [{"type": "node", "destination": "Details", "transition": {"type": "smart_animate", "duration": 0.3}}]},
-  {"trigger": "after_timeout", "timeout": 2000, "actions": [{"type": "back"}]}]}
+  {"trigger": "after_timeout", "timeout": 2, "actions": [{"type": "back"}]}]}
 ```
 
 - A reaction is a `trigger` (`on_click` when absent) and its `actions`, run in order (1–10; at most 50 reactions an
-  op). Triggers: `on_click`, `on_hover`, `on_press`, `on_drag`, `after_timeout` (needs `timeout`, in milliseconds as Figma stores it: 2000 is 2 s),
-  `mouse_enter`, `mouse_leave`, `mouse_up`, `mouse_down` (each with an optional `delay`, milliseconds), `on_key_down` (needs
+  op). Triggers: `on_click`, `on_hover`, `on_press`, `after_timeout` (needs `timeout`, in seconds: 2 is Figma's 2000 ms),
+  `mouse_enter`, `mouse_leave`, `mouse_up`, `mouse_down` (each with an optional `delay`, seconds), `on_key_down` (needs
   `keyCodes`; `device`: `keyboard` by default, `xbox_one`, `ps4`, `switch_pro`, `unknown_controller`). A field of
   another trigger is refused.
 - Actions: `{type: "back"}`, `{type: "close"}` (closes the overlay), `{type: "url", url, openInNewTab?}`, and
@@ -517,7 +517,9 @@ second call. `setReactions {nodeId, reactions}` sets what a layer does in a prot
   `ease_in`, `ease_in_and_out`, `linear`, `ease_in_back`, `ease_out_back`, `ease_in_and_out_back`, `gentle`, `quick`,
   `bouncy`, `slow`, `custom_cubic_bezier` (with `cubicBezier {x1, y1, x2, y2}`) or `custom_spring` (with `spring
   {mass, stiffness, damping, initialVelocity}`). An instant change has no `transition`.
-- Not written yet, each refused by name: actions that set a variable or a variable mode, `conditional`, media actions
+- When a page with no flow gets its first connection, Figma starts a flow on its own ("Flow 1", at the layer's
+  screen); the reply names it as `flowAdded`, `setFlowStart` renames it, and it goes back with a batch that fails.
+- Not written yet, each refused by name: `on_drag` (Figma refuses it from a plugin), actions that set a variable or a variable mode, `conditional`, media actions
   and media triggers. A frame's overlay settings (`overlay`: position, background, close on click outside) are
   read-only to plugins, so they stay as the designer set them in Figma's Prototype panel.
 

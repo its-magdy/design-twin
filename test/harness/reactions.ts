@@ -52,18 +52,19 @@ export const cases: Case[] = [{
     const btn = w.byId(w.h.btn ?? "");
     const r = await write(w, [{ op: "setReactions", nodeId: btn.id, reactions: [
       { trigger: "on_click", actions: [{ type: "node", destination: "Details", transition: { type: "smart_animate" } }] },
-      { trigger: "after_timeout", timeout: 2000, actions: [{ type: "back" }] },
+      { trigger: "after_timeout", timeout: 2, actions: [{ type: "back" }] },
       { trigger: "on_hover", actions: [{ type: "node", navigation: "overlay", destinationId: w.h.menu ?? "" }] },
-      { trigger: "mouse_enter", delay: 200, actions: [{ type: "url", url: "https://example.com", openInNewTab: true }, { type: "close" }] },
+      { trigger: "mouse_enter", delay: 0.2, actions: [{ type: "url", url: "https://example.com", openInNewTab: true }, { type: "close" }] },
       { trigger: "on_key_down", keyCodes: [13], actions: [{ type: "node", destination: "Existing B", transition: { type: "slide_in", direction: "left", duration: 0.5, easing: "custom_cubic_bezier", cubicBezier: { x1: 0.2, y1: 0, x2: 0.4, y2: 1 } } }] },
     ] }]);
-    ok(`[PROTO] applied: the reply counts the reactions and the ones replaced (got ${JSON.stringify(r)})`, r.ok && JSON.stringify(r.applied) === JSON.stringify([{ id: btn.id, reactions: 5, replaced: 0 }]));
+    ok(`[PROTO] applied: the reply counts the reactions and the ones replaced (got ${JSON.stringify(r)})`, r.ok && JSON.stringify(r.applied) === JSON.stringify([{ id: btn.id, reactions: 5, replaced: 0, flowAdded: "Flow 1" }]));
+    ok("[PROTO] Figma started a flow at the layer's screen on its own (the page had none): the reply said so", JSON.stringify(pageOf(w, "Page 1").flowStartingPoints) === JSON.stringify([{ nodeId: w.h.home, name: "Flow 1" }]));
     const got = reactionsOf(btn);
     const want = [
       { trigger: { type: "ON_CLICK" }, actions: [{ type: "NODE", destinationId: w.h.details, navigation: "NAVIGATE", transition: { type: "SMART_ANIMATE", easing: { type: "EASE_OUT" }, duration: 0.3 } }] },
-      { trigger: { type: "AFTER_TIMEOUT", timeout: 2000 }, actions: [{ type: "BACK" }] },
+      { trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "BACK" }] },
       { trigger: { type: "ON_HOVER" }, actions: [{ type: "NODE", destinationId: w.h.menu, navigation: "OVERLAY", transition: null }] },
-      { trigger: { type: "MOUSE_ENTER", delay: 200, deprecatedVersion: false }, actions: [{ type: "URL", url: "https://example.com", openInNewTab: true }, { type: "CLOSE" }] },
+      { trigger: { type: "MOUSE_ENTER", delay: 0.2 }, actions: [{ type: "URL", url: "https://example.com", openInNewTab: true }, { type: "CLOSE" }] },
       { trigger: { type: "ON_KEY_DOWN", device: "KEYBOARD", keyCodes: [13] }, actions: [{ type: "NODE", destinationId: "1:2", navigation: "NAVIGATE",
         transition: { type: "SLIDE_IN", direction: "LEFT", matchLayers: false, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.2, y1: 0, x2: 0.4, y2: 1 } }, duration: 0.5 } }] },
     ];
@@ -179,7 +180,7 @@ export const cases: Case[] = [{
     const w = await protoWorld({ extra: { clientStorage: { reviewWrites: true } } });
     const btn = w.byId(w.h.btn ?? "");
     const r = await write(w, [
-      { op: "setReactions", nodeId: btn.id, reactions: [{ actions: [{ type: "node", destinationId: w.h.details ?? "", transition: { type: "dissolve" } }] }, { trigger: "after_timeout", timeout: 1500, actions: [{ type: "back" }] }] },
+      { op: "setReactions", nodeId: btn.id, reactions: [{ actions: [{ type: "node", destinationId: w.h.details ?? "", transition: { type: "dissolve" } }] }, { trigger: "after_timeout", timeout: 1.5, actions: [{ type: "back" }] }] },
       { op: "setFlowStart", nodeId: w.h.home ?? "", name: "Main" },
     ]);
     const card = lastCard(w);
@@ -222,6 +223,18 @@ export const cases: Case[] = [{
       && !B.ok && /'Menu' \(.*\) is moved by ops\[1\]/.test(String(B.error)) && !D.ok && /'Menu' \(.*\) is moved by ops\[0\]/.test(String(D.error))
       && !C.ok && new RegExp("destination '" + String(w.h.card) + "' is moved by ops\\[1\\] of this batch \\(it, or a layer above it\\)").test(String(C.error))
       && (pageOf(w, "Page 1").flowStartingPoints as unknown[]).length === 1 && w.byId(w.h.menu ?? "").parent === pageOf(w, "Page 1"));
+    const drag = await write(w, [{ op: "setReactions", nodeId: w.h.btn ?? "", reactions: [{ trigger: "on_drag", actions: [{ type: "back" }] }] }]);
+    ok(`[PROTO-BATCH] on_drag is refused by name before anything runs (Figma refuses it from a plugin) (got ${JSON.stringify(drag.error)})`, !drag.ok && /an on_drag trigger cannot be written yet/.test(String(drag.error)));
     ok(`[PROTO-BATCH] a destination the batch moves is refused (got ${JSON.stringify(moved.error)})`, !moved.ok && new RegExp("destination '" + temp + "' is moved by ops\\[1\\] of this batch").test(String(moved.error)));
+  },
+}, {
+  name: "the flow Figma starts on its own with a page's first connection goes back with the batch",
+  async run() {
+    const w = await protoWorld();
+    w.trap.add("characters");
+    const r = await write(w, [{ op: "setReactions", nodeId: w.h.btn ?? "", reactions: [{ actions: [{ type: "node", destination: "Details" }] }] }, { op: "patch", nodeId: w.h.footer ?? "", set: { text: "v2" } }]);
+    w.trap.delete("characters");
+    ok(`[PROTO-AUTOFLOW] the batch failed and put back the reactions and the flow Figma added (got ${JSON.stringify(r)}, flows ${JSON.stringify(pageOf(w, "Page 1").flowStartingPoints)})`,
+      !r.ok && reactionsOf(w.byId(w.h.btn ?? "")).length === 0 && (pageOf(w, "Page 1").flowStartingPoints as unknown[]).length === 0);
   },
 }];

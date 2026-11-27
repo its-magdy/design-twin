@@ -18,7 +18,11 @@
 // Plugin API facts this leans on (@figma/plugin-typings):
 //   * Under documentAccess "dynamic-page" `reactions` is read-only; setReactionsAsync sets them. A Reaction's `actions`
 //     is the list (the singular `action` is deprecated); a NODE action names its destination by `destinationId`.
-//   * MOUSE_ENTER / MOUSE_LEAVE triggers carry `deprecatedVersion` (false: the current behaviour).
+//   * MOUSE_ENTER / MOUSE_LEAVE: the typings declare `deprecatedVersion`, but setReactionsAsync refuses that key (seen
+//     live: "Unrecognized key: deprecatedVersion"), so it is left out. A trigger's timeout and delay are seconds (seen
+//     live in the Prototype panel); a transition's duration too.
+//   * Figma adds a flow starting point ("Flow 1") on its own when a page with none gets its first connection (seen
+//     live); a put-back removes the one the op caused.
 //   * PageNode.flowStartingPoints is a plain writable list of {nodeId, name}; the first is the page's default flow.
 //   * A frame's overlay settings (overlayPositionType, overlayBackground, …) are read-only: an overlay offset applies only
 //     to a destination whose position is MANUAL, which the designer sets in Figma.
@@ -138,7 +142,7 @@ async function resolveDestination(ref: DestinationRef, node: SceneNode, page: Pa
 }
 
 const TRIGGER_TYPES = {
-  on_click: "ON_CLICK", on_hover: "ON_HOVER", on_press: "ON_PRESS", on_drag: "ON_DRAG", after_timeout: "AFTER_TIMEOUT",
+  on_click: "ON_CLICK", on_hover: "ON_HOVER", on_press: "ON_PRESS", after_timeout: "AFTER_TIMEOUT",
   mouse_enter: "MOUSE_ENTER", mouse_leave: "MOUSE_LEAVE", mouse_up: "MOUSE_UP", mouse_down: "MOUSE_DOWN", on_key_down: "ON_KEY_DOWN",
 } as const;
 const DEVICE_TYPES = { keyboard: "KEYBOARD", xbox_one: "XBOX_ONE", ps4: "PS4", switch_pro: "SWITCH_PRO", unknown_controller: "UNKNOWN_CONTROLLER" } as const;
@@ -154,12 +158,13 @@ const DIRECTION_TYPES = { left: "LEFT", right: "RIGHT", top: "TOP", bottom: "BOT
 function figmaTrigger(r: WriteReaction): Trigger {
   const t = r.trigger || "on_click";
   switch (t) {
-    // Milliseconds, as Figma stores them and the read export writes them.
+    // Seconds, as Figma's plugin API takes them and the read export writes them.
     case "after_timeout": return { type: "AFTER_TIMEOUT", timeout: r.timeout || 0 };
-    case "mouse_enter": case "mouse_leave": return { type: TRIGGER_TYPES[t], delay: r.delay || 0, deprecatedVersion: false };
+    // No `deprecatedVersion`: the typings declare it, Figma's setReactionsAsync refuses it (seen live).
+    case "mouse_enter": case "mouse_leave": return { type: TRIGGER_TYPES[t], delay: r.delay || 0 } as Trigger;
     case "mouse_up": case "mouse_down": return { type: TRIGGER_TYPES[t], delay: r.delay || 0 };
     case "on_key_down": return { type: "ON_KEY_DOWN", device: DEVICE_TYPES[r.device || "keyboard"], keyCodes: (r.keyCodes || []).slice() };
-    case "on_click": case "on_hover": case "on_press": case "on_drag":
+    case "on_click": case "on_hover": case "on_press":
     default: return { type: TRIGGER_TYPES[t] };
   }
 }
@@ -299,19 +304,32 @@ export async function applyReactions(t: ReactionTarget, consent: () => void, cha
   stillInDocument(node); // resolved before the batch ran: deleted since, it fails as its lookup would have
   for (const d of t.dests) stillInDocument(d, "destination");
   const prev = plain(node.reactions) as Reaction[];
+  // Figma starts a flow on its own when a page with none gets its first connection: the flows before, to tell.
+  const page = pageHolding(node);
+  const flowKey = (p: { nodeId: string; name: string }): string => p.nodeId + "\u0000" + p.name;
+  const flowsBefore = page ? page.flowStartingPoints.map(flowKey) : [];
   consent();
   try { await node.setReactionsAsync(plain(t.reactions) as Reaction[]); } catch (e) {
     if (!inDocument(node)) throw new Error(noNode(node.id));
     throw new Error("Figma refused the reactions for '" + t.name + "': " + errMsg(e));
   }
+  const added = page && inDocument(page) ? page.flowStartingPoints.filter((p) => flowsBefore.indexOf(flowKey(p)) < 0).map((p) => ({ nodeId: p.nodeId, name: p.name })) : [];
+  const applied: AppliedWrite = { id: node.id, reactions: t.reactions.length, replaced: prev.length };
+  const firstAdded = added[0];
+  if (firstAdded) applied.flowAdded = firstAdded.name;
   const change: Change = {
-    applied: { id: node.id, reactions: t.reactions.length, replaced: prev.length },
+    applied,
     kind: "prototype change",
     what: "the prototype interactions of '" + t.name + "' (" + node.id + ")",
     on: node,
     async restore(allowed) {
       await node.setReactionsAsync(prev);
       if (!allowed()) throw new RestoreStopped("'Allow edits' was turned off");
+      // The flow Figma added for this connection goes with it (one the designer renamed since stays).
+      if (page && added.length && inDocument(page)) {
+        const gone = added.map(flowKey);
+        page.flowStartingPoints = page.flowStartingPoints.filter((p) => gone.indexOf(flowKey(p)) < 0).map((p) => ({ nodeId: p.nodeId, name: p.name }));
+      }
     },
   };
   changes.push(change);

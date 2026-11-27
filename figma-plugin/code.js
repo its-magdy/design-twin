@@ -3009,7 +3009,7 @@
   var DEFAULT_DURATION = 0.3;
   var MAX_DURATION = 10;
   var DEFAULT_EASING = "ease_out";
-  var TRIGGERS = ["on_click", "on_hover", "on_press", "on_drag", "after_timeout", "mouse_enter", "mouse_leave", "mouse_up", "mouse_down", "on_key_down"];
+  var TRIGGERS = ["on_click", "on_hover", "on_press", "after_timeout", "mouse_enter", "mouse_leave", "mouse_up", "mouse_down", "on_key_down"];
   var NAVIGATIONS = ["navigate", "swap", "overlay", "scroll_to", "change_to"];
   var SIMPLE_TRANSITIONS = ["dissolve", "smart_animate", "scroll_animate"];
   var DIRECTIONAL_TRANSITIONS = ["move_in", "move_out", "push", "slide_in", "slide_out"];
@@ -3018,7 +3018,7 @@
   var DEVICES = ["keyboard", "xbox_one", "ps4", "switch_pro", "unknown_controller"];
   var isNum4 = (v) => typeof v === "number" && Number.isFinite(v);
   var bool2 = (v) => typeof v === "boolean" ? null : "must be true or false";
-  var millis = (v) => isNum4(v) && v >= 0 ? null : "must be a number of milliseconds \u2265 0 (Figma's unit for a trigger; 2000 is 2 s)";
+  var seconds = (v) => isNum4(v) && v >= 0 ? null : "must be a number of seconds \u2265 0 (2 is 2000 ms in Figma's Prototype panel)";
   var nonEmpty4 = (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string";
   var xy3 = (v) => isObj4(v) && isNum4(v.x) && isNum4(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}, two numbers";
   var unitNum = (v) => isNum4(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1";
@@ -3066,9 +3066,9 @@
     newTimestamp: refuse(MEDIA)
   };
   var REACTION_RULES = {
-    trigger: (v) => v === "on_media_hit" || v === "on_media_end" ? MEDIA : v === "unknown" ? "a trigger the read could not name cannot be written; give one of " + TRIGGERS.join(" | ") : oneOf(...TRIGGERS)(v),
-    timeout: millis,
-    delay: millis,
+    trigger: (v) => v === "on_drag" ? "an on_drag trigger cannot be written yet (Figma refuses it from a plugin: seen live, with a close or a navigate action)" : v === "on_media_hit" || v === "on_media_end" ? MEDIA : v === "unknown" ? "a trigger the read could not name cannot be written; give one of " + TRIGGERS.join(" | ") : oneOf(...TRIGGERS)(v),
+    timeout: seconds,
+    delay: seconds,
     keyCodes: (v) => Array.isArray(v) && v.length > 0 && v.every((k) => isNum4(k) && Number.isInteger(k) && k >= 0) ? null : "must be a non-empty list of key codes (whole numbers \u2265 0)",
     device: oneOf(...DEVICES),
     actions: (v) => Array.isArray(v) ? null : "must be a list of actions",
@@ -3100,7 +3100,7 @@
         const allowed2 = TRIGGER_FIELDS[k] || [];
         if (r[k] !== void 0 && allowed2.indexOf(trigger) < 0) problems.push(at3 + "." + k + ": only with trigger " + allowed2.join(" | ") + " (this one is " + trigger + ")");
       }
-      if (trigger === "after_timeout" && r.timeout === void 0) problems.push(at3 + ": trigger after_timeout needs `timeout` (milliseconds)");
+      if (trigger === "after_timeout" && r.timeout === void 0) problems.push(at3 + ": trigger after_timeout needs `timeout` (seconds)");
       if (trigger === "on_key_down" && r.keyCodes === void 0) problems.push(at3 + ": trigger on_key_down needs `keyCodes`");
       const acts = Array.isArray(r.actions) ? r.actions : null;
       if (!acts) {
@@ -3178,9 +3178,9 @@
   var secs = (n) => Math.round(n * 1e3) / 1e3 + " s";
   function triggerText(r) {
     const t = r.trigger || "on_click";
-    if (t === "after_timeout") return "after " + secs((r.timeout || 0) / 1e3);
+    if (t === "after_timeout") return "after " + secs(r.timeout || 0);
     if (t === "on_key_down") return "key " + (r.keyCodes || []).join(", ") + (r.device && r.device !== "keyboard" ? " (" + words(r.device) + ")" : "");
-    if (r.delay) return words(t) + " after " + secs(r.delay / 1e3);
+    if (r.delay) return words(t) + " after " + secs(r.delay);
     return words(t);
   }
   function transitionText(t) {
@@ -13098,7 +13098,6 @@
     on_click: "ON_CLICK",
     on_hover: "ON_HOVER",
     on_press: "ON_PRESS",
-    on_drag: "ON_DRAG",
     after_timeout: "AFTER_TIMEOUT",
     mouse_enter: "MOUSE_ENTER",
     mouse_leave: "MOUSE_LEAVE",
@@ -13129,12 +13128,13 @@
   function figmaTrigger(r) {
     const t = r.trigger || "on_click";
     switch (t) {
-      // Milliseconds, as Figma stores them and the read export writes them.
+      // Seconds, as Figma's plugin API takes them and the read export writes them.
       case "after_timeout":
         return { type: "AFTER_TIMEOUT", timeout: r.timeout || 0 };
+      // No `deprecatedVersion`: the typings declare it, Figma's setReactionsAsync refuses it (seen live).
       case "mouse_enter":
       case "mouse_leave":
-        return { type: TRIGGER_TYPES[t], delay: r.delay || 0, deprecatedVersion: false };
+        return { type: TRIGGER_TYPES[t], delay: r.delay || 0 };
       case "mouse_up":
       case "mouse_down":
         return { type: TRIGGER_TYPES[t], delay: r.delay || 0 };
@@ -13143,7 +13143,6 @@
       case "on_click":
       case "on_hover":
       case "on_press":
-      case "on_drag":
       default:
         return { type: TRIGGER_TYPES[t] };
     }
@@ -13315,6 +13314,9 @@
     stillInDocument(node);
     for (const d of t.dests) stillInDocument(d, "destination");
     const prev = plain(node.reactions);
+    const page = pageHolding(node);
+    const flowKey = (p) => p.nodeId + "\0" + p.name;
+    const flowsBefore = page ? page.flowStartingPoints.map(flowKey) : [];
     consent2();
     try {
       await node.setReactionsAsync(plain(t.reactions));
@@ -13322,14 +13324,22 @@
       if (!inDocument(node)) throw new Error(noNode(node.id));
       throw new Error("Figma refused the reactions for '" + t.name + "': " + errMsg(e));
     }
+    const added = page && inDocument(page) ? page.flowStartingPoints.filter((p) => flowsBefore.indexOf(flowKey(p)) < 0).map((p) => ({ nodeId: p.nodeId, name: p.name })) : [];
+    const applied = { id: node.id, reactions: t.reactions.length, replaced: prev.length };
+    const firstAdded = added[0];
+    if (firstAdded) applied.flowAdded = firstAdded.name;
     const change = {
-      applied: { id: node.id, reactions: t.reactions.length, replaced: prev.length },
+      applied,
       kind: "prototype change",
       what: "the prototype interactions of '" + t.name + "' (" + node.id + ")",
       on: node,
       async restore(allowed2) {
         await node.setReactionsAsync(prev);
         if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+        if (page && added.length && inDocument(page)) {
+          const gone = added.map(flowKey);
+          page.flowStartingPoints = page.flowStartingPoints.filter((p) => gone.indexOf(flowKey(p)) < 0).map((p) => ({ nodeId: p.nodeId, name: p.name }));
+        }
       }
     };
     changes.push(change);

@@ -224,8 +224,20 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       for (const r of list) for (const a of isNode(r) && Array.isArray(r.actions) ? r.actions : []) {
         if (isNode(a) && a.type === "NODE" && (typeof a.destinationId !== "string" || !reg.nodes || !reg.nodes[a.destinationId])) throw new Error("in Figma: no destination " + String(isNode(a) ? a.destinationId : ""));
       }
+      // What Figma refused live: the typings' `deprecatedVersion` on a mouse trigger, and an ON_DRAG trigger.
+      for (const r of list) {
+        const tg = isNode(r) && isNode(r.trigger) ? r.trigger : null;
+        if (tg && "deprecatedVersion" in tg) throw new Error("in Figma: Property \"reactions\" failed validation: Unrecognized key: \"deprecatedVersion\"");
+        if (tg && tg.type === "ON_DRAG") throw new Error("in Figma: Reaction at index 0 was invalid");
+      }
       if (hooks.onReactions) await hooks.onReactions();
       fields.reactions = Object.freeze(list.map((r: unknown) => Object.freeze(JSON.parse(JSON.stringify(r)) as Record<string, unknown>)));
+      // A page with no flow gets one ("Flow 1", at the connection's top frame) with its first connection, as Figma does.
+      const hasLink = list.some((r: unknown) => isNode(r) && Array.isArray(r.actions) && r.actions.some((a: unknown) => isNode(a) && a.type === "NODE"));
+      let top: FakeNode = n;
+      while (parentOf(top) && parentOf(top)?.type !== "PAGE") top = parentOf(top) as FakeNode;
+      const pg = parentOf(top);
+      if (hasLink && pg && pg.type === "PAGE" && Array.isArray(pg.flowStartingPoints) && pg.flowStartingPoints.length === 0) pg.flowStartingPoints = Object.freeze([{ nodeId: String(top.id), name: "Flow 1" }]);
     };
     // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {

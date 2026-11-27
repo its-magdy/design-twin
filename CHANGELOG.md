@@ -33,7 +33,7 @@ list of merged PRs.
 ### Added
 
 - `figma_write` can wire screens into a prototype. `setReactions` (`nodeId`, `reactions`) replaces a layer's
-  interactions with a list in the read export's `reactions` form: a trigger (click, hover, press, drag, after a
+  interactions with a list in the read export's `reactions` form: a trigger (click, hover, press, after a
   timeout, a mouse event, a key) and its actions (back, close the overlay, open a URL, or go to a node: navigate,
   open or swap an overlay, scroll to a layer, change a variant), with a transition. A destination is given by exact
   name or id, and resolved before anything runs: none or several refuse the batch, with the closest names or the ids.

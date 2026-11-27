@@ -1010,8 +1010,8 @@ the mode before and after (`inherited` when none was set), and the dry run says 
 not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes are put back
 with the rest of the batch, as far as it can be (see above).
 
-`setReactions` wires a prototype: what a layer does when it is clicked, hovered, pressed or dragged, after a timeout,
-on a mouse event or a key (`timeout` and `delay` in milliseconds, as Figma stores them). `reactions` is the read export's `reactions` list, so a reaction read from a file (bar a reaction with no actions, a node action with no destination, a key trigger with no key codes) is sent back
+`setReactions` wires a prototype: what a layer does when it is clicked, hovered, or pressed, after a timeout,
+on a mouse event or a key (`timeout` and `delay` in seconds, as Figma's plugin API takes them; `on_drag` is refused, Figma refusing it from a plugin; a page with no flow gets one from Figma with its first connection, named in the reply as `flowAdded`). `reactions` is the read export's `reactions` list, so a reaction read from a file (bar a reaction with no actions, a node action with no destination, a key trigger with no key codes) is sent back
 as it is. It replaces the layer's reactions (`[]` removes them). Each reaction has a `trigger` (`on_click` when absent)
 and its `actions`: `back`, `close` (the overlay), `url`, or `node`, which goes to a `destination`. Its `navigation` is
 `navigate` (the default), `overlay`, `swap`, `scroll_to` or `change_to`, with an optional `transition` (type, direction,

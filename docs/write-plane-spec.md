@@ -464,8 +464,9 @@ screens.
     `{op: "clearFlowStart", nodeId}`. The pure check and the words are in `bridge/src/reaction-spec.ts`; the file side is
     in `figma-plugin/src/reactions.ts`.
     - **The read form, replaced whole.** `reactions` is `prototype.ts`'s list: a `trigger` (`on_click` when absent;
-      hover, press, drag, `after_timeout` with `timeout`, mouse enter, leave, up and down with `delay` (both milliseconds, as Figma stores
-      them and the read writes them; a transition's `duration` is seconds), `on_key_down`
+      hover, press, `after_timeout` with `timeout`, mouse enter, leave, up and down with `delay` (both seconds, as
+      Figma's plugin API takes them and the read writes them: seen live, a timeout of 2 shows as 2000 ms in the
+      Prototype panel; a transition's `duration` is seconds too), `on_key_down`
       with `keyCodes` and `device`) and its `actions` (1–10): `back`, `close`, `url` (`url`, `openInNewTab`), and `node`
       (`destination` / `destinationId`, `navigation` navigate | swap | overlay | scroll_to | change_to, `transition`, the
       reset flags, `overlayOffset`). A reaction read from a file passes as it is (both destination fields, and a preset
@@ -499,7 +500,11 @@ screens.
       reads "Layer 'Sign in': prototype none → on click → go to 'Details' (dissolve 300 ms); after 1.5 s → back" and
       "Frame 'Home': flow start none → 'Main'", with destinations by the names the file has. The dry run says the
       same in a sentence, and that the destinations are checked when applied.
-    - Not built, each refused by name: actions that set a variable or a variable mode, conditionals, media actions and
+    - **Seen live.** Figma refuses the typings' `deprecatedVersion` on a mouse enter or leave trigger (so it is never
+      sent: a hover is written with the current behaviour) and an `on_drag` trigger (refused by name). A page with no
+      flow gets one ("Flow 1", at the layer's top frame) with its first connection: the reply names it (`flowAdded`)
+      and the op's put-back removes it. One Undo takes back a batch of reactions and flow changes.
+    - Not built, each refused by name: `on_drag`, actions that set a variable or a variable mode, conditionals, media actions and
       triggers. A frame's overlay settings (`overlay`: position, background, close on click outside) are read-only to
       plugins in Figma's API, so they stay as the designer sets them.
 

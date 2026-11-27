@@ -20,9 +20,9 @@ check("a list in the read form passes: every trigger and action kind it may writ
   { trigger: "on_click", actions: [{ type: "node", destination: "Home", navigation: "navigate", transition: { type: "dissolve", duration: 0.3, easing: "ease_out" } }] },
   { trigger: "on_hover", actions: [{ type: "node", destinationId: "4:2", navigation: "overlay", overlayOffset: { x: 0, y: 8 } }] },
   { trigger: "on_press", actions: [{ type: "node", destination: "Card", navigation: "scroll_to", resetScroll: true }] },
-  { trigger: "on_drag", actions: [{ type: "node", destination: "State=On", navigation: "change_to", transition: { type: "smart_animate", easing: "gentle" } }] },
-  { trigger: "after_timeout", timeout: 800, actions: [{ type: "back" }] },
-  { trigger: "mouse_enter", delay: 0, actions: [{ type: "close" }] }, { trigger: "mouse_leave", delay: 100, actions: [{ type: "close" }] },
+  { trigger: "on_press", actions: [{ type: "node", destination: "State=On", navigation: "change_to", transition: { type: "smart_animate", easing: "gentle" } }] },
+  { trigger: "after_timeout", timeout: 0.8, actions: [{ type: "back" }] },
+  { trigger: "mouse_enter", delay: 0, actions: [{ type: "close" }] }, { trigger: "mouse_leave", delay: 0.1, actions: [{ type: "close" }] },
   { trigger: "mouse_up", delay: 0, actions: [{ type: "back" }] }, { trigger: "mouse_down", delay: 0, actions: [{ type: "back" }] },
   { trigger: "on_key_down", keyCodes: [27], device: "keyboard", actions: [{ type: "back" }] },
   { actions: [{ type: "url", url: "https://example.com", openInNewTab: true }, { type: "back" }] },
@@ -50,10 +50,11 @@ check("an unknown trigger, action field or transition field is named, with the c
 check("a reaction needs actions, at least one, at most " + MAX_ACTIONS, /needs `actions`/.test(refused([{ trigger: "on_click" }])) && /actions: is empty/.test(refused([{ actions: [] }]))
   && new RegExp("11 actions; a reaction runs at most " + MAX_ACTIONS).test(refused([{ actions: Array.from({ length: 11 }, () => ({ type: "back" })) }])));
 check("at most " + MAX_REACTIONS + " reactions in one op", new RegExp("51 reactions; a layer takes at most " + MAX_REACTIONS).test(refused(Array.from({ length: 51 }, () => tap({ type: "back" })))));
-check("a timeout and a delay are Figma's milliseconds: said so when wrong, and in seconds in the words",
-  /timeout must be a number of milliseconds ≥ 0 \(Figma's unit for a trigger; 2000 is 2 s\)/.test(refused([{ trigger: "after_timeout", timeout: -1, actions: [{ type: "back" }] }]))
-  && /needs `timeout` \(milliseconds\)/.test(refused([{ trigger: "after_timeout", actions: [{ type: "back" }] }]))
-  && reactionsText([{ trigger: "after_timeout", timeout: 800, actions: [{ type: "back" }] }]) === "after 0.8 s → back");
+check("a timeout and a delay are seconds, as Figma's plugin API takes them (seen live): said so when wrong",
+  /timeout must be a number of seconds ≥ 0 \(2 is 2000 ms in Figma's Prototype panel\)/.test(refused([{ trigger: "after_timeout", timeout: -1, actions: [{ type: "back" }] }]))
+  && /needs `timeout` \(seconds\)/.test(refused([{ trigger: "after_timeout", actions: [{ type: "back" }] }]))
+  && reactionsText([{ trigger: "after_timeout", timeout: 0.8, actions: [{ type: "back" }] }]) === "after 0.8 s → back"
+  && /on_drag trigger cannot be written yet \(Figma refuses it from a plugin/.test(refused([{ trigger: "on_drag", actions: [{ type: "back" }] }])));
 check("each trigger's own fields: a timeout needs after_timeout (and it needs one), a delay a mouse trigger, keys a key trigger",
   /reactions\[0\]\.timeout: only with trigger after_timeout \(this one is on_click\)/.test(refused([{ timeout: 1, actions: [{ type: "back" }] }]))
   && /trigger after_timeout needs `timeout`/.test(refused([{ trigger: "after_timeout", actions: [{ type: "back" }] }]))
@@ -81,7 +82,7 @@ check("flows: setFlowStart needs a name, without edge spaces; clearFlowStart tak
   && writeOpError({ op: "setFlowStart", nodeId: "1:2", name: "Main" }, 0) === null && writeOpError({ op: "clearFlowStart", nodeId: "1:2" }, 0) === null);
 
 console.log("\nthe dry run:");
-const pv = writeOpPreview(op([tap({ type: "node", destination: "Home", transition: { type: "smart_animate" } }), { trigger: "after_timeout", timeout: 2000, actions: [{ type: "back" }] }]), 0);
+const pv = writeOpPreview(op([tap({ type: "node", destination: "Home", transition: { type: "smart_animate" } }), { trigger: "after_timeout", timeout: 2, actions: [{ type: "back" }] }]), 0);
 check(`setReactions overwrites the node, said in one sentence (got ${JSON.stringify(pv.change)})`, pv.effect === "overwrites" && pv.target === "1:2" && pv.invalid === undefined
   && /^node 1:2: its prototype interactions become 2 reactions \(on click → go to 'Home' \(smart animate 300 ms\); after 2 s → back\), replacing the ones it has — /.test(String(pv.change)));
 check("[] says it removes them", /node 1:2: removes every prototype interaction/.test(String(writeOpPreview(op([]), 0).change)));
@@ -92,7 +93,7 @@ check("flow ops say what they do", /node 1:2: becomes the starting point of flow
 
 console.log("\nthe card's words:");
 check("a trigger and its actions in a few words", reactionsText([
-  { trigger: "mouse_enter", delay: 250, actions: [{ type: "node", navigation: "overlay", destinationId: "3:1" }] },
+  { trigger: "mouse_enter", delay: 0.25, actions: [{ type: "node", navigation: "overlay", destinationId: "3:1" }] },
   { trigger: "on_key_down", keyCodes: [13, 27], device: "ps4", actions: [{ type: "url", url: "https://x.test", openInNewTab: true }, { type: "close" }] },
   { actions: [{ type: "node", navigation: "scroll_to", destination: "Footer", transition: { type: "move_in", direction: "top", duration: 0.2 } }] },
 ], ["Menu"]) === "mouse enter after 0.25 s → open overlay 'Menu'; key 13, 27 (ps4) → open https://x.test in a new tab, then close the overlay; on click → scroll to 'Footer' (move in top 200 ms)");
