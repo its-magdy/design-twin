@@ -962,7 +962,7 @@ registerTool(
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
       "seedTokens {file, collection?}: those tables from the project's tokens.dtcg.json or tokens.resolver.json | " +
       "setVariableMode {nodeId, collection, mode} / clearVariableMode {nodeId, collection}: a frame's variable mode | " +
-      "setReactions {nodeId, reactions}: replace a layer's prototype interactions (the read's reactions form; a destination by name or id) / setFlowStart {nodeId, name} / clearFlowStart {nodeId}: a frame a flow starts from | " +
+      "setReactions {nodeId, reactions} / setFlowStart {nodeId, name} / clearFlowStart {nodeId}: a layer's prototype links (read form, replaced whole) and flow starts | " +
       "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +

@@ -116,6 +116,8 @@ const SUITE_FILES: readonly string[] = [
   "write-rules.test.ts",
   // where a new screen lands (#184): a page or section to use or make — the check, the dry run's words, the card (pure)
   "write-places.test.ts",
+  // prototype interactions and flows (#183): the reactions' check, the flow ops, the dry run's and the card's words (pure)
+  "write-reactions.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];
