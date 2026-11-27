@@ -538,7 +538,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     // A variable or style edit, and a patch's library check (a library's component cannot be changed here).
     const sources = await resolveSourceOps(list);
     const problems = [...imgs.problems, ...creates.problems, ...modes.problems, ...protos.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...rules.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves, protos.targets),
-      ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves),
+      ...removalConflicts(list, trees.targets, structure.moves, protos.targets), ...moveConflicts(list, protos.targets), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves),
       ...ruleConflicts(rules.targets, trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
     return { creates, modes, protos, trees, patches, rules, structure, sources, problems };
   };
@@ -868,7 +868,7 @@ function keyedDeleteConflicts(targets: ReadonlyMap<number, TreeTarget>, deletes:
 
 /** An op that names a node a keyed re-send of the same batch removes (it, or anything below it), as a parent or a target:
  *  the removal runs last, so the op would act on a node about to go. Refused up front, like a delete conflict. */
-function removalConflicts(list: readonly WriteOp[], targets: ReadonlyMap<number, TreeTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+function removalConflicts(list: readonly WriteOp[], targets: ReadonlyMap<number, TreeTarget>, moves: ReadonlyMap<number, MoveTarget>, protos: ReadonlyMap<number, ProtoTarget>): OpProblem[] {
   const gone = new Map<string, number>();
   for (const [i, t] of targets) {
     if (!t.update) continue;
@@ -884,6 +884,25 @@ function removalConflicts(list: readonly WriteOp[], targets: ReadonlyMap<number,
       out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
       break;
     }
+    // A prototype connection to a node the re-send removes would point at nothing once the batch lands.
+    const t = protos.get(index);
+    const lost = t ? destinationIds(t).filter((id) => gone.has(id))[0] : undefined;
+    if (lost !== undefined) out.push({ index, op: op.op, message: "destination '" + lost + "' is removed by the keyed re-send in ops[" + String(gone.get(lost)) + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+  }
+  return out;
+}
+
+/** A prototype destination a `move` of the same batch puts somewhere else: the destination was checked where it is now
+ *  (a frame at the top of the page, a layer of the same frame), so a move could leave the connection pointing at what it
+ *  may not go to. Refused up front: wire it in a later batch, once the move has landed. */
+function moveConflicts(list: readonly WriteOp[], protos: ReadonlyMap<number, ProtoTarget>): OpProblem[] {
+  const moved = new Map<string, number>();
+  for (const [i, op] of list.entries()) if (op.op === "move" && op.nodeId && !moved.has(op.nodeId)) moved.set(op.nodeId, i);
+  const out: OpProblem[] = [];
+  if (!moved.size) return out;
+  for (const [index, t] of protos) {
+    const hit = destinationIds(t).filter((id) => moved.has(id))[0];
+    if (hit !== undefined) out.push({ index, op: list[index] ? String(list[index].op) : "setReactions", message: "destination '" + hit + "' is moved by ops[" + String(moved.get(hit)) + "] of this batch, so where it may be linked from is not known until it lands; wire it in a later batch" });
   }
   return out;
 }

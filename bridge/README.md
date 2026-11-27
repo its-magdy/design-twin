@@ -1011,20 +1011,21 @@ not read the file, so it names the new mode only). If a later op of the batch fa
 with the rest of the batch, as far as it can be (see above).
 
 `setReactions` wires a prototype: what a layer does when it is clicked, hovered, pressed or dragged, after a timeout,
-on a mouse event or a key. `reactions` is the read export's `reactions` list, so a reaction read from a file is sent back
+on a mouse event or a key (`timeout` and `delay` in milliseconds, as Figma stores them). `reactions` is the read export's `reactions` list, so a reaction read from a file is sent back
 as it is. It replaces the layer's reactions (`[]` removes them). Each reaction has a `trigger` (`on_click` when absent)
 and its `actions`: `back`, `close` (the overlay), `url`, or `node`, which goes to a `destination`. Its `navigation` is
 `navigate` (the default), `overlay`, `swap`, `scroll_to` or `change_to`, with an optional `transition` (type, direction,
 duration in seconds, easing). A destination is a node's exact id or an exact name, resolved before the batch runs and
 never guessed:
 - `navigate`, `overlay` and `swap`: a frame, component or instance at the top of the layer's page, or in a section on it.
-- `scroll_to`: a layer of the same top frame.
+- `scroll_to`: another layer of the same top frame (of the same variant, inside a component set).
 - `change_to`: a variant of the same component set.
 
 None or several refuse the batch, with the closest names or the ids. `setFlowStart {nodeId, name}` makes a top frame
 the start of a flow on its page; sent again for that frame, it renames the flow. `clearFlowStart` removes it. A flow
 name another frame's flow has on the page is refused. Each op keeps what it replaces and is put back with the rest of
-a batch that fails, and a destination the same batch deletes is refused. Not written yet, each refused by name:
+a batch that fails; a destination the same batch deletes, moves or drops from a keyed re-send is refused, and the
+flow ops of one batch are checked in order against each other. Not written yet, each refused by name:
 variable, conditional and media actions, and media triggers. A frame's overlay settings (position, background) are
 read-only to plugins in Figma's API. The full grammar is in the skill's `references/grammar.md`, under Prototype.
 

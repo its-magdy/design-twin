@@ -52,18 +52,18 @@ export const cases: Case[] = [{
     const btn = w.byId(w.h.btn ?? "");
     const r = await write(w, [{ op: "setReactions", nodeId: btn.id, reactions: [
       { trigger: "on_click", actions: [{ type: "node", destination: "Details", transition: { type: "smart_animate" } }] },
-      { trigger: "after_timeout", timeout: 2, actions: [{ type: "back" }] },
+      { trigger: "after_timeout", timeout: 2000, actions: [{ type: "back" }] },
       { trigger: "on_hover", actions: [{ type: "node", navigation: "overlay", destinationId: w.h.menu ?? "" }] },
-      { trigger: "mouse_enter", delay: 0.2, actions: [{ type: "url", url: "https://example.com", openInNewTab: true }, { type: "close" }] },
+      { trigger: "mouse_enter", delay: 200, actions: [{ type: "url", url: "https://example.com", openInNewTab: true }, { type: "close" }] },
       { trigger: "on_key_down", keyCodes: [13], actions: [{ type: "node", destination: "Existing B", transition: { type: "slide_in", direction: "left", duration: 0.5, easing: "custom_cubic_bezier", cubicBezier: { x1: 0.2, y1: 0, x2: 0.4, y2: 1 } } }] },
     ] }]);
     ok(`[PROTO] applied: the reply counts the reactions and the ones replaced (got ${JSON.stringify(r)})`, r.ok && JSON.stringify(r.applied) === JSON.stringify([{ id: btn.id, reactions: 5, replaced: 0 }]));
     const got = reactionsOf(btn);
     const want = [
       { trigger: { type: "ON_CLICK" }, actions: [{ type: "NODE", destinationId: w.h.details, navigation: "NAVIGATE", transition: { type: "SMART_ANIMATE", easing: { type: "EASE_OUT" }, duration: 0.3 } }] },
-      { trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "BACK" }] },
+      { trigger: { type: "AFTER_TIMEOUT", timeout: 2000 }, actions: [{ type: "BACK" }] },
       { trigger: { type: "ON_HOVER" }, actions: [{ type: "NODE", destinationId: w.h.menu, navigation: "OVERLAY", transition: null }] },
-      { trigger: { type: "MOUSE_ENTER", delay: 0.2, deprecatedVersion: false }, actions: [{ type: "URL", url: "https://example.com", openInNewTab: true }, { type: "CLOSE" }] },
+      { trigger: { type: "MOUSE_ENTER", delay: 200, deprecatedVersion: false }, actions: [{ type: "URL", url: "https://example.com", openInNewTab: true }, { type: "CLOSE" }] },
       { trigger: { type: "ON_KEY_DOWN", device: "KEYBOARD", keyCodes: [13] }, actions: [{ type: "NODE", destinationId: "1:2", navigation: "NAVIGATE",
         transition: { type: "SLIDE_IN", direction: "LEFT", matchLayers: false, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.2, y1: 0, x2: 0.4, y2: 1 } }, duration: 0.5 } }] },
     ];
@@ -179,7 +179,7 @@ export const cases: Case[] = [{
     const w = await protoWorld({ extra: { clientStorage: { reviewWrites: true } } });
     const btn = w.byId(w.h.btn ?? "");
     const r = await write(w, [
-      { op: "setReactions", nodeId: btn.id, reactions: [{ actions: [{ type: "node", destinationId: w.h.details ?? "", transition: { type: "dissolve" } }] }, { trigger: "after_timeout", timeout: 1.5, actions: [{ type: "back" }] }] },
+      { op: "setReactions", nodeId: btn.id, reactions: [{ actions: [{ type: "node", destinationId: w.h.details ?? "", transition: { type: "dissolve" } }] }, { trigger: "after_timeout", timeout: 1500, actions: [{ type: "back" }] }] },
       { op: "setFlowStart", nodeId: w.h.home ?? "", name: "Main" },
     ]);
     const card = lastCard(w);
@@ -188,5 +188,31 @@ export const cases: Case[] = [{
       && lines[0] === "Layer 'Sign in': prototype none → on click → go to 'Details' (dissolve 300 ms); after 1.5 s → back"
       && lines[1] === "Frame 'Home': flow start none → 'Main'");
     ok(`[PROTO-CARD] Show me has the one layer each line changes (got ${JSON.stringify((card?.lines ?? []).map((l) => l.show))})`, (card?.lines ?? []).every((l) => l.show?.n === 1));
+  },
+}, {
+  name: "the batch's own changes count: flow ops see the ones before them, scroll_to stays in a variant, a keyed re-send's removal or a move of a destination is refused",
+  async run() {
+    const w = await protoWorld();
+    const flows = (): string => JSON.stringify(pageOf(w, "Page 1").flowStartingPoints);
+    const twice = await write(w, [{ op: "setFlowStart", nodeId: w.h.home ?? "", name: "Main" }, { op: "setFlowStart", nodeId: w.h.details ?? "", name: "Main" }]);
+    ok(`[PROTO-BATCH] two frames given one flow name in one batch: refused before anything ran (got ${JSON.stringify(twice)})`, !twice.ok && twice.failedAt === 1 && (twice.restored ?? []).length === 0
+      && /page 'Page 1' already has a flow 'Main'/.test(String(twice.error)) && flows() === "[]");
+    const setThenClear = await write(w, [{ op: "setFlowStart", nodeId: w.h.details ?? "", name: "Later" }, { op: "clearFlowStart", nodeId: w.h.details ?? "" }]);
+    ok(`[PROTO-BATCH] a set then a clear of the same frame composes (got ${JSON.stringify(setThenClear.error)})`, setThenClear.ok && flows() === "[]");
+    await write(w, [{ op: "setFlowStart", nodeId: w.h.home ?? "", name: "Main" }]);
+    const handOver = await write(w, [{ op: "clearFlowStart", nodeId: w.h.home ?? "" }, { op: "setFlowStart", nodeId: w.h.details ?? "", name: "Main" }]);
+    ok(`[PROTO-BATCH] a clear frees its name for a later set in the same batch (got ${JSON.stringify(handOver.error)})`, handOver.ok && flows() === JSON.stringify([{ nodeId: w.h.details, name: "Main" }]));
+    const knob = w.h.knob ?? "";
+    const inSet = await write(w, [{ op: "setReactions", nodeId: knob, reactions: [{ actions: [{ type: "node", navigation: "scroll_to", destination: "Knob" }] }] }]);
+    ok(`[PROTO-BATCH] scroll_to from a variant's layer looks only inside that variant (got ${JSON.stringify(inSet.error)})`, !inSet.ok && /destination 'Knob' matches no layer inside 'State=Off'/.test(String(inSet.error)));
+    const keyed = await write(w, [{ op: "createTree", tree: { key: "screen", name: "Keyed", children: [{ name: "Top", handle: "top" }, { name: "Bottom", handle: "bottom" }] } }]);
+    const kh = keyed.applied[0]?.handles ?? {};
+    const drop = await write(w, [{ op: "setReactions", nodeId: kh.top ?? "", reactions: [{ actions: [{ type: "node", navigation: "scroll_to", destinationId: kh.bottom ?? "" }] }] },
+      { op: "createTree", tree: { key: "screen", name: "Keyed", children: [{ name: "Top", handle: "top" }] } }]);
+    ok(`[PROTO-BATCH] a destination the batch's keyed re-send removes is refused (got ${JSON.stringify(drop.error)})`, !drop.ok
+      && new RegExp("ops\\[0\\] \\(setReactions\\): destination '" + String(kh.bottom) + "' is removed by the keyed re-send in ops\\[1\\]").test(String(drop.error)));
+    const temp = (await write(w, [{ op: "createTree", tree: { name: "Moving", handle: "m" } }])).applied[0]?.handles?.m ?? "";
+    const moved = await write(w, [{ op: "setReactions", nodeId: w.h.btn ?? "", reactions: [{ actions: [{ type: "node", destinationId: temp }] }] }, { op: "move", nodeId: temp, parentId: w.h.home ?? "" }]);
+    ok(`[PROTO-BATCH] a destination the batch moves is refused (got ${JSON.stringify(moved.error)})`, !moved.ok && new RegExp("destination '" + temp + "' is moved by ops\\[1\\] of this batch").test(String(moved.error)));
   },
 }];

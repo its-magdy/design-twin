@@ -464,7 +464,8 @@ screens.
     `{op: "clearFlowStart", nodeId}`. The pure check and the words are in `bridge/src/reaction-spec.ts`; the file side is
     in `figma-plugin/src/reactions.ts`.
     - **The read form, replaced whole.** `reactions` is `prototype.ts`'s list: a `trigger` (`on_click` when absent;
-      hover, press, drag, `after_timeout` with `timeout`, mouse enter, leave, up and down with `delay`, `on_key_down`
+      hover, press, drag, `after_timeout` with `timeout`, mouse enter, leave, up and down with `delay` (both milliseconds, as Figma stores
+      them and the read writes them; a transition's `duration` is seconds), `on_key_down`
       with `keyCodes` and `device`) and its `actions` (1–10): `back`, `close`, `url` (`url`, `openInNewTab`), and `node`
       (`destination` / `destinationId`, `navigation` navigate | swap | overlay | scroll_to | change_to, `transition`, the
       reset flags, `overlayOffset`). A reaction read from a file passes as it is: both destination fields, and a preset
@@ -475,18 +476,20 @@ screens.
       or a name exactly one candidate has, the candidates depending on `navigation`:
       - navigate, swap and overlay: frames, components and instances at the top of the layer's page, or directly in a
         section on it. Figma's prototype links frames of one page.
-      - scroll_to: layers inside the layer's own top frame.
+      - scroll_to: other layers inside the layer's own top frame (for a layer of a variant, that variant).
       - change_to: the variants of the set the layer is a variant of, or is inside.
 
       Several candidates refuse the batch with their ids, none with the closest names. An id that is the wrong kind is
       told why: on another page, inside a frame, not a variant. An id and a name that disagree are refused. All of it is
       resolved before anything runs, every problem listed at once, and each destination is checked again right before
-      the op runs. A destination a `delete` of the same batch removes is refused. An `overlayOffset` needs an overlay
+      the op runs. A destination a `delete` of the same batch removes, a keyed re-send drops, or a `move` puts elsewhere is refused. An `overlayOffset` needs an overlay
       frame set to Manual position.
     - **Flows.** `setFlowStart` puts the frame, which must be at the top of its page or in a section, on its page's
       `flowStartingPoints`. A frame already there keeps its place and gets the new name. A name another frame's flow
       has on that page is refused. `clearFlowStart` removes the frame's flow, and is refused for a frame that starts
-      none. The list is read when the op runs, so several flow ops of one batch compose.
+      none. The flow ops of a batch are resolved in order against the page's list as the ones before leave it (a clear
+      frees a name for a later set; two frames given one name are refused before anything runs), and applied to the
+      list as it is when each runs.
     - **All or nothing, one undo step (decisions 14, 16).** Each op keeps what it replaces (the layer's reactions, the
       page's list) and is put back with the batch. Both are ordinary plugin edits inside the batch's commitUndo pair.
       A layer deleted during the await of setReactionsAsync fails the op as missing.

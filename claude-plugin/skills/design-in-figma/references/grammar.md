@@ -488,12 +488,12 @@ second call. `setReactions {nodeId, reactions}` sets what a layer does in a prot
 ```json
 {"op": "setReactions", "nodeId": "12:4", "reactions": [
   {"trigger": "on_click", "actions": [{"type": "node", "destination": "Details", "transition": {"type": "smart_animate", "duration": 0.3}}]},
-  {"trigger": "after_timeout", "timeout": 2, "actions": [{"type": "back"}]}]}
+  {"trigger": "after_timeout", "timeout": 2000, "actions": [{"type": "back"}]}]}
 ```
 
 - A reaction is a `trigger` (`on_click` when absent) and its `actions`, run in order (1–10; at most 50 reactions an
-  op). Triggers: `on_click`, `on_hover`, `on_press`, `on_drag`, `after_timeout` (needs `timeout`, seconds),
-  `mouse_enter`, `mouse_leave`, `mouse_up`, `mouse_down` (each with an optional `delay`, seconds), `on_key_down` (needs
+  op). Triggers: `on_click`, `on_hover`, `on_press`, `on_drag`, `after_timeout` (needs `timeout`, in milliseconds as Figma stores it: 2000 is 2 s),
+  `mouse_enter`, `mouse_leave`, `mouse_up`, `mouse_down` (each with an optional `delay`, milliseconds), `on_key_down` (needs
   `keyCodes`; `device`: `keyboard` by default, `xbox_one`, `ps4`, `switch_pro`, `unknown_controller`). A field of
   another trigger is refused.
 - Actions: `{type: "back"}`, `{type: "close"}` (closes the overlay), `{type: "url", url, openInNewTab?}`, and
@@ -506,7 +506,7 @@ second call. `setReactions {nodeId, reactions}` sets what a layer does in a prot
   against depends on `navigation`:
   - `navigate`, `overlay` and `swap`: frames, components and instances at the top of the layer's page, or directly
     in a section on it. A prototype stays on its page.
-  - `scroll_to`: layers inside the layer's own top frame.
+  - `scroll_to`: other layers inside the layer's own top frame (for a layer of a variant, inside that variant).
   - `change_to`: the variants of the component set the layer is a variant of, or is inside, by variant name, e.g.
     `"State=On"`.
 
@@ -524,7 +524,9 @@ second call. `setReactions {nodeId, reactions}` sets what a layer does in a prot
 `setFlowStart {nodeId, name}` makes a frame at the top of its page, or in a section on it, the start of a flow. Sent
 for a frame that already starts one, it renames that flow in place. A name another flow on the same page has is
 refused. `clearFlowStart {nodeId}` removes the flow the frame starts. All three ops keep what they replace and are put
-back when a later op of the batch fails. A destination the same batch deletes is refused.
+back when a later op of the batch fails. The flow ops of one batch are checked in order against each other: a clear
+frees a name for a later set, and two frames given one name are refused before anything runs. A destination the same
+batch deletes, moves or removes from a keyed re-send is refused (wire it in a later batch).
 
 ## Move and delete
 

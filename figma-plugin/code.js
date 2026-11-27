@@ -3018,7 +3018,7 @@
   var DEVICES = ["keyboard", "xbox_one", "ps4", "switch_pro", "unknown_controller"];
   var isNum4 = (v) => typeof v === "number" && Number.isFinite(v);
   var bool2 = (v) => typeof v === "boolean" ? null : "must be true or false";
-  var seconds = (v) => isNum4(v) && v >= 0 ? null : "must be a number of seconds \u2265 0";
+  var millis = (v) => isNum4(v) && v >= 0 ? null : "must be a number of milliseconds \u2265 0 (Figma's unit for a trigger; 2000 is 2 s)";
   var nonEmpty4 = (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string";
   var xy3 = (v) => isObj4(v) && isNum4(v.x) && isNum4(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}, two numbers";
   var unitNum = (v) => isNum4(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1";
@@ -3067,8 +3067,8 @@
   };
   var REACTION_RULES = {
     trigger: (v) => v === "on_media_hit" || v === "on_media_end" ? MEDIA : v === "unknown" ? "a trigger the read could not name cannot be written; give one of " + TRIGGERS.join(" | ") : oneOf(...TRIGGERS)(v),
-    timeout: seconds,
-    delay: seconds,
+    timeout: millis,
+    delay: millis,
     keyCodes: (v) => Array.isArray(v) && v.length > 0 && v.every((k) => isNum4(k) && Number.isInteger(k) && k >= 0) ? null : "must be a non-empty list of key codes (whole numbers \u2265 0)",
     device: oneOf(...DEVICES),
     actions: (v) => Array.isArray(v) ? null : "must be a list of actions",
@@ -3100,7 +3100,7 @@
         const allowed2 = TRIGGER_FIELDS[k] || [];
         if (r[k] !== void 0 && allowed2.indexOf(trigger) < 0) problems.push(at3 + "." + k + ": only with trigger " + allowed2.join(" | ") + " (this one is " + trigger + ")");
       }
-      if (trigger === "after_timeout" && r.timeout === void 0) problems.push(at3 + ": trigger after_timeout needs `timeout` (seconds)");
+      if (trigger === "after_timeout" && r.timeout === void 0) problems.push(at3 + ": trigger after_timeout needs `timeout` (milliseconds)");
       if (trigger === "on_key_down" && r.keyCodes === void 0) problems.push(at3 + ": trigger on_key_down needs `keyCodes`");
       const acts = Array.isArray(r.actions) ? r.actions : null;
       if (!acts) {
@@ -3178,9 +3178,9 @@
   var secs = (n) => Math.round(n * 1e3) / 1e3 + " s";
   function triggerText(r) {
     const t = r.trigger || "on_click";
-    if (t === "after_timeout") return "after " + secs(r.timeout || 0);
+    if (t === "after_timeout") return "after " + secs((r.timeout || 0) / 1e3);
     if (t === "on_key_down") return "key " + (r.keyCodes || []).join(", ") + (r.device && r.device !== "keyboard" ? " (" + words(r.device) + ")" : "");
-    if (r.delay) return words(t) + " after " + secs(r.delay);
+    if (r.delay) return words(t) + " after " + secs(r.delay / 1e3);
     return words(t);
   }
   function transitionText(t) {
@@ -13058,9 +13058,9 @@
   }
   function placesFor(node, page, nav) {
     if (nav === "scroll_to") {
-      const top = topOf(node);
+      const top = variantOf(node) || topOf(node);
       if (!top) return { error: "scroll_to scrolls within the frame the layer is in, and " + label5(node) + " is in none" };
-      return { list: layersIn(top), what: "layer inside '" + top.name + "' (scroll_to stays in the layer's own frame)" };
+      return { list: layersIn(top).filter((c) => c.id !== node.id), what: "layer inside '" + top.name + "' (scroll_to stays in the layer's own frame)" };
     }
     if (nav === "change_to") {
       const v = variantOf(node);
@@ -13129,6 +13129,7 @@
   function figmaTrigger(r) {
     const t = r.trigger || "on_click";
     switch (t) {
+      // Milliseconds, as Figma stores them and the read export writes them.
       case "after_timeout":
         return { type: "AFTER_TIMEOUT", timeout: r.timeout || 0 };
       case "mouse_enter":
@@ -13199,6 +13200,7 @@
   async function resolvePrototypeOps(ops) {
     const targets = /* @__PURE__ */ new Map();
     const problems = [];
+    const flows = /* @__PURE__ */ new Map();
     for (const [index, op] of ops.entries()) {
       if (!isProtoOp(op)) continue;
       const bad = (message) => {
@@ -13269,7 +13271,11 @@
         bad(label5(node) + " is a " + node.type + (node.parent && !atTop(node) ? " inside '" + node.parent.name + "'" : "") + "; a flow starts from a frame at the top of its page, or in a section on it");
         continue;
       }
-      const points = page.flowStartingPoints || [];
+      let points = flows.get(page.id);
+      if (!points) {
+        points = (page.flowStartingPoints || []).map((p) => ({ nodeId: p.nodeId, name: p.name }));
+        flows.set(page.id, points);
+      }
       const mine = points.filter((p) => p.nodeId === node.id)[0];
       const was = mine ? mine.name : null;
       if (op.op === "clearFlowStart") {
@@ -13278,6 +13284,7 @@
           continue;
         }
         targets.set(index, { kind: "flow", node, name, page, flow: null, was });
+        flows.set(page.id, points.filter((p) => p.nodeId !== node.id));
         continue;
       }
       const flow = op.name || "";
@@ -13287,6 +13294,7 @@
         continue;
       }
       targets.set(index, { kind: "flow", node, name, page, flow, was });
+      flows.set(page.id, mine ? points.map((p) => p.nodeId === node.id ? { nodeId: p.nodeId, name: flow } : p) : points.concat([{ nodeId: node.id, name: flow }]));
     }
     return { targets, problems };
   }
@@ -15076,7 +15084,8 @@
         ...structure2.problems,
         ...sources2.problems,
         ...deleteConflicts(list, structure2.deletes, structure2.moves, protos2.targets),
-        ...removalConflicts(list, trees2.targets, structure2.moves),
+        ...removalConflicts(list, trees2.targets, structure2.moves, protos2.targets),
+        ...moveConflicts(list, protos2.targets),
         ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves),
         ...ruleConflicts(rules2.targets, trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
@@ -15379,7 +15388,7 @@
     }
     return out;
   }
-  function removalConflicts(list, targets, moves) {
+  function removalConflicts(list, targets, moves, protos) {
     const gone = /* @__PURE__ */ new Map();
     for (const [i, t] of targets) {
       if (!t.update) continue;
@@ -15395,6 +15404,20 @@
         out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is removed by the keyed re-send in ops[" + by + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
         break;
       }
+      const t = protos.get(index);
+      const lost = t ? destinationIds(t).filter((id) => gone.has(id))[0] : void 0;
+      if (lost !== void 0) out.push({ index, op: op.op, message: "destination '" + lost + "' is removed by the keyed re-send in ops[" + String(gone.get(lost)) + "] (its spec no longer has it; removals run after every other op); drop one of the two" });
+    }
+    return out;
+  }
+  function moveConflicts(list, protos) {
+    const moved = /* @__PURE__ */ new Map();
+    for (const [i, op] of list.entries()) if (op.op === "move" && op.nodeId && !moved.has(op.nodeId)) moved.set(op.nodeId, i);
+    const out = [];
+    if (!moved.size) return out;
+    for (const [index, t] of protos) {
+      const hit = destinationIds(t).filter((id) => moved.has(id))[0];
+      if (hit !== void 0) out.push({ index, op: list[index] ? String(list[index].op) : "setReactions", message: "destination '" + hit + "' is moved by ops[" + String(moved.get(hit)) + "] of this batch, so where it may be linked from is not known until it lands; wire it in a later batch" });
     }
     return out;
   }

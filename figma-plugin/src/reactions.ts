@@ -95,9 +95,10 @@ function variantOf(n: BaseNode): ComponentNode | null {
 /** Where a navigation may go, from `node`, and what that is in a sentence. */
 function placesFor(node: SceneNode, page: PageNode, nav: DestinationRef["navigation"]): { list: SceneNode[]; what: string } | { error: string } {
   if (nav === "scroll_to") {
-    const top = topOf(node);
+    // A layer of a variant scrolls within that variant (its set is not one frame).
+    const top = variantOf(node) || topOf(node);
     if (!top) return { error: "scroll_to scrolls within the frame the layer is in, and " + label(node) + " is in none" };
-    return { list: layersIn(top), what: "layer inside '" + top.name + "' (scroll_to stays in the layer's own frame)" };
+    return { list: layersIn(top).filter((c) => c.id !== node.id), what: "layer inside '" + top.name + "' (scroll_to stays in the layer's own frame)" };
   }
   if (nav === "change_to") {
     const v = variantOf(node);
@@ -153,6 +154,7 @@ const DIRECTION_TYPES = { left: "LEFT", right: "RIGHT", top: "TOP", bottom: "BOT
 function figmaTrigger(r: WriteReaction): Trigger {
   const t = r.trigger || "on_click";
   switch (t) {
+    // Milliseconds, as Figma stores them and the read export writes them.
     case "after_timeout": return { type: "AFTER_TIMEOUT", timeout: r.timeout || 0 };
     case "mouse_enter": case "mouse_leave": return { type: TRIGGER_TYPES[t], delay: r.delay || 0, deprecatedVersion: false };
     case "mouse_up": case "mouse_down": return { type: TRIGGER_TYPES[t], delay: r.delay || 0 };
@@ -206,6 +208,8 @@ function figmaAction(a: WriteAction, destId: string | undefined): Action {
 export async function resolvePrototypeOps(ops: readonly WriteOp[]): Promise<{ targets: Map<number, ProtoTarget>; problems: OpProblem[] }> {
   const targets = new Map<number, ProtoTarget>();
   const problems: OpProblem[] = [];
+  /** each page's flow starting points as the batch's flow ops leave them, in op order */
+  const flows = new Map<string, Array<{ nodeId: string; name: string }>>();
   for (const [index, op] of ops.entries()) {
     if (!isProtoOp(op)) continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };
@@ -253,18 +257,22 @@ export async function resolvePrototypeOps(ops: readonly WriteOp[]): Promise<{ ta
 
     // A flow starts from a frame at the top of its page.
     if (!atTop(node) || TOP_TYPES.indexOf(node.type) < 0) { bad(label(node) + " is a " + node.type + (node.parent && !atTop(node) ? " inside '" + node.parent.name + "'" : "") + "; a flow starts from a frame at the top of its page, or in a section on it"); continue; }
-    const points = page.flowStartingPoints || [];
+    // The page's flows as the ops before this one in the batch leave them: a clear frees a name, a set takes one.
+    let points = flows.get(page.id);
+    if (!points) { points = (page.flowStartingPoints || []).map((p) => ({ nodeId: p.nodeId, name: p.name })); flows.set(page.id, points); }
     const mine = points.filter((p) => p.nodeId === node.id)[0];
     const was = mine ? mine.name : null;
     if (op.op === "clearFlowStart") {
       if (!mine) { bad(label(node) + " starts no flow on page '" + page.name + "'" + (points.length ? " (its flows: " + quoteList(points.map((p) => p.name)) + ")" : "")); continue; }
       targets.set(index, { kind: "flow", node, name, page, flow: null, was });
+      flows.set(page.id, points.filter((p) => p.nodeId !== node.id));
       continue;
     }
     const flow = op.name || "";
     const clash = points.filter((p) => p.name === flow && p.nodeId !== node.id)[0];
     if (clash) { bad("page '" + page.name + "' already has a flow '" + flow + "' (it starts at " + clash.nodeId + "); flows are told apart by name — pick another"); continue; }
     targets.set(index, { kind: "flow", node, name, page, flow, was });
+    flows.set(page.id, mine ? points.map((p) => (p.nodeId === node.id ? { nodeId: p.nodeId, name: flow } : p)) : points.concat([{ nodeId: node.id, name: flow }]));
   }
   return { targets, problems };
 }
