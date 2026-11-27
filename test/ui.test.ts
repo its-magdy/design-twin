@@ -114,6 +114,11 @@ check("close 4401 → 'token rejected': red, says what to run, OPENS the section
   return w.el("pill").textContent === "token rejected" && w.el("bridge").className === "bad" && /dtwin --show-token/.test(w.el("bridge").textContent)
     && w.el("connect").open === true && slow && /:8787\//.test(w.last().url);
 })());
+check("an identity answer that arrives after a 4401 close leaves 'token rejected' up (the socket opened, then was refused)", (() => {
+  const w = boot(); w.msg({ type: "token", token: "stale" }); const s = w.last(); openIt(s); closeIt(s, 4401);
+  w.msg({ type: "identity", identity: { instanceId: "i-1", file: "F", page: "P", fileKey: null, fileKeyAvailable: false, pluginVersion: "0.1.0" } });
+  return w.el("pill").textContent === "token rejected" && w.el("bridge").className === "bad";
+})());
 check("nothing listening → walks every allowed port, THEN says 'not running' (neutral, not an error) with how to start one", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" });
   closeIt(w.last(), 1006); const afterOne = w.el("pill").textContent; w.runTimers();

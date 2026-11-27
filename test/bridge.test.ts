@@ -516,6 +516,12 @@ void (async () => {
     ok("[bad-token] the plugin iframe (Origin null) gets close code 4401 it can read, not an opaque refusal",
       plugin.opened === true && plugin.code === core.CLOSE_BAD_TOKEN && core.CLOSE_BAD_TOKEN === 4401);
     ok("[bad-token] and was never registered as a client, even though it sent a hello", plugin.clients === 0 && !bridge.isConnected());
+    // The same for an older plugin with the token in its URL (the legacy handshake): admitted only to be closed 4401.
+    const oldIntruder = fakePlugin(port, { token: "wrong", hello: { file: "intruder" }, legacyUrlToken: true });
+    oldIntruder.opened.catch(() => {});
+    const oldPlugin = await closed(oldIntruder.ws);
+    ok("[bad-token] a legacy ?token= plugin with a wrong token (Origin null) is admitted and closed 4401 too, never registered",
+      oldPlugin.opened === true && oldPlugin.code === 4401 && oldPlugin.clients === 0);
     const node = await refused({ raw: true });
     ok("[bad-token] a non-browser client (no Origin) is still refused at the HTTP layer with 401", node.opened === false && node.http === 401);
     ok("[bad-token] and the refusal's body says why, as ws's did", node.body === "bad or missing token");

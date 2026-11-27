@@ -497,7 +497,9 @@ var DesignTwinRelay = (() => {
       if (m.type === "identity") {
         // The main thread answered "who am I" — relay.ts has sent it to the bridge as the `hello`.
         var idn = m.identity || {};
-        if (idn.file) setBridge("on", "connected", "Connected to the bridge on this computer as " + JSON.stringify(idn.file) + ".");
+        // Only while that socket is still open: a wrong token is closed (4401) before this answer can arrive, and
+        // "token rejected" must stay up.
+        if (idn.file && ws && ws.readyState === 1) setBridge("on", "connected", "Connected to the bridge on this computer as " + JSON.stringify(idn.file) + ".");
         return;
       }
     };
