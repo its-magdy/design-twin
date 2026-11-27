@@ -54,6 +54,16 @@ list of merged PRs.
 - The plugin export loses less. An OpenType feature the designer turned off now reaches the IR as `font.openTypeOff`
   (before, only enabled ones survived); each layout grid carries its own variable bindings as `tokens`, on frames and
   grid styles; and an annotation carries its Dev Mode category's label as `category` beside `categoryId`.
+- The Figma plugin no longer puts the bridge token in its connection URL, where Figma's dev console showed it on
+  every failed connection. It sends the token as the first message once the socket opens; the bridge accepts no
+  command and lists no plugin until it checks out, closes a wrong one with 4401, and closes a socket that sends no
+  token within 5 seconds. Update the plugin and `dtwin` together: a new plugin against an older bridge shows "token
+  rejected".
+
+### Deprecated
+
+- The bridge token in the connection URL (`?token=…`), which plugins before this release send. The bridge still
+  accepts it for this release and logs a line saying so; the next release refuses it.
 
 ## [0.1.6] - 2026-11-02
 

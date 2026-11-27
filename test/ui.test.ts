@@ -114,6 +114,11 @@ check("close 4401 → 'token rejected': red, says what to run, OPENS the section
   return w.el("pill").textContent === "token rejected" && w.el("bridge").className === "bad" && /dtwin --show-token/.test(w.el("bridge").textContent)
     && w.el("connect").open === true && slow && /:8787\//.test(w.last().url);
 })());
+check("an identity answer that arrives after a 4401 close leaves 'token rejected' up (the socket opened, then was refused)", (() => {
+  const w = boot(); w.msg({ type: "token", token: "stale" }); const s = w.last(); openIt(s); closeIt(s, 4401);
+  w.msg({ type: "identity", identity: { instanceId: "i-1", file: "F", page: "P", fileKey: null, fileKeyAvailable: false, pluginVersion: "0.1.0" } });
+  return w.el("pill").textContent === "token rejected" && w.el("bridge").className === "bad";
+})());
 check("nothing listening → walks every allowed port, THEN says 'not running' (neutral, not an error) with how to start one", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" });
   closeIt(w.last(), 1006); const afterOne = w.el("pill").textContent; w.runTimers();
@@ -131,7 +136,21 @@ check("saving a new token after a rejection reconnects at once, not after the 15
   const w = boot(); w.msg({ type: "token", token: "stale" }); closeIt(w.last(), 4401);
   const before = w.sockets.length;
   w.el("token").value = "fresh"; w.el("save-token").onclick?.();
-  return w.sockets.length === before + 1 && /token=fresh/.test(w.last().url) && w.posted.some((p) => p.type === "set-token" && p.token === "fresh");
+  const s = w.last(); openIt(s);
+  return w.sockets.length === before + 1 && s.sent[0] === '{"type":"auth","token":"fresh"}' && w.posted.some((p) => p.type === "set-token" && p.token === "fresh");
+})());
+// #189: Figma's console logs a failed dial's URL, so the token must never be in it — it is the socket's first frame.
+check("the token is never in the socket URL; it is the FIRST frame once the socket opens, before anything else", (() => {
+  const w = boot(); w.msg({ type: "token", token: "s3cr3t-tok" });
+  const urls: string[] = [];
+  closeIt(w.last(), 1006); w.runTimers(); closeIt(w.last(), 1006); w.runTimers();
+  const s = w.last(); const unsentBeforeOpen = s.sent.length === 0;
+  openIt(s);
+  w.msg({ type: "identity", identity: { instanceId: "i-1", file: "F", page: "P", fileKey: null, fileKeyAvailable: false, pluginVersion: "0.1.0" } });
+  for (const x of w.sockets) urls.push(x.url);
+  return urls.length === 3 && urls.every((u) => !/s3cr3t|token/.test(u) && /^ws:\/\/localhost:\d+\/$/.test(u)) && unsentBeforeOpen
+    && s.sent[0] === '{"type":"auth","token":"s3cr3t-tok"}' && s.sent.filter((d) => d.includes("s3cr3t-tok")).length === 1
+    && (JSON.parse(must(s.sent[1], "the hello")) as { type?: string }).type === "hello";
 })());
 check("a missed dial redials after REDIAL_MS (1 s), the interval the bridge's settle window is built from", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); closeIt(w.last(), 1006);
@@ -147,6 +166,8 @@ check("only ONE reconnect is ever pending, however many closes arrive", (() => {
 console.log("liveness frames relayed to the bridge:");
 // The bridge's stall check reads any frame as life. A bridge run's run-begin sends a progress frame at once,
 // so a cold export is not silent on the socket until its first asset tick.
+/** What the window sent after its first frame, the auth frame (#189). */
+const afterAuth = (s: FakeSocket): string[] => (s.sent[0] === '{"type":"auth","token":"t"}' ? s.sent.slice(1) : ["<no auth frame first>", ...s.sent]);
 const progressFrames = (s: FakeSocket) => s.sent.filter((d) => (JSON.parse(d) as { type?: string }).type === "progress");
 check("run-begin of a BRIDGE run → the socket gets {type:\"progress\",phase:\"start\"} at once", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
@@ -202,7 +223,7 @@ check("socket open → get-identity to the main thread; its identity answer → 
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
   const asked = w.posted.some((p) => p.type === "get-identity");
   w.msg({ type: "identity", identity: { instanceId: "i-1", file: "F", page: "P", fileKey: "K", fileKeyAvailable: true, pluginVersion: "0.1.0" } });
-  return asked && s.sent.join("|") === '{"type":"hello","instanceId":"i-1","file":"F","fileKey":"K","page":"P","pluginVersion":"0.1.0"}'
+  return asked && afterAuth(s).join("|") === '{"type":"hello","instanceId":"i-1","file":"F","fileKey":"K","page":"P","pluginVersion":"0.1.0"}'
     && w.el("bridge").textContent.includes('"F"');
 })());
 check("a command frame → posted as {type:bridge}; its bridge-result → the reply frame on the socket", (() => {
@@ -210,7 +231,7 @@ check("a command frame → posted as {type:bridge}; its bridge-result → the re
   s.onmessage?.({ data: JSON.stringify({ id: "r-1", cmd: "ping", args: {} }) });
   const fwd = w.posted.find((p) => p.type === "bridge");
   w.msg({ type: "bridge-result", id: "r-1", ok: true, result: { pong: true } });
-  return fwd?.id === "r-1" && s.sent.join("|") === '{"id":"r-1","ok":true,"result":{"pong":true}}';
+  return fwd?.id === "r-1" && afterAuth(s).join("|") === '{"id":"r-1","ok":true,"result":{"pong":true}}';
 })());
 check("a socket cancel {id} → a main-thread cancel of that id; an id-less one → nothing", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
