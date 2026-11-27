@@ -412,13 +412,14 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    Cmd-Z step (`commitUndo` before and after), except that Figma ends a step at each component property declared,
    edited or deleted (the call included); the batch still runs in op order, and the reply's `undoSteps` / `undoNote`
    say how many presses take it back (a new component still being built when a step ended is left hidden).
-   The op table (`bridge/src/commands.ts` `WRITE_OPS`, 14 ops) is read by all three places a write is checked —
+   The op table (`bridge/src/commands.ts` `WRITE_OPS`, 18 ops) is read by all three places a write is checked —
    the dry run, the plugin's wire check and `applyWrites` — and each spec shape has one pure check module the plugin
    bundle imports too: `createTree`'s tree spec (`tree-spec.ts`, with `tree-check.ts`; rows and fragments expanded
    first by `tree-expand.ts`; where it lands, `place-spec.ts`), `patch` (`patch-spec.ts`), `setVariable` / `setStyle` (`source-spec.ts`),
-   `createVariables` / `createStyles` (`create-spec.ts`). What only the file can answer (names, fonts, pages and
-   sections, a node's kind) is resolved by the plugin before the first op runs (`tree-refs.ts`, `places.ts`, `patch.ts`,
-   `sources.ts`, `creates.ts`); a page or section a `createTree` asks to make is planned then, once for the batch, and
+   `createVariables` / `createStyles` (`create-spec.ts`), the prototype ops `setReactions` / `setFlowStart` /
+   `clearFlowStart` (`reaction-spec.ts`). What only the file can answer (names, fonts, pages and
+   sections, a node's kind, a prototype's destinations) is resolved by the plugin before the first op runs (`tree-refs.ts`, `places.ts`, `patch.ts`,
+   `sources.ts`, `creates.ts`, `reactions.ts`); a page or section a `createTree` asks to make is planned then, once for the batch, and
    made by the first op landing there, as a change the batch puts back on a failure.
    The create tables come first in a batch and run first: what they will make is the batch's plan
    (`figma-plugin/src/batch-plan.ts`), so a later op's name for a new variable or text style resolves, like an import,

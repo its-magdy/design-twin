@@ -13,7 +13,7 @@ file or the spec instead. A hex colour is `#rgb`, `#rgba`, `#rrggbb` or `#rrggbb
 - [The call](#the-call) · [The ops](#the-ops) · [Replies](#replies)
 - [Tree spec (`createTree`)](#tree-spec-createtree) · [Design-system references](#design-system-references)
 - [Copies, rows, fragments](#copies-rows-fragments) · [Components](#components) · [Keyed re-send](#keyed-re-send) · [Spec from disk](#spec-from-disk)
-- [Patch](#patch) · [Patch by rule](#patch-by-rule) · [Source edits](#source-edits) · [Starting from nothing](#starting-from-nothing) · [Variable modes](#variable-modes) · [Move and delete](#move-and-delete)
+- [Patch](#patch) · [Patch by rule](#patch-by-rule) · [Source edits](#source-edits) · [Starting from nothing](#starting-from-nothing) · [Variable modes](#variable-modes) · [Prototype](#prototype) · [Move and delete](#move-and-delete)
 - [What a write cannot set yet](#what-a-write-cannot-set-yet) · [Limits](#limits)
 
 ## The call
@@ -47,6 +47,9 @@ at most 45 s; if they have not answered by then it returns `{pending: true, tick
 | `seedTokens` | `file` (the project's `tokens.dtcg.json` or `tokens.resolver.json`) | `collection` (a `tokens.dtcg.json`'s collection; `Tokens` by default) |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
+| `setReactions` | `nodeId`, `reactions` (the layer's prototype interactions, [below](#prototype); they replace the ones it has, `[]` removes them) | — |
+| `setFlowStart` | `nodeId` (a frame at the top of its page), `name` (the flow's) | — |
+| `clearFlowStart` | `nodeId` | — |
 | `move` | `nodeId`, `parentId` | `index` (0 first; last when absent) |
 | `delete` | `nodeId` | — |
 | `createFrame` | — | `parentId`, `name`, `width` + `height` (both or neither), `layoutMode` (`HORIZONTAL` \| `VERTICAL`), `itemSpacing`, `padding` (`[t, r, b, l]`), `fill` (hex) |
@@ -79,7 +82,8 @@ calls and can bind variables. A create with no `parentId` lands on the current p
   - `seedTokens` `{seeded: file, tables: [{collection, id, result, modesAdded?, created?, updated?, unchanged}, …], unmapped?, partly?}`
     (`created` / `updated` list `[name, id]`, `unchanged` counts the rest; the styles table is `{styles: true, …}`).
   - `patch` `{id, unbound?}` · `patchWhere` `{matched, pages, unbound?}` (how many layers, on how many pages; no ids) · `setVariable` `{id, modes}` · `setStyle` `{id}` · a mode op names the `collection` and
-    the mode `from` → `to` (`inherited` when none is set) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
+    the mode `from` → `to` (`inherited` when none is set) · `setReactions` `{id, reactions, replaced}` (how many it has
+    now, and had) · `setFlowStart` `{id, flow, from?}` · `clearFlowStart` `{id, from}` (`from`: the flow's old name) · `move` `{id, parentId}` · `delete` `{id, deleted: true}`.
 - Refused whole, nothing changed (bar a library item already imported for it, which stays): an error saying why (Allow
   edits off, rejected with the designer's reason, withdrawn or not reviewed in time, another write still waiting, Dev Mode, or every problem of the batch with its
   path and up to three candidates).
@@ -474,6 +478,54 @@ passes through the call. It goes first in a batch, like the tables; the 50-op li
 collection's id or key; `mode` is a mode's exact name or modeId. A library collection the file does not use yet is
 refused.
 
+## Prototype
+
+Wire screens together once they exist (a `createTree`'s reply gives their ids by `handle`), so a prototype is usually a
+second call. `setReactions {nodeId, reactions}` sets what a layer does in a prototype, in the read export's
+`reactions` form, so a reaction read from a file is sent back as it is. The list replaces the layer's reactions;
+`[]` removes them all.
+
+```json
+{"op": "setReactions", "nodeId": "12:4", "reactions": [
+  {"trigger": "on_click", "actions": [{"type": "node", "destination": "Details", "transition": {"type": "smart_animate", "duration": 0.3}}]},
+  {"trigger": "after_timeout", "timeout": 2, "actions": [{"type": "back"}]}]}
+```
+
+- A reaction is a `trigger` (`on_click` when absent) and its `actions`, run in order (1–10; at most 50 reactions an
+  op). Triggers: `on_click`, `on_hover`, `on_press`, `on_drag`, `after_timeout` (needs `timeout`, seconds),
+  `mouse_enter`, `mouse_leave`, `mouse_up`, `mouse_down` (each with an optional `delay`, seconds), `on_key_down` (needs
+  `keyCodes`; `device`: `keyboard` by default, `xbox_one`, `ps4`, `switch_pro`, `unknown_controller`). A field of
+  another trigger is refused.
+- Actions: `{type: "back"}`, `{type: "close"}` (closes the overlay), `{type: "url", url, openInNewTab?}`, and
+  `{type: "node", destination | destinationId, navigation?, transition?, …}`. `navigation` is `navigate` (the
+  default), `overlay`, `swap` (swap the open overlay), `scroll_to` or `change_to`. The node action also takes
+  `preserveScroll`, `resetScroll`, `resetVideo`, `resetInteractive` (booleans) and, opening an overlay, `overlayOffset
+  {x, y}`, which Figma honours only on an overlay frame set to Manual position. Plugins cannot set that position.
+- A destination is a node's exact id (`destinationId`, or `destination` when it reads as an id) or an exact name
+  (`destination`). Both are allowed when they name the same node, as the read writes them. What a name is matched
+  against depends on `navigation`:
+  - `navigate`, `overlay` and `swap`: frames, components and instances at the top of the layer's page, or directly
+    in a section on it. A prototype stays on its page.
+  - `scroll_to`: layers inside the layer's own top frame.
+  - `change_to`: the variants of the component set the layer is a variant of, or is inside, by variant name, e.g.
+    `"State=On"`.
+
+  A name that matches nothing is refused with the closest names; one that matches several is refused with their ids.
+- `transition`: `{type, duration?, easing?}`. `type` is `dissolve`, `smart_animate` or `scroll_animate`; or `move_in`,
+  `move_out`, `push`, `slide_in` or `slide_out` with a `direction` (`left`, `right`, `top`, `bottom`) and an optional
+  `matchLayers`. `duration` is in seconds (0.3 by default, at most 10). `easing` is `ease_out` by default, else
+  `ease_in`, `ease_in_and_out`, `linear`, `ease_in_back`, `ease_out_back`, `ease_in_and_out_back`, `gentle`, `quick`,
+  `bouncy`, `slow`, `custom_cubic_bezier` (with `cubicBezier {x1, y1, x2, y2}`) or `custom_spring` (with `spring
+  {mass, stiffness, damping, initialVelocity}`). An instant change has no `transition`.
+- Not written yet, each refused by name: actions that set a variable or a variable mode, `conditional`, media actions
+  and media triggers. A frame's overlay settings (`overlay`: position, background, close on click outside) are
+  read-only to plugins, so they stay as the designer set them in Figma's Prototype panel.
+
+`setFlowStart {nodeId, name}` makes a frame at the top of its page, or in a section on it, the start of a flow. Sent
+for a frame that already starts one, it renames that flow in place. A name another flow on the same page has is
+refused. `clearFlowStart {nodeId}` removes the flow the frame starts. All three ops keep what they replace and are put
+back when a later op of the batch fails. A destination the same batch deletes is refused.
+
 ## Move and delete
 
 Only for nodes this plugin session created (`createFrame`, `createText`, `createTree`, with everything below them).
@@ -484,7 +536,8 @@ is refused into the node itself, into an instance, or past the end of the new pa
 
 Refused by name, each with the reason: grid layout, effects on a node, mixed-format text (`runs`), an image's crop, rotation or filters (an image is a fill, above),
 a text bound to a variable (`textTokens`), a property bound to a variable (`propTokens`), rotation, blend modes,
-masks, vector geometry, prototype reactions, annotations, SLOT component properties, and a variable's scopes or code
+masks, vector geometry, prototype reactions inside a spec or a patch (`setReactions` sets them), a frame's overlay
+settings (read-only to plugins), annotations, SLOT component properties, and a variable's scopes or code
 syntax. A frame's
 mode inside a spec (`variableModes`) is a `setVariableMode` op after the tree lands.
 
