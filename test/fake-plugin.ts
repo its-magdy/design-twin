@@ -163,13 +163,21 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
     relays.set(c, relay);
     // Without redial, a socket that never opens settles `opened`: a dial error, a refused handshake (the raw client
     // reports it as `unexpected-response`, then closes, with no `error`), or any close before open.
+    // Once open, only the bridge refusing the token (4401, or 4408 for no auth frame) rejects it; any other close
+    // before the fence (the bridge shut down first) settles it as opened, as an open always did.
+    let wasOpen = false;
     let authed = false;
     c.on("error", (e: unknown) => { if (!opts.redial) rejectOpened(e); });
     c.on("unexpected-response", (r: HandshakeRefusal) => { if (!opts.redial) rejectOpened(new Error(`handshake refused: HTTP ${r.statusCode} ${r.body}`)); });
-    c.on("close", (code: number) => { if (!opts.redial && !authed) rejectOpened(new Error(`closed before it authenticated (code ${code})`)); });
+    c.on("close", (code: number) => {
+      if (opts.redial || authed) return;
+      if (!wasOpen || code === 4401 || code === 4408) rejectOpened(new Error(`closed before it authenticated (code ${code})`));
+      else resolveOpened();
+    });
     // The ping fence: the bridge reads a socket's frames in order, so its pong says the auth frame and the hello were handled.
     c.on("pong", () => { if (!authed) { authed = true; resolveOpened(); } });
     c.on("open", () => {
+      wasOpen = true;
       if (!opts.legacyUrlToken) sendOn(c, { type: "auth", token: opts.token } satisfies AuthFrame); // first, as ui.html sends it
       relay.socketOpened(); // the main thread answers get-identity: the hello
       c.ping();
