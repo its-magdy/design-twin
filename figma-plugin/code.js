@@ -817,6 +817,9 @@
     }
   }
   var COLON_ID_RE = /^I?\d+:\d+(?:[;:]\d+:\d+)*$/;
+  function isNodeId(s) {
+    return COLON_ID_RE.test(s);
+  }
   function normalizeNodeId(raw) {
     if (!raw) return void 0;
     const s = decode(String(raw).trim()).replace(/-/g, ":");
@@ -985,12 +988,12 @@
   }
   function propRefsShape(v) {
     if (!isObj(v)) return "must be an object {characters?, visible?, mainComponent?} of the property each field follows";
-    const fields = PROP_REF_FIELDS;
+    const fields2 = PROP_REF_FIELDS;
     for (const k of Object.keys(v)) {
       const x = v[k];
       if (x === void 0) continue;
-      if (fields.indexOf(k) < 0) {
-        const near3 = nearestNames(k, fields);
+      if (fields2.indexOf(k) < 0) {
+        const near3 = nearestNames(k, fields2);
         return "." + k + ": not a field a property drives" + (near3.length ? "; closest: " + quoteList(near3) : "") + " (characters, visible, mainComponent)";
       }
       if (typeof x !== "string" || !x.trim()) return "." + k + " must be a property's name (as the component root's `props` declares it)";
@@ -1076,9 +1079,9 @@
         return;
       }
       for (const layer of Object.keys(edits)) {
-        const fields = edits[layer];
+        const fields2 = edits[layer];
         const at3 = path + "[" + JSON.stringify(layer) + "]";
-        if (!isObj2(fields)) {
+        if (!isObj2(fields2)) {
           say2(at3 + ": must be an object of the fields to change");
           continue;
         }
@@ -1090,12 +1093,12 @@
         }
         const target = hits[0];
         if (!target) continue;
-        for (const k of Object.keys(fields)) {
+        for (const k of Object.keys(fields2)) {
           if (NOT_EDITED.indexOf(k) >= 0) {
             say2(at3 + "." + k + ": an edit changes a layer's fields; `" + k + "` cannot be edited");
             continue;
           }
-          const v = fields[k];
+          const v = fields2[k];
           if (v === null) delete target[k];
           else if (v !== void 0) put(target, k, copy(v));
         }
@@ -1737,9 +1740,9 @@
     shape: NOT_YET,
     booleanOp: NOT_YET,
     exportSettings: NOT_YET,
-    overlay: NOT_YET,
+    overlay: refuse("a frame's overlay settings (position, background, close on click outside) are read-only to plugins in Figma's API; set them in Figma's Prototype panel"),
     textTokens: refuse(DS_REF),
-    reactions: NOT_YET,
+    reactions: refuse("wire a layer's prototype with a setReactions op once the tree lands (the reply's `handles` give the ids)"),
     variableModes: refuse("set a frame's mode with a setVariableMode op after the tree lands"),
     resolvedModes: refuse("it is read-only (what the frame inherits)"),
     annotations: NOT_YET,
@@ -2001,8 +2004,8 @@
         tooMany = true;
         return;
       }
-      const label6 = isObj4(n) ? ex.labels.get(n) : void 0;
-      const path = label6 !== void 0 ? label6 : at3;
+      const label7 = isObj4(n) ? ex.labels.get(n) : void 0;
+      const path = label7 !== void 0 ? label7 : at3;
       if (!isObj4(n)) {
         problems.push(path + ": must be a node object");
         return;
@@ -2020,9 +2023,9 @@
       const compType = n.type === "COMPONENT" || n.type === "COMPONENT_SET" ? n.type : null;
       const isCompRoot = isRoot && compType !== null;
       const isVariant = depth === 1 && comp !== null && comp.type === "COMPONENT_SET";
-      const fields = {};
-      for (const k of Object.keys(n)) if (!(isCompRoot && k === "props")) Object.defineProperty(fields, k, { value: n[k], enumerable: true, writable: true, configurable: true });
-      problems.push(...objectProblems(fields, NODE_RULES, path));
+      const fields2 = {};
+      for (const k of Object.keys(n)) if (!(isCompRoot && k === "props")) Object.defineProperty(fields2, k, { value: n[k], enumerable: true, writable: true, configurable: true });
+      problems.push(...objectProblems(fields2, NODE_RULES, path));
       const kind = nodeKind(n);
       if (kind === null) problems.push(path + ".type: '" + String(n.type) + "' cannot be written yet (FRAME, TEXT and INSTANCE can; COMPONENT and COMPONENT_SET on the root)");
       const flex = isFlex(n);
@@ -2204,18 +2207,18 @@
     const size2 = sized ? " " + sized : "";
     const al = spec.layout && spec.layout.display === "flex" ? ", " + (spec.layout.flexDirection === "column" ? "vertical" : "horizontal") + " auto-layout" : "";
     const nodes = s.frames + s.texts + s.instances + s.clones;
-    const plural4 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
+    const plural5 = (n, one) => n + " " + one + (n === 1 ? "" : "s");
     const p = place2 || {};
     const at3 = spec.x !== void 0 || spec.y !== void 0 ? " at " + (spec.x !== void 0 ? spec.x : "auto") + "," + (spec.y !== void 0 ? spec.y : "auto") : "";
     const where = describePlace(p) + (p.section !== void 0 ? (at3 ? at3 + " inside it" : ", placed beside the frames already in it") + " (the section grows if needed)" : at3 || ", placed beside the existing frames");
     const edited = (n) => {
       const e = n.edits ? Object.keys(n.edits).length : 0;
-      return e ? " with " + plural4(e, "layer") + " changed" : "";
+      return e ? " with " + plural5(e, "layer") + " changed" : "";
     };
     const c = s.component;
-    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural4(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
+    const what = c ? c.type === "COMPONENT_SET" ? "component set '" + c.name + "' of " + plural5(c.variants, "variant") : "component '" + c.name + "'" : "frame '" + (spec.name || "Frame") + "'";
     const parts = [
-      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural4(s.frames, "frame") + ", " + plural4(s.texts, "text") + (s.instances ? ", " + plural4(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
+      spec.clone !== void 0 ? "creates a copy of node " + spec.clone + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") + edited(spec) + " " + where : "creates " + what + size2 + al + " with " + nodes + " node" + (nodes === 1 ? "" : "s") + (c ? " inside" : "") + " (" + plural5(s.frames, "frame") + ", " + plural5(s.texts, "text") + (s.instances ? ", " + plural5(s.instances, "instance") : "") + (s.clones ? ", " + s.clones + (s.clones === 1 ? " copy" : " copies") : "") + ") " + where
     ];
     if (s.clones > (spec.clone !== void 0 ? 1 : 0)) parts.push("copies node" + (s.sources.length === 1 ? " " : "s ") + quoteList(s.sources) + " (each copy with its layers and their values; a source stays as it is)");
     if (c && c.props.length) parts.push("properties " + quoteList(c.props));
@@ -2227,7 +2230,7 @@
     if (components2.length) parts.push("components " + quoteList(components2));
     if (variables.length) parts.push("variables " + quoteList(variables));
     if (textStyles.length) parts.push("text styles " + quoteList(textStyles));
-    if (s.unbound) parts.push(plural4(s.unbound, "raw value") + " left unbound");
+    if (s.unbound) parts.push(plural5(s.unbound, "raw value") + " left unbound");
     const checked = (components2.length + variables.length + textStyles.length ? (p.section !== void 0 ? "the page, its section, fonts and names" : "the page, fonts and names") + " are checked against the file when applied (a library item is imported only then)" : (p.section !== void 0 ? "the page, its section and fonts" : "the page and fonts") + " are checked against the file when applied") + (s.clones ? "; so are the nodes copied and the layers their edits name" : "");
     return parts.join("; ") + " \u2014 " + checked + ", and nothing lands unless all of it does";
   }
@@ -2312,7 +2315,8 @@
     component: "swapping an instance's component cannot be written yet; set its `props`",
     x: "a patch does not move a node; `move` changes its parent",
     y: "a patch does not move a node; `move` changes its parent",
-    font: "a text's font cannot be patched yet; name a text style in `styles.text`"
+    font: "a text's font cannot be patched yet; name a text style in `styles.text`",
+    reactions: "a layer's prototype interactions are set with a setReactions op {nodeId, reactions}"
   };
   var settableIn = (rules) => Object.keys(rules).filter((k) => {
     const r = rules[k];
@@ -2339,8 +2343,8 @@
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(PATCH_FIELDS, k))), PATCH_FIELDS, path));
-    const fields = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
-    if (!fields.length && !problems.length) say2("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
+    const fields2 = PATCH_FIELD_NAMES.filter((k) => set[k] !== void 0);
+    if (!fields2.length && !problems.length) say2("sets nothing; give at least one of " + PATCH_FIELD_NAMES.join(", "));
     if (problems.length) return { problems, summary };
     const l = isObj4(set.layout) ? set.layout : null;
     if (l) {
@@ -2370,7 +2374,7 @@
       if (n !== st.colors.length) say2("`tokens.strokes` names " + n + " variable" + (n === 1 ? "" : "s") + " for " + st.colors.length + " stroke colour" + (st.colors.length === 1 ? "" : "s") + "; give one per colour, in order");
     }
     if (problems.length) return { problems, summary };
-    summary.fields = fields;
+    summary.fields = fields2;
     const add = (list, name) => {
       if (typeof name === "string" && list.indexOf(name) < 0) list.push(name);
     };
@@ -2579,13 +2583,13 @@
     if (!isNum2(v.value)) return "is missing value (a number)";
     return auto && v.value < 0 ? "value must be \u2265 0" : null;
   };
-  var effectTokens = (fields) => (v) => {
-    if (!isObj4(v)) return "must be an object of field \u2192 variable (" + fields.join(", ") + ")";
+  var effectTokens = (fields2) => (v) => {
+    if (!isObj4(v)) return "must be an object of field \u2192 variable (" + fields2.join(", ") + ")";
     const keys = Object.keys(v).filter((k) => v[k] !== void 0);
     if (!keys.length) return "is empty";
     for (const k of keys) {
-      if (fields.indexOf(k) < 0) {
-        const near3 = nearestNames(k, fields);
+      if (fields2.indexOf(k) < 0) {
+        const near3 = nearestNames(k, fields2);
         return "." + k + ": not a field a variable binds to here" + (near3.length ? "; closest: " + quoteList(near3) : "");
       }
       if (typeof v[k] !== "string" || !String(v[k]).trim()) return "." + k + " must be a variable's name, key or id";
@@ -2689,18 +2693,18 @@
       }
     }
     problems.push(...objectProblems(Object.fromEntries(Object.entries(set).filter(([k]) => Object.prototype.hasOwnProperty.call(STYLE_FIELDS, k))), STYLE_RULE_TABLE, path));
-    const fields = STYLE_FIELD_NAMES.filter((k) => set[k] !== void 0);
-    if (!fields.length && !problems.length) problems.push(path + ": sets nothing; give at least one of " + STYLE_FIELD_NAMES.join(", "));
+    const fields2 = STYLE_FIELD_NAMES.filter((k) => set[k] !== void 0);
+    if (!fields2.length && !problems.length) problems.push(path + ": sets nothing; give at least one of " + STYLE_FIELD_NAMES.join(", "));
     if (problems.length) return { problems, summary };
-    const kinds = fields.map((f) => STYLE_FIELDS[f].kind).filter((k) => k !== null);
+    const kinds = fields2.map((f) => STYLE_FIELDS[f].kind).filter((k) => k !== null);
     const kind = kinds[0] === void 0 ? null : kinds[0];
     const other = kinds.filter((k) => k !== kind)[0];
     if (kind !== null && other !== void 0) {
-      const of = (want) => fields.filter((f) => STYLE_FIELDS[f].kind === want).map((f) => "`" + f + "`").join(", ");
+      const of = (want) => fields2.filter((f) => STYLE_FIELDS[f].kind === want).map((f) => "`" + f + "`").join(", ");
       problems.push(path + ": " + of(kind) + " belong" + (of(kind).indexOf(",") < 0 ? "s" : "") + " to a " + kind + " style and " + of(other) + " to a" + (other === "effect" ? "n " : " ") + other + " style; a style is one kind");
       return { problems, summary };
     }
-    summary.fields = fields;
+    summary.fields = fields2;
     summary.kind = kind;
     const add = (name) => {
       if (typeof name === "string" && summary.variables.indexOf(name) < 0) summary.variables.push(name);
@@ -2999,8 +3003,218 @@
     return out;
   }
 
+  // ../bridge/src/reaction-spec.ts
+  var MAX_REACTIONS = 50;
+  var MAX_ACTIONS = 10;
+  var DEFAULT_DURATION = 0.3;
+  var MAX_DURATION = 10;
+  var DEFAULT_EASING = "ease_out";
+  var TRIGGERS = ["on_click", "on_hover", "on_press", "on_drag", "after_timeout", "mouse_enter", "mouse_leave", "mouse_up", "mouse_down", "on_key_down"];
+  var NAVIGATIONS = ["navigate", "swap", "overlay", "scroll_to", "change_to"];
+  var SIMPLE_TRANSITIONS = ["dissolve", "smart_animate", "scroll_animate"];
+  var DIRECTIONAL_TRANSITIONS = ["move_in", "move_out", "push", "slide_in", "slide_out"];
+  var DIRECTIONS = ["left", "right", "top", "bottom"];
+  var EASINGS = ["ease_in", "ease_out", "ease_in_and_out", "linear", "ease_in_back", "ease_out_back", "ease_in_and_out_back", "custom_cubic_bezier", "gentle", "quick", "bouncy", "slow", "custom_spring"];
+  var DEVICES = ["keyboard", "xbox_one", "ps4", "switch_pro", "unknown_controller"];
+  var isNum4 = (v) => typeof v === "number" && Number.isFinite(v);
+  var bool2 = (v) => typeof v === "boolean" ? null : "must be true or false";
+  var seconds = (v) => isNum4(v) && v >= 0 ? null : "must be a number of seconds \u2265 0";
+  var nonEmpty4 = (v) => typeof v === "string" && v.trim().length > 0 ? null : "must be a non-empty string";
+  var xy3 = (v) => isObj4(v) && isNum4(v.x) && isNum4(v.y) && Object.keys(v).every((k) => k === "x" || k === "y") ? null : "must be {x, y}, two numbers";
+  var unitNum = (v) => isNum4(v) && v >= 0 && v <= 1 ? null : "must be a number from 0 to 1";
+  var realNum = (v) => isNum4(v) ? null : "must be a number";
+  var positiveNum = (v) => isNum4(v) && v > 0 ? null : "must be a number > 0";
+  var fields = (rules, required) => (v) => {
+    if (!isObj4(v)) return "must be an object {" + Object.keys(rules).join(", ") + "}";
+    const bad = objectProblems(v, rules, "");
+    if (bad.length) return bad[0] || null;
+    const missing = required.filter((k) => v[k] === void 0);
+    return missing.length ? "is missing " + missing.join(", ") : null;
+  };
+  var VARIABLE_ACTION = "a prototype action that sets a variable, a variable mode or runs a conditional cannot be written yet; back, close, url and node can";
+  var MEDIA = "a media action or trigger cannot be written yet";
+  var TRANSITION_RULES = {
+    type: (v) => v === "instant" ? "an instant change has no transition; leave `transition` out" : oneOf(...SIMPLE_TRANSITIONS, ...DIRECTIONAL_TRANSITIONS)(v),
+    direction: oneOf(...DIRECTIONS),
+    matchLayers: bool2,
+    duration: (v) => isNum4(v) && v >= 0 && v <= MAX_DURATION ? null : "must be a number of seconds from 0 to " + MAX_DURATION,
+    easing: oneOf(...EASINGS),
+    cubicBezier: fields({ x1: unitNum, y1: realNum, x2: unitNum, y2: realNum }, ["x1", "y1", "x2", "y2"]),
+    spring: fields({ mass: positiveNum, stiffness: positiveNum, damping: positiveNum, initialVelocity: realNum }, ["mass", "stiffness", "damping", "initialVelocity"])
+  };
+  var ACTION_RULES = {
+    type: (v) => v === "set_variable" || v === "set_variable_mode" || v === "conditional" ? VARIABLE_ACTION : v === "update_media_runtime" ? MEDIA : oneOf("back", "close", "url", "node")(v),
+    url: nonEmpty4,
+    openInNewTab: bool2,
+    navigation: oneOf(...NAVIGATIONS),
+    destination: nonEmpty4,
+    destinationId: nonEmpty4,
+    transition: (v) => isObj4(v) ? null : "must be an object {type, duration?, easing?, \u2026} (leave it out for an instant change)",
+    preserveScroll: bool2,
+    resetScroll: bool2,
+    resetVideo: bool2,
+    resetInteractive: bool2,
+    overlayOffset: xy3,
+    // The read form's other action fields: refused by name.
+    variable: refuse(VARIABLE_ACTION),
+    value: refuse(VARIABLE_ACTION),
+    collection: refuse(VARIABLE_ACTION),
+    mode: refuse(VARIABLE_ACTION),
+    conditionalBlocks: refuse(VARIABLE_ACTION),
+    mediaAction: refuse(MEDIA),
+    amountToSkip: refuse(MEDIA),
+    newTimestamp: refuse(MEDIA)
+  };
+  var REACTION_RULES = {
+    trigger: (v) => v === "on_media_hit" || v === "on_media_end" ? MEDIA : v === "unknown" ? "a trigger the read could not name cannot be written; give one of " + TRIGGERS.join(" | ") : oneOf(...TRIGGERS)(v),
+    timeout: seconds,
+    delay: seconds,
+    keyCodes: (v) => Array.isArray(v) && v.length > 0 && v.every((k) => isNum4(k) && Number.isInteger(k) && k >= 0) ? null : "must be a non-empty list of key codes (whole numbers \u2265 0)",
+    device: oneOf(...DEVICES),
+    actions: (v) => Array.isArray(v) ? null : "must be a list of actions",
+    mediaHitTime: refuse(MEDIA)
+  };
+  var TRIGGER_FIELDS = {
+    timeout: ["after_timeout"],
+    delay: ["mouse_enter", "mouse_leave", "mouse_up", "mouse_down"],
+    keyCodes: ["on_key_down"],
+    device: ["on_key_down"]
+  };
+  var NODE_ONLY = ["navigation", "destination", "destinationId", "transition", "preserveScroll", "resetScroll", "resetVideo", "resetInteractive", "overlayOffset"];
+  function checkReactions(list, path = "reactions") {
+    const summary = { reactions: 0, actions: 0, destinations: [] };
+    if (!Array.isArray(list)) return { problems: [path + `: must be a list of reactions in the read export's form, e.g. [{trigger: "on_click", actions: [{type: "back"}]}] ([] removes them all)`], summary };
+    const problems = [];
+    if (list.length > MAX_REACTIONS) problems.push(path + ": " + list.length + " reactions; a layer takes at most " + MAX_REACTIONS + " in one op");
+    list.forEach((r, i) => {
+      const at3 = path + "[" + i + "]";
+      if (!isObj4(r)) {
+        problems.push(at3 + ": must be an object {trigger?, actions}");
+        return;
+      }
+      const own4 = objectProblems(r, REACTION_RULES, at3);
+      problems.push(...own4);
+      if (own4.length) return;
+      const trigger = typeof r.trigger === "string" ? r.trigger : "on_click";
+      for (const k of Object.keys(TRIGGER_FIELDS)) {
+        const allowed2 = TRIGGER_FIELDS[k] || [];
+        if (r[k] !== void 0 && allowed2.indexOf(trigger) < 0) problems.push(at3 + "." + k + ": only with trigger " + allowed2.join(" | ") + " (this one is " + trigger + ")");
+      }
+      if (trigger === "after_timeout" && r.timeout === void 0) problems.push(at3 + ": trigger after_timeout needs `timeout` (seconds)");
+      if (trigger === "on_key_down" && r.keyCodes === void 0) problems.push(at3 + ": trigger on_key_down needs `keyCodes`");
+      const acts = Array.isArray(r.actions) ? r.actions : null;
+      if (!acts) {
+        if (r.actions === void 0) problems.push(at3 + ": needs `actions`, a list of what the trigger does");
+        return;
+      }
+      if (!acts.length) problems.push(at3 + ".actions: is empty; a reaction runs at least one action (to remove reactions, leave them out of the list)");
+      if (acts.length > MAX_ACTIONS) problems.push(at3 + ".actions: " + acts.length + " actions; a reaction runs at most " + MAX_ACTIONS);
+      acts.forEach((a, j) => checkAction(a, at3 + ".actions[" + j + "]", problems, summary));
+      summary.reactions++;
+    });
+    if (problems.length) return { problems, summary: { reactions: 0, actions: 0, destinations: [] } };
+    return { problems, summary };
+  }
+  function checkAction(a, at3, problems, summary) {
+    if (!isObj4(a)) {
+      problems.push(at3 + ": must be an object {type, \u2026}");
+      return;
+    }
+    const own4 = objectProblems(a, ACTION_RULES, at3);
+    if (a.type === void 0) own4.push(at3 + ": needs `type`: back | close | url | node");
+    problems.push(...own4);
+    if (own4.length) return;
+    const type = String(a.type);
+    if (type !== "node") {
+      for (const k of NODE_ONLY) if (a[k] !== void 0) problems.push(at3 + "." + k + ": only on a `node` action (this one is " + type + ")");
+    }
+    if (type !== "url") {
+      for (const k of ["url", "openInNewTab"]) if (a[k] !== void 0) problems.push(at3 + "." + k + ": only on a `url` action (this one is " + type + ")");
+    }
+    if (type === "url" && a.url === void 0) problems.push(at3 + ": a url action needs `url`");
+    summary.actions++;
+    if (type !== "node") return;
+    const navigation = typeof a.navigation === "string" ? a.navigation : "navigate";
+    const id = typeof a.destinationId === "string" ? a.destinationId : void 0;
+    const dest = typeof a.destination === "string" ? a.destination : void 0;
+    if (id === void 0 && dest === void 0) problems.push(at3 + ": a node action needs `destination` (a node's exact name or id) or `destinationId`");
+    if (a.overlayOffset !== void 0 && navigation !== "overlay" && navigation !== "swap") problems.push(at3 + ".overlayOffset: only when the action opens an overlay (navigation overlay or swap)");
+    if (isObj4(a.transition)) {
+      const tp = at3 + ".transition";
+      const t = a.transition;
+      const bad = objectProblems(t, TRANSITION_RULES, tp);
+      problems.push(...bad);
+      if (!bad.length) {
+        if (t.type === void 0) problems.push(tp + ": needs `type`: " + [...SIMPLE_TRANSITIONS, ...DIRECTIONAL_TRANSITIONS].join(" | "));
+        const directional = DIRECTIONAL_TRANSITIONS.indexOf(t.type) >= 0;
+        if (directional && t.direction === void 0) problems.push(tp + ": a " + String(t.type) + " transition needs `direction`: " + DIRECTIONS.join(" | "));
+        if (!directional && t.type !== void 0) {
+          for (const k of ["direction", "matchLayers"]) if (t[k] !== void 0) problems.push(tp + "." + k + ": only on a directional transition (" + DIRECTIONAL_TRANSITIONS.join(" | ") + ")");
+        }
+        if (t.easing === "custom_cubic_bezier" && t.cubicBezier === void 0) problems.push(tp + ": easing custom_cubic_bezier needs `cubicBezier` {x1, y1, x2, y2}");
+        if (t.easing === "custom_spring" && t.spring === void 0) problems.push(tp + ": easing custom_spring needs `spring` {mass, stiffness, damping, initialVelocity}");
+      }
+    }
+    const ref2 = { path: at3, navigation };
+    if (id !== void 0) ref2.id = id;
+    else if (dest !== void 0 && isNodeId(dest)) ref2.id = dest;
+    if (dest !== void 0 && !(id === void 0 && isNodeId(dest))) ref2.name = dest;
+    summary.destinations.push(ref2);
+  }
+  function isReactionList(v) {
+    return checkReactions(v).problems.length === 0;
+  }
+  function reactionRefusal(problems) {
+    const first2 = problems[0];
+    if (problems.length === 1 && first2 !== void 0) return first2 + ". Nothing was changed.";
+    return problems.length + " problems in the reactions \u2014 nothing was changed:\n" + problems.join("\n");
+  }
+  function flowNameError(name, at3) {
+    if (typeof name !== "string" || !name.trim()) return "`" + at3 + ".name`: a flow starting point needs a name";
+    if (name !== name.trim()) return "`" + at3 + ".name`: '" + name + "' has spaces at its start or end; a flow is named exactly";
+    return null;
+  }
+  var words = (s) => s.replace(/_/g, " ");
+  var secs = (n) => Math.round(n * 1e3) / 1e3 + " s";
+  function triggerText(r) {
+    const t = r.trigger || "on_click";
+    if (t === "after_timeout") return "after " + secs(r.timeout || 0);
+    if (t === "on_key_down") return "key " + (r.keyCodes || []).join(", ") + (r.device && r.device !== "keyboard" ? " (" + words(r.device) + ")" : "");
+    if (r.delay) return words(t) + " after " + secs(r.delay);
+    return words(t);
+  }
+  function transitionText(t) {
+    if (!t) return "instant";
+    const ms = Math.round((t.duration === void 0 ? DEFAULT_DURATION : t.duration) * 1e3);
+    return words(t.type) + (t.direction ? " " + t.direction : "") + " " + ms + " ms";
+  }
+  function actionText(a, dest) {
+    if (a.type === "back") return "back";
+    if (a.type === "close") return "close the overlay";
+    if (a.type === "url") return "open " + String(a.url) + (a.openInNewTab ? " in a new tab" : "");
+    const to = "'" + (dest !== void 0 ? dest : a.destination !== void 0 ? a.destination : String(a.destinationId)) + "'";
+    const nav = a.navigation || "navigate";
+    const verb = nav === "navigate" ? "go to " : nav === "overlay" ? "open overlay " : nav === "swap" ? "swap overlay for " : nav === "scroll_to" ? "scroll to " : "change to ";
+    return verb + to + (a.transition ? " (" + transitionText(a.transition) + ")" : "");
+  }
+  function reactionsText(list, dests = []) {
+    if (!list.length) return "none";
+    let k = 0;
+    return list.map((r) => triggerText(r) + " \u2192 " + r.actions.map((a) => actionText(a, a.type === "node" ? dests[k++] : void 0)).join(", then ")).join("; ");
+  }
+  var plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  function describeReactions(nodeId, list) {
+    const node = "node " + (nodeId || "?");
+    if (!list.length) return node + ": removes every prototype interaction \u2014 the reply counts the ones it removed; put back if a later op of the batch fails";
+    return node + ": its prototype interactions become " + plural(list.length, "reaction") + " (" + reactionsText(list) + "), replacing the ones it has \u2014 the node and each destination are checked against the file when applied (navigate, swap and overlay go to a frame at the top of the node's page or in a section on it; scroll_to to a layer of the same top frame; change_to to a variant of the same set); put back if a later op of the batch fails";
+  }
+  function describeFlow(nodeId, name) {
+    const node = "node " + (nodeId || "?");
+    return name === void 0 ? node + ": stops being a flow starting point on its page \u2014 checked against the file when applied; put back if a later op of the batch fails" : node + ": becomes the starting point of flow '" + name + "' on its page (renamed when it is one already) \u2014 the node must be a frame at the top of its page or in a section, and no other flow on the page may have that name; put back if a later op of the batch fails";
+  }
+
   // ../bridge/src/commands.ts
-  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "patchWhere", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"];
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "setReactions", "setFlowStart", "clearFlowStart", "createTree", "patch", "patchWhere", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"];
   var INHERITED = "inherited";
   var WRITE_OPS = {
     createFrame: { effect: "creates", required: [], shows: {} },
@@ -3009,6 +3223,10 @@
     setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } },
     setVariableMode: { effect: "overwrites", required: ["nodeId", "collection", "mode"], shows: { collection: "collection", newMode: "mode" } },
     clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
+    // Prototype (reaction-spec.ts): a layer's interactions, replaced whole; a frame a flow starts from (`name`: the flow's).
+    setReactions: { effect: "overwrites", required: ["nodeId", "reactions"], shows: {} },
+    setFlowStart: { effect: "overwrites", required: ["nodeId", "name"], shows: {} },
+    clearFlowStart: { effect: "overwrites", required: ["nodeId"], shows: {} },
     createTree: { effect: "creates", required: ["tree"], shows: {} },
     patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
     // A bulk patch by rule (rule-spec.ts): the same `set` on every layer the rule matches within its scope.
@@ -3024,8 +3242,8 @@
     createStyles: { effect: "creates", required: ["styles"], shows: {} }
   };
   var CREATE_OPS = ["createVariables", "createStyles"];
-  function missingWriteFields(op, fields) {
-    return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
+  function missingWriteFields(op, fields2) {
+    return WRITE_OPS[op].required.filter((k) => fields2[k] === void 0);
   }
   function writeOpPreview(o, index) {
     const step = opPreview(o, index);
@@ -3041,6 +3259,7 @@
     if (o.op === "patch") return patchPreview(o, index, missing);
     if (o.op === "patchWhere") return rulePreview(o, index, missing);
     if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
+    if (o.op === "setReactions" || o.op === "setFlowStart" || o.op === "clearFlowStart") return prototypePreview(o, index, missing);
     if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
     if (o.op === "createVariables" || o.op === "createStyles") return createPreview(o, index, missing);
     return {
@@ -3093,6 +3312,16 @@
     const only = " \u2014 only a node this plugin session created (checked when applied)";
     const change = o.op === "delete" ? `deletes node ${o.nodeId} and everything inside it${only}; deletes run after every other op of the batch has landed` : `moves node ${o.nodeId} into ${o.parentId}${o.index !== void 0 ? ` at index ${o.index}` : " as its last child"}${only}; put back if a later op fails`;
     return { ...base, change };
+  }
+  function prototypePreview(o, index, missing) {
+    const base = { index, op: o.op, effect: "overwrites", target: o.nodeId || null };
+    if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+    if (o.op === "setReactions") {
+      const { problems } = checkReactions(o.reactions);
+      if (problems.length || !isReactionList(o.reactions)) return { ...base, invalid: problems.join("\n") };
+      return { ...base, change: describeReactions(o.nodeId, o.reactions) };
+    }
+    return { ...base, change: describeFlow(o.nodeId, o.op === "setFlowStart" ? o.name : void 0) };
   }
   function sourcePreview(o, index, missing) {
     const base = { index, op: o.op, effect: "overwrites", target: (o.op === "setVariable" ? o.variable : o.style) || null };
@@ -3197,10 +3426,10 @@
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
   var isStr2 = (v) => typeof v === "string";
-  var isNum4 = (v) => typeof v === "number";
-  function opt(a, key, ok, what, label6 = key) {
+  var isNum5 = (v) => typeof v === "number";
+  function opt(a, key, ok, what, label7 = key) {
     const v = a[key];
-    return v === void 0 || ok(v) ? null : `\`${label6}\` is not ${what}`;
+    return v === void 0 || ok(v) ? null : `\`${label7}\` is not ${what}`;
   }
   function first(errs) {
     for (const e of errs) if (e !== null) return e;
@@ -3212,10 +3441,10 @@
   var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
   var isPageSel = (v) => isStr2(v) || Array.isArray(v) && v.every(isStr2);
   var isWriteOpName = (v) => isStr2(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
-  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum4);
+  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum5);
   var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color", "collection", "mode", "page", "section", "variable", "style"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
-  var isIndex = (v) => isNum4(v) && Number.isInteger(v) && v >= 0;
+  var isIndex = (v) => isNum5(v) && Number.isInteger(v) && v >= 0;
   function writeOpError(o, i) {
     const at3 = `ops[${i}]`;
     if (!isRecord(o)) return `\`${at3}\` is not an object`;
@@ -3223,7 +3452,7 @@
     if (!isWriteOpName(op)) return `\`${at3}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
     const typeErr = first([
       ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr2, "a string", `${at3}.${k}`)),
-      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum4, "a number", `${at3}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum5, "a number", `${at3}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at3}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at3}.padding`),
       opt(o, "index", isIndex, "a whole number \u2265 0", `${at3}.index`),
@@ -3233,6 +3462,7 @@
     ]);
     if (typeErr !== null) return typeErr;
     if (o.treeFile !== void 0) return `\`${at3}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
+    if (o.reactions !== void 0 && op !== "setReactions") return `\`${at3}.reactions\`: only a setReactions op sets a layer's prototype interactions`;
     if (o.bind !== void 0 && op !== "createTree") return `\`${at3}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
     for (const k of ["where", "scope", "token"]) if (o[k] !== void 0 && op !== "patchWhere") return `\`${at3}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
     const badPlace = placeError(o, at3);
@@ -3251,6 +3481,15 @@
       const problems = [...checkRule(o, at3).problems, ...checkPatch(o.set, `${at3}.set`).problems];
       if (problems.length) return patchRefusal(problems);
     }
+    if (op === "setReactions") {
+      const { problems } = checkReactions(o.reactions, `${at3}.reactions`);
+      if (problems.length) return reactionRefusal(problems);
+    }
+    if (op === "setFlowStart") {
+      const bad = flowNameError(o.name, at3);
+      if (bad !== null) return bad;
+    }
+    if (op === "clearFlowStart" && o.name !== void 0) return `\`${at3}.name\`: clearFlowStart takes only the frame's \`nodeId\` (the flow it starts goes with it)`;
     if (op === "setVariable") {
       const { problems } = checkVariableEdit(o, at3);
       if (problems.length) return sourceRefusal(problems);
@@ -3271,11 +3510,11 @@
   }
   var writeArgs = (a) => {
     if (!Array.isArray(a.ops)) return a.ops === void 0 ? "`ops` is missing" : "`ops` is not an array";
-    return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "holdMs", isNum4, "a number")]);
+    return first([...a.ops.map(writeOpError), imageTableError(a.images), opt(a, "holdMs", isNum5, "a number")]);
   };
   var writeTicketArgs = (a) => first([
     isStr2(a.ticket) && a.ticket ? null : a.ticket === void 0 ? "`ticket` is missing" : "`ticket` is not a non-empty string",
-    opt(a, "holdMs", isNum4, "a number"),
+    opt(a, "holdMs", isNum5, "a number"),
     opt(a, "cancel", isBool, "a boolean")
   ]);
   var noArgs = () => null;
@@ -3291,7 +3530,7 @@
     exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr2, "a string")]),
     exportSelection: readOptArgs,
     exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
-    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum4, "a number")]),
+    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum5, "a number")]),
     write: writeArgs,
     writeTicket: writeTicketArgs,
     writeImpact: writeArgs
@@ -4775,10 +5014,10 @@
     const out = {};
     for (const [index, entry] of Object.entries(map)) {
       if (!entry || typeof entry !== "object") continue;
-      const { properties, ...fields } = entry;
+      const { properties, ...fields2 } = entry;
       const extra = {};
       putNonEmpty(extra, "properties", await bindingMap(properties, conv));
-      putNonEmpty(out, index, Object.assign(await bindingMap(fields, conv) || {}, extra));
+      putNonEmpty(out, index, Object.assign(await bindingMap(fields2, conv) || {}, extra));
     }
     return nonEmpty(out);
   }
@@ -4819,13 +5058,13 @@
     return nonEmpty(out);
   }
   function unknownKindStyle(s, kind) {
-    const fields = s;
+    const fields2 = s;
     const o = {};
-    if (typeof fields.id === "string") o.id = fields.id;
-    if (typeof fields.name === "string") o.name = fields.name;
-    if (typeof fields.styleId === "string") o.styleId = fields.styleId;
+    if (typeof fields2.id === "string") o.id = fields2.id;
+    if (typeof fields2.name === "string") o.name = fields2.name;
+    if (typeof fields2.styleId === "string") o.styleId = fields2.styleId;
     o.kind = kind.toLowerCase();
-    if (typeof fields.timelineOffset === "number" && fields.timelineOffset) o.timelineOffset = round(fields.timelineOffset);
+    if (typeof fields2.timelineOffset === "number" && fields2.timelineOffset) o.timelineOffset = round(fields2.timelineOffset);
     return o;
   }
   async function animationStyleEntry(s) {
@@ -6378,7 +6617,7 @@
   function rowText(r) {
     return (r.field ? r.field + " " : "") + (r.from !== void 0 ? r.from + " \u2192 " : "\u2192 ") + r.to;
   }
-  var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
+  var plural2 = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
   var isObj7 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   var cut = (s, n = 40) => s.length > n ? s.slice(0, n - 1) + "\u2026" : s;
   function paintsText(v) {
@@ -6411,8 +6650,8 @@
     if (!seen.size) return void 0;
     return seen.size === 1 ? [...seen][0] : "mixed";
   }
-  function fieldRows(set, fields, reads) {
-    return fields.map((f) => {
+  function fieldRows(set, fields2, reads) {
+    return fields2.map((f) => {
       const from = oldText(f, reads);
       return { field: f, to: valueText(f, set[f]), ...from !== void 0 ? { from } : {} };
     });
@@ -6443,15 +6682,15 @@
           }
           const set = { ...o.set };
           const checked = checkPatch(o.set).summary.fields;
-          const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
+          const fields2 = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
           if (r && r.component !== void 0) {
             const tail = followTail(r);
-            lines.push({ head: "Main component '" + r.component + "'" + (r.name && r.name !== r.component ? ", layer '" + r.name + "'" : ""), rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
+            lines.push({ head: "Main component '" + r.component + "'" + (r.name && r.name !== r.component ? ", layer '" + r.name + "'" : ""), rows: fieldRows(set, fields2, [r]), ...tail ? { tail } : {}, ops: [i] });
             return;
           }
           group("patch " + JSON.stringify(o.set), i, (g) => {
-            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
-            g.rows = fieldRows(set, fields, g.reads);
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural2(g.ops.length, "layer");
+            g.rows = fieldRows(set, fields2, g.reads);
           });
           return;
         }
@@ -6463,26 +6702,26 @@
           }
           const set = { ...o.set };
           const checked = checkPatch(o.set).summary.fields;
-          const fields = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
+          const fields2 = Object.keys(set).filter((k) => checked.indexOf(k) >= 0);
           const mixed = r && r.mixed ? r.mixed : [];
-          const rows = fields.map((f) => mixed.indexOf(f) >= 0 ? { field: f, from: "mixed", to: valueText(f, set[f]) } : fieldRows(set, [f], [r])[0] || { field: f, to: valueText(f, set[f]) });
-          const count2 = r && typeof r.matched === "number" ? plural(r.matched, "layer") : "Layers";
+          const rows = fields2.map((f) => mixed.indexOf(f) >= 0 ? { field: f, from: "mixed", to: valueText(f, set[f]) } : fieldRows(set, [f], [r])[0] || { field: f, to: valueText(f, set[f]) });
+          const count2 = r && typeof r.matched === "number" ? plural2(r.matched, "layer") : "Layers";
           const pages = r && r.pages ? r.pages : [];
           const shown4 = pages.slice(0, 3).map((p) => "'" + p.page + "' (" + p.count + ")").join(", ");
-          const more = pages.length > 3 ? " and " + plural(pages.length - 3, "more page") : "";
+          const more = pages.length > 3 ? " and " + plural2(pages.length - 3, "more page") : "";
           lines.push({ head: count2 + " matching " + describeWhere(rule.where), rows, ...pages.length ? { tail: "on " + shown4 + more } : {}, ops: [i] });
           return;
         }
         case "setFill":
           group("fill " + String(o.color), i, (g) => {
-            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural2(g.ops.length, "layer");
             const from = oldText("fill", g.reads);
             g.rows = [{ field: "fill", to: String(o.color), ...from !== void 0 ? { from } : {} }];
           });
           return;
         case "setText":
           group("text " + JSON.stringify(o.text), i, (g) => {
-            g.head = g.ops.length === 1 ? named("Text", g.reads[0]) : plural(g.ops.length, "text");
+            g.head = g.ops.length === 1 ? named("Text", g.reads[0]) : plural2(g.ops.length, "text");
             const from = oldText("text", g.reads);
             g.rows = [{ field: "text", to: valueText("text", o.text || ""), ...from !== void 0 ? { from } : {} }];
           });
@@ -6491,9 +6730,32 @@
         case "clearVariableMode": {
           const to = o.op === "clearVariableMode" ? "inherited" : "'" + String(o.mode) + "'";
           group("mode " + String(o.collection) + " " + to, i, (g) => {
-            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural2(g.ops.length, "layer");
             g.rows = [{ field: "'" + String(o.collection) + "' mode", to }];
           });
+          return;
+        }
+        case "setReactions": {
+          const list = isReactionList(o.reactions) ? o.reactions : [];
+          group("reactions " + JSON.stringify(o.reactions), i, (g) => {
+            g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural2(g.ops.length, "layer");
+            const had = /* @__PURE__ */ new Set();
+            for (const x of g.reads) {
+              const n = x && x.old ? x.old.prototype : void 0;
+              had.add(typeof n === "number" ? n ? plural2(n, "interaction") : "none" : "?");
+            }
+            const from = had.has("?") ? void 0 : had.size === 1 ? [...had][0] : "mixed";
+            const first2 = g.reads[0];
+            g.rows = [{ field: "prototype", to: cut(reactionsText(list, first2 && first2.destinations ? first2.destinations : []), 160), ...from !== void 0 ? { from } : {} }];
+          });
+          return;
+        }
+        case "setFlowStart":
+        case "clearFlowStart": {
+          const to = o.op === "clearFlowStart" ? "none" : "'" + String(o.name) + "'";
+          const was = r && r.old && "flow" in r.old ? r.old.flow : void 0;
+          const from = was === void 0 ? void 0 : typeof was === "string" ? "'" + was + "'" : "none";
+          lines.push({ head: named("Frame", r), rows: [{ field: "flow start", to, ...from !== void 0 ? { from } : {} }], ops: [i] });
           return;
         }
         case "setVariable": {
@@ -6508,9 +6770,9 @@
         }
         case "setStyle": {
           const set = isStyleSet(o.set) ? { ...o.set } : {};
-          const fields = isStyleSet(o.set) ? checkStyleSet(o.set).summary.fields : [];
+          const fields2 = isStyleSet(o.set) ? checkStyleSet(o.set).summary.fields : [];
           const tail = followTail(r);
-          lines.push({ head: named("Style", r), rows: fieldRows(set, fields, [r]), ...tail ? { tail } : {}, ops: [i] });
+          lines.push({ head: named("Style", r), rows: fieldRows(set, fields2, [r]), ...tail ? { tail } : {}, ops: [i] });
           return;
         }
         case "createTree": {
@@ -6523,10 +6785,10 @@
             return;
           }
           const c = summary.component;
-          const what = spec && spec.clone !== void 0 ? "New copy of a layer" + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") : c ? c.type === "COMPONENT_SET" ? "New component set '" + c.name + "' (" + plural(c.variants, "variant") + ")" : "New component '" + c.name + "'" : "New frame '" + (spec && spec.name ? spec.name : "Frame") + "'";
+          const what = spec && spec.clone !== void 0 ? "New copy of a layer" + (spec.name !== void 0 ? " named '" + spec.name + "'" : "") : c ? c.type === "COMPONENT_SET" ? "New component set '" + c.name + "' (" + plural2(c.variants, "variant") + ")" : "New component '" + c.name + "'" : "New frame '" + (spec && spec.name ? spec.name : "Frame") + "'";
           const size2 = spec ? sizePhrase(spec) : "";
           const inside = summary.frames + summary.texts + summary.instances + summary.clones - (c ? 0 : 1);
-          const head = what + (size2 ? ", " + size2 : "") + (inside > 0 ? ", " + plural(inside, "layer") + " inside" : "");
+          const head = what + (size2 ? ", " + size2 : "") + (inside > 0 ? ", " + plural2(inside, "layer") + " inside" : "");
           const lands = r && r.lands ? "lands " + r.lands : void 0;
           lines.push({ head, rows: [], ...lands ? { tail: lands } : {}, ops: [i] });
           return;
@@ -6547,12 +6809,12 @@
           return;
         case "createVariables": {
           const { summary } = checkCreateVariables(o);
-          lines.push({ head: "Variables in collection '" + summary.collection + "': " + plural(summary.rows.length, "row"), rows: [], tail: "new names are created, names the file has are updated", ops: [i] });
+          lines.push({ head: "Variables in collection '" + summary.collection + "': " + plural2(summary.rows.length, "row"), rows: [], tail: "new names are created, names the file has are updated", ops: [i] });
           return;
         }
         case "createStyles": {
           const { rows } = checkCreateStyles(o);
-          lines.push({ head: "Styles: " + plural(rows.length, "row") + (rows.length ? " (" + rows.slice(0, 3).map((s) => "'" + s.name + "'").join(", ") + (rows.length > 3 ? ", \u2026" : "") + ")" : ""), rows: [], tail: "new names are created, names the file has are updated", ops: [i] });
+          lines.push({ head: "Styles: " + plural2(rows.length, "row") + (rows.length ? " (" + rows.slice(0, 3).map((s) => "'" + s.name + "'").join(", ") + (rows.length > 3 ? ", \u2026" : "") + ")" : ""), rows: [], tail: "new names are created, names the file has are updated", ops: [i] });
           return;
         }
         default: {
@@ -6567,14 +6829,14 @@
 
   // ../bridge/src/review-policy.ts
   var REVIEW_LAYER_LIMIT = 25;
-  var plural2 = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
+  var plural3 = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
   function reviewDecision(f) {
     const reasons = [];
     if (f.sourceEdits) reasons.push("it changes " + (f.sourceEdits === 1 ? "a variable, style or main component" : f.sourceEdits + " variables, styles or main components") + " that other layers follow");
     if (f.bulkByRule) reasons.push("it changes layers it picks by a rule");
     const total = f.sinceApproval + f.layers;
     if (total > REVIEW_LAYER_LIMIT) {
-      reasons.push(f.sinceApproval ? plural2(total, "existing layer") + " would have changed since your last approval (over " + REVIEW_LAYER_LIMIT + ")" : "it changes " + plural2(total, "existing layer") + " (over " + REVIEW_LAYER_LIMIT + ")");
+      reasons.push(f.sinceApproval ? plural3(total, "existing layer") + " would have changed since your last approval (over " + REVIEW_LAYER_LIMIT + ")" : "it changes " + plural3(total, "existing layer") + " (over " + REVIEW_LAYER_LIMIT + ")");
     }
     if (f.checkbox) reasons.push("'Review each change first' is on");
     return reasons.length ? { wait: true, reason: reasons.join("; ") } : { wait: false, reason: "" };
@@ -6855,10 +7117,10 @@
     const set = {};
     const tokens = {};
     const extras = [];
-    const fields = [];
+    const fields2 = [];
     const has2 = (f) => changed.indexOf(f) >= 0;
     const touch = (f) => {
-      if (fields.indexOf(f) < 0) fields.push(f);
+      if (fields2.indexOf(f) < 0) fields2.push(f);
     };
     const bt = b.tokens || {};
     const at3 = a.tokens || {};
@@ -6969,7 +7231,7 @@
       extras.push(f);
       touch(f);
     }
-    return { set, extras, fields };
+    return { set, extras, fields: fields2 };
   }
   function layoutOf(b) {
     const l = b.layout;
@@ -7873,11 +8135,11 @@
     return [...counts].map(([k, n]) => n + " earlier " + k + (n === 1 ? "" : "s")).join(" and ");
   }
   var hasLanded = (l) => l.imported > 0 || l.images > 0;
-  var plural3 = (n, what) => n + " " + what + (n === 1 ? "" : "s");
+  var plural4 = (n, what) => n + " " + what + (n === 1 ? "" : "s");
   function landedText(l) {
     const parts = [];
-    if (l.images) parts.push("loaded " + plural3(l.images, "image file") + " into Figma");
-    if (l.imported) parts.push("imported " + plural3(l.imported, "library item"));
+    if (l.images) parts.push("loaded " + plural4(l.images, "image file") + " into Figma");
+    if (l.imported) parts.push("imported " + plural4(l.imported, "library item"));
     return parts.join(" and ");
   }
   var landedNote = (l) => "No layer was changed, but the batch had already " + landedText(l) + ".";
@@ -7956,8 +8218,8 @@
     if (l) {
       if (!has(node, "layoutMode")) fixed("layout", what + ", which cannot have auto-layout (a frame, component or instance can)");
       else if (l.mode === void 0 && l.display === void 0 && !flexAfter) {
-        const fields = Object.keys(l).filter((k) => l[k] !== void 0);
-        now("layout", "'" + node.name + "' has no auto-layout, so " + fields.map((k) => "`layout." + k + "`").join(", ") + ' would do nothing; add `display: "flex"`');
+        const fields2 = Object.keys(l).filter((k) => l[k] !== void 0);
+        now("layout", "'" + node.name + "' has no auto-layout, so " + fields2.map((k) => "`layout." + k + "`").join(", ") + ' would do nothing; add `display: "flex"`');
       } else if (flexAfter) {
         const wraps = l.flexWrap === "wrap" || l.flexWrap === void 0 && layoutNow(node).wrap;
         for (const k of ["rowGap", "columnGap", "alignContent"]) if (l[k] !== void 0 && !wraps) now("layout." + k, 'needs wrapping: give `flexWrap: "wrap"` (the node does not wrap)');
@@ -8017,7 +8279,10 @@
     if (problems.length) throw new Error(problems.join("; ") + " (checked right before this op ran, after the earlier ops of the batch)");
   }
   function changesBefore(ops, index) {
-    return ops.slice(0, index).some((o) => o.op !== "setVariableMode" && o.op !== "clearVariableMode" && o.op !== "delete");
+    return ops.slice(0, index).some((o) => !leavesLayout(o));
+  }
+  function leavesLayout(o) {
+    return o.op === "setVariableMode" || o.op === "clearVariableMode" || o.op === "setReactions" || o.op === "setFlowStart" || o.op === "clearFlowStart" || o.op === "delete";
   }
   function fontsOf(t) {
     const len = t.characters.length;
@@ -8419,28 +8684,28 @@
         for (const [k, v] of auto) putBack(n, k, v);
       });
     }
-    const plain = [];
+    const plain2 = [];
     const links = [];
     const textRuns = n.type === "TEXT" && (set.text !== void 0 || set.styles !== void 0 || set.fills !== void 0 || tok.fills !== void 0);
     const notMixed = ([, v]) => v !== figma.mixed;
     if ((set.fills !== void 0 || tok.fills !== void 0) && !textRuns) {
-      plain.push(...keep(n, ["fills"]).filter(notMixed));
+      plain2.push(...keep(n, ["fills"]).filter(notMixed));
       const link = keepStyleLink(n, "fillStyleId");
       if (link) links.push(link);
     }
     if (set.strokes !== void 0 || tok.strokes !== void 0 || tok.strokeWeight !== void 0 || tok.strokeTopWeight !== void 0 || tok.strokeRightWeight !== void 0 || tok.strokeBottomWeight !== void 0 || tok.strokeLeftWeight !== void 0) {
-      plain.push(...keep(n, STROKE_PROPS).filter(notMixed));
+      plain2.push(...keep(n, STROKE_PROPS).filter(notMixed));
       const link = keepStyleLink(n, "strokeStyleId");
       if (link) links.push(link);
     }
-    if (set.radius !== void 0 || CORNER_PROPS.some((k) => tok[k] !== void 0)) plain.push(...keep(n, ["cornerRadius", ...CORNER_PROPS]).filter(notMixed));
-    if (set.opacity !== void 0 || tok.opacity !== void 0) plain.push(...keep(n, ["opacity"]));
-    if (set.hidden !== void 0) plain.push(...keep(n, ["visible"]));
-    if (set.name !== void 0) plain.push(...keep(n, ["name"]));
+    if (set.radius !== void 0 || CORNER_PROPS.some((k) => tok[k] !== void 0)) plain2.push(...keep(n, ["cornerRadius", ...CORNER_PROPS]).filter(notMixed));
+    if (set.opacity !== void 0 || tok.opacity !== void 0) plain2.push(...keep(n, ["opacity"]));
+    if (set.hidden !== void 0) plain2.push(...keep(n, ["visible"]));
+    if (set.name !== void 0) plain2.push(...keep(n, ["name"]));
     const geometry = ["width", "height", ...LIMITS2];
-    for (const k of Object.keys(tok)) if (geometry.indexOf(k) < 0 && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain.push(...keep(n, [k]));
+    for (const k of Object.keys(tok)) if (geometry.indexOf(k) < 0 && NUMBER_TOKEN_FIELDS.indexOf(k) >= 0 && k in n) plain2.push(...keep(n, [k]));
     steps2.push(() => {
-      for (const [k, v] of plain) putBack(n, k, v);
+      for (const [k, v] of plain2) putBack(n, k, v);
     });
     for (const link of links) steps2.push(link);
     if (textRuns && n.type === "TEXT") {
@@ -11524,8 +11789,8 @@
     }
     return null;
   }
-  function leaveOut(op, fields) {
-    const has2 = fields.filter((f) => op[f] !== void 0).map((f) => "`" + f + "`");
+  function leaveOut(op, fields2) {
+    const has2 = fields2.filter((f) => op[f] !== void 0).map((f) => "`" + f + "`");
     return "leave " + (has2.length > 1 ? has2.slice(0, -1).join(", ") + " and " + has2[has2.length - 1] : has2.join("")) + " out";
   }
   function onlyOne(ref2, items, item) {
@@ -11737,8 +12002,8 @@
     const a = isObj11(bv) ? bv[k] : void 0;
     return isObj11(a) && typeof a.id === "string" ? a.id : null;
   }
-  function applyExtras(n, s, fields, only, variables, changes) {
-    const todo = only.filter((f) => fields.indexOf(f) >= 0);
+  function applyExtras(n, s, fields2, only, variables, changes) {
+    const todo = only.filter((f) => fields2.indexOf(f) >= 0);
     if (!todo.length) return;
     const kept = [];
     const limits = todo.indexOf("sizeLimits") >= 0;
@@ -11957,7 +12222,7 @@
     if (!Array.isArray(p)) return "mixed";
     return p.filter((x) => x.visible !== false).map((x) => x.type === "SOLID" ? { type: "solid", color: hexOf(x.color, x.opacity) } : { type: x.type === "IMAGE" ? "image" : x.type.toLowerCase() });
   }
-  var isNum5 = (v) => typeof v === "number";
+  var isNum6 = (v) => typeof v === "number";
   function oldOf(node, field, to) {
     const r = node;
     switch (field) {
@@ -11966,7 +12231,7 @@
       case "hidden":
         return !node.visible;
       case "opacity":
-        return isNum5(r.opacity) ? r.opacity : void 0;
+        return isNum6(r.opacity) ? r.opacity : void 0;
       case "text":
         return node.type === "TEXT" ? node.characters : void 0;
       case "fills":
@@ -11974,7 +12239,7 @@
       case "strokes":
         return "strokes" in node ? paintsOf(r.strokes) : void 0;
       case "radius":
-        return isNum5(r.cornerRadius) ? r.cornerRadius : r.cornerRadius === figma.mixed ? "mixed" : void 0;
+        return isNum6(r.cornerRadius) ? r.cornerRadius : r.cornerRadius === figma.mixed ? "mixed" : void 0;
       case "box":
         return { w: Math.round(node.width), h: Math.round(node.height) };
       case "widthMode":
@@ -12127,6 +12392,20 @@
               read.name = m.node.name;
               ids.push(m.node.id);
             }
+            break;
+          }
+          // The layer (or frame) it changes, what it has now, and the destinations by the names the file has.
+          case "setReactions":
+          case "setFlowStart":
+          case "clearFlowStart": {
+            const p = t.protos.get(i);
+            if (!p) break;
+            read.name = p.node.name;
+            ids.push(p.node.id);
+            if (p.kind === "reactions") {
+              read.old = { prototype: p.node.reactions.length };
+              read.destinations = p.destNames.slice();
+            } else read.old = { flow: p.was };
             break;
           }
           case "setVariable": {
@@ -12738,6 +13017,349 @@
     };
   }
 
+  // src/reactions.ts
+  var isProtoOp = (op) => op.op === "setReactions" || op.op === "setFlowStart" || op.op === "clearFlowStart";
+  var TOP_TYPES = ["FRAME", "COMPONENT", "INSTANCE"];
+  var label5 = (n) => "'" + n.name + "' (" + n.id + ")";
+  function atTop(n) {
+    const p = n.parent;
+    return !!p && (p.type === "PAGE" || p.type === "SECTION");
+  }
+  function topOf(n) {
+    for (let a = n; a && a.type !== "PAGE"; a = a.parent) if (a.type !== "SECTION" && atTop(a)) return a;
+    return null;
+  }
+  function topFrames(page) {
+    const out = [];
+    const walk = (parent) => {
+      for (const c of parent.children) {
+        if (c.type === "SECTION") walk(c);
+        else if (TOP_TYPES.indexOf(c.type) >= 0) out.push(c);
+      }
+    };
+    walk(page);
+    return out;
+  }
+  function layersIn(top) {
+    const out = [];
+    const walk = (n) => {
+      if (!("children" in n) || n.type === "INSTANCE") return;
+      for (const c of n.children) {
+        out.push(c);
+        walk(c);
+      }
+    };
+    walk(top);
+    return out;
+  }
+  function variantOf(n) {
+    for (let a = n; a && a.type !== "PAGE"; a = a.parent) if (a.type === "COMPONENT" && a.parent && a.parent.type === "COMPONENT_SET") return a;
+    return null;
+  }
+  function placesFor(node, page, nav) {
+    if (nav === "scroll_to") {
+      const top = topOf(node);
+      if (!top) return { error: "scroll_to scrolls within the frame the layer is in, and " + label5(node) + " is in none" };
+      return { list: layersIn(top), what: "layer inside '" + top.name + "' (scroll_to stays in the layer's own frame)" };
+    }
+    if (nav === "change_to") {
+      const v = variantOf(node);
+      if (!v || !v.parent || v.parent.type !== "COMPONENT_SET") return { error: "change_to switches an interactive component to another variant, and " + label5(node) + " is not a variant of a component set or inside one" };
+      const set = v.parent;
+      return { list: set.children.filter((c) => c.type === "COMPONENT"), what: "variant of '" + set.name + "' (change_to goes to a variant of the same set)" };
+    }
+    return { list: topFrames(page), what: "frame at the top of page '" + page.name + "' (a prototype goes to a frame on the layer's own page, or in a section on it)" };
+  }
+  function notAmong(n, node, page, nav, what) {
+    const pg = n.type === "PAGE" ? null : pageHolding(n);
+    if (nav !== "change_to" && pg && pg.id !== page.id) return label5(n) + " is on page '" + pg.name + "'; a prototype connection stays on its own page ('" + page.name + "')";
+    if (n.id === node.id && nav === "scroll_to") return label5(n) + " is the layer itself; scroll_to goes to another layer of its frame";
+    return label5(n) + " is a " + n.type + (nav === "scroll_to" || nav === "change_to" ? "" : n.parent ? " inside '" + n.parent.name + "'" : "") + ", not a " + what;
+  }
+  async function resolveDestination(ref2, node, page) {
+    const at3 = ref2.path + ": ";
+    const places = placesFor(node, page, ref2.navigation);
+    if ("error" in places) return { error: at3 + places.error };
+    if (ref2.id !== void 0) {
+      const n = await nodeById(ref2.id);
+      if (!n) return { error: at3 + "destination: " + noNode(ref2.id) };
+      const hit = places.list.filter((c) => c.id === n.id)[0];
+      if (!hit) return { error: at3 + "destination " + notAmong(n, node, page, ref2.navigation, places.what) };
+      if (ref2.name !== void 0 && ref2.name !== hit.name) return { error: at3 + "`destinationId` '" + ref2.id + "' is '" + hit.name + "', but `destination` says '" + ref2.name + "'; give one, or both naming the same node" };
+      return { node: hit };
+    }
+    const name = ref2.name || "";
+    const m = matchByName(name, places.list, (c) => c.name);
+    if (m.kind === "one") return { node: m.item };
+    if (m.kind === "many") return { error: at3 + "destination '" + name + "' names " + m.matches.length + " of them (each a " + places.what + ") \u2014 pass one's id: " + m.matches.slice(0, 3).map(label5).join(", ") };
+    return { error: at3 + "destination '" + name + "' matches no " + places.what + (m.candidates.length ? "; closest: " + quoteList(m.candidates) : "") };
+  }
+  var TRIGGER_TYPES = {
+    on_click: "ON_CLICK",
+    on_hover: "ON_HOVER",
+    on_press: "ON_PRESS",
+    on_drag: "ON_DRAG",
+    after_timeout: "AFTER_TIMEOUT",
+    mouse_enter: "MOUSE_ENTER",
+    mouse_leave: "MOUSE_LEAVE",
+    mouse_up: "MOUSE_UP",
+    mouse_down: "MOUSE_DOWN",
+    on_key_down: "ON_KEY_DOWN"
+  };
+  var DEVICE_TYPES = { keyboard: "KEYBOARD", xbox_one: "XBOX_ONE", ps4: "PS4", switch_pro: "SWITCH_PRO", unknown_controller: "UNKNOWN_CONTROLLER" };
+  var NAV_TYPES = { navigate: "NAVIGATE", swap: "SWAP", overlay: "OVERLAY", scroll_to: "SCROLL_TO", change_to: "CHANGE_TO" };
+  var EASING_TYPES = {
+    ease_in: "EASE_IN",
+    ease_out: "EASE_OUT",
+    ease_in_and_out: "EASE_IN_AND_OUT",
+    linear: "LINEAR",
+    ease_in_back: "EASE_IN_BACK",
+    ease_out_back: "EASE_OUT_BACK",
+    ease_in_and_out_back: "EASE_IN_AND_OUT_BACK",
+    custom_cubic_bezier: "CUSTOM_CUBIC_BEZIER",
+    gentle: "GENTLE",
+    quick: "QUICK",
+    bouncy: "BOUNCY",
+    slow: "SLOW",
+    custom_spring: "CUSTOM_SPRING"
+  };
+  var SIMPLE_TYPES = { dissolve: "DISSOLVE", smart_animate: "SMART_ANIMATE", scroll_animate: "SCROLL_ANIMATE" };
+  var DIRECTIONAL_TYPES = { move_in: "MOVE_IN", move_out: "MOVE_OUT", push: "PUSH", slide_in: "SLIDE_IN", slide_out: "SLIDE_OUT" };
+  var DIRECTION_TYPES = { left: "LEFT", right: "RIGHT", top: "TOP", bottom: "BOTTOM" };
+  function figmaTrigger(r) {
+    const t = r.trigger || "on_click";
+    switch (t) {
+      case "after_timeout":
+        return { type: "AFTER_TIMEOUT", timeout: r.timeout || 0 };
+      case "mouse_enter":
+      case "mouse_leave":
+        return { type: TRIGGER_TYPES[t], delay: r.delay || 0, deprecatedVersion: false };
+      case "mouse_up":
+      case "mouse_down":
+        return { type: TRIGGER_TYPES[t], delay: r.delay || 0 };
+      case "on_key_down":
+        return { type: "ON_KEY_DOWN", device: DEVICE_TYPES[r.device || "keyboard"], keyCodes: (r.keyCodes || []).slice() };
+      case "on_click":
+      case "on_hover":
+      case "on_press":
+      case "on_drag":
+      default:
+        return { type: TRIGGER_TYPES[t] };
+    }
+  }
+  function figmaEasing(t) {
+    const e = { type: EASING_TYPES[t.easing || DEFAULT_EASING] };
+    if (t.cubicBezier && e.type === "CUSTOM_CUBIC_BEZIER") e.easingFunctionCubicBezier = { x1: t.cubicBezier.x1, y1: t.cubicBezier.y1, x2: t.cubicBezier.x2, y2: t.cubicBezier.y2 };
+    if (t.spring && e.type === "CUSTOM_SPRING") e.easingFunctionSpring = { mass: t.spring.mass, stiffness: t.spring.stiffness, damping: t.spring.damping, initialVelocity: t.spring.initialVelocity };
+    return e;
+  }
+  function figmaTransition(t) {
+    if (!t) return null;
+    const duration = t.duration === void 0 ? DEFAULT_DURATION : t.duration;
+    const easing = figmaEasing(t);
+    switch (t.type) {
+      case "move_in":
+      case "move_out":
+      case "push":
+      case "slide_in":
+      case "slide_out":
+        return { type: DIRECTIONAL_TYPES[t.type], direction: DIRECTION_TYPES[t.direction || "left"], matchLayers: t.matchLayers === true, easing, duration };
+      case "dissolve":
+      case "smart_animate":
+      case "scroll_animate":
+      default:
+        return { type: SIMPLE_TYPES[t.type], easing, duration };
+    }
+  }
+  function figmaAction(a, destId) {
+    switch (a.type) {
+      case "back":
+        return { type: "BACK" };
+      case "close":
+        return { type: "CLOSE" };
+      case "url":
+        return a.openInNewTab === void 0 ? { type: "URL", url: a.url || "" } : { type: "URL", url: a.url || "", openInNewTab: a.openInNewTab };
+      case "node":
+      default: {
+        const o = {
+          type: "NODE",
+          destinationId: destId || null,
+          navigation: NAV_TYPES[a.navigation || "navigate"],
+          transition: figmaTransition(a.transition)
+        };
+        if (a.preserveScroll !== void 0) o.preserveScrollPosition = a.preserveScroll;
+        if (a.resetScroll !== void 0) o.resetScrollPosition = a.resetScroll;
+        if (a.resetVideo !== void 0) o.resetVideoPosition = a.resetVideo;
+        if (a.resetInteractive !== void 0) o.resetInteractiveComponents = a.resetInteractive;
+        if (a.overlayOffset) o.overlayRelativePosition = { x: a.overlayOffset.x, y: a.overlayOffset.y };
+        return o;
+      }
+    }
+  }
+  async function resolvePrototypeOps(ops) {
+    const targets = /* @__PURE__ */ new Map();
+    const problems = [];
+    for (const [index, op] of ops.entries()) {
+      if (!isProtoOp(op)) continue;
+      const bad = (message) => {
+        problems.push({ index, op: op.op, message });
+      };
+      const nodeId = op.nodeId || "";
+      const nd = await nodeById(nodeId);
+      if (!nd) {
+        bad(noNode(nodeId));
+        continue;
+      }
+      if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
+        bad(label5(nd) + " is a " + nd.type + "; " + (op.op === "setReactions" ? "prototype interactions are on a layer" : "a flow starts from a frame"));
+        continue;
+      }
+      const node = nd;
+      const page = pageHolding(node);
+      if (!page) {
+        bad(noNode(nodeId));
+        continue;
+      }
+      await page.loadAsync();
+      if (goneFrom(node, bad) || goneFrom(page, bad, "page")) continue;
+      const name = node.name;
+      if (op.op === "setReactions") {
+        if (!("setReactionsAsync" in node)) {
+          bad(label5(node) + " is a " + node.type + ", which has no prototype interactions");
+          continue;
+        }
+        const list = isReactionList(op.reactions) ? op.reactions : null;
+        if (!list) {
+          bad("the reactions are not valid (checked before the batch): " + checkReactions(op.reactions).problems.join("; "));
+          continue;
+        }
+        const refs2 = checkReactions(list).summary.destinations;
+        const dests = [];
+        let failed = false;
+        for (const ref2 of refs2) {
+          const d = await resolveDestination(ref2, node, page);
+          if ("error" in d) {
+            bad(d.error);
+            failed = true;
+            continue;
+          }
+          dests.push(d.node);
+        }
+        if (goneFrom(node, bad)) continue;
+        for (const d of dests) if (goneFrom(d, bad, "destination")) failed = true;
+        if (failed) continue;
+        let k = 0;
+        for (const [ri, r] of list.entries()) for (const [ai, a] of r.actions.entries()) {
+          if (a.type !== "node") continue;
+          const d = dests[k++];
+          if (!a.overlayOffset || !d) continue;
+          const pos = "overlayPositionType" in d ? d.overlayPositionType : void 0;
+          if (pos !== "MANUAL") bad("reactions[" + ri + "].actions[" + ai + "].overlayOffset: the overlay '" + d.name + "' is positioned " + (pos ? pos.toLowerCase().replace(/_/g, " ") : "in the centre (the default)") + ", and an offset applies only to one set to Manual (a frame's overlay position is set in Figma's Prototype panel; plugins cannot)");
+        }
+        k = 0;
+        const reactions = list.map((r) => ({ trigger: figmaTrigger(r), actions: r.actions.map((a) => {
+          if (a.type !== "node") return figmaAction(a, void 0);
+          const d = dests[k++];
+          return figmaAction(a, d ? d.id : void 0);
+        }) }));
+        targets.set(index, { kind: "reactions", node, name, reactions, dests, destNames: dests.map((d) => d.name) });
+        continue;
+      }
+      if (!atTop(node) || TOP_TYPES.indexOf(node.type) < 0) {
+        bad(label5(node) + " is a " + node.type + (node.parent && !atTop(node) ? " inside '" + node.parent.name + "'" : "") + "; a flow starts from a frame at the top of its page, or in a section on it");
+        continue;
+      }
+      const points = page.flowStartingPoints || [];
+      const mine = points.filter((p) => p.nodeId === node.id)[0];
+      const was = mine ? mine.name : null;
+      if (op.op === "clearFlowStart") {
+        if (!mine) {
+          bad(label5(node) + " starts no flow on page '" + page.name + "'" + (points.length ? " (its flows: " + quoteList(points.map((p) => p.name)) + ")" : ""));
+          continue;
+        }
+        targets.set(index, { kind: "flow", node, name, page, flow: null, was });
+        continue;
+      }
+      const flow = op.name || "";
+      const clash = points.filter((p) => p.name === flow && p.nodeId !== node.id)[0];
+      if (clash) {
+        bad("page '" + page.name + "' already has a flow '" + flow + "' (it starts at " + clash.nodeId + "); flows are told apart by name \u2014 pick another");
+        continue;
+      }
+      targets.set(index, { kind: "flow", node, name, page, flow, was });
+    }
+    return { targets, problems };
+  }
+  function destinationIds(t) {
+    return t.kind === "reactions" ? t.dests.map((d) => d.id) : [];
+  }
+  function plain(v) {
+    if (Array.isArray(v)) return v.map(plain);
+    if (v && typeof v === "object") {
+      const o = {};
+      for (const k of Object.keys(v)) o[k] = plain(Reflect.get(v, k));
+      return o;
+    }
+    return v;
+  }
+  async function applyReactions(t, consent2, changes) {
+    const { node } = t;
+    stillInDocument(node);
+    for (const d of t.dests) stillInDocument(d, "destination");
+    const prev = plain(node.reactions);
+    consent2();
+    try {
+      await node.setReactionsAsync(plain(t.reactions));
+    } catch (e) {
+      if (!inDocument(node)) throw new Error(noNode(node.id));
+      throw new Error("Figma refused the reactions for '" + t.name + "': " + errMsg(e));
+    }
+    const change = {
+      applied: { id: node.id, reactions: t.reactions.length, replaced: prev.length },
+      kind: "prototype change",
+      what: "the prototype interactions of '" + t.name + "' (" + node.id + ")",
+      on: node,
+      async restore(allowed2) {
+        await node.setReactionsAsync(prev);
+        if (!allowed2()) throw new RestoreStopped("'Allow edits' was turned off");
+      }
+    };
+    changes.push(change);
+    stillInDocument(node);
+    for (const d of t.dests) stillInDocument(d, "destination");
+    return change.applied;
+  }
+  function applyFlow(t) {
+    const { node, page } = t;
+    stillInDocument(node);
+    stillInDocument(page, "page");
+    const prev = page.flowStartingPoints.map((p) => ({ nodeId: p.nodeId, name: p.name }));
+    const mine = prev.filter((p) => p.nodeId === node.id)[0];
+    let next;
+    if (t.flow === null) {
+      if (!mine) throw new Error("'" + t.name + "' starts no flow on page '" + page.name + "' any more (an earlier op of the batch changed its flows)");
+      next = prev.filter((p) => p.nodeId !== node.id);
+    } else {
+      const flow = t.flow;
+      const clash = prev.filter((p) => p.name === flow && p.nodeId !== node.id)[0];
+      if (clash) throw new Error("page '" + page.name + "' has a flow '" + flow + "' already (it starts at " + clash.nodeId + "; an earlier op of the batch made it)");
+      next = mine ? prev.map((p) => p.nodeId === node.id ? { nodeId: p.nodeId, name: flow } : p) : prev.concat([{ nodeId: node.id, name: flow }]);
+    }
+    page.flowStartingPoints = next;
+    const applied = { id: node.id };
+    if (t.flow !== null) applied.flow = t.flow;
+    if (mine) applied.from = mine.name;
+    return {
+      applied,
+      kind: "flow change",
+      what: "the flow starting points of page '" + page.name + "'",
+      on: node,
+      restore() {
+        page.flowStartingPoints = prev;
+      }
+    };
+  }
+
   // src/rules.ts
   var SESSION_SALT = Math.random().toString(36).slice(2) + Date.now().toString(36);
   function inSource(n) {
@@ -12755,7 +13377,7 @@
   async function loadPage(p) {
     if (typeof p.loadAsync === "function") await p.loadAsync();
   }
-  async function layersIn(rule, bad, selected) {
+  async function layersIn2(rule, bad, selected) {
     const scoped = await scopeLayers(rule, bad, selected);
     return goneAmong(scoped.hits.map((h) => h.node), bad, "layer") ? { hits: [] } : scoped;
   }
@@ -12959,7 +13581,7 @@
       }
       const before = problems.length;
       const shown4 = mode.kind === "approved" ? mode.expect.get(index) : void 0;
-      const scoped = await layersIn(rule, bad, shown4 ? shown4.selection : void 0);
+      const scoped = await layersIn2(rule, bad, shown4 ? shown4.selection : void 0);
       const hits = await matchesOf(rule, scoped.hits, bad);
       if (problems.length > before) continue;
       const match2 = matchOf(op, hits);
@@ -13594,7 +14216,7 @@
       if (found === null) continue;
       const chain = [from];
       for (let k = found; k !== void 0 && k !== from; k = back.get(k)) chain.splice(1, 0, k);
-      const label6 = async (k) => {
+      const label7 = async (k) => {
         const r = byKey.get(k);
         if (r) return "'" + r.name + "'";
         let v = null;
@@ -13606,7 +14228,7 @@
         return v ? "'" + v.name + "'" : k.slice(3);
       };
       const names = [];
-      for (const k of chain.concat([from])) names.push(await label6(k));
+      for (const k of chain.concat([from])) names.push(await label7(k));
       out.push({ index: start.op, op: "createVariables", message: "variables[" + start.index + "]: the aliases " + names.join(" \u2192 ") + " make a loop" });
       break;
     }
@@ -13915,9 +14537,9 @@
   }
 
   // src/structure.ts
-  var label5 = (n) => "'" + n.name + "' (" + n.id + ")";
+  var label6 = (n) => "'" + n.name + "' (" + n.id + ")";
   var NOT_OURS = "this plugin session did not create it; a write moves or deletes only nodes it created since the plugin window was opened";
-  var holds2 = (node, foreign) => "node " + label5(node) + " holds " + label5(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
+  var holds2 = (node, foreign) => "node " + label6(node) + " holds " + label6(foreign) + ", which this plugin session did not create; a delete takes everything below a node, and a write deletes only nodes it created since the plugin window was opened";
   function instanceAround(n) {
     for (let p = n; p; p = p.parent) if (p.type === "INSTANCE") return p;
     return null;
@@ -13928,17 +14550,17 @@
   }
   function placeProblem(node, parent, index) {
     const inst = instanceAround(parent);
-    if (inst) return "parent " + label5(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label5(inst)) + ", which cannot take new children";
-    if (within(parent, node)) return "parent " + label5(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
+    if (inst) return "parent " + label6(parent) + " is " + (inst === parent ? "an instance" : "inside the instance " + label6(inst)) + ", which cannot take new children";
+    if (within(parent, node)) return "parent " + label6(parent) + " is " + (parent.id === node.id ? "the node itself" : "inside the node") + "; a node cannot move into itself";
     const room = parent.children.length - (node.parent && node.parent.id === parent.id ? 1 : 0);
-    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label5(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
+    if (index !== void 0 && index > room) return "index " + index + " is past the end: " + label6(parent) + " would have " + room + " other child" + (room === 1 ? "" : "ren") + " (0 is first; leave `index` out for last)";
     return null;
   }
   async function resolveStructureOps(ops, changesBefore2) {
     const moves = /* @__PURE__ */ new Map();
     const deletes = /* @__PURE__ */ new Map();
     const problems = [];
-    const others = ops.some((o) => o.op !== "delete" && o.op !== "setVariableMode" && o.op !== "clearVariableMode");
+    const others = ops.some((o) => !leavesLayout(o));
     for (const [index, op] of ops.entries()) {
       if (op.op !== "move" && op.op !== "delete") continue;
       const bad = (message) => {
@@ -13950,12 +14572,12 @@
         continue;
       }
       if (nd.type === "DOCUMENT" || nd.type === "PAGE") {
-        bad(label5(nd) + " is a " + nd.type + "; " + NOT_OURS);
+        bad(label6(nd) + " is a " + nd.type + "; " + NOT_OURS);
         continue;
       }
       const node = nd;
       if (!createdThisSession(node.id)) {
-        bad("node " + label5(node) + ": " + NOT_OURS);
+        bad("node " + label6(node) + ": " + NOT_OURS);
         continue;
       }
       if (op.op === "delete") {
@@ -13973,7 +14595,7 @@
         continue;
       }
       if (pd.type === "DOCUMENT" || !("insertChild" in pd)) {
-        bad("parent " + label5(pd) + " is a " + pd.type + ", which cannot have children");
+        bad("parent " + label6(pd) + " is a " + pd.type + ", which cannot have children");
         continue;
       }
       if (pd.type === "PAGE") await pd.loadAsync();
@@ -14001,7 +14623,7 @@
     const wrong = placeProblem(node, parent, t.index);
     if (wrong) throw new Error(wrong);
     const from = node.parent;
-    if (!from || !("insertChild" in from)) throw new Error("node " + label5(node) + " has no parent to move it from");
+    if (!from || !("insertChild" in from)) throw new Error("node " + label6(node) + " has no parent to move it from");
     const at3 = from.children.indexOf(node);
     const x = node.x, y = node.y, w = node.width, h = node.height;
     const sizing2 = "layoutSizingHorizontal" in node ? { h: node.layoutSizingHorizontal, v: node.layoutSizingVertical } : null;
@@ -14011,7 +14633,7 @@
     return {
       applied,
       kind: "moved node",
-      what: "the move of " + label5(node),
+      what: "the move of " + label6(node),
       on: node,
       restore() {
         from.insertChild(Math.min(at3, from.children.length - (node.parent && node.parent.id === from.id ? 1 : 0)), node);
@@ -14099,7 +14721,7 @@
       takeBack([n], ours);
     } };
   }
-  async function applyWrite(op, { mode, tree, patch, move, variable: variable3, style, rule }, changes) {
+  async function applyWrite(op, { mode, proto, tree, patch, move, variable: variable3, style, rule }, changes) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
@@ -14220,6 +14842,21 @@
         if (!mode) throw new Error(op.op + ": the op was not resolved before the batch ran");
         consent();
         const change = applyMode(mode);
+        changes.push(change);
+        return change.applied;
+      }
+      // Resolved up front: the node and every destination exist and are of the kind their navigation goes to (reactions.ts).
+      // Each keeps what it replaces.
+      case "setReactions": {
+        if (!proto || proto.kind !== "reactions") throw new Error("setReactions: the op was not resolved before the batch ran");
+        consent();
+        return applyReactions(proto, consent, changes);
+      }
+      case "setFlowStart":
+      case "clearFlowStart": {
+        if (!proto || proto.kind !== "flow") throw new Error(op.op + ": the op was not resolved before the batch ran");
+        consent();
+        const change = applyFlow(proto);
         changes.push(change);
         return change.applied;
       }
@@ -14420,6 +15057,7 @@
       const creates2 = await resolveCreateOps(list);
       setBatchPlan(creates2.plan);
       const modes2 = await resolveModeOps(list);
+      const protos2 = await resolvePrototypeOps(list);
       const trees2 = await resolveTreeOps(list, await bindTreeOps(list, creates2));
       const keyed = await resolveKeyed(list, trees2.targets);
       const patches2 = await resolvePatchOps(list);
@@ -14430,27 +15068,28 @@
         ...imgs.problems,
         ...creates2.problems,
         ...modes2.problems,
+        ...protos2.problems,
         ...trees2.problems,
         ...keyed.problems,
         ...patches2.problems,
         ...rules2.problems,
         ...structure2.problems,
         ...sources2.problems,
-        ...deleteConflicts(list, structure2.deletes, structure2.moves),
+        ...deleteConflicts(list, structure2.deletes, structure2.moves, protos2.targets),
         ...removalConflicts(list, trees2.targets, structure2.moves),
         ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves),
         ...ruleConflicts(rules2.targets, trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
-      return { creates: creates2, modes: modes2, trees: trees2, patches: patches2, rules: rules2, structure: structure2, sources: sources2, problems: problems2 };
+      return { creates: creates2, modes: modes2, protos: protos2, trees: trees2, patches: patches2, rules: rules2, structure: structure2, sources: sources2, problems: problems2 };
     };
-    const { creates, modes, trees, patches, rules, structure, sources, problems } = await resolveBatch();
+    const { creates, modes, protos, trees, patches, rules, structure, sources, problems } = await resolveBatch();
     const firstProblem = problems[0];
     if (firstProblem) {
       const changedNote = mode === "submit" ? "" : "the file changed while the write waited for review: ";
       return { ok: false, applied, failedAt: firstProblem.index, failedOp: firstProblem.op, error: changedNote + batchRefusal(problems, { landed: landedOf(out) }) };
     }
     if (mode === "submit" && list.length) {
-      const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
+      const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, protos: protos.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
       out.layers = reads.layers;
       const bulkByRule = rules.targets.size > 0;
       const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, sinceApproval: layersSinceApproval() });
@@ -14582,6 +15221,7 @@
       try {
         rows[i] = await applyWrite(op, {
           mode: modes.targets.get(i),
+          proto: protos.targets.get(i),
           tree: trees.targets.get(i),
           patch: patches.targets.get(i),
           move: structure.moves.get(i),
@@ -14778,7 +15418,7 @@
     }
     return out;
   }
-  function deleteConflicts(list, deletes, moves) {
+  function deleteConflicts(list, deletes, moves, protos) {
     const gone = /* @__PURE__ */ new Map();
     for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
     const out = [];
@@ -14790,6 +15430,9 @@
         out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is deleted by ops[" + by + "] of this batch (deletes run after every other op); drop one of the two" });
         break;
       }
+      const t = protos.get(index);
+      const lost = t ? destinationIds(t).filter((id) => gone.has(id))[0] : void 0;
+      if (lost !== void 0) out.push({ index, op: op.op, message: "destination '" + lost + "' is deleted by ops[" + String(gone.get(lost)) + "] of this batch (deletes run after every other op); drop one of the two" });
     }
     return out;
   }
@@ -14978,10 +15621,10 @@
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post3 = (m) => figma.ui.postMessage(m);
-  async function runExport(label6, collect, toFiles) {
+  async function runExport(label7, collect, toFiles) {
     let r;
     try {
-      r = await serializeRun(collect, { source: "ui", label: label6 });
+      r = await serializeRun(collect, { source: "ui", label: label7 });
     } catch (e) {
       post3({ type: "error", message: errMsg(e) });
       return;

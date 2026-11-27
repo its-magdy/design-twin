@@ -2945,9 +2945,9 @@ var NODE_RULES = {
   shape: NOT_YET,
   booleanOp: NOT_YET,
   exportSettings: NOT_YET,
-  overlay: NOT_YET,
+  overlay: refuse("a frame's overlay settings (position, background, close on click outside) are read-only to plugins in Figma's API; set them in Figma's Prototype panel"),
   textTokens: refuse(DS_REF),
-  reactions: NOT_YET,
+  reactions: refuse("wire a layer's prototype with a setReactions op once the tree lands (the reply's `handles` give the ids)"),
   variableModes: refuse("set a frame's mode with a setVariableMode op after the tree lands"),
   resolvedModes: refuse("it is read-only (what the frame inherits)"),
   annotations: NOT_YET,
@@ -3443,7 +3443,8 @@ var NOT_PATCHED = {
   component: "swapping an instance's component cannot be written yet; set its `props`",
   x: "a patch does not move a node; `move` changes its parent",
   y: "a patch does not move a node; `move` changes its parent",
-  font: "a text's font cannot be patched yet; name a text style in `styles.text`"
+  font: "a text's font cannot be patched yet; name a text style in `styles.text`",
+  reactions: "a layer's prototype interactions are set with a setReactions op {nodeId, reactions}"
 };
 var settableIn = (rules) => Object.keys(rules).filter((k) => {
   const r = rules[k];

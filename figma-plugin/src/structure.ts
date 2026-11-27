@@ -14,6 +14,7 @@
 // page must be loaded (loadAsync) before a node is appended to it.
 import type { AppliedWrite, WriteOp } from "../../bridge/src/commands.ts";
 import { createdThisSession, foreignBelow } from "./session";
+import { leavesLayout } from "./patch";
 import type { Change, OpProblem } from "./write-batch";
 import { goneFrom, nodeById, stillInDocument } from "./node-lookup";
 
@@ -58,7 +59,7 @@ export async function resolveStructureOps(ops: readonly WriteOp[], changesBefore
   const deletes = new Map<number, DeleteTarget>();
   const problems: OpProblem[] = [];
   // Deletes run after every other op, so any other op in the batch can change what a delete takes with it.
-  const others = ops.some((o) => o.op !== "delete" && o.op !== "setVariableMode" && o.op !== "clearVariableMode");
+  const others = ops.some((o) => !leavesLayout(o));
   for (const [index, op] of ops.entries()) {
     if (op.op !== "move" && op.op !== "delete") continue;
     const bad = (message: string): void => { problems.push({ index, op: op.op, message }); };

@@ -11,6 +11,7 @@ import { readBatch, SHOW_CAP } from "./review-reads";
 import { queueWork } from "./state";
 import { toast } from "./toast";
 import { applyMode, resolveModeOps, type ModeTarget } from "./variable-modes";
+import { applyFlow, applyReactions, destinationIds, resolvePrototypeOps, type ProtoTarget } from "./reactions";
 import { buildTree, resolveTreeOps, treeGone, type TreeTarget } from "./tree";
 import { destGone, makeDest } from "./places";
 import { applyUpdate, checkRemoval, removalCount, removalsOf, resolveKeyed, touchedBy } from "./keyed";
@@ -93,7 +94,7 @@ function consent(): void {
 // resolveModeOps), a createTree op's page, section and fonts (tree.ts resolveTreeOps, places.ts), a patch's node and names (patch.ts
 // resolvePatchOps), a move's node and new parent (structure.ts).
 interface Resolved {
-  mode?: ModeTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined;
+  mode?: ModeTarget | undefined; proto?: ProtoTarget | undefined; tree?: TreeTarget | undefined; patch?: PatchTarget | undefined; move?: MoveTarget | undefined;
   variable?: VariableTarget | undefined; style?: StyleTarget | undefined; rule?: RuleTarget | undefined;
 }
 
@@ -105,7 +106,7 @@ function createdNode(n: SceneNode): Change {
 
 // Every op that changes the file pushes the Change it made onto `changes` (a node created, a value overwritten, a mode
 // set, a tree built, a node moved), so a later failure can undo all of them.
-async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, style, rule }: Resolved, changes: Change[]): Promise<AppliedWrite> {
+async function applyWrite(op: WriteOp, { mode, proto, tree, patch, move, variable, style, rule }: Resolved, changes: Change[]): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
@@ -218,6 +219,21 @@ async function applyWrite(op: WriteOp, { mode, tree, patch, move, variable, styl
       if (!mode) throw new Error(op.op + ": the op was not resolved before the batch ran");
       consent();
       const change = applyMode(mode);
+      changes.push(change);
+      return change.applied;
+    }
+    // Resolved up front: the node and every destination exist and are of the kind their navigation goes to (reactions.ts).
+    // Each keeps what it replaces.
+    case "setReactions": {
+      if (!proto || proto.kind !== "reactions") throw new Error("setReactions: the op was not resolved before the batch ran");
+      consent();
+      return applyReactions(proto, consent, changes);
+    }
+    case "setFlowStart":
+    case "clearFlowStart": {
+      if (!proto || proto.kind !== "flow") throw new Error(op.op + ": the op was not resolved before the batch ran");
+      consent();
+      const change = applyFlow(proto);
       changes.push(change);
       return change.applied;
     }
@@ -509,6 +525,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const creates = await resolveCreateOps(list);
     setBatchPlan(creates.plan);
     const modes = await resolveModeOps(list);
+    const protos = await resolvePrototypeOps(list);
     // A `bind: true` spec is bound to the file's variables and text styles (and what the create tables make) first: the
     // bound spec is what resolves, builds and, for a keyed re-send, is compared with the last one (bind.ts).
     const trees = await resolveTreeOps(list, await bindTreeOps(list, creates));
@@ -520,12 +537,12 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     const structure = await resolveStructureOps(list, (i) => changesBefore(list, i));
     // A variable or style edit, and a patch's library check (a library's component cannot be changed here).
     const sources = await resolveSourceOps(list);
-    const problems = [...imgs.problems, ...creates.problems, ...modes.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...rules.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves),
+    const problems = [...imgs.problems, ...creates.problems, ...modes.problems, ...protos.problems, ...trees.problems, ...keyed.problems, ...patches.problems, ...rules.problems, ...structure.problems, ...sources.problems, ...deleteConflicts(list, structure.deletes, structure.moves, protos.targets),
       ...removalConflicts(list, trees.targets, structure.moves), ...keyedDeleteConflicts(trees.targets, structure.deletes, structure.moves),
       ...ruleConflicts(rules.targets, trees.targets, structure.deletes, structure.moves)].sort((a, b) => a.index - b.index);
-    return { creates, modes, trees, patches, rules, structure, sources, problems };
+    return { creates, modes, protos, trees, patches, rules, structure, sources, problems };
   };
-  const { creates, modes, trees, patches, rules, structure, sources, problems } = await resolveBatch();
+  const { creates, modes, protos, trees, patches, rules, structure, sources, problems } = await resolveBatch();
   const firstProblem = problems[0];
   if (firstProblem) {
     // Approved (or previewed) after a wait: the designer may have changed the file while the card was up, so the batch
@@ -538,7 +555,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
   // The designer's review (review.ts, spec decision 18): decided here, once the whole batch resolved (a batch that would
   // be refused never puts a card up) and before anything touches the file (the images and library imports below included).
   if (mode === "submit" && list.length) {
-    const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
+    const reads = await readBatch(list, { trees: trees.targets, patches: patches.targets, rules: rules.targets, modes: modes.targets, protos: protos.targets, moves: structure.moves, deletes: structure.deletes, variables: sources.variables, styles: sources.styles });
     out.layers = reads.layers;
     const bulkByRule = rules.targets.size > 0;
     const decision = reviewDecision({ checkbox: await reviewWrites(), sourceEdits: reads.sourceEdits, bulkByRule, layers: reads.layers, sinceApproval: layersSinceApproval() });
@@ -688,7 +705,7 @@ async function batchWrites(list: WriteOp[], images: ImageTable | undefined, mode
     if (op.op === "delete" || isCreateOp(op)) continue;
     try {
       rows[i] = await applyWrite(op, {
-        mode: modes.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i),
+        mode: modes.targets.get(i), proto: protos.targets.get(i), tree: trees.targets.get(i), patch: patches.targets.get(i), move: structure.moves.get(i),
         variable: sources.variables.get(i), style: sources.styles.get(i), rule: rules.targets.get(i),
       }, changes);
     } catch (e) {
@@ -893,7 +910,7 @@ function ruleConflicts(rules: ReadonlyMap<number, RuleTarget>, trees: ReadonlyMa
 
 /** An op that names a node a delete of the same batch removes (it, or anything below it), as a parent or a target:
  *  deletes run last, so the op would act on a node about to go. Refused up front, like any other problem. */
-function deleteConflicts(list: readonly WriteOp[], deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>): OpProblem[] {
+function deleteConflicts(list: readonly WriteOp[], deletes: ReadonlyMap<number, DeleteTarget>, moves: ReadonlyMap<number, MoveTarget>, protos: ReadonlyMap<number, ProtoTarget>): OpProblem[] {
   const gone = new Map<string, number>();
   for (const [i, t] of deletes) for (const id of idsDeletedWith(t.node, moves)) if (!gone.has(id)) gone.set(id, i);
   const out: OpProblem[] = [];
@@ -905,6 +922,10 @@ function deleteConflicts(list: readonly WriteOp[], deletes: ReadonlyMap<number, 
       out.push({ index, op: op.op, message: "`" + k + "` '" + String(id) + "' is deleted by ops[" + by + "] of this batch (deletes run after every other op); drop one of the two" });
       break;
     }
+    // A prototype connection to a node the batch deletes would point at nothing once the batch lands.
+    const t = protos.get(index);
+    const lost = t ? destinationIds(t).filter((id) => gone.has(id))[0] : undefined;
+    if (lost !== undefined) out.push({ index, op: op.op, message: "destination '" + lost + "' is deleted by ops[" + String(gone.get(lost)) + "] of this batch (deletes run after every other op); drop one of the two" });
   }
   return out;
 }

@@ -133,7 +133,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   const cloned: FakeNode[] = [];
   const raw = new WeakMap<FakeNode, FakeNode>(); // a node's own fields, behind the proxy that checks what Figma refuses
   const imports: string[] = [];
-  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined; onSwitch?: (() => Promise<void>) | undefined } = {};
+  const hooks: { onStyle?: (() => Promise<void>) | undefined; onImport?: (() => Promise<void>) | undefined; onSwitch?: (() => Promise<void>) | undefined; onReactions?: (() => Promise<void>) | undefined } = {};
   const loadedFonts = new Set<string>();
   const trap = new Set<string>();
   const pageLoads: string[] = [];
@@ -164,7 +164,7 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
   // The document (figma.root), once the world exists: a page's remove() takes it out of its children.
   const doc: { figma: { root: { children: FakeNode[] }; currentPage: FakeNode } | null } = { figma: null };
   const page = (id: string, name: string, existing: FakeNode[] = []): FakeNode & { selection: FakeNode[] } => {
-    const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], removed: false, loadAsync: async () => { pageLoads.push(id); } };
+    const pg: FakeNode & { selection: FakeNode[] } = { id, type: "PAGE", name, selection: [], children: [], removed: false, flowStartingPoints: Object.freeze([]), loadAsync: async () => { pageLoads.push(id); } };
     pg.findAllWithCriteria = (c: { types: string[] }) => findAll(pg, c.types);
     pg.appendChild = appendTo(pg);
     pg.insertChild = insertInto(pg);
@@ -215,6 +215,18 @@ export async function treeWorld(opts: { kit?: boolean; extra?: Scene; fonts?: Re
       if (v === "") data.delete(k); else data.set(k, v);
     };
     fields.getPluginDataKeys = () => [...data.keys()];
+    // Prototype interactions: read-only under dynamic-page, set whole with setReactionsAsync (frozen when read back, as
+    // Figma's); a NODE action's destination must be a node the file has.
+    fields.reactions = Object.freeze([]);
+    fields.setReactionsAsync = async (list: unknown) => {
+      if (trap.has("setReactionsAsync")) throw new Error("in Figma: cannot set reactions on " + String(fields.name));
+      if (!Array.isArray(list)) throw new Error("in Figma: reactions must be an array");
+      for (const r of list) for (const a of isNode(r) && Array.isArray(r.actions) ? r.actions : []) {
+        if (isNode(a) && a.type === "NODE" && (typeof a.destinationId !== "string" || !reg.nodes || !reg.nodes[a.destinationId])) throw new Error("in Figma: no destination " + String(isNode(a) ? a.destinationId : ""));
+      }
+      if (hooks.onReactions) await hooks.onReactions();
+      fields.reactions = Object.freeze(list.map((r: unknown) => Object.freeze(JSON.parse(JSON.stringify(r)) as Record<string, unknown>)));
+    };
     // null unbinds (the value stays), as Figma's does.
     fields.setBoundVariable = (field: string, v: unknown) => {
       const bound = isNode(fields.boundVariables) ? { ...fields.boundVariables } : {};
@@ -652,7 +664,7 @@ export const cases: Case[] = [{
       wPartial.applied.length === 0 && (wPartial.restored ?? []).length === 2 && created.every((n) => n.name !== "A" && n.name !== "B"));
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | createTree | patch | patchWhere | move | delete | setVariable | setStyle | createVariables | createStyles");
+    ok("write: unknown op is rejected, naming every op", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText | setVariableMode | clearVariableMode | setReactions | setFlowStart | clearFlowStart | createTree | patch | patchWhere | move | delete | setVariable | setStyle | createVariables | createStyles");
     // setFill and setText keep what they replace too: a later failure puts the fill and the text back.
     const fillsBefore = rectTarget.fills, textBefore = textTarget.characters;
     const wBack = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#123456" }, { op: "setText", nodeId: "t:1", text: "temporary" }, { op: "setFill", nodeId: "nope:2", color: "#fff" }]);
@@ -707,6 +719,9 @@ export const cases: Case[] = [{
       setFill: { op: "setFill", nodeId: "r:1", color: "#00f" },
       setText: { op: "setText", nodeId: "t:1", text: "x" },
       setVariableMode: { op: "setVariableMode", nodeId: "f:1", collection: "Theme", mode: "Dark" },
+      setReactions: { op: "setReactions", nodeId: h.b ?? "", reactions: [{ trigger: "on_click", actions: [{ type: "back" }] }] },
+      setFlowStart: { op: "setFlowStart", nodeId: h.a ?? "", name: "Main" },
+      clearFlowStart: { op: "clearFlowStart", nodeId: h.a ?? "" },
       clearVariableMode: { op: "clearVariableMode", nodeId: "f:1", collection: "Theme" },
       patch: { op: "patch", nodeId: "r:1", set: { fills: [{ type: "solid", color: "#00ff00" }] } },
       patchWhere: { op: "patchWhere", where: { name: "Existing A" }, set: { name: "Existing A" } },

@@ -167,9 +167,13 @@ export async function checkBeforeApply(t: PatchTarget): Promise<void> {
 }
 
 /** An op before `index` in the batch can change the layout, parents, child lists or variants the checks of a later op
- *  read (everything but a variable-mode op and a delete, which runs last). */
+ *  read (everything but a variable-mode op, a prototype op and a delete, which runs last). */
 export function changesBefore(ops: readonly WriteOp[], index: number): boolean {
-  return ops.slice(0, index).some((o) => o.op !== "setVariableMode" && o.op !== "clearVariableMode" && o.op !== "delete");
+  return ops.slice(0, index).some((o) => !leavesLayout(o));
+}
+/** An op that changes no layer's layout, parent, children or variant: a variable mode, a prototype interaction, a flow. */
+export function leavesLayout(o: WriteOp): boolean {
+  return o.op === "setVariableMode" || o.op === "clearVariableMode" || o.op === "setReactions" || o.op === "setFlowStart" || o.op === "clearFlowStart" || o.op === "delete";
 }
 
 /** Every font a text node uses now (all of them, for a mixed text). */
