@@ -25,7 +25,8 @@ the capture to the file — a `createTree` op's `bind: true`, which binds raw va
 styles, and instances of the components the component map names, read in the write direction — is built; bulk patch
 by rule — `patchWhere`, a patch of every layer a rule matches within a scope, its dry run counting per page with a token
 the real run carries — is built; placement in a section, and a page or section a `createTree` makes (`section`,
-`createPage`, `createSection`) — is built)
+`createPage`, `createSection`) — is built; prototype interactions and flows — `setReactions`, a layer's reactions in
+the read form with destinations by exact name or id, and `setFlowStart` / `clearFlowStart` — are built)
 Date: 2026-11-11
 
 This document records the design agreed for letting an agent write to a Figma file at the lowest token
@@ -158,6 +159,7 @@ screens.
 | Same change on many screens or pages | one patch with a match rule and a scope | independent of the match count |
 | Colour or brand update | change the variable or style once | one op; Figma propagates |
 | Fault in a repeated part | patch the local main component once | one op; instances follow |
+| Wire screens into a prototype | `setReactions` on each layer that reacts, `setFlowStart` on a flow's first frame | one op per layer, after the screens exist |
 
 6. **Clone and patch.** A spec node may say "copy this node, with these overrides": `{clone: id, edits}`, the
    node's own fields a patch of the copy and each edit a patch of one of its layers (by id, or a name unique in the
@@ -449,7 +451,62 @@ screens.
     way a run over 25 matches goes (`rule-patch-token`: the dry run, then the run carrying its token) is recorded on the
     same job at 2 calls, 1 op, about 519 tokens (78 out, 441 in: the dry run's preview and `match`).
     Adding `patchWhere` to the schema and description took `toolDefinition` from 1,287 to 1,400; adding `section`,
-    `createPage` and `createSection` (#184) took it to 1,449.
+    `createPage` and `createSection` (#184) took it to 1,449; the three prototype ops and their `reactions` field (#183)
+    took it to 1,533.
+
+### Prototype
+
+22. **Prototype interactions and flows.** A screen's links are written in the read export's own form, after the
+    screens exist: a tree spec carries no ids and no references between ops (decision 1), so a reaction inside a
+    `createTree` is refused, pointing at the op below, and the reply's `handles` give the ids to wire.
+
+    As built (#183): `{op: "setReactions", nodeId, reactions}` and `{op: "setFlowStart", nodeId, name}` /
+    `{op: "clearFlowStart", nodeId}`. The pure check and the words are in `bridge/src/reaction-spec.ts`; the file side is
+    in `figma-plugin/src/reactions.ts`.
+    - **The read form, replaced whole.** `reactions` is `prototype.ts`'s list: a `trigger` (`on_click` when absent;
+      hover, press, `after_timeout` with `timeout`, mouse enter, leave, up and down with `delay` (both seconds, as
+      Figma's plugin API takes them and the read writes them: seen live, a timeout of 2 shows as 2000 ms in the
+      Prototype panel; a transition's `duration` is seconds too), `on_key_down`
+      with `keyCodes` and `device`) and its `actions` (1–10): `back`, `close`, `url` (`url`, `openInNewTab`), and `node`
+      (`destination` / `destinationId`, `navigation` navigate | swap | overlay | scroll_to | change_to, `transition`, the
+      reset flags, `overlayOffset`). A reaction read from a file passes as it is (both destination fields, and a preset
+      easing's curve, which is accepted and not written), except what a write refuses by name: a reaction with no actions, a node action with no destination, a key trigger with no key codes, and the
+      kinds not written yet. A mouse enter or leave is written with Figma's current hover behaviour (the read does not
+      say which version a reaction used). The list replaces the layer's reactions, as Figma's
+      `setReactionsAsync` does; `[]` removes them, and at most 50 go in one op. A field of another trigger or action
+      kind is refused, never dropped. Figma's defaults fill what is left out: ease out, 0.3 s, no transition (instant).
+    - **Destinations, never guessed (decision 15).** An exact id (`destinationId`, or `destination` when it reads as one)
+      or a name exactly one candidate has, the candidates depending on `navigation`:
+      - navigate, swap and overlay: frames, components and instances at the top of the layer's page, or directly in a
+        section on it. Figma's prototype links frames of one page.
+      - scroll_to: other layers inside the layer's own top frame (for a layer of a variant, that variant).
+      - change_to: the variants of the set the layer is a variant of, or is inside.
+
+      Several candidates refuse the batch with their ids, none with the closest names. An id that is the wrong kind is
+      told why: on another page, inside a frame, not a variant. An id and a name that disagree are refused. All of it is
+      resolved before anything runs, every problem listed at once, and each destination is checked again right before
+      the op runs. A destination a `delete` of the same batch removes, a keyed re-send drops, or a `move` puts elsewhere is refused. An `overlayOffset` needs an overlay
+      frame set to Manual position.
+    - **Flows.** `setFlowStart` puts the frame, which must be at the top of its page or in a section, on its page's
+      `flowStartingPoints`. A frame already there keeps its place and gets the new name. A name another frame's flow
+      has on that page is refused. `clearFlowStart` removes the frame's flow, and is refused for a frame that starts
+      none. The flow ops of a batch are resolved in order against the page's list as the ones before leave it (a clear
+      frees a name for a later set; two frames given one name are refused before anything runs), and applied to the
+      list as it is when each runs.
+    - **All or nothing, one undo step (decisions 14, 16).** Each op keeps what it replaces (the layer's reactions, the
+      page's list) and is put back with the batch. Both are ordinary plugin edits inside the batch's commitUndo pair.
+      A layer deleted during the await of setReactionsAsync fails the op as missing.
+    - **Review (decision 18).** A layer that is not the session's own counts toward the review's layer limit. The card
+      reads "Layer 'Sign in': prototype none → on click → go to 'Details' (dissolve 300 ms); after 1.5 s → back" and
+      "Frame 'Home': flow start none → 'Main'", with destinations by the names the file has. The dry run says the
+      same in a sentence, and that the destinations are checked when applied.
+    - **Seen live.** Figma refuses the typings' `deprecatedVersion` on a mouse enter or leave trigger (so it is never
+      sent: a hover is written with the current behaviour) and an `on_drag` trigger (refused by name). A page with no
+      flow gets one ("Flow 1", at the layer's top frame) with its first connection: the reply names it (`flowAdded`)
+      and the op's put-back removes it. One Undo takes back a batch of reactions and flow changes.
+    - Not built, each refused by name: `on_drag`, actions that set a variable or a variable mode, conditionals, media actions and
+      triggers. A frame's overlay settings (`overlay`: position, background, close on click outside) are read-only to
+      plugins in Figma's API, so they stay as the designer sets them.
 
 ## Build order
 

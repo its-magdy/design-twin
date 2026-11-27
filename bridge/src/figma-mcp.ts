@@ -737,6 +737,9 @@ const writeOpShape = z.object({
   color: hexColor.optional(),
   collection: z.string().optional(),
   mode: z.string().optional(),
+  // setReactions: a layer's prototype interactions in the read export's form, checked by reaction-spec.ts checkReactions
+  // (the same three places as a tree spec), not spelled out here (spec decision 19).
+  reactions: z.array(z.record(z.string(), z.unknown())).optional(),
   // createTree: the spec is checked by tree-spec.ts checkTree (the dry run, the wire check and the plugin all run it),
   // not spelled out here — a recursive schema would cost every tool listing its size (spec decision 19).
   tree: z.record(z.string(), z.unknown()).optional(),
@@ -959,10 +962,11 @@ registerTool(
       "createVariables {collection, modes?, variables:[[name, type, …a value per mode]]} / createStyles {styles:[{name, kind, set}]}: variables or styles as one table, first in a batch; a name the file has updates in place | " +
       "seedTokens {file, collection?}: those tables from the project's tokens.dtcg.json or tokens.resolver.json | " +
       "setVariableMode {nodeId, collection, mode} / clearVariableMode {nodeId, collection}: a frame's variable mode | " +
+      "setReactions {nodeId, reactions} / setFlowStart {nodeId, name} / clearFlowStart {nodeId}: a layer's prototype links (read form, replaced whole) and flow starts | " +
       "move {nodeId, parentId, index?} / delete {nodeId}: only nodes this plugin session created | " +
       "createFrame, createText, setFill, setText: one node or property per op. " +
       "The full spec and patch grammar is the designtwin plugin's design-in-figma skill (references/grammar.md); a refused batch names each offending field by path, with candidates for a name. " +
-      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, patchWhere, setFill, setText, the mode and source ops) or re-sends a keyed createTree, a component or a create table. " +
+      "Dry-run first (dryRun:true), show the user the preview, apply only after they agree, for anything that OVERWRITES (patch, patchWhere, setFill, setText, the mode, prototype and source ops) or re-sends a keyed createTree, a component or a create table. " +
       "The plugin's 'Allow edits' must be ticked by the designer (a dry run reports editsAllowed). A write may wait for their review (dry run: wouldWait): on {pending, ticket}, call figma_write {ticket} (not the ops) until it answers; cancel:true withdraws it.",
     inputSchema: {
       ...clientShape,

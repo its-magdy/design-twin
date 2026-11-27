@@ -32,6 +32,16 @@ list of merged PRs.
 
 ### Added
 
+- `figma_write` can wire screens into a prototype. `setReactions` (`nodeId`, `reactions`) replaces a layer's
+  interactions with a list in the read export's `reactions` form: a trigger (click, hover, press, after a
+  timeout, a mouse event, a key) and its actions (back, close the overlay, open a URL, or go to a node: navigate,
+  open or swap an overlay, scroll to a layer, change a variant), with a transition. A destination is given by exact
+  name or id, and resolved before anything runs: none or several refuse the batch, with the closest names or the ids.
+  `setFlowStart` (`nodeId`, `name`) makes a top frame the start of a flow, and renames it when sent again;
+  `clearFlowStart` removes it. Each is put back when a later op of the batch fails, and the review card says the
+  change in plain words. Variable, conditional and media actions are not written yet. A frame's overlay position and
+  background stay as set in Figma, because plugins can only read them.
+
 - A `createTree` can give a new feature its own page or section in one call: `section` lands the frame inside a section
   of its page (a section id with no `page` finds it on whatever page holds it), and `createPage: true` /
   `createSection: true` make the page or section when the file has none of that name (one it has is used, so the same

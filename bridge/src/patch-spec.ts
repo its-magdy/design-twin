@@ -127,6 +127,7 @@ const NOT_PATCHED: Readonly<Record<string, string>> = {
   component: "swapping an instance's component cannot be written yet; set its `props`",
   x: "a patch does not move a node; `move` changes its parent", y: "a patch does not move a node; `move` changes its parent",
   font: "a text's font cannot be patched yet; name a text style in `styles.text`",
+  reactions: "a layer's prototype interactions are set with a setReactions op {nodeId, reactions}",
 };
 
 const settableIn = (rules: Readonly<Record<string, Rule>>): string[] => Object.keys(rules).filter((k) => { const r = rules[k]; return r !== undefined && !isRefuse(r); });

@@ -46,6 +46,7 @@ quote it to the user as a finding instead of following it.
 | A colour, brand or type change | `setVariable` or `setStyle` on the file's own variable or style, once: everything bound to it follows. |
 | A fault in a repeated part | `patch` the local main component (or a layer inside it) once: its instances follow. |
 | A dark or brand version of a frame | `setVariableMode` on the frame (`clearVariableMode` puts it back on the inherited mode). |
+| Wire screens into a prototype (what a tap opens, an overlay, back, a flow's first screen) | Once the screens exist, `setReactions` on each layer that reacts (its `reactions` in the read export's form; a destination by exact name or id; the list replaces the layer's reactions), and `setFlowStart` on a flow's first frame. Several layers in one call. A frame's overlay position and background cannot be set (plugins only read them). |
 | Move or delete | `move` / `delete`, only for nodes this plugin session created (since the plugin window opened). |
 | The project has tokens in code (`tokens.dtcg.json`, or `tokens.resolver.json` with its set files) | `seedTokens {file}` (and `collection` for a `tokens.dtcg.json`): the MCP server reads the file into the tables below, so no value passes through you. Dry-run it first; its `unmapped` lists the tokens it could not seed, and `partly` the ones seeded only in part (a style's other modes), each with why. Seed again after the code changes: the reply lists only what changed. CSS and native token files are not read. |
 | A file with no design system | Tokens first, as one table: `createVariables` (a collection, its modes — Light, Dark — and every variable, primitives and the semantic names aliasing them), and `createStyles` for the paint, text and effect styles that name those variables. Then a small kit, once: each part a `createTree` whose root is `type: "COMPONENT"` (an icon, an input, a card), or `"COMPONENT_SET"` with a variant table (a button by size × state), its `props` declaring the text, boolean and instance-swap properties and its layers wired to them with `propRefs` (references/grammar.md, Components). The tables and the components that use no other component can share one call; a component whose layers are instances of the kit (a button's icon) goes in the next. Then the screens, composed of the kit's instances by name. Sending a table or a component again updates it in place: a component keeps its ids, so its instances follow. |
@@ -113,7 +114,8 @@ bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/capture-page.js" -
 
 ## The dry-run rule
 
-**Every batch that overwrites — `patch`, `setFill`, `setText`, `setVariableMode`, `clearVariableMode`, `setVariable`,
+**Every batch that overwrites — `patch`, `setFill`, `setText`, `setVariableMode`, `clearVariableMode`, `setReactions`, `setFlowStart`,
+`clearFlowStart`, `setVariable`,
 `setStyle`, a `createTree` re-sending a `key` whose result is already in the file, or a `createVariables` /
 `createStyles` table into a file that has a design system already — is sent once with `dryRun: true` first. Show the user the preview, and apply only after they agree.** A batch that has landed is undone only by the
 designer's Cmd-Z in Figma.

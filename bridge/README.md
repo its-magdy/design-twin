@@ -908,7 +908,7 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
-`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments; or a component, or a set of variants from a table, used by name later and updated in place when sent again) / patch (change an existing node by id) / patchWhere (the same patch on every layer a rule matches) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode; **no arbitrary code
+`figma_write` (batch of safe ops — createTree (a whole screen in one op, a copy of one with only its differences, rows of instances, named fragments; or a component, or a set of variants from a table, used by name later and updated in place when sent again) / patch (change an existing node by id) / patchWhere (the same patch on every layer a rule matches) / move / delete / setVariable / setStyle (change a local variable or style once, and everything using it follows) / createVariables / createStyles (a design system from nothing: a table of variables or styles in one op, updated in place when sent again) / seedTokens (those tables read from the project's token file on disk) / createFrame / createText / setFill / setText / setVariableMode / clearVariableMode / setReactions / setFlowStart / clearFlowStart (a prototype: what a layer does when tapped, and where a flow starts); **no arbitrary code
 execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
@@ -956,6 +956,9 @@ the current page):
 | `setText` | `nodeId`, `text` | — |
 | `setVariableMode` | `nodeId`, `collection`, `mode` | — |
 | `clearVariableMode` | `nodeId`, `collection` | — |
+| `setReactions` | `nodeId`, `reactions` (the layer's prototype interactions in the read export's form, below) | — |
+| `setFlowStart` | `nodeId` (a frame at the top of its page or in a section), `name` (the flow's) | — |
+| `clearFlowStart` | `nodeId` | — |
 | `createTree` | `tree` (one nested node spec, below), or `treeFile` (a path to the same spec as a JSON file) | `page` (a page's exact name or id; the current page when absent), `section` (a section's exact name on that page, or its id: with no `page`, on whichever page holds it), `createPage` / `createSection` (`true`: make the page or section when the file has none of that name; below), `bind` (`true`: the spec's raw values bound to the file's variables and text styles, below) |
 | `patch` | `nodeId`, `set` (the fields to change, below) | — |
 | `patchWhere` | `where` (a rule: `text`, `fill`, `variable`, `instanceOf`, `name`; every one given must hold), `set` (as a patch's) | `scope` (`"selection"`, `"page"` — the current page, the default — `"file"`, or page names or ids), `token` (the dry run's, needed above 25 matches; below) |
@@ -1006,6 +1009,25 @@ which a write cannot do yet); one the file already uses works by its exact id. T
 the mode before and after (`inherited` when none was set), and the dry run says the same change in words (it does
 not read the file, so it names the new mode only). If a later op of the batch fails, the mode changes are put back
 with the rest of the batch, as far as it can be (see above).
+
+`setReactions` wires a prototype: what a layer does when it is clicked, hovered, or pressed, after a timeout,
+on a mouse event or a key (`timeout` and `delay` in seconds, as Figma's plugin API takes them; `on_drag` is refused, Figma refusing it from a plugin; a page with no flow gets one from Figma with its first connection, named in the reply as `flowAdded`). `reactions` is the read export's `reactions` list, so a reaction read from a file (bar a reaction with no actions, a node action with no destination, a key trigger with no key codes) is sent back
+as it is. It replaces the layer's reactions (`[]` removes them). Each reaction has a `trigger` (`on_click` when absent)
+and its `actions`: `back`, `close` (the overlay), `url`, or `node`, which goes to a `destination`. Its `navigation` is
+`navigate` (the default), `overlay`, `swap`, `scroll_to` or `change_to`, with an optional `transition` (type, direction,
+duration in seconds, easing). A destination is a node's exact id or an exact name, resolved before the batch runs and
+never guessed:
+- `navigate`, `overlay` and `swap`: a frame, component or instance at the top of the layer's page, or in a section on it.
+- `scroll_to`: another layer of the same top frame (of the same variant, inside a component set).
+- `change_to`: a variant of the same component set.
+
+None or several refuse the batch, with the closest names or the ids. `setFlowStart {nodeId, name}` makes a top frame
+the start of a flow on its page; sent again for that frame, it renames the flow. `clearFlowStart` removes it. A flow
+name another frame's flow has on the page is refused. Each op keeps what it replaces and is put back with the rest of
+a batch that fails; a destination the same batch deletes, moves or drops from a keyed re-send is refused, and the
+flow ops of one batch are checked in order against each other. Not written yet, each refused by name:
+variable, conditional and media actions, and media triggers. A frame's overlay settings (position, background) are
+read-only to plugins in Figma's API. The full grammar is in the skill's `references/grammar.md`, under Prototype.
 
 `createTree` creates a whole screen in one op. `tree` is the root frame, written the way the read export writes a
 node: the same field names and values, defaults left out, no ids and no parent references. A node is a `FRAME`, a

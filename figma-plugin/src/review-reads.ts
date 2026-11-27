@@ -15,6 +15,7 @@ import { changedBy } from "./keyed";
 import type { PatchTarget } from "./patch";
 import type { RuleTarget } from "./rules";
 import type { ModeTarget } from "./variable-modes";
+import type { ProtoTarget } from "./reactions";
 import type { DeleteTarget, MoveTarget } from "./structure";
 import { createdThisSession } from "./session";
 import { errMsg } from "./util";
@@ -26,6 +27,7 @@ export interface ResolvedTargets {
   patches: ReadonlyMap<number, PatchTarget>;
   rules: ReadonlyMap<number, RuleTarget>;
   modes: ReadonlyMap<number, ModeTarget>;
+  protos: ReadonlyMap<number, ProtoTarget>;
   moves: ReadonlyMap<number, MoveTarget>;
   deletes: ReadonlyMap<number, DeleteTarget>;
   variables: ReadonlyMap<number, VariableTarget>;
@@ -210,6 +212,18 @@ export async function readBatch(list: readonly WriteOp[], t: ResolvedTargets): P
         case "clearVariableMode": {
           const m = t.modes.get(i);
           if (m) { read.name = m.node.name; ids.push(m.node.id); }
+          break;
+        }
+        // The layer (or frame) it changes, what it has now, and the destinations by the names the file has.
+        case "setReactions":
+        case "setFlowStart":
+        case "clearFlowStart": {
+          const p = t.protos.get(i);
+          if (!p) break;
+          read.name = p.node.name;
+          ids.push(p.node.id);
+          if (p.kind === "reactions") { read.old = { prototype: p.node.reactions.length }; read.destinations = p.destNames.slice(); }
+          else read.old = { flow: p.was };
           break;
         }
         case "setVariable": {

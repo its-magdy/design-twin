@@ -35,6 +35,7 @@ src/
   structure.ts   move / delete, only of nodes this session created (session.ts keeps the list)
   sources.ts     setVariable / setStyle and a patch of a main component, and the dry run's writeImpact count
   variable-modes.ts  setVariableMode / clearVariableMode on a node
+  reactions.ts   setReactions / setFlowStart / clearFlowStart: a layer's prototype interactions, a page's flow starts
   edits.ts       the "Allow edits" opt-in: off by default, saved per user in clientStorage
   review.ts      the designer's review: the card a write waits on, its preview, and the ticket the agent polls
   review-reads.ts what the card reads of the file (names, current values, followers, landing spot) and Show me

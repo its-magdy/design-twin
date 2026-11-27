@@ -19,6 +19,7 @@ import { checkCreateStyles, checkCreateVariables } from "./create-spec.ts";
 import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
 import { sizePhrase, type TreeNodeSpec } from "./tree-spec.ts";
+import { isReactionList, reactionsText } from "./reaction-spec.ts";
 
 /** What the file says about one op, for its line. Every field is optional: a read that failed leaves it out. */
 export interface OpRead {
@@ -42,6 +43,8 @@ export interface OpRead {
   pages?: Array<{ page: string; count: number }>;
   /** patchWhere: the fields whose old value differs between the matches (they read "mixed"; `old` has the shared ones) */
   mixed?: string[];
+  /** setReactions: each node action's destination by the name the file has, in the op's order */
+  destinations?: string[];
 }
 
 /** One value change on a line: `from` absent when the old value could not be read. */
@@ -189,6 +192,27 @@ export function cardLines(ops: readonly WriteOp[], reads: ReadonlyArray<OpRead |
           g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
           g.rows = [{ field: "'" + String(o.collection) + "' mode", to }];
         });
+        return;
+      }
+      case "setReactions": {
+        const list = isReactionList(o.reactions) ? o.reactions : [];
+        group("reactions " + JSON.stringify(o.reactions), i, (g) => {
+          g.head = g.ops.length === 1 ? named("Layer", g.reads[0]) : plural(g.ops.length, "layer");
+          // How many it had (the plugin reads the count; the old interactions themselves are in the file to see).
+          const had = new Set<string>();
+          for (const x of g.reads) { const n = x && x.old ? x.old.prototype : undefined; had.add(typeof n === "number" ? (n ? plural(n, "interaction") : "none") : "?"); }
+          const from = had.has("?") ? undefined : had.size === 1 ? [...had][0] : "mixed";
+          const first = g.reads[0];
+          g.rows = [{ field: "prototype", to: cut(reactionsText(list, first && first.destinations ? first.destinations : []), 160), ...(from !== undefined ? { from } : {}) }];
+        });
+        return;
+      }
+      case "setFlowStart":
+      case "clearFlowStart": {
+        const to = o.op === "clearFlowStart" ? "none" : "'" + String(o.name) + "'";
+        const was = r && r.old && "flow" in r.old ? r.old.flow : undefined;
+        const from = was === undefined ? undefined : typeof was === "string" ? "'" + was + "'" : "none";
+        lines.push({ head: named("Frame", r), rows: [{ field: "flow start", to, ...(from !== undefined ? { from } : {}) }], ops: [i] });
         return;
       }
       case "setVariable": {

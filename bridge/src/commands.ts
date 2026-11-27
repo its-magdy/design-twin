@@ -32,6 +32,7 @@ import { checkTree } from "./tree-check.ts";
 import { componentRootOf } from "./component-spec.ts";
 import { imageTableError, type ImageTable } from "./image-spec.ts";
 import { describePlace, placeError } from "./place-spec.ts";
+import { checkReactions, describeFlow, describeReactions, flowNameError, isReactionList, reactionRefusal, type WriteReaction } from "./reaction-spec.ts";
 import type { BindCounts } from "./bind-values.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -78,7 +79,7 @@ export interface ScreenshotArgs extends NodeArgs {
 }
 
 /** The write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
-export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "createTree", "patch", "patchWhere", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"] as const;
+export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText", "setVariableMode", "clearVariableMode", "setReactions", "setFlowStart", "clearFlowStart", "createTree", "patch", "patchWhere", "move", "delete", "setVariable", "setStyle", "createVariables", "createStyles"] as const;
 export type WriteOpName = (typeof WRITE_OP_NAMES)[number];
 /** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
@@ -101,6 +102,9 @@ export interface WriteOp {
   collection?: string | undefined;
   /** setVariableMode: a mode's name within `collection`, or its exact modeId */
   mode?: string | undefined;
+  /** setReactions: the layer's prototype interactions, in the read export's form (reaction-spec.ts); they replace the ones
+   *  it has, `[]` removes them. Typed loosely on the wire: checkReactions narrows it, at all three readers of WRITE_OPS. */
+  reactions?: readonly WriteReaction[] | readonly unknown[] | undefined;
   /** createTree: the whole screen, one nested spec in the read export's field names (tree-spec.ts). Typed loosely
    *  on the wire: tree-spec.ts checkTree is what narrows it, at all three readers of WRITE_OPS. */
   tree?: TreeNodeSpec | Record<string, unknown> | undefined;
@@ -166,7 +170,7 @@ export interface WriteTicketArgs {
 /** A WriteOp field that holds a string. */
 type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color" | "collection" | "mode" | "page" | "section" | "variable" | "style";
 /** A WriteOp field an op can require: the string fields, createTree's spec, a patch's fields and the create tables. */
-type WriteField = WriteStrField | "tree" | "set" | "where" | "variables" | "styles";
+type WriteField = WriteStrField | "tree" | "set" | "where" | "variables" | "styles" | "reactions";
 /** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
  *  (writeOpError — the gate a `write` command passes in the plugin's handleBridge, via parseCommandRequest, before
  *  writes.ts applyWrites runs; applyWrites repeats it for its direct callers). So a batch the preview calls invalid
@@ -193,6 +197,10 @@ export const WRITE_OPS: { readonly [K in WriteOpName]: WriteOpRow } = {
   setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } },
   setVariableMode: { effect: "overwrites", required: ["nodeId", "collection", "mode"], shows: { collection: "collection", newMode: "mode" } },
   clearVariableMode: { effect: "overwrites", required: ["nodeId", "collection"], shows: { collection: "collection", newMode: INHERITED } },
+  // Prototype (reaction-spec.ts): a layer's interactions, replaced whole; a frame a flow starts from (`name`: the flow's).
+  setReactions: { effect: "overwrites", required: ["nodeId", "reactions"], shows: {} },
+  setFlowStart: { effect: "overwrites", required: ["nodeId", "name"], shows: {} },
+  clearFlowStart: { effect: "overwrites", required: ["nodeId"], shows: {} },
   createTree: { effect: "creates", required: ["tree"], shows: {} },
   patch: { effect: "overwrites", required: ["nodeId", "set"], shows: {} },
   // A bulk patch by rule (rule-spec.ts): the same `set` on every layer the rule matches within its scope.
@@ -275,6 +283,7 @@ function opPreview(o: WriteOp, index: number): WritePreviewStep {
   if (o.op === "patch") return patchPreview(o, index, missing);
   if (o.op === "patchWhere") return rulePreview(o, index, missing);
   if (o.op === "move" || o.op === "delete") return structurePreview(o, index, missing);
+  if (o.op === "setReactions" || o.op === "setFlowStart" || o.op === "clearFlowStart") return prototypePreview(o, index, missing);
   if (o.op === "setVariable" || o.op === "setStyle") return sourcePreview(o, index, missing);
   if (o.op === "createVariables" || o.op === "createStyles") return createPreview(o, index, missing);
   return {
@@ -340,6 +349,19 @@ function structurePreview(o: WriteOp, index: number, missing: readonly string[])
     ? `deletes node ${o.nodeId} and everything inside it${only}; deletes run after every other op of the batch has landed`
     : `moves node ${o.nodeId} into ${o.parentId}${o.index !== undefined ? ` at index ${o.index}` : " as its last child"}${only}; put back if a later op fails`;
   return { ...base, change };
+}
+
+/** A prototype op's preview: the change in one sentence, or every problem. Whether the node and its destinations exist
+ *  and are of the right kind is the plugin's to say (the preview reads no file). */
+function prototypePreview(o: WriteOp, index: number, missing: readonly string[]): WritePreviewStep {
+  const base = { index, op: o.op, effect: "overwrites" as const, target: o.nodeId || null };
+  if (missing.length) return { ...base, invalid: `missing ${missing.join(", ")}` };
+  if (o.op === "setReactions") {
+    const { problems } = checkReactions(o.reactions);
+    if (problems.length || !isReactionList(o.reactions)) return { ...base, invalid: problems.join("\n") };
+    return { ...base, change: describeReactions(o.nodeId, o.reactions) };
+  }
+  return { ...base, change: describeFlow(o.nodeId, o.op === "setFlowStart" ? o.name : undefined) };
 }
 
 /** A setVariable or setStyle op's preview: what it changes in one sentence (and a style's rows), or every problem. How
@@ -591,6 +613,14 @@ export interface AppliedWrite {
   parentId?: string;
   /** delete: the node is gone */
   deleted?: true;
+  /** setReactions: how many reactions the layer has now, and how many it had before */
+  reactions?: number;
+  replaced?: number;
+  /** setReactions: the flow Figma started on its own, the page having none, when the layer got its first connection */
+  flowAdded?: string;
+  /** setFlowStart: the flow the frame starts now (`from`: its old name, when it started one already); clearFlowStart:
+   *  `from` is the flow it no longer starts */
+  flow?: string;
   /** setVariable: the modes it changed, by name */
   modes?: string[];
   /** createVariables: what happened to the collection itself — made, given modes it lacked, or neither */
@@ -977,6 +1007,7 @@ export function writeOpError(o: unknown, i: number): string | null {
   // A spec path is read by figma_write (spec-file.ts), which hands the plugin the spec itself: one that arrives here
   // came round the MCP server.
   if (o.treeFile !== undefined) return `\`${at}.treeFile\`: a spec path is read by figma_write on the MCP server; send the spec itself as \`tree\``;
+  if (o.reactions !== undefined && op !== "setReactions") return `\`${at}.reactions\`: only a setReactions op sets a layer's prototype interactions`;
   if (o.bind !== undefined && op !== "createTree") return `\`${at}.bind\`: only a createTree binds its spec's values to the file's variables and styles`;
   for (const k of ["where", "scope", "token"]) if (o[k] !== undefined && op !== "patchWhere") return `\`${at}.${k}\`: only patchWhere picks its layers by a rule (\`where\`, \`scope\`, \`token\`)`;
   const badPlace = placeError(o, at);
@@ -995,6 +1026,15 @@ export function writeOpError(o: unknown, i: number): string | null {
     const problems = [...checkRule(o, at).problems, ...checkPatch(o.set, `${at}.set`).problems];
     if (problems.length) return patchRefusal(problems);
   }
+  if (op === "setReactions") {
+    const { problems } = checkReactions(o.reactions, `${at}.reactions`);
+    if (problems.length) return reactionRefusal(problems);
+  }
+  if (op === "setFlowStart") {
+    const bad = flowNameError(o.name, at);
+    if (bad !== null) return bad;
+  }
+  if (op === "clearFlowStart" && o.name !== undefined) return `\`${at}.name\`: clearFlowStart takes only the frame's \`nodeId\` (the flow it starts goes with it)`;
   if (op === "setVariable") {
     const { problems } = checkVariableEdit(o, at);
     if (problems.length) return sourceRefusal(problems);
