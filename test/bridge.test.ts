@@ -634,6 +634,34 @@ void (async () => {
     bridge.close();
     ok("[auth-frame] bridge.close() closes a socket that is still waiting to authenticate", await until(() => closedCode !== -1, 3000));
   }
+  // Only so many sockets may wait to authenticate at once (each could make the bridge buffer one big frame); one
+  // more is closed 1013 on open, and a socket that authenticates frees its slot.
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(settingsAt(port), { settleMs: 0, maxPendingAuth: 2 });
+    await bridge.listening;
+    const dial = () => {
+      const c = new WsClient(`ws://127.0.0.1:${port}/`, { origin: "null" });
+      const r = { opened: false, code: -1 };
+      c.on("open", () => { r.opened = true; });
+      c.on("close", (code: number) => { r.code = code; });
+      c.on("error", () => {});
+      return { c, r };
+    };
+    const a = dial(); await until(() => a.r.opened, 2000);
+    const b = dial(); await until(() => b.r.opened, 2000);
+    const over = dial();
+    ok("[auth-frame] a socket over the waiting-to-authenticate cap is closed 1013, the ones under it stay open",
+      await until(() => over.r.code === 1013, 3000) && a.r.code === -1 && b.r.code === -1);
+    a.c.send(JSON.stringify({ type: "auth", token: TOKEN }));
+    await until(() => bridge.listClients().length === 1, 2000);
+    const next = dial();
+    await until(() => next.r.opened, 2000);
+    await sleep(150);
+    ok("[auth-frame] …and one that authenticates frees its slot for the next", bridge.listClients().length === 1 && next.r.opened && next.r.code === -1);
+    for (const x of [a, b, next]) x.c.close();
+    bridge.close();
+  }
 
   // ------------------------------------------------- server-core: the HTTP side of Bun.serve
   // The handshake check runs in Bun.serve's fetch(), before the upgrade. A plain HTTP request must still

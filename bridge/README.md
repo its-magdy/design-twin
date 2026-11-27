@@ -137,7 +137,8 @@ failed WebSocket dial, and the plugin dials ports 8787–8789 in turn. The plugi
 `ws://localhost:<port>/` and sends the token as the socket's first frame, `{"type":"auth","token":"…"}`.
 Until that frame checks out the bridge does not list the socket, routes nothing to it and reads nothing
 else from it. A wrong token, or any other first frame, is closed with code `4401`; a socket that sends no
-auth frame within 5 seconds is closed with `4408`. The token in the URL (`?token=…`), which plugins
+auth frame within 5 seconds is closed with `4408`, and at most 8 sockets may wait for their auth frame at once
+(one more is closed with `1013`). The token in the URL (`?token=…`), which plugins
 before this change send, is still accepted for one release and logs a deprecation line on the bridge;
 the release after refuses it. Update the plugin together with `dtwin`: a new plugin against an older
 bridge is reported as "token rejected".

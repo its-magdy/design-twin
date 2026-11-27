@@ -596,7 +596,7 @@ var DesignTwinRelay = (() => {
           portIdx = BRIDGE_PORTS.indexOf(port);
           failsSinceOpen = 0;
           tokenRejected = true;
-          setBridge("bad", "token rejected", "The bridge is running, but it rejected this token — it was probably replaced (dtwin --rotate-token) or this is a different computer's token. Run  dtwin --show-token  in a terminal, paste the result above and press Save.");
+          setBridge("bad", "token rejected", "The bridge is running, but it rejected this token — it was probably replaced (dtwin --rotate-token) or this is a different computer's token. Run  dtwin --show-token  in a terminal, paste the result above and press Save. If it still says this, update dtwin: an older one cannot read this plugin's token.");
           var d = $("connect"); if (d) d.open = true;
           scheduleReconnect(15000);
           return;

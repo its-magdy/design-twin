@@ -179,12 +179,13 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
 // plugin as an opaque close 1006, byte-identical to "nothing is listening". So the plugin could not
 // tell "start the bridge" from "re-paste the token", and showed one useless "offline" for both.
 //
-// For the plugin ONLY (its sandboxed iframe sends Origin "null"; a CLI/server client sends none and CAN
-// read the 401), a handshake that passed Origin + Host and failed on the TOKEN alone is admitted, flagged,
-// and closed at once with an application close code the iframe can read. It is never registered as a
-// client and gets no message handler, so it can neither receive a command nor send a result — what
+// On the LEGACY `?token=` handshake, for the plugin ONLY (its sandboxed iframe sends Origin "null"; a CLI/server
+// client sends none and CAN read the 401), a handshake that passed Origin + Host and failed on the TOKEN alone is
+// admitted, flagged, and closed at once with an application close code the iframe can read. It is never registered
+// as a client and every frame it sends is ignored, so it can neither receive a command nor send a result — what
 // an unauthenticated caller gains over the 401 is one bit it already had ("a bridge is here").
-// Origin/Host failures are still refused outright at the HTTP layer.
+// Origin/Host failures are still refused outright at the HTTP layer. The first-frame handshake (below) closes a
+// wrong token with the same code, whatever the Origin: by then the socket is open, and a close code is all there is.
 const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
 
 // THE FIRST-FRAME HANDSHAKE (#189). A browser logs a failed WebSocket dial's URL in its console (Figma's dev console
@@ -197,6 +198,12 @@ const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for ap
 const CLOSE_AUTH_TIMEOUT = 4408;
 /** How long an admitted socket has to send its auth frame. The plugin sends it the moment the socket opens. */
 const AUTH_TIMEOUT_MS = 5000;
+/** At most this many sockets wait for their auth frame at once; one more is closed on open with CLOSE_TRY_AGAIN. Bun buffers
+ *  a whole frame (up to the payload cap) before any handler sees it, so the count is what bounds what an
+ *  unauthenticated peer can make the bridge hold. A plugin per open file authenticates in one round trip. */
+const MAX_PENDING_AUTH = 8;
+/** RFC 6455 "Try Again Later": the close for a socket over MAX_PENDING_AUTH. The plugin redials as for any close. */
+const CLOSE_TRY_AGAIN = 1013;
 /** The largest first frame read as an auth frame: a token is 48 characters; nothing a plugin authenticates with is
  *  anywhere near this, and a bigger first frame is refused without being parsed. */
 const MAX_AUTH_FRAME = 4096;
@@ -656,6 +663,8 @@ interface BridgeOptions {
   clock?: Clock;
   /** how long an admitted socket has to send its auth frame (AUTH_TIMEOUT_MS); the test suite shortens it */
   authTimeoutMs?: number;
+  /** how many sockets may wait for their auth frame at once (MAX_PENDING_AUTH); the test suite lowers it */
+  maxPendingAuth?: number;
 }
 
 function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
@@ -707,6 +716,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   // on its own `data`, set once it is authenticated; a bad-token or pending socket has none, so every handler
   // ignores what it sends (bar a pending socket's first frame) — it can neither receive a command nor send a result.
   const authTimeoutMs = opts.authTimeoutMs ?? AUTH_TIMEOUT_MS;
+  const maxPendingAuth = opts.maxPendingAuth ?? MAX_PENDING_AUTH;
   // Sockets admitted with no token in the URL and not yet authenticated: close() must end them too.
   const unauthed = new Set<BridgeSocket>();
   // The legacy `?token=` handshake is said once per bridge, not on every reconnect of the same old plugin.
@@ -736,6 +746,9 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     if (ws.data.auth === "bad") return refuse(ws, CLOSE_BAD_TOKEN, "bad token");
     // No token yet: held unregistered until its first frame (onMessage), for authTimeoutMs at most.
     if (ws.data.auth === "pending") {
+      // Checked at open(), the first handler a socket reaches and before any of its frames: one over the cap is
+      // closed with 1013 ("try again later"), never held.
+      if (unauthed.size >= maxPendingAuth) return refuse(ws, CLOSE_TRY_AGAIN, "too many connections waiting to authenticate");
       unauthed.add(ws);
       ws.data.authTimer = setTimeout(() => {
         unauthed.delete(ws);
@@ -1178,9 +1191,9 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
 export type Bridge = ReturnType<typeof createBridge>;
 export type { BridgeOptions };
 
-// verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
-// ONLY real access control, so they get direct unit coverage rather than being reachable only through
-// a live WebSocket handshake.
+// verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). With the first-frame check
+// (createBridge's authenticate) they are the bridge's real access control, so they get direct unit coverage
+// rather than being reachable only through a live WebSocket handshake; the first-frame check is covered live.
 // isConnId and connectionFor live in route.ts (which takes only types from this module); re-exported for the suites
 // that test them here.
 export { createBridge, createRegistry, connectionFor, isConnId, verifyClientWith, CLOSE_BAD_TOKEN, CLOSE_AUTH_TIMEOUT, AUTH_TIMEOUT_MS, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
