@@ -482,7 +482,7 @@ refused.
 
 Wire screens together once they exist (a `createTree`'s reply gives their ids by `handle`), so a prototype is usually a
 second call. `setReactions {nodeId, reactions}` sets what a layer does in a prototype, in the read export's
-`reactions` form, so a reaction read from a file is sent back as it is. The list replaces the layer's reactions;
+`reactions` form, so a reaction read from a file is sent back as it is (bar the few a write refuses by name: a reaction with no actions, a node action with no destination, a key trigger with no key codes). The list replaces the layer's reactions;
 `[]` removes them all.
 
 ```json

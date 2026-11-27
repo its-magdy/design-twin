@@ -213,6 +213,15 @@ export const cases: Case[] = [{
       && new RegExp("ops\\[0\\] \\(setReactions\\): destination '" + String(kh.bottom) + "' is removed by the keyed re-send in ops\\[1\\]").test(String(drop.error)));
     const temp = (await write(w, [{ op: "createTree", tree: { name: "Moving", handle: "m" } }])).applied[0]?.handles?.m ?? "";
     const moved = await write(w, [{ op: "setReactions", nodeId: w.h.btn ?? "", reactions: [{ actions: [{ type: "node", destinationId: temp }] }] }, { op: "move", nodeId: temp, parentId: w.h.home ?? "" }]);
+    const A = await write(w, [{ op: "setReactions", nodeId: w.h.btn ?? "", reactions: [{ actions: [{ type: "node", destination: "Details" }] }] }, { op: "move", nodeId: w.h.btn ?? "", parentId: w.h.elsewhere ?? "" }]);
+    const B = await write(w, [{ op: "setFlowStart", nodeId: w.h.menu ?? "", name: "Moved" }, { op: "move", nodeId: w.h.menu ?? "", parentId: w.h.home ?? "" }]);
+    const C = await write(w, [{ op: "setReactions", nodeId: w.h.btn ?? "", reactions: [{ actions: [{ type: "node", navigation: "scroll_to", destination: "Card" }] }] }, { op: "move", nodeId: w.h.cards ?? "", parentId: w.h.details ?? "" }]);
+    const D = await write(w, [{ op: "move", nodeId: w.h.menu ?? "", parentId: w.h.home ?? "" }, { op: "setFlowStart", nodeId: w.h.menu ?? "", name: "Moved" }]);
+    ok(`[PROTO-BATCH] a move of the reacting layer, of a flow's frame (before or after), or of a layer above a destination is refused (got ${JSON.stringify([A.error, B.error, C.error, D.error])})`,
+      !A.ok && /'Sign in' \(.*\) is moved by ops\[1\] of this batch \(it, or a layer above it\)/.test(String(A.error))
+      && !B.ok && /'Menu' \(.*\) is moved by ops\[1\]/.test(String(B.error)) && !D.ok && /'Menu' \(.*\) is moved by ops\[0\]/.test(String(D.error))
+      && !C.ok && new RegExp("destination '" + String(w.h.card) + "' is moved by ops\\[1\\] of this batch \\(it, or a layer above it\\)").test(String(C.error))
+      && (pageOf(w, "Page 1").flowStartingPoints as unknown[]).length === 1 && w.byId(w.h.menu ?? "").parent === pageOf(w, "Page 1"));
     ok(`[PROTO-BATCH] a destination the batch moves is refused (got ${JSON.stringify(moved.error)})`, !moved.ok && new RegExp("destination '" + temp + "' is moved by ops\\[1\\] of this batch").test(String(moved.error)));
   },
 }];

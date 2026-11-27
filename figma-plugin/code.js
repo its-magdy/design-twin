@@ -15085,7 +15085,7 @@
         ...sources2.problems,
         ...deleteConflicts(list, structure2.deletes, structure2.moves, protos2.targets),
         ...removalConflicts(list, trees2.targets, structure2.moves, protos2.targets),
-        ...moveConflicts(list, protos2.targets),
+        ...moveConflicts(list, protos2.targets, structure2.moves),
         ...keyedDeleteConflicts(trees2.targets, structure2.deletes, structure2.moves),
         ...ruleConflicts(rules2.targets, trees2.targets, structure2.deletes, structure2.moves)
       ].sort((a, b) => a.index - b.index);
@@ -15410,14 +15410,20 @@
     }
     return out;
   }
-  function moveConflicts(list, protos) {
-    const moved = /* @__PURE__ */ new Map();
-    for (const [i, op] of list.entries()) if (op.op === "move" && op.nodeId && !moved.has(op.nodeId)) moved.set(op.nodeId, i);
+  function moveConflicts(list, protos, moves) {
     const out = [];
-    if (!moved.size) return out;
+    if (!moves.size || !protos.size) return out;
+    const moved = /* @__PURE__ */ new Map();
+    for (const [i, m] of moves) for (const n of [m.node, ...nodesBelow(m.node)]) if (!moved.has(n.id)) moved.set(n.id, i);
     for (const [index, t] of protos) {
+      const op = list[index] ? String(list[index].op) : "setReactions";
+      const own4 = moved.get(t.node.id);
+      if (own4 !== void 0) {
+        out.push({ index, op, message: "'" + t.name + "' (" + t.node.id + ") is moved by ops[" + own4 + "] of this batch (it, or a layer above it), so what it may link to or start is not known until it lands; do it in a later batch" });
+        continue;
+      }
       const hit = destinationIds(t).filter((id) => moved.has(id))[0];
-      if (hit !== void 0) out.push({ index, op: list[index] ? String(list[index].op) : "setReactions", message: "destination '" + hit + "' is moved by ops[" + String(moved.get(hit)) + "] of this batch, so where it may be linked from is not known until it lands; wire it in a later batch" });
+      if (hit !== void 0) out.push({ index, op, message: "destination '" + hit + "' is moved by ops[" + String(moved.get(hit)) + "] of this batch (it, or a layer above it), so where it may be linked from is not known until it lands; wire it in a later batch" });
     }
     return out;
   }

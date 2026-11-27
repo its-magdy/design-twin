@@ -468,8 +468,10 @@ screens.
       them and the read writes them; a transition's `duration` is seconds), `on_key_down`
       with `keyCodes` and `device`) and its `actions` (1–10): `back`, `close`, `url` (`url`, `openInNewTab`), and `node`
       (`destination` / `destinationId`, `navigation` navigate | swap | overlay | scroll_to | change_to, `transition`, the
-      reset flags, `overlayOffset`). A reaction read from a file passes as it is: both destination fields, and a preset
-      easing's curve, which is accepted and not written. The list replaces the layer's reactions, as Figma's
+      reset flags, `overlayOffset`). A reaction read from a file passes as it is (both destination fields, and a preset
+      easing's curve, which is accepted and not written), except what a write refuses by name: a reaction with no actions, a node action with no destination, a key trigger with no key codes, and the
+      kinds not written yet. A mouse enter or leave is written with Figma's current hover behaviour (the read does not
+      say which version a reaction used). The list replaces the layer's reactions, as Figma's
       `setReactionsAsync` does; `[]` removes them, and at most 50 go in one op. A field of another trigger or action
       kind is refused, never dropped. Figma's defaults fill what is left out: ease out, 0.3 s, no transition (instant).
     - **Destinations, never guessed (decision 15).** An exact id (`destinationId`, or `destination` when it reads as one)

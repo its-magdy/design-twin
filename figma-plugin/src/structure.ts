@@ -144,7 +144,7 @@ export function applyDelete(t: DeleteTarget): AppliedWrite {
 }
 
 /** Every node at or below `n` in the file (an instance's sublayers included). */
-function nodesBelow(n: BaseNode, out: BaseNode[] = []): BaseNode[] {
+export function nodesBelow(n: BaseNode, out: BaseNode[] = []): BaseNode[] {
   out.push(n);
   if ("children" in n) for (const c of n.children) nodesBelow(c, out);
   return out;
